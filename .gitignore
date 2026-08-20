@@ -1,0 +1,17 @@
+# Rust build artifacts (implementation phase)
+/target/
+**/*.rs.bk
+
+# Mojang-derived material must never enter the repo (ASSET-D18/D19)
+*.jar
+/oracle/
+/datagen-output/
+/.minecraft/
+
+# Local tooling state
+.claude/settings.local.json
+*.log
+
+# OS noise
+Thumbs.db
+.DS_Store
