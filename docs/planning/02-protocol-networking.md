@@ -119,6 +119,7 @@ pub struct PlayerConnection {
 - A per-connection outbound channel plus the interest-management subscription API, for any domain that needs to broadcast state (entity movement, block updates, world events) to affected players.
 - `rc-protocol`: an edition-agnostic crate (VarInt/NBT/text-component codecs, generated packet enums) that Phase 2's native client reuses directly, per the project vision's "shared logic crates with the server."
 - Resolved player identity (UUID, username, skin/cape properties) from the online-mode join flow (NET-D6), handed to whichever domain owns player-profile/identity state.
+- Per `15-crossplay.md` (CROSS-D1), `rc-bedrock-translator` is a second consumer at NET-D8's typed-ECS-ingress-event seam and its Stage-11 encode-worker-pool seam, alongside `rc-protocol` — NET-D8's own content and boundary shape are unmodified.
 
 **Needs from other domains:**
 - From the core architecture/ECS-threading document: the concrete ingress/egress event-bus contract, the entity ID space, and the tick-boundary semantics defining when world/entity state is "settled" and safe to encode.

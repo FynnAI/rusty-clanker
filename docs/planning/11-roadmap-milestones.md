@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Sequences the entire project — Phase 1 (server) then Phase 2 (client) — into milestones `M0`…`M10`, each with a goal, a scope, and measurable, automatable acceptance criteria. Fixes the build order so that every later milestone's scope can assume every earlier milestone's acceptance criteria already hold, states the top technical risks and their mitigations against the domain docs that own them, and records the project's current phase and the phase transition that follows planning.
+Sequences the entire project — Phase 1 (server) then Phase 2 (client) — into milestones `M0`…`M10`, each with a goal, a scope, and measurable, automatable acceptance criteria, plus `M11` (Bedrock Cross-Play, `15-crossplay.md`) appended as a Phase-1-server-only extension gated on `M0`–`M7` and independent of `M8`–`M10`. Fixes the build order so that every later milestone's scope can assume every earlier milestone's acceptance criteria already hold, states the top technical risks and their mitigations against the domain docs that own them, and records the project's current phase and the phase transition that follows planning.
 
 ## Scope
 
@@ -36,6 +36,7 @@ flowchart LR
     M7 --> M8["M8\nMod API Alpha"]
     M8 --> M9["M9\nClient Bootstrap"]
     M9 --> M10["M10\nClient Feature Parity"]
+    M7 -. "independent of M8-M10\n(CROSS-D22, 15-crossplay.md)" .-> M11["M11\nBedrock Cross-Play"]
 
     subgraph Foundational["Foundational from M0 (PLAN-D3) — not its own milestone"]
         direction TB
@@ -53,7 +54,7 @@ flowchart LR
 **Goal:** the Cargo workspace exists per `12-workspace-structure.md` and empty regions tick at 20 TPS on the real scheduler, with no network and no chunks yet.
 
 **Scope:**
-- Workspace scaffold: all 22 library crates + 2 binaries + `xtask` created per `12`'s Crate Manifest, `[workspace.dependencies]` pinned per `12`'s Workspace Dependency Versions table.
+- Workspace scaffold: all 27 library crates + 2 binaries + `xtask` created per `12`'s Crate Manifest, `[workspace.dependencies]` pinned per `12`'s Workspace Dependency Versions table.
 - `rc-core`, `rc-messaging`, `rc-scheduler` implemented to the point of ARCH-D1–D9, D12, D18–D23: a `bevy_ecs::World` per region, RC-Executor/RC-WorkerPool driving the 11-stage tick pipeline (stages that have no mechanics content yet are no-ops), region build/merge/split (ARCH-D5–D6) exercised against synthetic load.
 - `rc-transport-inproc`'s `InProcessTransport` (ARCH-D27) wired between two artificially-split regions.
 - `12`'s CI gates (WS-D11: `fmt-check`, `lint`, `lint-deps`, `test`) green on every push from the first commit onward.
@@ -204,12 +205,35 @@ flowchart LR
 - The `M8` reference mod's client-side hook — identical Rust mod source, compiled once for the server target and once for the client target (the isomorphic-modding promise) — renders its custom visual behavior correctly in the native client, closing the loop `M8` deliberately left open.
 - A `cargo tree` audit (`12-workspace-structure.md`'s WS-D3 rule 1) confirms `rc-core`, `rc-nbt`, `rc-registries`, `rc-protocol`, `rc-mod-api` resolve to the **same compiled dependency versions** in both `rusty-clanker-server`'s and `rusty-clanker-client`'s dependency graphs — no drift, no forked copies.
 
+### M11 — Bedrock Cross-Play
+
+**Goal:** a pinned-version (CROSS-D6) Bedrock Edition client joins the same world a Java client is connected to, sees the server's real worldgen-parity terrain, plays alongside the Java client with Tier-1 behaviors verified bit-for-bit consistent, and every Tier-2/3 deviation is documented and bounded, not silent — with `crossplay = false` producing zero bound Bedrock listener and zero measurable performance cost.
+
+**Scope:**
+- `rc-bedrock-raknet`, `rc-bedrock-protocol`, `rc-bedrock-auth`, `rc-bedrock-translator`, `rc-bedrock-mappings` (CROSS-D2) implemented to CROSS-D9–D20.
+- Monolithic-mode in-process listener and cluster-mode proxy/node placement (CROSS-D3) both implemented and tested.
+- `crossplay` Cargo feature and `[crossplay]` config surface (CROSS-D4/D10).
+- The mapping-data pipeline (`xtask fetch-bedrock-data`, `xtask codegen-bedrock-mappings`, CROSS-D19–D21) run successfully against a legally obtained BDS + `bedrock-samples` checkout for the pinned version pair.
+- `09-testing-quality.md`'s `rc-paritybot` gains a Bedrock-bot capability (CROSS-D23) and the cross-edition consistency scenario corpus (CROSS-D24).
+
+**Acceptance criteria:**
+- `crossplay = false` (or absent): an automated test confirms no UDP socket is bound on the configured RakNet port; a `criterion` benchmark shows no measurable tick-time regression against a `crossplay`-feature-stripped build (CROSS-D26).
+- `crossplay = true`, monolithic mode: an unmodified, pinned-version Bedrock client completes the full connection lifecycle (RakNet handshake, JWT-chain login, encryption handshake, resource-pack negotiation) and spawns into the server's real, `M5`-generated terrain — not a placeholder or superflat world.
+- A scripted `both-simultaneously` cross-edition scenario (CROSS-D24) confirms a block placed by the Java client is observed by the Bedrock client, and vice versa, within a bounded tick window, with resulting world state identical regardless of which edition performed the action.
+- The full CROSS-D15 Tier-1 behavior set passes the cross-edition consistency suite (CROSS-D24) with world-state hashes identical to the Java-only baseline (`09`'s TEST-D10).
+- The full CROSS-D16/D17 Tier-2/3 set is asserted present-and-bounded via a dedicated fixed test matrix — any newly discovered Bedrock-side limitation is added to the tier table (CROSS-D18) before the affected feature is considered acceptance-complete.
+- `crossplay = true`, cluster mode: a Bedrock client's session survives a cross-node region-boundary handoff within `M7`'s already-proven CLUSTER-D22 ≤2-tick, zero-disconnect budget, verified by a Bedrock-bot variant of `09`'s TEST-D21 handoff suite.
+- A real, unmodified pinned-version Bedrock game client manually joins, renders, and plays a continuous session against a full-featured (`M0`–`M7`) Rusty Clanker build (CROSS-D25's one manual-verification carve-out).
+
+**Dependency:** requires `M0`–`M7`'s acceptance criteria (engine skeleton through cluster mode activation); independent of `M8` (Mod API Alpha) and fully independent of `M9`/`M10` (Phase 2 client) — see CROSS-D22.
+
 ## Risk Register
 
 | Risk | Description | Mitigation | Owning decisions/docs |
 |---|---|---|---|
 | Parity drift | Behavioral or bit-exact mismatches against vanilla accumulate over time as the reimplementation grows, undetected until a player notices. | Automated, CI-gated parity corpora with numeric thresholds (`M3`'s ≥50-contraption bit-exact redstone trace, `M5`'s ≥99.9% worldgen chunk-hash match), re-run on every scheduled CI job (`12`'s WS-D11), not just once at milestone completion. | `01` ARCH-D13/D14/D16/D17; `12` WS-D10/D11; this doc `M3`/`M5` |
 | Protocol version churn | Mojang ships a new full release (e.g. `26.3`) mid-development, and NET-D1's pinned target goes stale before Phase 1 finishes. | NET-D2's deliberate, reviewed version-bump gate (three explicit sub-steps, never silent); the `xtask fetch-data`/`codegen` pipeline (NET-D9) is built for repeatable re-runs against a new version rather than a one-time script. | `02` NET-D1/D2/D9 |
+| Cross-play mapping/tier staleness | Bedrock's own faster patch cadence (CROSS-D6) means the Java↔Bedrock mapping-data pipeline output or the translation-tier table can silently fall behind a newer Bedrock client build, reintroducing an undocumented parity gap on the Bedrock-facing side. | CROSS-D21 ties the mapping-pipeline re-run to *either* edition's version pin moving; CROSS-D18 treats the tier table as a living document reviewed at every Bedrock version-bump gate, never left stale — the same "no silent drift" discipline this register's Parity drift/Protocol version churn rows already apply to the Java-only surface. | `15-crossplay.md` CROSS-D6/D7/D18/D21; this doc `M11` |
 | Determinism under parallelism | An undiscovered edge case in the per-stage parallelization guarantees (ARCH-D13–D17) — especially at chunk/region boundaries — produces observable non-determinism vanilla does not have. | ARCH-D8's startup conflict-graph hard-error catches declared-access violations at boot, not at runtime; `M3`'s bit-exact redstone corpus is specifically chosen because redstone is the domain with zero tolerance for this risk (ARCH-D13); `12`'s `cargo-nextest`-isolated test policy (WS-D10) keeps a discovered non-determinism bug from masking others. | `01` ARCH-D8/D13-D17; `12` WS-D10; this doc `M3` |
 | Cluster border semantics | CLUSTER-D7's ≤30 ms p99 cross-node latency budget is a *deployment-topology* requirement, not a protocol guarantee this project can enforce — an operator who deploys nodes cross-region rather than co-located will see degraded behavior the engine cannot prevent. | CLUSTER-D8's self-healing co-location migration collapses a hot cross-node border back toward zero latency automatically; `M7`'s acceptance criteria explicitly test the graceful-degradation path, not just the happy path; CLUSTER-D28's required observability metrics make a topology violation visible to the operator rather than silently degrading. | `13` CLUSTER-D7/D8/D28; this doc `M7` |
 | Handoff complexity | CLUSTER-D22's six-step handoff protocol has several interacting timing assumptions (proxy buffering, atomic forwarding-table flip, dual in-flight messages across old/new node); a missed edge case could drop or duplicate a player's packets during a border crossing. | `M7`'s acceptance criteria require a fault-injection test (node killed mid-handoff), not only the happy-path crossing; CLUSTER-D24's pre-warming reduces the real-world frequency of the failure window by removing connection-setup latency from the critical path; CLUSTER-D23's structurally separate control channel keeps handoff signaling from ever being confused with ordinary `RegionMessage` traffic. | `13` CLUSTER-D22/D23/D24; this doc `M7` |

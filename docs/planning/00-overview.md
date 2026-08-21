@@ -23,7 +23,7 @@ This is the entry point to Rusty Clanker's planning documentation, for humans an
 
 - **Phase 1 — Server.** The dedicated server: engine core, protocol, world/persistence, worldgen, game mechanics, modding API, cluster mode. Sequenced as milestones `M0`–`M8` (`11-roadmap-milestones.md`).
 - **Phase 2 — Client.** The native `wgpu` client, isomorphic-mod client-side loop, and singleplayer (embedded server). Sequenced as milestones `M9`–`M10`. Does not begin in earnest until Phase 1 reaches `M8` (`PLAN-D1`).
-- **Current phase: PLANNING.** The `docs/planning/` document series (`01`–`13`, plus this file) is the entirety of the project's output to date — no `cargo init`, no source crate, no code exists yet (`PLAN-D6`).
+- **Current phase: PLANNING.** The `docs/planning/` document series (`01`–`15`, plus this file) is the entirety of the project's output to date — no `cargo init`, no source crate, no code exists yet (`PLAN-D6`).
 - **Next phase: blueprint derivation**, performed per milestone, not once for the whole project. A milestone's blueprint (one file under the reserved `blueprints/` directory, `WS-D8`) is derived from the planning docs only once that milestone becomes active, starting with `M0`'s blueprint drawn from `01`, `02`, `12`, and `11` (`PLAN-D6`).
 
 ## Document Map
@@ -40,10 +40,11 @@ This is the entry point to Rusty Clanker's planning documentation, for humans an
 | `08-assets-auth-legal.md` | Authentication, asset acquisition, legal/source policy | Defines the client's Microsoft/Xbox auth chain, the local-only asset-acquisition rule, the Mojang-data commit/custody boundary, and the binding source and branding/EULA policy. |
 | `09-testing-quality.md` | Verification methodology | Defines the layered parity-verification stack (golden data, vanilla-differential testing, worldgen corpus, in-world structure tests), determinism/cluster testing, fuzzing, CI tiers, and performance SLOs. |
 | `10-prior-art.md` | Competitive/prior-art survey | Surveys existing Minecraft-server/client reimplementations and records what this project adopts as validated architecture versus deliberately avoids. |
-| `11-roadmap-milestones.md` | Delivery sequencing | Sequences the whole project into milestones `M0`–`M10` with measurable acceptance criteria, a risk register, and the current-phase/next-phase statement. |
+| `11-roadmap-milestones.md` | Delivery sequencing | Sequences the whole project into milestones `M0`–`M10`, plus `M11` (Bedrock cross-play), with measurable acceptance criteria, a risk register, and the current-phase/next-phase statement. |
 | `12-workspace-structure.md` | Cargo workspace | Fixes the full crate list, dependency-graph hard rules, toolchain/edition pin, feature-flag strategy, and on-disk repository layout every other document's code compiles into. |
 | `13-cluster-architecture.md` | Multi-node cluster mode | Defines `NetworkTransport`, the raft-backed `RegionId → NodeId` directory, the connection-terminating proxy, and the seamless cross-node player-handoff protocol. |
 | `14-performance-engineering.md` | Cross-cutting performance engineering | Owns the parity-gated fast-path framework, memory/allocation/SIMD/build-pipeline/OS-tuning policy, and the concrete performance budgets/reference hardware every other document's performance-adjacent decisions point back to. |
+| `15-crossplay.md` | Bedrock Edition cross-play | Defines the Bedrock protocol-translation layer sitting outside the ECS/tick pipeline, the RakNet transport and Bedrock-side identity/auth chain, the translation-scope tier list, the mapping-data pipeline, and the `M11` cross-play milestone — Java Edition semantics remain authoritative without exception. |
 
 ## Foundational Decisions
 
@@ -70,13 +71,14 @@ The most load-bearing decisions across all documents, by ID. This is a pointer i
 | `TEST-D46`, `TEST-D50` | CI is the sole authority on task completion — an implementation changeset is mechanically blocked from touching tests, fixtures, or budget/SLO tables, and an agent's self-reported local run is never a substitute for a green, from-clean-checkout CI run. |
 | `PERF-D1`, `PERF-D4` | The parity-gated fast-path framework: a startup-only `EngineConfig`-selected trait seam (`PERF-D1`) admitted only behind an observational-equivalence promotion suite (`PERF-D4`) — the mechanism every optimized fast path across the corpus, current and future, must route through. |
 | `PLAN-D1`, `PLAN-D3` | Phase 1 precedes Phase 2; the message substrate and region model are foundational from milestone `M0`, cluster mode is a later activation milestone that touches no `M0`–`M6` domain logic. |
+| `CROSS-D1`, `CROSS-D6` | Bedrock cross-play: Java Edition semantics are authoritative without exception, the simulation core never learns about Bedrock; the pinned Bedrock protocol target (protocol 2168, Bedrock 26.44) is tracked independently of the Java pin (`NET-D1`). |
 
 ## Conventions
 
 - **Current-state-only.** Every document describes what is decided as of this writing — never a changelog, never a narrated history of alternatives considered or superseded.
-- **Decision-ID scheme.** Every binding decision carries a stable ID, `<PREFIX>-D<n>`, one prefix per owning document (`ARCH`, `NET`, `WORLD`, `GEN`, `MECH`, `MOD`, `CLIENT`, `ASSET`, `TEST`, `PRIOR`, `PLAN`, `WS`, `CLUSTER`, `PERF`), monotonically numbered and never renumbered or reused. Other documents, and future blueprints, cite a decision by ID rather than restating it.
+- **Decision-ID scheme.** Every binding decision carries a stable ID, `<PREFIX>-D<n>`, one prefix per owning document (`ARCH`, `NET`, `WORLD`, `GEN`, `MECH`, `MOD`, `CLIENT`, `ASSET`, `TEST`, `PRIOR`, `PLAN`, `WS`, `CLUSTER`, `PERF`, `CROSS`), monotonically numbered and never renumbered or reused. Other documents, and future blueprints, cite a decision by ID rather than restating it.
 - **English throughout.** All planning prose, and all future code/comments/commit messages, are written in English.
-- **Doc structure template.** Every domain document (`01`–`13`) follows the same shape: **Purpose** (one paragraph) → **Scope** (In scope / Out of scope) → **Decisions** (a table: ID | Decision | Rationale) → supporting diagrams (Mermaid) where a picture clarifies a pipeline or protocol → **Interfaces** (Provides to / Needs from, per related document) → **Open Questions**. This file is the one exception, structured as an index instead.
+- **Doc structure template.** Every domain document (`01`–`15`) follows the same shape: **Purpose** (one paragraph) → **Scope** (In scope / Out of scope) → **Decisions** (a table: ID | Decision | Rationale) → supporting diagrams (Mermaid) where a picture clarifies a pipeline or protocol → **Interfaces** (Provides to / Needs from, per related document) → **Open Questions**. This file is the one exception, structured as an index instead.
 
 ## Glossary
 
@@ -96,3 +98,6 @@ The most load-bearing decisions across all documents, by ID. This is a pointer i
 - **Isomorphic mod** — one compiled mod artifact carrying shared/server/client logic, loaded automatically on whichever side(s) apply, with no author bookkeeping for "am I on the server" (`06`).
 - **Allowed/forbidden sources** — the binding source lists governing how Mojang-compatible behavior may be implemented: the pinned version's officially-distributed decompiled source may be consulted as a local reference, but Mojang expression is never copied verbatim (`ASSET-D18`/`D19`).
 - **Blueprint (blueprint derivation)** — the project phase after planning: deriving a concrete implementation plan for one milestone at a time from the current state of these planning documents (`PLAN-D6`).
+- **Cross-play** — Bedrock Edition clients joining the same world as Java Edition clients via a protocol-translation layer sitting entirely outside the ECS/tick pipeline; Java semantics remain authoritative without exception (`CROSS-D1`, `15`).
+- **Translation tier** — the parity / gracefully-degraded / unsupported classification (Tier 1/2/3) of a gameplay-visible behavior's fidelity when observed by a Bedrock client (`CROSS-D15`–`D17`).
+- **RakNet** — the UDP-based reliable transport protocol Bedrock Edition clients speak; Rusty Clanker implements it hand-written from public documentation, direct-connect only (`CROSS-D8`).

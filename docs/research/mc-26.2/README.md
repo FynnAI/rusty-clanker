@@ -10,12 +10,20 @@ unambiguous implementation blueprints from `docs/planning/`) a precise,
 own-words map of what vanilla actually does, so blueprint authors are not
 left inferring behavior from external secondary sources alone.
 
-These 16 documents are **research**, not **planning**. They describe vanilla
+These 26 documents are **research**, not **planning**. They describe vanilla
 as it is; they do not decide what Rusty Clanker will do. Every design
 decision remains the exclusive property of `docs/planning/*.md` and its
 `<PREFIX>-D<n>` decision registers. Where a research document's findings bear
 on an open planning question, it says so explicitly and points at the owning
 planning document — it does not make the call itself.
+
+The corpus has two tiers: subsystem cartography (00–15, one document per
+package cluster) and deep dives into formulas and determinism (16–25, one
+document per parity-critical mechanism — RNG, noise math, float/double
+precision, combat, enchanting/XP/loot, villager economy, random-tick growth
+and weather, natural spawning, seed derivation, and fluid dynamics — each
+tracing exact algorithms, constants, and RNG call sequences rather than
+package structure).
 
 ## How this corpus was produced
 
@@ -38,7 +46,7 @@ planning document — it does not make the call itself.
 - **Neither the decompiled source tree nor the datagen output is committed
   to this repository, in any form, per `docs/planning/08-assets-auth-legal.md`
   ASSET-D18(f)/ASSET-D19/ASSET-D24.** They are local, developer-machine-only
-  working references. Only these 16 hand-authored Markdown documents —
+  working references. Only these 26 hand-authored Markdown documents —
   containing class/method/field names, signatures, numeric constants, data
   shapes, and algorithm descriptions in the researchers' own words — are
   committed.
@@ -96,12 +104,36 @@ world-generation, or authentication surface.
 | 14 | [`14-physics-collision.md`](14-physics-collision.md) | `VoxelShape` representation, the `Entity.move()` pipeline, per-entity-category gravity/drag formulas, knockback, fall damage, fluid physics, vehicles, projectile motion, DDA raytracing, explosions, server movement reconciliation |
 | 15 | [`15-services-misc.md`](15-services-misc.md) | Session authentication, `server.properties` inventory, the JSON-RPC server-management API, console/GUI/remote-control surfaces, weather, raids, ambient spawners, GameTest framework, debug subscriptions, feature flags, ban/allow/op lists |
 
-Every document follows the same structure: Purpose → Where it lives (package
+Documents 00–15 follow the same structure: Purpose → Where it lives (package
 map) → How it works (numbered subsections) → Key types → Constants & magic
 values → Cross-subsystem interfaces → Data-generator cross-reference → Notes
 for Rusty Clanker. Documents 00–01, 08, and 12 additionally end with a
 distilled Open Questions section of their own; the remainder fold their open
 questions into their "Notes for Rusty Clanker" close.
+
+## Deep dives — formulas & determinism
+
+Documents 16–25 go one level deeper than the subsystem cartography above:
+each pins the exact formulas, numeric types, constants, and RNG call
+sequences a specific parity-critical mechanism depends on — the layer where
+"functionally similar" silently diverges from "bit-identical." Each follows
+its own related structure: Purpose → Where it lives → The mechanics
+(numbered subsections) → Constants table → RNG usage map / cross-references
+→ Reimplementation hazards, ranked → Open questions (where the mechanism
+left any).
+
+| # | Document | Scope |
+|---|---|---|
+| 16 | [`16-rng-internals.md`](16-rng-internals.md) | Both PRNG algorithm families (48-bit Legacy LCG, Xoroshiro128++) traced method-by-method — `nextInt`/`nextFloat`/`nextDouble`/`nextGaussian` shapes, seed-mixing (`mixStafford13`) call paths, `Mth.getSeed`'s 32-bit/64-bit split, the full RNG usage map across worldgen and gameplay, and a source-verified correction to GEN-D6's carver-seeding claim |
+| 17 | [`17-noise-math.md`](17-noise-math.md) | `ImprovedNoise`/`PerlinNoise`/`NormalNoise`/`BlendedNoise` construction order and float/double boundaries, `CubicSpline`'s all-`f32` evaluation, `DensityFunctions.Ap2`'s cache-skipping short-circuit hazard, `IntervalSelect` (successor to the no-longer-existing `WeirdScaledSampler`), and Climate's `quantizeCoord` funnel |
+| 18 | [`18-float-determinism.md`](18-float-determinism.md) | Per-call-site catalogue of table-based vs. real-`Math` trig/`atan2`/`invSqrt`, the JDK transcendental cross-platform non-guarantee, decompiler literal-rendering pitfalls (why every constant needs a `javap` cross-check), `VecDeltaCodec`'s rounding-mode mismatch, and Java integer-overflow wraparound hazards |
+| 19 | [`19-combat-damage.md`](19-combat-damage.md) | The full server-authoritative hurt pipeline in exact evaluation order (shield/freeze/armor/resistance/enchant EPF/absorption), the player-vs-mob absorption divergence, melee/projectile/fall-damage assembly, and the complete exhaustion/regen constant table |
+| 20 | [`20-enchant-xp-loot-math.md`](20-enchant-xp-loot-math.md) | Enchanting-table bookshelf/cost/slot-reseed RNG regimes, `AnvilMenu`'s exact tax/price/repair-cost pipeline, `apply_bonus`/binomial loot-function formulas and their conditional RNG-call counts, the XP curve/orb-tier/mending accounting, and the fishing wait-time state machine |
+| 21 | [`21-villager-economy.md`](21-villager-economy.md) | World-persisted vs. per-entity RNG streams, the exact demand/price-clamp (mixed `f32`/`f64`) formulas, trade-commit XP-accounting order, the `GossipType` transfer/merge table, breeding/golem-spawn trigger conditions, and the wandering-trader spawn-chance ladder |
+| 22 | [`22-growth-weather-spread.md`](22-growth-weather-spread.md) | `Level.randValue`'s separate non-`RandomSource` position-jitter LCG, `CropBlock`'s growth-chance/soil-scan formula, exact weather-timer ranges and the global (not per-dimension) `WeatherData` singleton, biome height-temperature adjustment, and the fire spread/burnout odds table |
+| 23 | [`23-spawning-math.md`](23-spawning-math.md) | Global/local mob-cap formulas, the pack-spawn vs. chunk-generation-time spawning algorithms (structurally different RNG walks), the slime-chunk dual-gate, the difficulty-scaled equipment-roll pipeline, despawn rules, and trial-spawner per-player scaling |
+| 24 | [`24-seed-derivation-map.md`](24-seed-derivation-map.md) | The complete seed fan-out reference — which `NoiseGeneratorSettings` use which RNG algorithm, `BiomeManager.obfuscateSeed`'s scope, the full `Noises.java` resource-key enumeration, every `WorldgenRandom` seeding formula, the structure-set salt table, and corrections to two prior-document claims |
+| 25 | [`25-fluid-dynamics.md`](25-fluid-dynamics.md) | The two independent lava+water reactions, fixed neighbor-iteration orders (distinct for contact scans vs. flow/spread), the greedy depth-first slope search, the float/double boundary in `getFlow`, per-fluid constants gated by the `FAST_LAVA` attribute, and sponge absorption's bounded BFS |
 
 ## Cross-cutting findings
 
@@ -196,6 +228,81 @@ domain boundaries that no single detail document owns:
   documentable, and arguably *improving* deviation, but needs a formal
   WORLD-D decision rather than silent adoption per the project's
   no-silent-deviation rule.
+
+### RNG, noise & numeric-precision architecture
+
+The deep-dive corpus (`16`–`25`) resolves the "which RNG algorithm, which
+type width, which call order" questions the domain documents above could
+only flag. The findings that change how every formula-bearing blueprint must
+be written:
+
+- **Two structurally incompatible RNG algorithm families coexist, selected
+  per call site**: the legacy 48-bit `java.util.Random`-compatible LCG and
+  Xoroshiro128++ (`16`, `24`). Overworld/large_biomes/amplified worldgen use
+  Xoroshiro; nether/end/caves/floating_islands and most gameplay RNG use
+  legacy. Each has its own `nextInt(bound)` shape (Xoroshiro: Lemire
+  multiply-high, no power-of-two fast path; legacy: guaranteed single-draw
+  power-of-two fast path) and its own `fromHashOf` hash (Xoroshiro: MD5;
+  legacy: `String.hashCode()`) — confirmed exact, not just algorithm-family,
+  by `16`.
+- **Two independent determinism *regimes* run in parallel through gameplay
+  code, not just worldgen**: seed-derived/`random_sequence`-backed streams
+  (Xoroshiro128++, persisted, reproducible — fishing, structures, vaults,
+  villager trade-content rolling) versus ambient/ephemeral streams
+  (`Entity.random`, `Level.random`, `Level.soundSeedGenerator`) seeded once
+  per boot from `RandomSupport.generateUniqueSeed()` (a uniquifier XOR
+  `nanoTime()`) — deliberately non-reproducible across restarts in vanilla
+  itself (`16`, `20`, `21`, `23`). Most combat, natural spawning, mob AI
+  variance, anvil/grindstone, and random-tick position selection use the
+  ambient regime; seeding them from the world seed for "determinism" would
+  itself be an undocumented parity break, not an improvement.
+- **`docs/planning/04-worldgen-parity.md` GEN-D6 is confirmed wrong on one
+  formula and needs correcting before blueprint time**: carver source-chunk
+  seeding calls `WorldgenRandom::setLargeFeatureSeed` (XOR-combine,
+  multipliers not forced odd), not the decoration-seed formula (add-combine,
+  multipliers forced odd via `|1`) GEN-D6 currently claims it reuses (`16`
+  §7). The other three GEN-D6 formulas are confirmed bit-exact.
+- **Noise math is a strict type-boundary problem, not just an algorithm
+  one** (`17`): `CubicSpline` runs entirely in `f32`, narrowing at the
+  coordinate boundary and only widening back to `f64` on return;
+  `BlendedNoise` always uses the *legacy sequential* Perlin-construction path
+  for its three fields even when seeded via a Xoroshiro-derived
+  `RandomState`; `DensityFunctions.Ap2` skips evaluating (and therefore
+  caching) its second operand whenever the first operand already determines
+  the result, silently bypassing any stateful cache node inside the skipped
+  subtree; and Climate sampling funnels through a second, distinct
+  `f64→f32→i64` quantization step separate from the spline boundary.
+- **Bit-identity of the transcendental math itself is not guaranteed by the
+  JDK/JVM spec** (`18`): HotSpot's default `Math.sin/cos/pow/exp/log/atan`
+  path is a proprietary JIT intrinsic, not fdlibm/StrictMath (`strictfp` and
+  `StrictMath` are confirmed absent everywhere in 26.2) — golden fixtures
+  must be captured from an empirically pinned reference JVM build/CPU
+  architecture, not assumed derivable from a spec. `Mth.sin/cos` (a
+  65536-entry table) and real `Math.sin/cos` are used at disjoint,
+  call-site-specific locations with no discoverable category rule; every
+  call site needs individual verification.
+- **Decompiler output cannot be trusted for numeric-literal precision in
+  either direction** — demonstrated concretely both ways in the same class
+  (`18`): a genuinely-double constant rendered with a misleading
+  float-suffixed literal, and a genuinely float-widened-into-double literal
+  that looks like an honest double. Every magic constant destined for the
+  Rust port needs a `javap -c -constants` cross-check against the real class
+  file, never a transcription from decompiled `.java` source alone.
+- **RNG call-count per invocation is itself runtime-conditional, observable
+  state** — a hazard independently rediscovered across unrelated domains:
+  `apply_bonus`'s loot functions, `RemoveBinomial`'s Bernoulli-loop-vs-
+  Gaussian-approximation switch, `LavaFluid.randomTick`'s 1-to-7-call
+  fire-ignition path, and natural spawning's per-attempt draw count all mean
+  "always call the helper the same number of times" is unsafe to assume —
+  the exact branch structure must be ported, not just the formula (`20`,
+  `23`, `25`).
+- **The seed-to-world fan-out is now a single confirmed reference** (`24`):
+  which RNG algorithm applies is fixed per `NoiseGeneratorSettings`;
+  `BiomeManager.obfuscateSeed` (SHA-256 of the little-endian overworld seed)
+  is computed once and reused verbatim for nether/end; and the default
+  `FrequencyReductionMethod` binds `setLargeFeatureWithSalt`'s parameters in
+  an order swapped relative to every other structure-placement caller — a
+  concrete transcription trap for a naive port.
 
 ### Data-driven surface
 
@@ -469,11 +576,6 @@ already suffice, but each names a specific gap this corpus did not close.
   genuinely dead code, used by a code path outside `net.minecraft.world`,
   or reserved for a future/alternate mode before deciding whether Rusty
   Clanker needs an equivalent second implementation.
-- The exact RNG algorithm behind `level.getRandom()` (used for
-  `Orientation.random` in experimental redstone and piston/particle
-  effects) is out of this document's scope — belongs to a general
-  RNG/determinism research document; experimental-redstone parity depends
-  on it.
 - Cross-partition/cluster behavior for vibration travel across chunk-load
   boundaries and for redstone circuits or torch-burnout state crossing a
   future cluster partition boundary is explicitly deferred to
@@ -627,3 +729,97 @@ already suffice, but each names a specific gap this corpus did not close.
   action/body/input, 33 files) was identified as a leftover likely owned by
   game-mechanics or client-architecture research but not deep-dived — worth
   a future pass if no other document claims it explicitly.
+
+### 16 — RNG internals
+
+- Whether any real vanilla call path invokes `WorldgenRandom::nextGaussian()`
+  across a `setDecorationSeed`/`setFeatureSeed`/`setLargeFeatureSeed` reseed
+  boundary needs a black-box audit against a running reference server —
+  grep-only analysis cannot confirm reachability of a specific runtime call
+  sequence with certainty.
+- `RandomCommand`'s no-`sequence` path resolving to `Level.random` (ambient,
+  non-reproducible) rather than any world-seed-derived stream should be
+  double-checked against community documentation of `/random value` for any
+  version-specific caveat, since a command literally named "random" that is
+  *not* reproducible by default is a slightly surprising design choice worth
+  confirming isn't itself a 26.2-specific change from older versions.
+- This document's RNG usage map (weather, random ticks, ambient particles,
+  sound-seed sync) is representative, not an exhaustive enumeration of every
+  `Entity.random`/`Level.random` call site (there are hundreds across
+  `world.entity`/`world.level.block`) — a systematic per-mechanism audit
+  belongs to each owning gameplay domain as those mechanisms are
+  individually blueprinted, using this document's method-level algorithms as
+  the shared, already-verified primitive layer.
+
+### 18 — Floating-point & math-table determinism
+
+- What exact HotSpot build/version and CPU architecture will produce the
+  golden fixtures for CI — will `Math.sin/cos/pow/exp/log` outputs be
+  captured as opaque reference data rather than assumed derivable from
+  fdlibm, given JDK `Math` is not guaranteed cross-platform bit-identical?
+- Will the CI/fixture-generation JVM launch command be pinned to explicitly
+  exclude (or explicitly set and record) `-Djoml.fastmath`/
+  `-Djoml.sinLookup`/`-Djoml.useMathFma`, since these silently change
+  joml-mediated gameplay math (e.g. crossbow multishot spread) even though
+  the jar hash stays identical?
+- Should a dedicated differential test harness be budgeted specifically for
+  reverse-engineering HotSpot's `Math.sin/cos/pow/exp/log` intrinsic
+  behavior against a Rust libm candidate, separate from general parity
+  testing, given this is flagged as the hardest single piece of parity work
+  in the project?
+
+### 19 — Combat & damage formulas
+
+- Per-mob custom melee-attack overrides (bosses, ranged mobs with special
+  variance) were explicitly out of scope for this pass — only the generic
+  `Mob.doHurtTarget` path was verified; a follow-up pass could catalog
+  mob-specific `doHurtTarget` overrides if any exist.
+- The generic `LootItemCondition`/`ConditionalEffect` evaluation engine that
+  gates enchantment effects (`damage_source_properties`,
+  `entity_properties`, `random_chance`) was referenced but not
+  independently deep-dived — it's shared machinery with the loot-table
+  system and may already be covered (or deserve coverage) in
+  `10-items-recipes-loot.md`.
+- Crossbow-specific charge/uncertainty constants and multishot/piercing
+  projectile-count RNG were not traced in the same depth as the bow path —
+  only the shared `Projectile.getMovementToShoot` triangle-RNG mechanism was
+  verified; crossbow's exact charge-time formula could use a follow-up if
+  crossbow parity becomes a blocker.
+
+### 20 — Enchanting, XP & loot probability math
+
+- Which stable, deterministic ordering Rusty Clanker should adopt for
+  multi-enchantment iteration (replacing Java's unreproducible
+  identity-hashcode order) — registration order and sorted-by-resource-id
+  are both viable; needs a MECH-D decision, not something derivable from
+  vanilla source.
+- Whether Rusty Clanker should deliberately make ambient
+  (non-`random_sequence`) loot/enchant/anvil/grindstone RNG
+  world-seed-reproducible for testability, given that doing so would make
+  the engine *more* deterministic than real vanilla and is itself a stated
+  parity deviation if adopted (candidate ARCH-D/TEST-D).
+- Whether any vanilla-content combination can actually produce the anvil's
+  "two mutually incompatible enchantments added from one book with neither
+  present on the target" scenario in normal (non-command) play, which would
+  determine how urgently the identity-hashcode iteration-order hazard needs
+  resolving vs. being a purely theoretical/modded-content concern.
+
+### 25 — Fluid dynamics & related block physics
+
+- `FluidState.getAmount()` never appears to return 9 despite `AMOUNT_MAX=9`
+  existing as a constant, making `FlowingFluid.getShape`'s
+  `state.getAmount() == 9` branch look unreachable/vestigial in 26.2 —
+  flagged as a low-priority hazard rather than fully resolved, since
+  confirming it's truly dead (vs. reachable via some code path not covered
+  by this domain, e.g. a datapack-registered custom fluid) would require
+  auditing all `Fluid` subclasses outside vanilla's two.
+- The exact iteration order of `BlockPos.betweenClosed` (used by
+  `FarmlandBlock.isNearWater`'s 9x2x9 box scan) was not verified, since it
+  only matters for an existence check (order-independent for correctness) —
+  could matter if reused elsewhere for an order-sensitive purpose.
+- Cauldron item-interaction dispatch (`CauldronInteraction`
+  registry/bootstrap) was deliberately left to `07-blocks-blockstates.md`/
+  `00-source-overview.md` per this domain's owned-scope split; this document
+  only covers the fluid-receiving side (rain/snow/dripstone fill) — if that
+  coverage turns out thin, the interaction table may need its own follow-up
+  pass.

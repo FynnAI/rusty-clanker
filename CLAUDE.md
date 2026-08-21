@@ -35,6 +35,7 @@ Rusty Clanker is a from-scratch Rust reimplementation of the Minecraft: Java Edi
 - **Vanilla parity is bit-identical by default.** Any deviation must be an explicitly documented, bounded, justified exception — never silent or approximate.
 - **No cross-partition blocking:** no mod, region, or node interaction may block a tick waiting on another partition; cross-partition effects are fire-and-forget with bounded-latency delivery.
 - **Isomorphic mods:** one compiled mod artifact carries shared/server/client parts; the engine loads the applicable sides automatically.
+- **Bedrock cross-play (doc 15, CROSS-):** config-activated (`crossplay = false` default — off means zero Bedrock code paths active), own from-scratch translation layer (`rc-bedrock-*` crates) at the connection boundary; Java semantics are always authoritative and the simulation core never learns about Bedrock. Pinned Bedrock protocol tracked independently of the Java pin; RakNet/UDP only; milestone M11 (depends on M0–M7, independent of mod API and client milestones). Geyser/Cloudburst/gophertunnel code only via the ASSET-D30 firewall regardless of their permissive licenses.
 - **Performance engineering is owned by doc 14 (PERF-):** parity-gated fast-path framework (every behavior-relevant optimization ships as an alternative backend behind a trait seam, promoted only after an observational-equivalence gate), allocator/arena policy, SIMD dispatch rules, opt-in Cranelift worldgen JIT behind the same gate, PGO/BOLT release pipeline, per-stage tick and memory budgets.
 
 ## Document map (`docs/planning/`)
@@ -56,5 +57,6 @@ Rusty Clanker is a from-scratch Rust reimplementation of the Minecraft: Java Edi
 | `12-workspace-structure.md` | Cargo workspace, crate graph, dependency pins (WS-) |
 | `13-cluster-architecture.md` | Server meshing: partitioning, ownership, proxy, handoff (CLUSTER-) |
 | `14-performance-engineering.md` | Cross-cutting perf: fast-path gate, memory/SIMD/IO tactics, build pipeline, budgets (PERF-) |
+| `15-crossplay.md` | Bedrock cross-play: translation layer, Bedrock pin, auth, mapping pipeline, M11 (CROSS-) |
 
 Research corpora (outside `docs/planning/`): `docs/research/mc-26.2/` (subsystem cartography of the ASSET-D18(f) reference) and `docs/research/third-party/` (ASSET-D30 firewall notes).
