@@ -6,7 +6,7 @@
 | Milestone | M1 — Protocol Bootstrap: Status & Login |
 | Prerequisites | M1-B01 (`rc-protocol`'s VarInt/frame/wire/packet/`RcPacket` derive foundation and `rusty-clanker-server`'s `net::{ConnectionConfig, ConnectionHandle, SendError, spawn_connection}` Tokio connection layer — this blueprint calls every one of these exactly as M1-B01 fixed them, adding no change to `crates/protocol/src/{varint,frame,wire,packet,cipher}.rs` or `crates/server/src/net/connection.rs`). M1-B04 (Login/Configuration and the handoff into Play, real and merged): its Configuration→Play hand-off is the real `rusty_clanker_server::net::{PlayerSession, PlayerSessionSink}` seam (`PlayerSession { profile: ResolvedProfile, entity_id: rc_core::RcEntityId, connection: ConnectionHandle, inbound: mpsc::Receiver<RawPacket> }`, `PlayerSessionSink::accept(&self, session: PlayerSession)`), which this blueprint implements for `HardcodedWorld` (Deliverables, `world.rs`) — the "later blueprint" M1-B04's own Context names as the one that wires `PlayerSessionSink` into the simulation. This blueprint's own `enter_play`/`PlayerProfile` entry point (below) stays the lower-level primitive the sink's `accept` translates into and calls; every acceptance test in this blueprint still exercises `enter_play` directly against a raw M1-B01 connection, bypassing Login/Configuration entirely, so this blueprint's own Deliverables and Acceptance tests remain fully self-contained and independently testable — the `PlayerSessionSink` impl is additive integration glue, not a dependency of any test below. |
 | Implements | NET-D4 (the terminal-packet-driven Configuration→Play inbound-state transition, the one specific half of NET-D4 the research cartography flags as landing inside player-spawn setup rather than the protocol-state-machine blueprint itself — restated in Context); NET-D8 (implements M1-B04's `PlayerSessionSink` seam for `HardcodedWorld`, completing the Login/Configuration→Play hand-off M1-B04 itself leaves for "a later blueprint"); ARCH-D5/D7/D12 (this blueprint's own first real instantiation of one hardcoded region via `rc-scheduler`, ticking at 20 TPS — the composition-root wiring M1-B01 explicitly deferred: "the full `pub fn run_embedded(...)` composition root... is a later blueprint's scope"); WORLD-D2 (paletted-container wire encoding, restated field-by-field for this blueprint's own hand-built superflat content — no dependency on `rc-chunk-storage`, which stays untouched); TEST-D14 pattern (a synchronous, deterministic, clock-injectable driver for the keep-alive state machine, mirroring the project's existing "pure core / thin I/O shell" testing discipline); satisfies M1's roadmap Acceptance Criterion 1's Play-spawn and 30-minute-idle-soak halves (`11-roadmap-milestones.md`) |
-| Crates touched | `rusty-clanker-server` (`crates/server/`) only, plus `rc-protocol`'s already-reserved `crates/protocol/generated/v776/` directory (wiring the M0-B07 codegen output into `rc-protocol`'s compiled module tree for the first time — no change to any hand-written `rc-protocol` source file). No new Cargo edge: `PlayerSession`/`PlayerSessionSink` (M1-B04) already live in this same crate. |
+| Crates touched | `rusty-clanker-server` (`crates/server/`), plus `rc-registries`' already-populated `crates/registries/generated/v776/` directory (WS-D13 — wiring the M0-B07 codegen output into `rc-registries`' compiled module tree for the first time: one new `mod.rs` plus one `#[path]` declaration in `crates/registries/src/lib.rs`, no change to any other hand-written `rc-registries` source). One new Cargo edge: `crates/server/Cargo.toml` gains a direct `rc-registries` dependency (a `SHARED`-crate edge, legal under every WS-D3 rule). `PlayerSession`/`PlayerSessionSink` (M1-B04) already live in this same crate. |
 | Estimated scope | L |
 
 ## Goal & Done definition
@@ -119,7 +119,7 @@ Restated from `docs/research/mc-26.2/02-network-protocol.md` §3.12 (`JoinWorldT
 
 All four distinct block-state ids (`AIR`, `BEDROCK`, `DIRT`, `GRASS_BLOCK`) fall inside section index `0` alone (`y ∈ [-64,-48)` covers `-64..=-49`, which contains all of `-64..=-59` above) — every one of the other 23 sections is pure `AIR`. This is a deliberate placement choice (not a coincidence this blueprint merely observes) specifically so exactly one section per chunk needs the non-trivial (`Indirect`, 4-bit) palette path and every other section takes the trivial (`SingleValue`, 0-bit) path, keeping both the encoder and its acceptance tests simple and exactly, deterministically assertable. Biome: a single value, `minecraft:worldgen/biome` registry entry `PLAINS`, for the whole chunk (every section, every one of the 64 quart-cells) — `SingleValue`, 0 bits.
 
-`AIR`/`BEDROCK`/`DIRT`/`GRASS_BLOCK` are `rc_protocol::generated_v776::block_states::default_state::{AIR, BEDROCK, DIRT, GRASS_BLOCK}` (M0-B07's codegen output, each block's own flagged-default state — none of these four blocks has any property that would make a non-default state meaningfully different for a flat placeholder). `PLAINS` is `rc_protocol::generated_v776::registries::worldgen_biome::PLAINS` (same codegen output, `RegistryEntryId`). Both files are assumed already committed per M0's own roadmap Acceptance Criterion 3 (M0 is a hard precondition of M1 starting at all, PLAN-D2) — this blueprint's own new work is wiring that already-generated code into `rc-protocol`'s compiled module tree for the first time (Deliverables), since no prior blueprint did so (`crates/protocol/src/lib.rs` has no `generated` module declaration until this blueprint adds one).
+`AIR`/`BEDROCK`/`DIRT`/`GRASS_BLOCK` are `rc_registries::generated_v776::block_states::default_state::{AIR, BEDROCK, DIRT, GRASS_BLOCK}` (M0-B07's codegen output, each block's own flagged-default state — none of these four blocks has any property that would make a non-default state meaningfully different for a flat placeholder). `PLAINS` is `rc_registries::generated_v776::registries::worldgen_biome::PLAINS` (same codegen output, `RegistryEntryId`). Both files are assumed already committed per M0's own roadmap Acceptance Criterion 3 (M0 is a hard precondition of M1 starting at all, PLAN-D2) — this blueprint's own new work is wiring that already-generated code into `rc-registries`' compiled module tree for the first time (Deliverables, per WS-D13), since no prior blueprint did so (`crates/registries/src/lib.rs` has no `generated_v776` module declaration until this blueprint adds one).
 
 **Dimension/biome registry precondition.** `LoginPlay`'s `dimension_type` field is a registry-resolved `VarInt` id, and the biome paletted container's single value is likewise a registry id — both are meaningless unless the client already knows those registries from Configuration's registry sync (`docs/research/mc-26.2/02-network-protocol.md` §3.12, `ClientboundRegistryDataPacket`, a live web search performed while deriving this blueprint confirmed: "it is impossible to send a valid Login (play) packet unless the [`minecraft:dimension_type`] registry has at least one entry"). This blueprint assumes M1-B04 synchronizes, at minimum, one `minecraft:dimension_type` entry named `minecraft:overworld` at protocol id `0` and the `minecraft:worldgen/biome` registry containing at least `minecraft:plains` — restated here as a binding requirement on M1-B04, not something this blueprint implements (Configuration's registry sync is entirely M1-B04's scope). This blueprint's own tests, which bypass Configuration entirely, do not depend on a real registry sync having happened (a raw byte-level decode-and-assert never needs the *client* to be happy — only this blueprint's own encoder to be provably correct); the manual, real-vanilla-client verification pass (M1's Acceptance Criterion 3, a different milestone-level manual step) is the one place this precondition actually matters, and is called out again in Constraints.
 
@@ -270,11 +270,12 @@ A connected vanilla client sends more than this blueprint's own three recognized
 
 ## Deliverables
 
-### `crates/server/Cargo.toml` (modify — add one normal dependency; two dev-dependencies)
+### `crates/server/Cargo.toml` (modify — add two normal dependencies; two dev-dependencies)
 
 ```toml
 [dependencies]
 # ...every existing line from M1-B01 unchanged...
+rc-registries = { path = "../registries" }
 bevy_ecs = { workspace = true }
 
 [dev-dependencies]
@@ -282,14 +283,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ```
 
-### `crates/protocol/generated/v776/mod.rs` (new — this blueprint's own wiring of M0-B07's already-committed codegen output into `rc-protocol`'s module tree, first consumer)
+### `crates/registries/generated/v776/mod.rs` (new — this blueprint's own wiring of M0-B07's already-committed codegen output into `rc-registries`' module tree, first consumer)
 
 ```rust
 pub mod block_states;
 pub mod registries;
 ```
 
-### `crates/protocol/src/lib.rs` (modify — add one path-attributed module declaration; every existing line from M1-B01 unchanged)
+### `crates/registries/src/lib.rs` (modify — add one path-attributed module declaration; every existing line from M0-B01 unchanged)
 
 ```rust
 #[path = "../generated/v776/mod.rs"]
@@ -451,8 +452,8 @@ pub fn pack_position(pos: rc_core::BlockPos) -> i64;
 ### `crates/server/src/play/chunk.rs`
 
 ```rust
-use rc_protocol::generated_v776::block_states::default_state as blocks;
-use rc_protocol::generated_v776::registries::worldgen_biome as biomes;
+use rc_registries::generated_v776::block_states::default_state as blocks;
+use rc_registries::generated_v776::registries::worldgen_biome as biomes;
 
 pub const WORLD_MIN_Y: i32 = -64;
 pub const SECTION_COUNT: usize = 24;
@@ -610,7 +611,7 @@ pub async fn enter_play(
 
 ## Acceptance tests (write these FIRST — own changeset)
 
-**Changeset boundary:** the test changeset is every file listed below, plus `crates/server/src/play/{packets.rs, chunk.rs, keepalive.rs, world.rs, connection.rs, mod.rs}` with every function body from the Deliverables signatures replaced with `todo!()` (fields/derives/doc comments unchanged, including `HardcodedWorld`'s `PlayerSessionSink` impl), plus the `crates/server/Cargo.toml`, `crates/protocol/src/lib.rs`, `crates/server/src/lib.rs`, and `crates/protocol/generated/v776/mod.rs` edits. The implementation changeset (Implementation steps) fills in real bodies only; it must not modify any file under `crates/server/tests/`.
+**Changeset boundary:** the test changeset is every file listed below, plus `crates/server/src/play/{packets.rs, chunk.rs, keepalive.rs, world.rs, connection.rs, mod.rs}` with every function body from the Deliverables signatures replaced with `todo!()` (fields/derives/doc comments unchanged, including `HardcodedWorld`'s `PlayerSessionSink` impl), plus the `crates/server/Cargo.toml`, `crates/registries/src/lib.rs`, `crates/server/src/lib.rs`, and `crates/registries/generated/v776/mod.rs` edits. The implementation changeset (Implementation steps) fills in real bodies only; it must not modify any file under `crates/server/tests/`.
 
 ### `crates/server/tests/play_chunk_set.rs` (real loopback socket, no M1-B02/B03/B04 dependency)
 
@@ -620,7 +621,7 @@ pub async fn enter_play(
 3. Assert packets arrive in exactly this id order: `0x31, 0x61, 0x48, 0x26, 0x58, 0x0C`, then exactly 9 `0x2D`, then `0x0B` — decode each non-chunk packet via `decode_one::<T>` and assert: `LoginPlay.is_flat == true`, `.game_mode == 1`, `.dimension_names == vec!["minecraft:overworld"]`; `SynchronizePlayerPosition.teleport_id == 1`; `GameEvent == GameEvent{event:13, value:0.0}`; `SetChunkCacheCenter == {0,0}`; `ChunkBatchFinished.batch_size == 9`.
 4. After decoding `SynchronizePlayerPosition`, client writes a hand-encoded `ConfirmTeleportation{teleport_id:1}` frame back on the raw socket (proving `enter_play` does not block waiting for it before continuing — the remaining packets must already be readable, or become readable shortly after, regardless of whether this ack was sent at all; the test sends it purely to exercise the "accepted and logged" path in `enter_play`'s dispatch loop, not to unblock anything).
 5. Decode all 9 `LevelChunkWithLight` packets via `decode_one::<LevelChunkWithLight>`; assert their `(chunk_x, chunk_z)` pairs equal `chunk::placeholder_chunk_coords()` **in that exact order**; assert every packet's `data`/`heightmaps`/light-mask fields are byte-identical to the first one's (content is uniform across all 9 chunks — Context).
-6. For the first chunk's `data`: decode section 0 directly (a small test-local mirror of `encode_paletted_container`'s *decode* direction — implementer's own test-only helper, not a production deliverable) and assert: `block_count == 1280` exactly (the non-air count: `1` bedrock `+ 3` dirt `+ 1` grass `= 5` layers × `256` columns), the block-states container's `bits_per_entry == 4`, its palette length `== 4`, and — via the decoded index/palette pair — that the block at local `(x=0, y=0, z=0)` (section-local, i.e. world `y = -64`) resolves to `rc_protocol::generated_v776::block_states::default_state::BEDROCK` and the block at local `y = 15` (world `y = -49`) resolves to `AIR`. Assert section 1's (and, by the byte-identity check in step 5's spirit, every section `1..24`'s) `bits_per_entry == 0` and its single palette value equals `AIR`.
+6. For the first chunk's `data`: decode section 0 directly (a small test-local mirror of `encode_paletted_container`'s *decode* direction — implementer's own test-only helper, not a production deliverable) and assert: `block_count == 1280` exactly (the non-air count: `1` bedrock `+ 3` dirt `+ 1` grass `= 5` layers × `256` columns), the block-states container's `bits_per_entry == 4`, its palette length `== 4`, and — via the decoded index/palette pair — that the block at local `(x=0, y=0, z=0)` (section-local, i.e. world `y = -64`) resolves to `rc_registries::generated_v776::block_states::default_state::BEDROCK` and the block at local `y = 15` (world `y = -49`) resolves to `AIR`. Assert section 1's (and, by the byte-identity check in step 5's spirit, every section `1..24`'s) `bits_per_entry == 0` and its single palette value equals `AIR`.
 7. Assert `heightmaps`, decoded via a small test-local NBT reader (three `TAG_Long_Array` entries), contains exactly `WORLD_SURFACE`/`MOTION_BLOCKING`/`MOTION_BLOCKING_NO_LEAVES`, each 37 longs, each column value `5`.
 
 ### `crates/server/tests/play_session_handoff.rs` (real loopback socket; the one file in this blueprint that constructs M1-B04's `PlayerSession`)
@@ -655,8 +656,8 @@ pub async fn enter_play(
 
 ## Implementation steps
 
-1. **`crates/protocol/generated/v776/mod.rs` + `crates/protocol/src/lib.rs`.** Add the two-line module file and the one `#[path = ...]` declaration. Observable: `cargo build -p rc-protocol` still succeeds (assumes M0-B07's manual step already populated `registries.rs`/`block_states.rs` — if it has not yet run in a given checkout, this step's own build failure is the actionable signal to run it, not a defect in this blueprint).
-2. **`crates/server/Cargo.toml`.** Add `bevy_ecs` (normal) and `serde`/`serde_json` (dev). Observable: `cargo metadata` resolves.
+1. **`crates/registries/generated/v776/mod.rs` + `crates/registries/src/lib.rs`.** Add the two-line module file and the one `#[path = ...]` declaration. Observable: `cargo build -p rc-registries` still succeeds (assumes M0-B07's manual step already populated `registries.rs`/`block_states.rs` — if it has not yet run in a given checkout, this step's own build failure is the actionable signal to run it, not a defect in this blueprint).
+2. **`crates/server/Cargo.toml`.** Add `rc-registries` and `bevy_ecs` (normal) and `serde`/`serde_json` (dev). Observable: `cargo metadata` resolves.
 3. **`packets.rs`.** Every `#[derive(RcPacket)]` struct exactly as Deliverables; `LightArray`'s `WireWrite`/`WireRead` per Context; `pack_position` per Context's bit-shift formula. Observable: compiles; every packet's `STATE`/`BOUND`/`ID` constants are correct (spot-checked by a doctest or the acceptance tests' own decode path).
 4. **`chunk.rs` — `pack_bits`, `encode_paletted_container`.** Exactly Context's pseudocode: SingleValue when `entries.iter().collect::<HashSet<_>>().len() == 1`; else compute `raw_bits = 32 - (distinct.len() as u32 - 1).leading_zeros()` (an exact, allocation-free `ceil(log2(n))` for `n >= 2`); `bits = max(indirect_floor_bits, raw_bits)`; branch `Indirect`/`Direct` per `bits <= max_indirect_bits`. Palette order is first-encountered order over `entries` (a `Vec` built via linear scan with a membership check — this blueprint's own content is tiny, `O(n²)` over at most 4 distinct values is irrelevant). Observable: a handful of the implementer's own scratch unit tests (not part of Acceptance tests, freely added) round-trip cleanly; deferred confirmation is `play_chunk_set.rs`.
 5. **`chunk.rs` — `encode_section`, `build_placeholder_chunk_data`.** Per Context's layer table and section-format pseudocode; call `encode_paletted_container` with `(4, 8, block_registry_bits)` for blocks and `(1, 3, biome_registry_bits)` for biomes, where `block_registry_bits`/`biome_registry_bits` are computed once from `block_states::BLOCK_STATE_COUNT`/the biome registry's own generated `COUNT` const (Context's `Direct`-arm note — `ceil(log2(count))`, same formula as `raw_bits` above, applied to the whole registry rather than one container's distinct set). `placeholder_chunk_coords`: two nested `-1..=1` ranges, `cx` outer. Observable: `play_chunk_set.rs` step 6's decode assertions pass.

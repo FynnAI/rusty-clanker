@@ -62,7 +62,7 @@ flowchart LR
 **Acceptance criteria:**
 - A debug build ticks 8 synthetic regions (no chunks, no players, no mechanics content) at a stable 20 TPS ± 1% for a continuous 10-minute soak test with zero panics.
 - Two regions exchange a synthetic `BorderUpdateEvent`-shaped message across `InProcessTransport`, and an automated test confirms it is applied at the correct Stage-1 boundary on the destination region's next tick (ARCH-D11's timing rule) — not the same tick, not two ticks later.
-- `xtask fetch-data 26.2` and `xtask codegen` (NET-D9) run successfully against a locally supplied, legally obtained `server.jar` and produce compiling generated code under `crates/protocol/generated/v776/`.
+- `xtask fetch-data 26.2` and `xtask codegen` (NET-D9) run successfully against a locally supplied, legally obtained `server.jar` and produce compiling generated code under `crates/registries/generated/v776/` (WS-D13).
 - `xtask lint-deps` (`12`'s WS-D3 dependency-graph rule checker) passes with zero forbidden edges.
 - The agent-executable verification loop and the test-integrity guardrails (`09-testing-quality.md`'s TEST-D40–D52) — machine-readable tier output, the CI path-guard, and the CI-is-authority rule — are wired and enforced from the first commit onward.
 

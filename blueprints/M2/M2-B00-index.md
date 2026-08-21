@@ -101,9 +101,11 @@ M1-B05's hand-rolled wire encoder), the eight WORLD-D1 `bevy_ecs` components (`C
 `BlockStateColumn`, `BiomeColumn`, `LightColumn`, `HeightmapSet`, `BlockEntityIndex`, `ChunkStatus`,
 `ChunkPersistenceState`), and the dirty-tracking hook (`set`'s `bool` return + `mark_dirty`) a
 future block-write system wires together. Defines its own local `BlockStateId(u32)`/`BiomeId(u16)`
-newtypes rather than depending on `rc_protocol::generated_v776` directly — a hard dependency-graph
-impossibility (`xtask lint-deps` Rule 2: `rc-mechanics` already depends on `rc-chunk-storage`, so a
-further edge to `rc-protocol` would create a forbidden `SIM -> NETRENDER` path), not a preference.
+newtypes rather than importing `rc_registries::generated_v776`'s generated id types directly — a
+deliberate decoupling of the leaf storage crate from codegen output; `xtask lint-deps` Rule 2
+separately bars the wire-facing route through `rc-protocol` (`rc-mechanics` already depends on
+`rc-chunk-storage`, so a further edge to `rc-protocol` would create a forbidden `SIM -> NETRENDER`
+path).
 No NBT, no Anvil I/O, no light propagation, no worldgen.
 *Decisions covered:* WORLD-D1/D2 (full, both restated field-precise and cross-checked against
 M1-B05's own encoder), WORLD-D3/D4 (registry-id integration, resolved via local newtypes),

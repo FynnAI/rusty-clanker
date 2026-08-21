@@ -140,7 +140,7 @@ sequenceDiagram
 flowchart TD
     A["server.jar\n(developer/operator-local, legally downloaded)"] --> B["--reports\n(NET-D9, owned by 02)"]
     A --> C["data/minecraft/worldgen/{structure,structure_set,template_pool}\n(xtask extract-structures, ASSET-D16)"]
-    B --> D["xtask codegen\n(02's pipeline)"] --> E["crates/protocol/generated/...\n(committed: generated Rust, NET-D10/ASSET-D15)"]
+    B --> D["xtask codegen\n(02's pipeline)"] --> E["crates/{registries,protocol}/generated/... (WS-D13)\n(committed: generated Rust, NET-D10/ASSET-D15)"]
     C --> F["data/vanilla-structures/\n(.gitignored, per-installation, ASSET-D16)"]
     A -.never committed, never distributed.-> X["server.jar itself, raw --reports JSON,\nany texture/sound/model asset"]
     C -.never committed, never distributed.-> X

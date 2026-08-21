@@ -702,8 +702,8 @@ jobs:
 ### Directory placeholders
 
 - `crates/protocol/spec/.gitkeep` (empty file — NET-D9's `crates/protocol/spec/*.ron` files land in a later blueprint)
-- `crates/protocol/generated/.gitkeep` (empty file — `crates/protocol/generated/v776/` lands with the codegen blueprint)
-- `crates/registries/generated/.gitkeep` (empty file — same, for registry codegen)
+- `crates/protocol/generated/.gitkeep` (empty file — `crates/protocol/generated/v776/` packet codegen lands with the M1 packet-codegen blueprint; WS-D13 reserves this directory for packet code only)
+- `crates/registries/generated/.gitkeep` (empty file — `crates/registries/generated/v776/` registry/block-state codegen lands with M0-B07, WS-D13)
 
 ## Acceptance tests (write these FIRST — own changeset)
 
