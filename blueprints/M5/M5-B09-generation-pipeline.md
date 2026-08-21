@@ -305,10 +305,27 @@ pub fn advance_to_carvers(chunk: &mut ProtoChunk, ctx: &GenerationContext);
 /// §G.7 — `features`. THE one rung with a real cross-chunk dependency (Context §B) —
 /// never called directly by anything but `DecorationScheduler` (§K), which only ever
 /// invokes it once this chunk's whole 3x3 window is `Carvers`-complete. Calls
-/// `decoration::decorate_chunk` (M5-B07) against `window`'s own `DecorationWorldAccess`
-/// impl (§K); sets `window.center_mut().features_complete = true` on return (never
-/// only `status`, since `DecorationScheduler` reads `features_complete`, not `status`,
-/// to decide neighbor eligibility — Context §K's own reason this is a separate flag).
+/// `decoration::decorate_chunk` against `window`'s own `DecorationWorldAccess` impl
+/// (§K), passing `bridge: None` for `decorate_chunk`'s own real, final trailing
+/// parameter, `bridge: Option<&crate::decoration::underground::UndergroundFeatureContext>`
+/// (M5-B12e's own additive extension to M5-B07's original 11-parameter signature) — no
+/// real `UndergroundFeatureContext` producer exists yet (the same bootstrap story as
+/// M5-B08's own beardifier seam: `None` until a future blueprint supplies a real
+/// `DirectoryTemplateSource`/`BlockStateNames` registry), so `fossil`/`template`/
+/// `freeze_top_layer` resolve to their own documented `bridge.is_none()` no-op paths
+/// for now. `decorate_chunk`'s own internal per-feature call site is, in the real,
+/// final contract, M5-B11's `decoration::vegetation::place_configured_feature_vegetation`
+/// — the outermost, composed entry point, which tries M5-B11's own 17 vegetation
+/// kinds first and falls through to M5-B12e's
+/// `decoration::underground::place_configured_feature_all` for its 35 non-vegetation
+/// kinds, which itself falls through to M5-B07's original `place_configured_feature`
+/// for its 7 (M5-B07 defines the call site, M5-B12e then M5-B11 each edit it in turn
+/// to converge on this one final state) — none of these three layers is ever called
+/// directly by this blueprint or by anything in this crate outside `decorate_chunk`
+/// itself; `advance_to_features` only ever calls `decorate_chunk`, exactly as before.
+/// Sets `window.center_mut().features_complete = true` on return (never only `status`,
+/// since `DecorationScheduler` reads `features_complete`, not `status`, to decide
+/// neighbor eligibility — Context §K's own reason this is a separate flag).
 pub fn advance_to_features(window: &mut super::decoration_window::DecorationWindow<'_>, ctx: &GenerationContext);
 
 /// §G.8/§G.9 — `initialize_light`/`light`. Marker rungs only (Context §H) — advance

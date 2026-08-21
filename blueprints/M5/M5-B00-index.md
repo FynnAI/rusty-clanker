@@ -32,14 +32,23 @@ five conforming `L`-sized blueprints along its own already-drawn family
 boundaries and, in the same pass, added the `ctx: &PlacementCtx` parameter
 its combined dispatcher was missing (below) — both defects a prior audit
 pass had flagged but left unresolved as outside its own assigned scope.
-Sixteen blueprints implement M5, drafted and Tier-1-tested. One further ID
-remains reserved but not yet drafted — the named owner of M5-B08's own
-separate structures-tier-2 gap (15 non-jigsaw hand-coded structure
-families), tracked as **M5-B13** below (reassigned from the single-file
-M5-B12's own original ID once that blueprint was drafted against a
-different, features-only scope — "Cross-blueprint gaps and reconciliation"
-below) — required before the milestone's own GEN-D1/GEN-D27 acceptance gate
-is exercised for real.
+Nineteen blueprints implement M5, drafted and Tier-1-tested — the sixteen
+already-established blueprints plus the three-blueprint **M5-B13** family
+(M5-B13a small-template/procedural structures, M5-B13b mineshaft/stronghold,
+M5-B13c ocean monument/woodland mansion), which closes M5-B08's own
+separate structures-tier-2 gap (the 15 non-jigsaw hand-coded structure
+families that blueprint named and deferred to a single reserved ID,
+reassigned from the single-file M5-B12's own original ID once that
+blueprint was drafted against a different, features-only scope —
+"Cross-blueprint gaps and reconciliation" below). With M5-B13a/b/c landed,
+every content gap this milestone's own text once named as blocking the
+GEN-D1/GEN-D27 acceptance gate from being exercised for real is closed at
+the drafted-complete level (modulo one genuine wiring gap this audit found
+between M5-B13's own `GeneratorRegistry` and M5-B08's already-shipped
+`generate_structure_starts`, "Cross-blueprint gaps and reconciliation"
+below); the gate's own *measured* exercise still awaits the real jar-gated
+data pipeline run and the real production content-resolver table M5-B09/
+M5-B10 already name (below).
 
 M5-B01 independently caught and resolved a genuine internal contradiction in
 this project's own research corpus (`24-seed-derivation-map.md` §3.1's
@@ -104,12 +113,26 @@ gaps and reconciliation" below for what remains.
 | M5-B12c | Features: Underground & Structural Miscellany (Underground Tier 2, Part 3 of 5) | L |
 | M5-B12d | Features: Fossil & Template (Underground Tier 2, Part 4 of 5) | L |
 | M5-B12e | Features: Selectors, Combinators & the Combined Dispatcher (Underground Tier 2, Part 5 of 5) | L |
+| M5-B13a | Structures Tier 2: Small Template & Procedural Structures (Part 1 of 3) | L |
+| M5-B13b | Structures Tier 2: Mineshaft & Stronghold (Part 2 of 3) | L |
+| M5-B13c | Structures Tier 2: Ocean Monument & Woodland Mansion (Part 3 of 3) | L |
 
-**Reserved, not-yet-drafted follow-up blueprint** — the named owner of M5-B08's own tier gap ("Cross-blueprint gaps and reconciliation" below); not derived yet, not counted in the "sixteen blueprints" above, and not part of the wave structure below until drafted. (M5-B11 and the M5-B12 family are no longer reserved — all six are drafted and listed in the table above; the ID that was originally reserved here for structures was M5-B12 (a single blueprint, before it was drafted and later split into the M5-B12a-e family below), reassigned to M5-B13 once that scope turned out to be features, not structures — see "Cross-blueprint gaps and reconciliation" below.)
-
-| ID | Title | Scope | Owns |
-|---|---|---|---|
-| M5-B13 | Structures Tier 2 (Hand-Coded Piece Generators) | TBD once drafted | The 15 non-jigsaw hand-coded structure families M5-B08 Context §A/§J names individually and defers |
+M5-B13a/b/c are the named owner of M5-B08's own structures-tier-2 gap (the
+15 non-jigsaw hand-coded structure families that blueprint's Context §A/§J
+named individually and deferred to a single reserved ID). The ID was
+originally reserved as a single blueprint, `M5-B13`, "TBD once drafted"; it
+is now three conforming `L`-sized blueprints split along family-complexity
+boundaries, each depending on its predecessor for shared plumbing
+(`hand_coded::common`, the `GeneratorRegistry`/`ProceduralPieceData`
+additive extension to M5-B08's own `structure/generation.rs` — M5-B13a
+creates both, M5-B13b/c each extend them further) — never in parallel with
+each other, unlike M5-B11/the M5-B12 family's own mutually-independent
+split. (M5-B11 and the M5-B12 family are likewise no longer reserved — all
+eleven are drafted and listed in the table above; the ID that was
+originally reserved here for structures was `M5-B12` (a single blueprint,
+before it was drafted and later split into the M5-B12a-e family below),
+reassigned to `M5-B13` once that scope turned out to be features, not
+structures — see "Cross-blueprint gaps and reconciliation" below.)
 
 ## Dependency graph
 
@@ -155,8 +178,11 @@ flowchart TD
         B10["M5-B10\nParity corpus +\nacceptance harness"]
     end
 
-    subgraph L7["Reserved, not yet drafted — not a real wave until derived"]
-        B13["M5-B13\nStructures tier 2\n(reserved)"]
+    subgraph L4b["Wave 4b — structures tier 2, once M5-B08 (+M5-B01/M5-B02) lands; sequential within itself, independent of the M5-B11/M5-B12 features waves"]
+        direction LR
+        B13a["M5-B13a\nsmall template/procedural\nstructures (8 families)"]
+        B13b["M5-B13b\nmineshaft + stronghold"]
+        B13c["M5-B13c\nocean monument +\nwoodland mansion"]
     end
 
     M0M2M3M4 --> B01
@@ -213,7 +239,12 @@ flowchart TD
     B11 --> B10
     B12e --> B10
 
-    B08 -. "reserved owner\n(not yet drafted)" .-> B13
+    B01 --> B13a
+    B02 --> B13a
+    B08 --> B13a
+    B13a --> B13b
+    B13b --> B13c
+    B05 --> B13c
 ```
 
 **Recommended execution order:**
@@ -299,28 +330,21 @@ flowchart TD
    `docs/research/mc-26.2/05-worldgen.md` §3.13's own 63-name enumeration —
    see "Cross-blueprint gaps and reconciliation" below for the residual,
    smaller gaps this does **not** close).
-6. **M5-B09** needs all of M5-B01 through M5-B08 **and now M5-B11/the M5-B12
+6. **M5-B09** needs all of M5-B01 through M5-B08 **and M5-B11/the M5-B12
    family too** — it is the actual `GenStage`-scheduler-integration blueprint every
    one of M5-B03 through M5-B08's own Deliverables names and defers to,
    calling each stage's already-shipped driver function in GEN-D25's fixed
    order against a non-ECS `ProtoChunk`, and closing M5-B05's own open
-   `ClimateSampler` seam with a real implementation for the first time. **This
-   edge is new, added by this audit, and is not yet reflected in
-   `M5-B09-generation-pipeline.md`'s own text**: M5-B09's own Context
-   restates M5-B07's pre-M5-B11/M5-B12 `decoration::decorate_chunk` signature
-   (no `bridge` parameter) as a fixed prerequisite it consumes verbatim: its
-   `advance_to_features` internally calls `decoration::decorate_chunk`
-   against that older signature. M5-B12e adds a trailing
-   `bridge: Option<&UndergroundFeatureContext>` parameter to that same
-   function and describes its real supplier as "a future `GenStage`-driver
-   blueprint's own responsibility" — language that, at the (now-superseded,
-   single-file) M5-B12's own original drafting time, already misdescribed
-   M5-B09 (an existing, already-drafted Wave-5 blueprint, not a future one).
-   Whoever implements M5-B09 needs a small,
-   additive correction to its own `advance_to_features` call site (pass
-   `bridge: None` until a real `UndergroundFeatureContext` exists) — tracked
-   here rather than silently left for an implementer to discover as a build
-   failure.
+   `ClimateSampler` seam with a real implementation for the first time.
+   `M5-B09-generation-pipeline.md`'s own text reflects the real, final
+   `decoration::decorate_chunk` contract: M5-B12e's own additive trailing
+   `bridge: Option<&UndergroundFeatureContext>` parameter, and M5-B11's own
+   composed dispatcher chain (`decorate_chunk`'s internal per-feature call
+   site reaching M5-B11's `place_configured_feature_vegetation`, falling
+   through to M5-B12e's `place_configured_feature_all`, falling through to
+   M5-B07's original `place_configured_feature`). Its own `advance_to_features`
+   calls `decoration::decorate_chunk` passing `bridge: None`, since no real
+   `UndergroundFeatureContext` producer exists yet.
 7. **M5-B10** needs M5-B01 through M5-B09 transitively (for its corpus/hash
    machinery) and, for real, needs M5-B09 too: `Md5B09Generator`'s own
    struct fields reference `rc_worldgen::pipeline::GenerationContext` directly
@@ -330,6 +354,27 @@ flowchart TD
    `FixedChunkGenerator`. Its **real** parity/throughput gate (`m5-acceptance`,
    scheduled/nightly, not part of its own Done state) is unreachable until the
    real production content-resolver table (Context §A.4) lands.
+8. **M5-B13a**, **M5-B13b**, **M5-B13c** become startable once M5-B01,
+   M5-B02, and M5-B08 land (M5-B13c additionally needs M5-B05, for its own
+   ocean-monument biome gate). Unlike every other multi-part family in this
+   milestone, the three are **not** mutually parallel: M5-B13b depends on
+   M5-B13a for shared plumbing (`hand_coded::common`'s box-fill/heightmap/
+   loot-container helpers, the `GeneratorRegistry`/`ProceduralPieceData`
+   additive extension to M5-B08's `structure/generation.rs`), and M5-B13c
+   depends on both M5-B13a and M5-B13b for the same reason, extended twice
+   further — each blueprint's own Deliverables applies one more additive
+   edit to the identical two files (`structure/generation.rs`,
+   `structure/hand_coded/mod.rs`), so the three must land strictly in
+   alphabetical order. None of the three is a prerequisite for M5-B09 or
+   M5-B10 — no landed blueprint yet constructs a `GeneratorRegistry` and
+   passes it anywhere a `GenStage`-integration caller would need it (M5-B13a
+   Context §A's own noted omission: `JigsawGenerator` itself is still a bare
+   unit struct with unfulfillable field needs, left unfixed as out of that
+   blueprint's own file scope) — closing that wiring gap, and M5-B08's own
+   `generate_structure_starts`'s inability to route through the new
+   registry-shaped `dispatch_generator` at all (this audit's own finding,
+   "Cross-blueprint gaps and reconciliation" below), is a future
+   GenStage-integration blueprint's job.
 
 ## Per-blueprint summary
 
@@ -653,24 +698,86 @@ real `pipeline` module to exist and compile.
 *Decisions covered:* GEN-D27 (both tiers), GEN-D20 (exception ledger), GEN-D25/
 D26 (verified, not re-decided), ARCH-D19/D20 (throughput leg), TEST-D12/D13.
 
-**M5-B13 — Structures Tier 2 (reserved, not yet drafted).** Owns the 15
-non-jigsaw hand-coded structure families M5-B08 Context §A/§J names
-individually (`stronghold`, `fortress`, `woodland_mansion`, `ocean_monument`,
-`mineshaft`, `end_city`, `desert_pyramid`, `jungle_temple`, `swamp_hut`,
-`igloo`, `ocean_ruin`, `shipwreck`, `buried_treasure`, `ruined_portal`,
-`nether_fossil`) and explicitly defers, implementing
-`generation::StructureGenerator` (M5-B08's own trait) per family. Not yet
-derived — no Context, Deliverables, or Acceptance tests exist yet for this ID.
-(Reassigned from M5-B12: this ID was originally reserved as "M5-B12" for
-this exact structures scope, before M5-B12 itself was drafted against a
-different, features-only scope — "Cross-blueprint gaps and reconciliation"
-below.)
+**M5-B13a — Structures Tier 2: Small Template & Procedural Structures.**
+Implements 8 of the 15 non-jigsaw structure families M5-B08 Context §A/§J
+named and deferred — `desert_pyramid`, `jungle_temple`, `swamp_hut`, `igloo`,
+`ocean_ruin`, `shipwreck`, `buried_treasure`, `ruined_portal` — each a
+concrete `generation::StructureGenerator` (M5-B08's own trait). Restates the
+full fifteen-family map and its three-way M5-B13a/b/c ownership split, and
+resolves the dimension-deferred remainder (`fortress`, `end_city`,
+`nether_fossil` — Nether/End-only, no reserved owner, matching this index's
+own established convention for the four End-exclusive `Feature` kinds).
+Builds the shared `hand_coded::common` infrastructure every M5-B13 sibling
+reuses (box-fill primitives over `StructureBlockSink`, a ground-height
+averaging seam, a pending-loot-container recorder) and replaces M5-B08's own
+single-generator `dispatch_generator` with a `GeneratorRegistry`-keyed
+version (additive to M5-B08's `structure/generation.rs`) — seven of its
+eight families reuse `PieceKind::Jigsaw` directly (a single fixed-rotation
+template stamp is structurally identical to a one-element, zero-junction
+jigsaw piece, an explicit, justified design choice avoiding a redundant
+parallel piece-replay path); only `buried_treasure` (no template at all)
+needs the new `PieceKind::Procedural` variant. Confidence is tiered exactly
+as M5-B04/M5-B06/M5-B08 already established (HIGH/MODERATE/LOW), with every
+numeric constant this blueprint invents outright (igloo basement stack
+offsets, ocean-ruin cluster radius, shipwreck embed depth, ruined-portal
+Y-search ranges) explicitly flagged for a future GEN-D27 reconciliation
+pass. *Decisions covered:* GEN-D21 (8 more concrete instances), GEN-D23
+(zero new template-loading code), GEN-D6 (`set_large_feature_seed` call
+sites, restated per family).
+
+**M5-B13b — Structures Tier 2: Mineshaft & Stronghold.** Implements 2 more
+families. Stronghold reuses M5-B08's already-implemented `concentric_rings`
+ring-position math unmodified and adds only the piece-graph generation that
+blueprint explicitly left out — a retry-until-portal-room weighted piece BFS
+(`MAX_DEPTH=50`, the 11-kind `STRONGHOLD_PIECE_WEIGHTS` table, salt-
+incrementing retry loop), this blueprint's own best-grounded family (its
+piece weight table and both depth gates independently cross-confirmed by
+two separate sources). Mineshaft is explicitly, honestly LOW confidence
+throughout its own eager corridor/crossing/room random-walk shape — neither
+available source documents corridor length ranges, branching probabilities,
+or piece counts — shipped anyway as a concrete, internally consistent,
+deterministic, terminating reconstruction, flagged for GEN-D27
+reconciliation rather than left as a silent gap. Both families' own
+bounded-retry/bounded-piece-count safety caps (`MAX_RETRY_ATTEMPTS = 20`,
+`MAX_PIECES = 40`) are explicit, documented, justified deviations from
+vanilla's own unbounded generation (this repository's own binding
+"explicitly documented, bounded, justified exception" principle). *Decisions
+covered:* GEN-D21, GEN-D6, GEN-D23 (M5-B08's persistence/replay seam, reused
+not re-derived).
+
+**M5-B13c — Structures Tier 2: Ocean Monument & Woodland Mansion.**
+Implements the final 2 families — the least-documented pair in the whole
+fifteen-family set, by a wide margin. Ocean monument (a strict 29×29
+all-required-biome gate, then a fixed-grid, non-template, box-fill room
+layout) is this blueprint's own single lowest-confidence algorithm in the
+entire M5-B13 family, stated as such rather than dressed up as more certain
+than it is — neither available source documents a piece-by-piece generation
+algorithm. Woodland mansion is better-grounded: the research corpus confirms
+real numbers (an 11×11 planar room grid, a fixed `(7,4)` 3×3 foyer, four
+recursive corridors with base lengths `6/6/3/3`, three floors) this
+blueprint's own algorithm is built directly around; its own rooms reuse
+`PieceKind::Jigsaw` (M5-B13a's own convention) since they are genuinely
+template-stamped, needing only one new `ProceduralPieceData` variant for its
+post-placement cobblestone backfill. The corpus's own unresolved `"11x11x5-
+cell"` qualifier is deliberately left open rather than guessed at — a
+documented, honest incompleteness, not a silently fabricated interpretation.
+Completes the fifteen-family map: every non-jigsaw structure family is now
+either implemented (this blueprint and its two siblings), jigsaw-covered (no
+code needed), or explicitly dimension-deferred with no reserved owner
+(`fortress`, `end_city`, `nether_fossil`) — verified by this audit as a
+complete, non-overlapping accounting against the 26.2 `StructureType`
+registry, with no double-ownership against M5-B12c's `monster_room`/
+`desert_well` (real *Feature* kinds, an entirely different registry) or
+M5-B12d's `fossil` *Feature* kind (a naming coincidence with the
+dimension-deferred `nether_fossil` *structure*, never the same code path —
+both M5-B13a and M5-B12d's own text name this distinction explicitly).
+*Decisions covered:* GEN-D21, GEN-D6, GEN-D23.
 
 ## M5 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
 |---|---|---|---|
-| 1 | For a fixed world seed, 10,000 generated chunks' block-state arrays hash-match a vanilla-server-generated reference corpus for **at least 99.9%** of chunks, checked by `xtask parity-check worldgen`; any exceptions documented, bounded, and attributable to a specific named source of non-determinism. | M5-B01 through M5-B08 + M5-B11/M5-B12a-e (the generation content itself — with M5-B11/M5-B12a-e now closing the `Feature`-kind registry completely, see below) + M5-B09 (assembles it into one real pipeline, and exposes `generate_chunk_sync` for M5-B10's own use) + M5-B10 (the corpus, the hash/diff machinery, the exception-attribution ledger and its own machine-checked gate) | **Not yet reachable as a real, green measurement; the `Feature`-kind coverage gap this row previously named is now closed, several smaller gaps remain.** The complete 64-name vanilla `Feature`-kind registry (63 names in `docs/research/mc-26.2/05-worldgen.md` §3.13 plus `random_patch`, a real kind that document's own enumeration omits — independently caught by both M5-B11 and the M5-B12 family) is now accounted for exactly once each, with no silent gap and no double-ownership, verified by this audit: 7 by M5-B07 (`ore`, `disk`, `spring_feature`, `lake`, `tree`, `random_patch`, `simple_block`), 17 by M5-B11 (vegetation), 35 across M5-B12a-e (underground/misc), 5 End-dimension-exclusive and out of scope for both (`chorus_plant`, `end_platform`, `end_spike`, `end_island`, `end_gateway` — GEN-D1's own scope already excludes the End). What remains open: (a) the manual jar-gated `fetch-worldgen-data`/`compile-worldgen-data` run against a real 26.2 `server.jar` has not been performed (M5-B02's own named precondition); (b) **the 15 non-jigsaw hand-coded structure families M5-B08 names and defers are still open**, now tracked against reserved-but-not-yet-drafted **M5-B13** (reassigned from the stale "M5-B12" reservation — this audit's own correction, blueprint table above); (c) the real production content-resolver table `Md5B09Generator`'s `context_builder` needs (M5-B10 Context §A.4) has not been written, so `xtask parity-check worldgen` cannot generate real chunks yet; (d) a handful of smaller, individually-named, honestly-flagged sub-registry gaps remain even within M5-B11/M5-B12a-e's own closed scope — 4 of 10 `TreeDecorator` kinds, 4 End-dimension `Feature` kinds, `monster_room`'s spawner NBT/`bonus_chest`'s loot-table population (no mob-spawner/loot-table system exists anywhere in this project yet) — each already named as a bounded, documented incompleteness by M5-B11/M5-B12a-e themselves. **The API gap this row previously named — M5-B12's combined dispatcher missing a `ctx: &PlacementCtx` parameter, discovered by an earlier audit pass — is now closed**: M5-B12e's own `place_configured_feature_all` carries `ctx` from its first draft (landing the family's combined dispatcher in its own final blueprint, once every sibling's kind functions exist, is what made this the natural fix rather than a retrofit), and M5-B11's own fallthrough forwards it correctly. This is the honest, documented state this project's own convention calls for — not a silent gap. |
+| 1 | For a fixed world seed, 10,000 generated chunks' block-state arrays hash-match a vanilla-server-generated reference corpus for **at least 99.9%** of chunks, checked by `xtask parity-check worldgen`; any exceptions documented, bounded, and attributable to a specific named source of non-determinism. | M5-B01 through M5-B08 + M5-B11/M5-B12a-e + M5-B13a/b/c (the generation content itself — with M5-B11/M5-B12a-e now closing the `Feature`-kind registry completely and M5-B13a/b/c now closing the structure-family registry completely, see below) + M5-B09 (assembles it into one real pipeline, and exposes `generate_chunk_sync` for M5-B10's own use) + M5-B10 (the corpus, the hash/diff machinery, the exception-attribution ledger and its own machine-checked gate) | **Not yet reachable as a real, green measurement; both content-registry gaps this row previously named are now closed, several smaller gaps remain.** The complete 64-name vanilla `Feature`-kind registry (63 names in `docs/research/mc-26.2/05-worldgen.md` §3.13 plus `random_patch`, a real kind that document's own enumeration omits — independently caught by both M5-B11 and the M5-B12 family) is now accounted for exactly once each, with no silent gap and no double-ownership, verified by this audit: 7 by M5-B07 (`ore`, `disk`, `spring_feature`, `lake`, `tree`, `random_patch`, `simple_block`), 17 by M5-B11 (vegetation), 35 across M5-B12a-e (underground/misc), 5 End-dimension-exclusive and out of scope for both (`chorus_plant`, `end_platform`, `end_spike`, `end_island`, `end_gateway` — GEN-D1's own scope already excludes the End). The complete 15-family non-jigsaw `StructureType` registry (`docs/research/mc-26.2/06-structures.md` §3.1) is likewise accounted for exactly once each, verified by this audit: 8 by M5-B13a, 2 by M5-B13b, 2 by M5-B13c, 3 dimension-deferred with no reserved owner (`fortress`, `end_city`, `nether_fossil`), no double-ownership against M5-B12c's `monster_room`/`desert_well` or M5-B12d's `fossil` *Feature* kind (both entirely separate registries from the `nether_fossil` *structure*). What remains open: (a) the manual jar-gated `fetch-worldgen-data`/`compile-worldgen-data` run against a real 26.2 `server.jar` has not been performed (M5-B02's own named precondition); (b) **a genuine wiring gap this audit found**: M5-B08's own `generate_structure_starts` still only accepts a single `jigsaw_generator: &dyn StructureGenerator` parameter and was never extended to accept M5-B13a's own `GeneratorRegistry`, so it cannot actually route to any of the fifteen newly-registered hand-coded generators even though `dispatch_generator`'s own signature now requires a registry in place of that lone generator (Cross-blueprint gaps and reconciliation, below) — a future GenStage-integration blueprint's job to close, not silently absorbed; (c) the real production content-resolver table `Md5B09Generator`'s `context_builder` needs (M5-B10 Context §A.4) has not been written, so `xtask parity-check worldgen` cannot generate real chunks yet; (d) a handful of smaller, individually-named, honestly-flagged sub-registry gaps remain even within M5-B11/M5-B12a-e's own closed scope — 4 of 10 `TreeDecorator` kinds, 4 End-dimension `Feature` kinds, `monster_room`'s spawner NBT/`bonus_chest`'s loot-table population (no mob-spawner/loot-table system exists anywhere in this project yet) — each already named as a bounded, documented incompleteness by M5-B11/M5-B12a-e themselves. **The API gap this row previously named — M5-B12's combined dispatcher missing a `ctx: &PlacementCtx` parameter, discovered by an earlier audit pass — is now closed**: M5-B12e's own `place_configured_feature_all` carries `ctx` from its first draft (landing the family's combined dispatcher in its own final blueprint, once every sibling's kind functions exist, is what made this the natural fix rather than a retrofit), and M5-B11's own fallthrough forwards it correctly. This is the honest, documented state this project's own convention calls for — not a silent gap. |
 | 2 | Worldgen throughput sustains chunk generation fast enough to keep 20 simulated players at render distance 12 from exhausting their loaded-chunk radius, while concurrently-ticking regions' p99 tick duration stays within the 50 ms budget and zero overdue-region admission violations occur. | M5-B09 (the EDF admission gate itself, proven by a dedicated acceptance test) + M5-B10 (the throughput leg's measurement/observability machinery: `RegionTickLogEntry`, `EdfViolationEvent`/`rc_scheduler::edf_log`, `loaded-radius-log`) | **Mechanism fully specified and self-tested in isolation; the real measurement is blocked on the same real production content-resolver table as row 1** (a real `rusty-clanker-server` build with real worldgen wired in is a hard precondition for this leg, per M5-B10's own Context §A.2). `rc_scheduler::edf_log` is confirmed **not** supplied by M5-B09 as written (M5-B09's own EDF gate is entirely internal to `WorldgenScheduler`'s dispatch thread, with no `record_violation`/`drain_violations()` hooks exposed) — M5-B10's own conditional clause (Context §A.3) correctly triggers and remains M5-B10's own responsibility to build, not a gap. |
 
 ## Cross-blueprint gaps and reconciliation
@@ -711,9 +818,48 @@ below.)
   14 remaining `TrunkPlacer`/`FoliagePlacer` kinds, the 1-member `RootPlacer`
   family, and 6 of 10 `TreeDecorator` kinds M5-B07 also named and deferred
   are likewise closed by M5-B11. **The structure-tier gap (M5-B08's own
-  named deferral) remains open** — the 15 non-jigsaw hand-coded structure
-  families are still deferred-with-owner, now tracked against **M5-B13**
-  (reassigned from the stale "M5-B12" reservation, below), not yet drafted.
+  named deferral) is now closed too, by M5-B13a/b/c** — the 15 non-jigsaw
+  hand-coded structure families are verified by this audit as a complete,
+  non-overlapping accounting: 8 (M5-B13a) + 2 (M5-B13b) + 2 (M5-B13c) + 3
+  (dimension-deferred, no reserved owner — `fortress`, `end_city`,
+  `nether_fossil`) = 15, cross-checked against
+  `docs/research/mc-26.2/06-structures.md` §3.1's own 15-name enumeration,
+  with `pillager_outpost` correctly excluded (jigsaw-typed, zero code
+  needed) and no double-ownership against M5-B12c's `monster_room`/
+  `desert_well` *Feature* kinds or M5-B12d's `fossil` *Feature* kind (a
+  naming coincidence with the dimension-deferred `nether_fossil`
+  *structure*, never the same code path — both M5-B13a's own Context §A and
+  M5-B12d's own text name this distinction explicitly). One genuine gap
+  survives this closure, newly found by this audit and not previously
+  tracked anywhere: see the `generate_structure_starts`/`GeneratorRegistry`
+  wiring-gap bullet below.
+- **`generate_structure_starts` cannot actually reach any of M5-B13a/b/c's
+  fifteen newly-registered generators — a genuine wiring gap this audit
+  found, not yet tracked by any prior pass.** M5-B08's own
+  `generate_structure_starts` (`structure/generation.rs`) has always taken a
+  single `jigsaw_generator: &dyn StructureGenerator` parameter and resolves
+  "the structure kind's own `find_generation_point`" (M5-B08 Context §D item
+  5) by calling `dispatch_generator(structure_type, jigsaw_generator)`
+  internally — M5-B08's own original two-parameter form. M5-B13a's own
+  additive edit changes `dispatch_generator`'s signature to
+  `dispatch_generator(structure_type, registry: &GeneratorRegistry<'a>)`,
+  justified at drafting time as "no compiled caller exists yet... a safe,
+  zero-cost signature change" (M5-B13a Context §B) — true in isolation, but
+  `generate_structure_starts`'s own signature was never correspondingly
+  extended to accept a `GeneratorRegistry` in place of its lone
+  `jigsaw_generator` parameter, by any of M5-B13a/b/c. The result: once a
+  real implementation exists, `generate_structure_starts`'s own body cannot
+  satisfy the new `dispatch_generator`'s parameter type from what it is
+  given — it has no `GeneratorRegistry` to pass, only a bare
+  `&dyn StructureGenerator` — so none of the fifteen M5-B13a/b/c generators
+  is reachable through the one function M5-B08 Context §D designates as the
+  real per-chunk entry point, no matter how many are registered. No blueprint
+  through M5-B13c closes this — it is a future GenStage-integration
+  blueprint's job (the same future blueprint M5-B13a Context §A already
+  names as needing to retrofit `JigsawGenerator`'s own bare-unit-struct
+  problem) to extend `generate_structure_starts`'s own signature to accept
+  `registry: &GeneratorRegistry<'a>` and thread it through to
+  `dispatch_generator` at every attempted-structure call site.
 - **A genuine ID conflict between M5-B00-index.md's own reserved table and
   the originally-drafted, single-file M5-B12 — discovered independently by
   both M5-B11 and that original M5-B12, and resolved by an earlier audit
@@ -724,8 +870,10 @@ below.)
   `Feature` kinds), per its own task assignment. Resolved by reassigning the
   structures-tier-2 scope to a fresh ID, **M5-B13** (blueprint table above);
   the features-registry scope that ID conflicted with has since been
-  redrafted as the M5-B12a-e family (below), so the conflict is now moot in
-  both directions.
+  redrafted as the M5-B12a-e family (below), and the structures-tier-2 scope
+  itself has since been drafted as the three-blueprint M5-B13a/b/c family
+  (blueprint table above), so the conflict is now fully moot in both
+  directions, not merely reassigned-but-still-pending.
 - **The API gap in the (now-superseded, single-file) M5-B12's own combined
   dispatcher — discovered by an earlier audit pass, resolved by this one.**
   That draft's `place_configured_feature_all` took `feature, origin, world,
@@ -748,23 +896,6 @@ below.)
   a `ctx`-dependent kind through the real `place_configured_feature_all`
   entry point, the exact gap class the single-file draft's own test suite
   (probing only `minecraft:no_op`) had missed.
-- **M5-B09's own text does not yet reflect M5-B11/the M5-B12 family's
-  additive changes to `decoration::decorate_chunk`'s signature — discovered
-  by an earlier audit pass, still open (out of this file's own scope; the
-  fix belongs in `M5-B09-generation-pipeline.md` itself).** M5-B09 (already
-  drafted, Wave 5 above) restates and consumes M5-B07's pre-M5-B11/M5-B12
-  `decorate_chunk` signature (no `bridge` parameter) as a fixed
-  prerequisite; its own `advance_to_features` internally calls it. M5-B12e
-  adds a trailing `bridge: Option<&UndergroundFeatureContext>` parameter
-  (and a `ctx: &PlacementCtx` parameter) to that same function and describes
-  its real, non-`None` `bridge` supplier as "a future `GenStage`-driver
-  blueprint's own responsibility" — language that already misdescribes
-  M5-B09, which is not a future blueprint but an existing one that already
-  specifies this exact call site. Whoever implements M5-B09 needs a small,
-  additive correction to its own `advance_to_features` body (pass
-  `bridge: None`) before it will compile against M5-B12e's real signature —
-  tracked here so it surfaces as a planned correction rather than a
-  build-time surprise.
 - **M5-B12's own single-file draft self-declared an explicit exception to
   `00-blueprint-spec.md`'s own Sizing rule — discovered by an earlier audit
   pass, resolved by this one.** `Estimated scope: XL` was not one of the
@@ -786,12 +917,32 @@ below.)
   additively without touching M5-B02's file (out of its own assigned scope).
 - **`M5-B08-structures.md`'s own Context still defers its 15 non-jigsaw
   structure families to "M5-B12 (reserved, not yet drafted)" — stale, noticed
-  by this audit, not yet corrected (out of this file's own assigned scope;
-  the fix belongs in `M5-B08-structures.md` itself).** That reservation was
-  reassigned to **M5-B13** (blueprint table above) once the ID M5-B08's own
-  text still names was drafted against the unrelated M5-B12a-e features
-  scope instead. Whoever next revises `M5-B08-structures.md` should retarget
-  that one deferral reference from "M5-B12" to "M5-B13".
+  by an earlier audit pass, still not corrected as of this one (out of this
+  file's own assigned scope; the fix belongs in `M5-B08-structures.md`
+  itself).** That reservation was reassigned to **M5-B13**, then drafted in
+  full as the three-blueprint M5-B13a/b/c family (blueprint table above) —
+  M5-B08's own text is now doubly stale (both the ID and the "not yet
+  drafted" status are wrong). Whoever next revises `M5-B08-structures.md`
+  should retarget its deferral reference from "M5-B12 (reserved, not yet
+  drafted)" to "M5-B13a/b/c" and drop the "reserved, not yet drafted"
+  framing entirely.
+- **M5-B13a's own Context section runs to roughly 545 lines, well past
+  `00-blueprint-spec.md`'s own "~300 lines... the task is too big" guidance
+  (its total body, 701 lines, stays within the "~800 lines" body limit) —
+  now corrected.** An earlier audit pass found `Estimated scope: L` claimed
+  as ordinary, with no stated exception, unlike M5-B08's own precedent for a
+  large blueprint covering several loosely-coupled families in one coherent
+  domain (its header's Estimated scope field explicitly states the "not the
+  general ≤800-line guideline" exception) — the same class of defect this
+  index's own "Cross-blueprint gaps" section already records as resolved for
+  the single-file M5-B12 draft (a self-declared `XL` scope, split into the
+  conforming M5-B12a-e family). Resolved by this audit: rather than
+  fragmenting the shared `hand_coded::common` infrastructure derivation
+  (built here and reused by both sibling M5-B13 blueprints) away from its
+  first four consumers, M5-B13a's own header now states the same class of
+  explicit Sizing-rule exception M5-B08 already established, matching this
+  project's own convention for declaring, rather than silently exceeding, a
+  deliberate oversized-Context blueprint.
 
 ## M5 completion, restated
 
@@ -805,17 +956,28 @@ the M5-B12 family's own internal sequential edits to its own
 mod` line, M5-B12e alone adds the `place_configured_feature_all` body), and
 M5-B12e's/M5-B11's own sequential edits to M5-B07's `driver.rs`, chief among
 them — applied in M5-B07 → M5-B12e → M5-B11 order, per those two
-blueprints' own stated convergence claim). M5-B09's own Done state, as
-*drafted*, depends only on M5-B01 through M5-B08 having actually landed in
-the form its own Context assumes — no separate reconciliation changeset is
-needed there for those eight, since M5-B09 was drafted with all eight
-already available. **M5-B09's own text is not yet reconciled against
-M5-B11/the M5-B12 family's own later, additive change to
-`decorate_chunk`'s signature** ("Cross-blueprint gaps and reconciliation"
-above) — a small, correctly-scoped follow-up patch to
-`M5-B09-generation-pipeline.md` itself, not a re-derivation, is needed
-before M5-B09's own implementation can compile against the real, final
-`decorate_chunk`. M5-B10's own Tier-1 *test* gate is fully independent of
+blueprints' own stated convergence claim). M5-B13a/b/c reach their own
+Tier-1 Done state the same way, but **not** in parallel with each other —
+M5-B13b needs M5-B13a merged (for `hand_coded::common` and the
+`GeneratorRegistry`/`ProceduralPieceData` shapes it extends) and M5-B13c
+needs both M5-B13a and M5-B13b merged, each applying one more additive edit
+to the identical `structure/generation.rs`/`structure/hand_coded/mod.rs`
+pair M5-B13a's own Deliverables first created — landing them out of
+alphabetical order does not compile. None of the three feeds forward into
+M5-B09 or M5-B10's own compile graph: no landed blueprint yet constructs a
+`GeneratorRegistry` and passes it to `generate_structure_starts`, since that
+function's own signature was never extended to accept one (this audit's own
+"Cross-blueprint gaps" finding, above) — M5-B13a/b/c's own fifteen
+generators are Tier-1-proven in isolation but not yet reachable from the
+real generation flow. M5-B09's own Done state, as
+*drafted*, depends on M5-B01 through M5-B08 and M5-B11/the M5-B12 family
+having actually landed in the form its own Context assumes — M5-B09's own
+text already reflects the real, final `decoration::decorate_chunk` contract
+(M5-B12e's trailing `bridge: Option<&UndergroundFeatureContext>` parameter,
+M5-B11's composed dispatcher chain reaching `place_configured_feature_vegetation`
+→ `place_configured_feature_all` → `place_configured_feature`), with its own
+`advance_to_features` calling `decorate_chunk` passing `bridge: None`, so no
+separate reconciliation changeset is needed there. M5-B10's own Tier-1 *test* gate is fully independent of
 M5-B09's real generation output (its harness self-tests use only
 `FixedChunkGenerator`), though its Tier-1 *build* does require M5-B09's real
 `pipeline` module to exist and compile, since `Md5B09Generator` references
@@ -828,9 +990,12 @@ content-resolver table `Md5B09Generator`'s `context_builder` needs (Context
 `todo!()` stub; (c) the `Feature`-kind tier gap, now closed by M5-B11/the
 M5-B12 family (verified by this audit — the complete 64-name registry, no
 gap, no double-ownership, M5-B12e's own combined dispatcher correctly
-`ctx`-carrying from its first draft), and the remaining structures tier gap
-has been closed by now-reserved **M5-B13** (still not yet drafted) or
-explicitly re-scoped into GEN-D20-style documented, bounded exceptions; and
+`ctx`-carrying from its first draft), and the structures-family tier gap,
+now likewise closed by **M5-B13a/b/c** (verified by this audit — the
+complete 15-family registry, no gap, no double-ownership) modulo the
+`generate_structure_starts`/`GeneratorRegistry` wiring gap this audit found
+(a future GenStage-integration blueprint's job to close, "Cross-blueprint
+gaps and reconciliation" above — not a content gap, a routing one); and
 (d) the `m5-acceptance` CI job's first run against all of the above is green
 on both reference OS legs from a clean checkout — exactly the same
 "drafted-complete vs. measured-complete" distinction M0-B08/M1-B06/M2-B08/

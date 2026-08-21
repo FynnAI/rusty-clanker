@@ -598,7 +598,7 @@ Add, to the workflow's existing top-level `on.workflow_dispatch.inputs` block (a
 
 13. `evaluate_ac2_passes_when_near_zero_and_dispatch_engaged` — the zero-player region's last snapshot has `near_zero_dedicated_cpu: true`, `last_tick_task_count: Some(1)` → `Ac2Outcome.passed == true`, `dispatch_evidence == Engaged`.
 14. **`cpu_burning_quiet_region_fails_ac2`** (mandatory harness self-test) — the zero-player region's last snapshot has `near_zero_dedicated_cpu: false` (a fake that keeps burning CPU) → `Ac2Outcome.near_zero_cpu == false`, `Ac2Outcome.passed == false`.
-15. `evaluate_ac2_reports_not_yet_instrumented_when_task_count_absent` — `near_zero_dedicated_cpu: true`, `last_tick_task_count: None` (today's honest, real-world state, Context §D) → `Ac2Outcome.dispatch_evidence == NotYetInstrumented`, `Ac2Outcome.passed == false` — proving AC2 correctly fails on the mechanism gap alone even when the CPU evidence alone would otherwise pass.
+15. `evaluate_ac2_reports_not_yet_instrumented_when_task_count_absent` — `near_zero_dedicated_cpu: true`, `last_tick_task_count: None` (the pre-M6-B07 state; M6-B07's coalesced-dispatch implementation populates this field in a complete build, and this case guards against running acceptance on a build without it) → `Ac2Outcome.dispatch_evidence == NotYetInstrumented`, `Ac2Outcome.passed == false` — proving AC2 correctly fails on the mechanism gap alone even when the CPU evidence alone would otherwise pass.
 
 ### `xtask/tests/m6_report_ac3_evaluation.rs`
 

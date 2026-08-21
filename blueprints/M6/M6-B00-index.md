@@ -5,44 +5,62 @@
 M6 gives the project the measurement and governance machinery its own
 headline claim needs — "quiet regions batched, hot regions scale out,"
 proven under real multi-region load, with `01`'s ARCH-D6/ARCH-D19 seed
-threshold defaults replaced by calibrated values — without yet requiring the
-real `RegionManager`-driven, network-facing, many-region composition root on
-`rusty-clanker-server` that no blueprint through this milestone builds. Six
-blueprints implement M6: a declarative multi-region bot-swarm load-testing
-harness proven at 200-bot/8-region scale against synthetic/fake targets
-(M6-B01); a per-`(region, stage)` CPU-attribution and pool/EDF/lifecycle
-metrics layer wired additively into the already-merged `rc-scheduler`
-(M6-B02); the ARCH-D6/ARCH-D19 calibration methodology, pipeline, and
-governance path for landing a calibrated value into `01-server-architecture.md`
-(M6-B03); a three-tier reference-host specification with a real,
-filesystem-probing fingerprint/match/gate mechanism (M6-B04); the Tier-3
-PGO+BOLT release build pipeline (M6-B05); and the concrete pass/fail
-evaluators, `xtask m6-report` entry point, and `AuthoritativeRunReport`
-wrapping for all three of `11-roadmap-milestones.md`'s M6 acceptance criteria
-(M6-B06). Every blueprint in this milestone follows the identical, by-now
+threshold defaults replaced by calibrated values — and, since M6-B07 landed,
+the real `RegionManager`-driven, network-facing, many-region composition
+root on `rusty-clanker-server` every other blueprint in this milestone named
+as still missing. Seven blueprints implement M6: a declarative multi-region
+bot-swarm load-testing harness proven at 200-bot/8-region scale against
+synthetic/fake targets (M6-B01); a per-`(region, stage)` CPU-attribution and
+pool/EDF/lifecycle metrics layer wired additively into the already-merged
+`rc-scheduler` (M6-B02); the ARCH-D6/ARCH-D19 calibration methodology,
+pipeline, and governance path for landing a calibrated value into
+`01-server-architecture.md` (M6-B03); a three-tier reference-host
+specification with a real, filesystem-probing fingerprint/match/gate
+mechanism (M6-B04); the Tier-3 PGO+BOLT release build pipeline (M6-B05); the
+concrete pass/fail evaluators, `xtask m6-report` entry point, and
+`AuthoritativeRunReport` wrapping for all three of
+`11-roadmap-milestones.md`'s M6 acceptance criteria (M6-B06); and, closing
+the composition-root gap the first six blueprints all correctly deferred
+rather than each attempting piecemeal, the real, `RegionManager`-driven
+`rusty-clanker-server` entry point itself — a real EDF admission scheduler
+(ARCH-D20) and ARCH-D19's real coalesced single-work-item dispatch, both for
+the first time — plus the dynamic/pinned region-layout bootstrap, live
+merge/split wiring, fault-injection application, and N-region player
+routing every other M6 blueprint's own contract named and left unimplemented
+(M6-B07). M6-B01 through M6-B06 each follow the identical, by-now
 five-times-established pattern this project's own blueprint lineage uses
 whenever a task's real execution depends on work no blueprint has built yet:
 pin the dependency's exact contract shape, build and Tier-1-prove the
 consuming blueprint's own machinery entirely against synthetic data or a
 stub fixture, and leave the real, full-scale run wired, correct-by-construction,
 and honestly fail-closed until a future sibling blueprint lands the
-composition root. All six blueprints are self-consistent on that stance; no
-blueprint in this milestone claims a real green acceptance run it cannot
-produce.
+composition root. M6-B07 is that sibling blueprint — every one of those six
+"contract pinned, implementation deferred" postures is now, for the
+composition-root gap specifically, discharged for real (verified per
+blueprint by this audit, "Per-blueprint summary" below); two narrower gaps
+remain genuinely open even after M6-B07 (real ARCH-D6/ARCH-D19 governance
+calibration via `--mode real-sweep`, and an operator-provisioned reference
+host), restated in "M6 completion, restated" below.
 
 The milestone's actual mechanism content — the scenario schema, the metrics
 APIs, the calibration pipeline, the reference-host fingerprint/gate, the
-PGO/BOLT pipeline, and the acceptance evaluators — is accurate against the
-planning corpus and internally consistent in the API surfaces blueprints
-actually share. All six blueprints are mutually consistent: M6-B03's and
-M6-B04's own new `PROTECTED_PATHS` rows are described without a hardcoded
-ordinal, so the two may land in either order; both keep `CONTRIBUTING.md` in
-sync with their own new row; M6-B03's header Prerequisites cites only the one
-M6-B02 type its body actually uses; and M6-B06 — the last of the three
-`.github/workflows/ci.yml`-touching blueprints to land — reconciles
-`reference-host-gate`'s and `release`'s shared `workflow_dispatch` trigger
-with a `job` selector input. Details in "Cross-blueprint consistency notes"
-below.
+PGO/BOLT pipeline, the acceptance evaluators, and the composition root
+itself — is accurate against the planning corpus and internally consistent
+in the API surfaces blueprints actually share. All seven blueprints are
+mutually consistent: M6-B03's and M6-B04's own new `PROTECTED_PATHS` rows
+are described without a hardcoded ordinal, so the two may land in either
+order; both keep `CONTRIBUTING.md` in sync with their own new row; M6-B03's
+header Prerequisites cites only the one M6-B02 type its body actually uses;
+M6-B06 — the last of the three `.github/workflows/ci.yml`-touching
+blueprints to land — reconciles `reference-host-gate`'s and `release`'s
+shared `workflow_dispatch` trigger with a `job` selector input; and M6-B07
+touches no new `PROTECTED_PATHS` row at all, since every file its
+Deliverables modify already falls under an existing `crates/scheduler/**`/
+`crates/server/**`/`xtask/**` catch-all row (proven by its own acceptance
+test 23) — the entire changeset lands labeled `Changeset-Type: governance`,
+consistent with this lineage's own established convention for a blueprint
+that only ever touches already-protected paths. Details in "Cross-blueprint
+consistency notes" below.
 
 | ID | Title | Scope |
 |---|---|---|
@@ -52,6 +70,7 @@ below.
 | M6-B04 | Reference Host Specification & Fingerprinting | L |
 | M6-B05 | Tier-3 Release Build Pipeline (PGO + BOLT) | L |
 | M6-B06 | Multi-Region Acceptance Harness | L |
+| M6-B07 | Multi-Region Composition Root, EDF Admission & Coalesced Dispatch | L |
 
 ## Dependency graph
 
@@ -76,6 +95,10 @@ flowchart TD
         B06["M6-B06\nAcceptance harness\n(AC1/AC2/AC3 + m6-report)"]
     end
 
+    subgraph L4["Wave 4 — the composition root, once every other M6 blueprint lands"]
+        B07["M6-B07\nComposition root, EDF\nadmission & coalesced dispatch"]
+    end
+
     M0M1M3M4M5 --> B01
     M0M1M3M4M5 --> B02
     M0M1M3M4M5 --> B04
@@ -88,6 +111,12 @@ flowchart TD
     B03 -.->|"soft: calibration_values_landed\nmarker convention, report-path attachment"| B06
     B04 -- "real: xtask::reference_host::{gate,\nAuthoritativeRunReport, TierId}" --> B06
     B05 -- "real: xtask::release::detect_region_layout_support" --> B06
+
+    B01 -- "real: §B's four-item contract,\nrestated + implemented" --> B07
+    B02 -- "real: rc_scheduler::metrics feed-in\n(record_deadline_ready/record_admission,\nlast_tick_task_count)" --> B07
+    B03 -- "real: with_resize_thresholds/\nwith_thresholds_and_metrics wiring" --> B07
+    B05 -- "real: detect_region_layout_support\n--help substring reused" --> B07
+    B06 -- "real: §D's fifth contract item\n(--metrics-snapshot-log) + field shape" --> B07
 
     style B04 fill:transparent
 ```
@@ -120,6 +149,25 @@ flowchart TD
    tier_by_id}`, all imported directly inside the same `xtask` crate), and
    M6-B05 (`xtask::release::detect_region_layout_support`, reused unmodified,
    same crate).
+4. **M6-B07** needs all five other M6 blueprints merged: M6-B01 (§B's
+   four-item contract, restated field-for-field as this crate's own local
+   types per its own dependency-direction rule, and implemented for real),
+   M6-B02 (`rc_scheduler::metrics`'s `record_deadline_ready`/
+   `record_admission`/`edf_violation_count`/`is_near_zero_dedicated_cpu`,
+   called for real for the first time, plus the previously-`None`-only
+   `last_tick_task_count` field, populated for real), M6-B03
+   (`RcWorkerPool::with_resize_thresholds`/`RegionManager::
+   with_thresholds_and_metrics`, wired from a new `[scheduler]` config
+   table), M6-B05 (`xtask::release::detect_region_layout_support`, reused
+   unmodified as the exact substring check this blueprint's own `--help`
+   output must satisfy), and M6-B06 (§D's fifth composition-root contract
+   item, `--metrics-snapshot-log`, and the exact additive
+   `RegionMetricsSnapshot.last_tick_task_count: Option<u32>` field shape,
+   both implemented for real). It is also the first blueprint since M4-B08
+   to touch `crates/server/src/play/world.rs`/`two_region_world.rs`
+   (a bounded, named code-motion extraction only, Context §C.1 of that
+   blueprint) and the first to give `crates/server/src/main.rs` real content
+   at all.
 
 ## Per-blueprint summary
 
@@ -286,13 +334,57 @@ realization of M6's Acceptance Criteria 1–3 (`11-roadmap-milestones.md`);
 ARCH-D6/D7/D18/D19/D20 (verification only); TEST-D32/PERF-D58 (via M6-B04);
 TEST-D37 Tier 3 (restated).
 
+**M6-B07 — Multi-Region Composition Root, EDF Admission & Coalesced
+Dispatch.** Gives `rusty-clanker-server` the real, `RegionManager`-driven,
+network-facing, many-region composition root M6-B01 §B, M6-B02's own
+Scope-boundary note, M6-B03 §A, M6-B05 §L, and M6-B06 §A all independently
+named as still missing — the single, already-and-consistently-named gap the
+first six M6 blueprints correctly declined to build piecemeal. Discharges,
+for real, every one of those six blueprints' own pinned contracts: a real
+`main.rs`/`run_embedded` implementing M6-B01 §B's full four-item contract
+(`--region-layout`/`RC_REGION_LAYOUT`, `--fault-injection-schedule`,
+`--region-lifecycle-log`) plus M6-B06 §D's fifth item
+(`--metrics-snapshot-log`); a real, concurrency-safe earliest-deadline-first
+admission scheduler (`rc_scheduler::edf`, ARCH-D20 realized for the first
+time, calling M6-B02's own `record_deadline_ready`/`record_admission` feed-in
+points at the exact instants those functions were built to be called);
+ARCH-D19's real coalesced single-work-item dispatch (`RcExecutor::
+tick_region_coalesced`) and the `last_tick_task_count` field M6-B02/M6-B06
+both left `None`-only, now populated for real; live region merge/split
+executed under real admission-scheduler load, with the transport/directory/
+chunk-lifecycle bookkeeping M0-B06 named as a composition-root obligation;
+N-region player routing generalizing M4-B08's own two-region `PlayerRouting`;
+and the fault-injection schedule resolver M6-B01 §B item 3 named, applied
+for real as a per-tick synthetic-load multiplier. Also retires a real,
+independently-flagged architectural debt: `HardcodedWorld` (M1-B05) and
+`TwoRegionWorld` (M4-B08) each built their own separate `RcExecutor`,
+violating ARCH-D8's "one conflict graph, computed once, reused for every
+region" requirement — a gap M4-B08 explicitly deferred to "a future sibling
+blueprint"; this blueprint extracts one shared `build_server_executor`,
+retiring both types from `main()`'s own call graph without modifying either
+type's code or breaking either type's own pre-existing test suite. Two
+narrower gaps this blueprint explicitly does not close, honestly disclosed
+rather than silently left: M5-B09's own real worldgen job-submission API is
+not wired through the new `EdfScheduler::submit_background` facility (M5-B09
+is not a prerequisite of this blueprint; the admission-priority facility
+ARCH-D20's own interface note promises is built and tested, but the actual
+integration call site is a small follow-up); and border-halo chunk ticking
+across a region boundary (ARCH-D10/D11) remains fully unimplemented, a
+named non-goal. *Decisions covered:* ARCH-D5/D6 (dynamic bootstrap,
+concretely resolved), ARCH-D7 (genuinely concurrent per-region ticking, for
+the first time), ARCH-D18/D19/D20 (EDF admission and coalesced dispatch,
+both implemented for real), ARCH-D21 (Tokio runtime boundary, owned for the
+first time), ARCH-D23/D24/D25/D29 (restated and applied), ARCH-D9/D10/D11
+(border-halo restated as an explicit non-goal), CLUSTER-D26/D27 (restated,
+cluster mode out of scope).
+
 ## M6 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
 |---|---|---|---|
-| 1 | 20 TPS sustained across all regions for a 15-minute run with 200 simulated bots distributed across ≥8 independently-ticking regions at view distance 10, on the milestone's documented reference host, with RC-WorkerPool utilization staying under its hard cap (ARCH-D18). | M6-B01 (scenario/fanout mechanism + `eight_region_mixed.ron`), M6-B02 (pool-utilization sampling), M6-B04 (the reference-host tier + fingerprint gate), M6-B06 (AC1a/AC1b evaluators, `xtask m6-report`) | **Mechanism fully specified, self-tested against synthetic data, and correctly fail-closed.** The real run is blocked on the same, single, already-and-consistently-named gap every blueprint in this milestone states: no landed blueprint wires `rc-scheduler::RegionManager`/`RcExecutor`/`RcWorkerPool` into a live, network-facing, many-region `rusty-clanker-server` composition root (M6-B01 §B). Once that lands and implements M6-B01 §B's four-item contract plus M6-B06's own `--metrics-snapshot-log` addition, `xtask m6-report --server-bin <real binary> --reference-tier m6-acceptance` on a provisioned, labeled self-hosted reference-host runner (an operator action M6-B04 also names as out of scope) produces the real, authoritative measurement. |
-| 2 | A region with 0 players coalesces onto a shared worker (ARCH-D19's coalesced-tick path) and is measured, via per-region CPU attribution metrics, to contribute near-zero dedicated CPU. | M6-B02 (`near_zero_dedicated_cpu`, the attribution mechanism itself, dispatch-granularity-agnostic by construction), M6-B06 (AC2a/AC2b evaluators, the new `last_tick_task_count` contract field) | **CPU-attribution mechanism fully built and correct today; the coalesced-dispatch mechanism itself does not exist.** AC2a (near-zero CPU reading) is measurable the instant a real region exists to measure. AC2b (proof the *coalesced* code path, not merely many cheap fine-grained tasks, actually ran) cannot pass until ARCH-D19's real coalesced single-work-item dispatch is implemented — M0-B06, M6-B02, and M6-B03 all independently confirm this gap is still open as of their own drafting, and M6-B06 honestly reports `CoalescedDispatchEvidence::NotYetInstrumented` rather than a false pass. No blueprint through M6-B06 implements this mechanism; it remains reserved for a future blueprint. |
-| 3 | A fault-injection test deliberately overloads one region: sibling regions hold 20 TPS while only the overloaded region's own TPS degrades (ARCH-D7), confirmed automatically. | M6-B01 (`FaultInjectionSchedule`, `resolve_load_multiplier`'s deterministic mechanism, the shipped scenario's own one-region fault entry), M6-B06 (AC3a/AC3b evaluators, the settle-window/threshold constants) | **Mechanism fully specified and self-tested against synthetic data (the `siblings_also_degrade_fails_ac3` self-test proves the two sub-checks are independently attributed).** Blocked on the identical composition-root gap as criterion 1 — the fault-injection *schedule* is real and shippable today (M6-B01 §B item 3's server-side application is the missing half), and `evaluate_ac3`'s own pure functions are provably correct against constructed fault-window data. |
+| 1 | 20 TPS sustained across all regions for a 15-minute run with 200 simulated bots distributed across ≥8 independently-ticking regions at view distance 10, on the milestone's documented reference host, with RC-WorkerPool utilization staying under its hard cap (ARCH-D18). | M6-B01 (scenario/fanout mechanism + `eight_region_mixed.ron`), M6-B02 (pool-utilization sampling), M6-B04 (the reference-host tier + fingerprint gate), M6-B06 (AC1a/AC1b evaluators, `xtask m6-report`), M6-B07 (the real composition root itself, M6-B01 §B's contract implemented for real) | **The composition-root gap this row previously named is now closed — verified by this audit against M6-B07's own Done-when list and Acceptance tests.** `rusty-clanker-server` now has a real `RegionManager`/`RcExecutor`/`RcWorkerPool`-driven, network-facing, many-region entry point (M6-B07), implementing M6-B01 §B's four-item contract and M6-B06's own `--metrics-snapshot-log` addition exactly as both blueprints specified. What remains open is no longer a missing mechanism, only its real-hardware exercise: `xtask m6-report --server-bin <real binary> --reference-tier m6-acceptance` still needs a provisioned, labeled self-hosted reference-host runner (an operator action M6-B04 names as out of scope) to produce the real, authoritative 200-bot/8-region/15-minute measurement — M6-B07's own Tier-1 gate caps every one of its own `composition_in_process.rs` tests at 20 real concurrent sockets, by its own stated design, deliberately never re-implementing M6-B06's already-built Tier-3 job. |
+| 2 | A region with 0 players coalesces onto a shared worker (ARCH-D19's coalesced-tick path) and is measured, via per-region CPU attribution metrics, to contribute near-zero dedicated CPU. | M6-B02 (`near_zero_dedicated_cpu`, the attribution mechanism itself, dispatch-granularity-agnostic by construction), M6-B06 (AC2a/AC2b evaluators, the new `last_tick_task_count` contract field), M6-B07 (`RcExecutor::tick_region_coalesced`, ARCH-D19's real coalesced single-work-item dispatch, implemented for real) | **Both halves of this criterion's own previously-named gap are now closed — verified by this audit.** AC2a (near-zero CPU reading) was already measurable the instant a real region exists to measure. AC2b (proof the *coalesced* code path, not merely many cheap fine-grained tasks, actually ran) is now backed by a real mechanism: M6-B07's own `tick_region_coalesced` engages whenever a region's tick-duration EWMA drops under the same 10%-of-budget "quiet" threshold ARCH-D19/M0-B06 already pinned, wraps its whole coalesced body in exactly one `region_tagged_task` submission, and populates `last_tick_task_count = Some(1)` for that tick — its own dedicated acceptance test (`coalesced_dispatch_engages_for_a_quiet_region_and_reports_near_zero_cpu`) proves both AC2a and AC2b together against the real scheduler, not hand-fed test calls. M6-B06's own `CoalescedDispatchEvidence::NotYetInstrumented` fallback is accordingly now dead code on any run built against a real M6-B07 composition root — M6-B06 itself has not been revised to reflect this (out of this index's own scope; the fix, if wanted, belongs in `M6-B06-acceptance-harness.md` itself). |
+| 3 | A fault-injection test deliberately overloads one region: sibling regions hold 20 TPS while only the overloaded region's own TPS degrades (ARCH-D7), confirmed automatically. | M6-B01 (`FaultInjectionSchedule`, `resolve_load_multiplier`'s deterministic mechanism, the shipped scenario's own one-region fault entry), M6-B06 (AC3a/AC3b evaluators, the settle-window/threshold constants), M6-B07 (the server-side fault-injection application M6-B01 §B item 3 left as the missing half, implemented for real) | **The composition-root gap this row previously named is now closed — verified by this audit.** M6-B07 §I carries its own local, byte-for-byte restatement of M6-B01 §G's `resolve_load_multiplier` algorithm (justified by the same production/test-crate dependency-direction rule M6-B03/M6-B06 already established for their own file-boundary mirrors) and applies it for real, every tick, immediately before dispatch — its own acceptance test 19 (`fault_injection_schedule_isolates_the_targeted_region`) proves the targeted region's own tick-duration EWMA diverges from an untargeted sibling's under the real scheduler. What remains open is the same real-hardware/real-scale exercise as criterion 1, not a missing mechanism. |
 
 ## Cross-blueprint consistency notes
 
@@ -329,18 +421,52 @@ TEST-D37 Tier 3 (restated).
   Context §G.1), so one manual dispatch runs exactly the job an operator
   selected.
 
-- **Every M6 blueprint's own "the real run is blocked on the composition
-  root" stance is mutually consistent.** M6-B01 §B, M6-B02's Scope-boundary
-  note, M6-B03 §A, M6-B04's own Context, M6-B05 §L, and M6-B06 §A all
-  restate, in each blueprint's own words, the identical fact — no blueprint
-  through M6-B06 wires `rc-scheduler`'s `RegionManager`/`RcExecutor`/
-  `RcWorkerPool` into a live, network-facing, many-region
-  `rusty-clanker-server` composition root — and each pins its own dependent
-  contract on that gap precisely (M6-B01 §B's four items, extended by M6-B06
-  §D's fifth; M6-B05's toy-fixture substitution; M6-B06's
-  `AC2b`/`CoalescedDispatchEvidence::NotYetInstrumented` honesty). No
-  blueprint's restatement of this gap contradicts another's, and every
-  blueprint's own Tier-1 Done state is correctly independent of it landing.
+- **Every M6-B01-through-M6-B06 blueprint's own "the real run is blocked on
+  the composition root" stance was mutually consistent, and is now
+  discharged by M6-B07 exactly along the lines each of them pinned.**
+  M6-B01 §B, M6-B02's Scope-boundary note, M6-B03 §A, M6-B04's own Context,
+  M6-B05 §L, and M6-B06 §A each restated, in their own words, the identical
+  fact — no blueprint through M6-B06 wires `rc-scheduler`'s `RegionManager`/
+  `RcExecutor`/`RcWorkerPool` into a live, network-facing, many-region
+  `rusty-clanker-server` composition root — and each pinned its own
+  dependent contract on that gap precisely (M6-B01 §B's four items, extended
+  by M6-B06 §D's fifth; M6-B05's toy-fixture substitution; M6-B06's
+  `AC2b`/`CoalescedDispatchEvidence::NotYetInstrumented` honesty). M6-B07
+  discharges every one of those pinned contracts by name (its own
+  Prerequisites field cites all five other M6 blueprints and restates
+  exactly which type/contract it consumes from each) — verified by this
+  audit, not merely asserted: M6-B01 §B's four items are each implemented in
+  M6-B07 §B/§I/§J/§K; M6-B02's `record_deadline_ready`/`record_admission`
+  feed-in points are called from M6-B07's own `EdfScheduler` at the exact
+  instants those functions were built to be called (§E.3); M6-B06 §D's
+  `--metrics-snapshot-log` and `last_tick_task_count` field shape are both
+  implemented verbatim (§F/§K). No blueprint's restatement of the gap
+  contradicted another's, and every blueprint's own Tier-1 Done state
+  remains correctly independent of M6-B07 landing — M6-B07 is additive to
+  all six, never a breaking revision of any of their own already-merged
+  Deliverables (M6-B07 Constraints (e)/(f) name the two narrow, bounded
+  exceptions to that rule precisely: `HardcodedWorld::new`'s/
+  `TwoRegionWorld::new`'s own bodies, and `RegionManager::region(&self,
+  id)`'s removal in favor of `with_region`).
+
+- **M6-B07's own Estimated scope stays within `00-blueprint-spec.md`'s
+  sizing guidance, though closer to its edges than any other M6 blueprint —
+  verified by this audit.** Its body runs to 790 lines (spec: "~800 lines");
+  its Context section runs to roughly 490 lines (spec: "~300 lines... if the
+  Context section alone exceeds ~300... the task is too big"). M6-B07's own
+  header now states the same explicit "not the general guideline" exception
+  M5-B02/M5-B03/M5-B08 each stated for their own oversized Context sections
+  — alongside its own pre-existing prose argument, in the same
+  Estimated-scope field, that splitting the composition root further would
+  only recreate the "contract pinned, implementation deferred" pattern this
+  milestone's other six blueprints already used five times, "not appropriate
+  for the one blueprint whose entire job is to stop deferring." This audit
+  finds that argument sound given the blueprint's own subject (a genuine
+  single composition root cannot be usefully partitioned across files
+  without reintroducing exactly the deferred-contract seams it exists to
+  close), and the header now matches, rather than merely implying, this
+  project's own established convention for declaring a deliberate sizing
+  exception the way M5-B02/M5-B03/M5-B08 already did.
 
 ## M6 completion, restated
 
@@ -358,28 +484,45 @@ restates a fifth's own governance-marker convention (M6-B03) plus a sixth's
 own metrics shape (M6-B02, file-boundary mirror only), and reconciles
 `reference-host-gate`'s and `release`'s shared `workflow_dispatch` trigger
 (Cross-blueprint consistency notes, above) — the one substantive edit it
-makes to a file two sibling blueprints already committed. All six
+makes to a file two sibling blueprints already committed. M6-B07 needs all
+five of M6-B01 through M6-B06 merged (Recommended execution order, above) —
+it is the one blueprint in this milestone whose own crates (`rc-scheduler`,
+`rusty-clanker-server`) directly consume real types/contracts from every one
+of the other five, as named in its own Prerequisites field. All seven
 blueprints' own Tier-1 gates are mutually consistent and independently
-green.
+green — M6-B07's own additive changes to `rc-scheduler`/`rusty-clanker-server`
+leave every pre-existing M0-B04/B05/B06/M1-B05/M2-B05/M4-B08/M6-B02/M6-B03
+test passing byte-for-byte unmodified, per its own Done-when list, verified
+by this audit against its own Acceptance tests section.
 
-`11-roadmap-milestones.md`'s three M6 acceptance criteria are reached for
-real only once a still-future, not-yet-drafted sibling blueprint (a) wires
-`rc-scheduler`'s `RegionManager`/`RcExecutor`/`RcWorkerPool` into a real,
-network-facing, many-region `rusty-clanker-server` composition root
-implementing M6-B01 §B's full four-item contract plus M6-B06 §D's fifth
-item; (b) implements ARCH-D19's real coalesced single-work-item dispatch
-mechanism and populates the new `last_tick_task_count` field (M6-B06 §D) —
-required for AC2b, not AC2a; (c) implements `xtask calibrate --mode
-real-sweep` (M6-B03 §A/§H, explicitly deferred) and lands at least one real
-governance changeset calibrating an ARCH-D6/ARCH-D19 value into
-`docs/planning/01-server-architecture.md`, carrying M6-B03 §H's own
-`"Calibrated against"` marker text M6-B06's own `calibration_values_landed`
-check looks for; and (d) an operator provisions and labels a real,
-self-hosted reference-host runner matching one of M6-B04's three declared
-tiers, so `reference-host-gate`'s `workflow_dispatch` job — extended by
-M6-B06 to run the real `m6-report` step — has a runner to dispatch to at
-all. Until then, every mechanism this milestone's six blueprints build is
-correct-by-construction and honestly, mechanically fail-closed rather than
-silently green — exactly the same "drafted-complete vs. measured-complete"
-distinction M0-B08/M1-B06/M3-B08/M4-B09/M5-B10's own harness blueprints
-already established as this project's standing pattern.
+`11-roadmap-milestones.md`'s three M6 acceptance criteria are, as of
+M6-B07 landing, blocked on genuinely narrower gaps than before — verified
+by this audit, not merely asserted (M6 acceptance criteria → blueprint
+mapping, above). The real, `RegionManager`-driven composition root now
+exists, wires M6-B01 §B's full four-item contract plus M6-B06 §D's fifth
+item, and implements ARCH-D19's real coalesced single-work-item dispatch
+(populating `last_tick_task_count` for real) — the two gaps this section
+previously named as items (a) and (b) are closed. What remains: (a) an
+operator provisions and labels a real, self-hosted reference-host runner
+matching one of M6-B04's three declared tiers, so `reference-host-gate`'s
+`workflow_dispatch` job — extended by M6-B06 to run the real `m6-report`
+step, now against a real M6-B07-built server binary — has a runner to
+dispatch to at all, and the real 200-bot/8-region/15-minute run (M6-B07's
+own Tier-1 gate deliberately caps itself at 20 real concurrent sockets,
+per its own Constraints (i), leaving the real load-scale exercise to
+M6-B06's already-built Tier-3 job exactly as designed) actually executes;
+and (b) `xtask calibrate --mode real-sweep` (M6-B03 §A/§H, explicitly
+deferred by that blueprint and not built by M6-B07 either) still needs to
+land at least one real governance changeset calibrating an ARCH-D6/ARCH-D19
+value into `docs/planning/01-server-architecture.md`, carrying M6-B03 §H's
+own `"Calibrated against"` marker text M6-B06's own
+`calibration_values_landed` check looks for — a real `rusty-clanker-server`
+build existing now (M6-B07) makes a future `--mode real-sweep`
+implementation meaningfully buildable, but that mode itself remains
+undrafted. Until both close, `M6_calibrated_values_landed_via_governance`
+(M6-B06's own honest, currently-expected-red case) stays red, and the
+reference-host-gate job's own first real run remains unexercised — exactly
+the same "drafted-complete vs. measured-complete" distinction
+M0-B08/M1-B06/M3-B08/M4-B09/M5-B10's own harness blueprints already
+established as this project's standing pattern, now narrowed from a missing
+mechanism to an operator action plus one still-undrafted calibration mode.
