@@ -194,13 +194,12 @@ into an observable `NodeHealthEvent` stream). Defines, and consumes but does
 not implement, `openraft::RaftNetworkFactory<TypeConfig>` and its own
 `JoinClient` trait — the real QUIC-backed network for both remains the one
 genuinely open cross-cutting gap this whole milestone inherits (Milestone
-summary, above). Explicitly flags, and does not resolve, an apparent
-prose/diagram contradiction in `12-workspace-structure.md`'s own WS-D3
-rule 2 vs. its Dependency Graph (a `cluster --> sched` edge the diagram
-draws that the prose forbids) — correctly deferred to whichever blueprint
-would need to cross it; M7-B03 and M7-B05 both independently pick it up and
-both resolve it identically (prose wins, no edge is ever created — Context
-§A of each), a real, verified cross-blueprint consistency. *Decisions
+summary, above). Notes that CLUSTER-D16 takeover's own load-driven
+placement needs `rc-scheduler`-owned tick-duration data, which
+`12-workspace-structure.md`'s WS-D3 rule 2 bars `rc-cluster` from reaching
+by a Cargo edge — resolved by crossing a trait boundary instead
+(`LoadReportSink`), never a dependency; M7-B03 and M7-B05 both build on
+that same boundary, a real, verified cross-blueprint consistency. *Decisions
 covered:* CLUSTER-D1, D5, D13, D14, D15, D16 (foundation only), D19, D26/D27
 (dependency-set discipline), D28 (span instrumentation only, OTLP deferred).
 
@@ -327,9 +326,9 @@ covered:* CLUSTER-D22 (node-side half), D24 (node-side trigger), D7, D9/D10
 
 **M7-B08 — Cluster Bootstrap, Config & Deployment.** Gives
 `rusty-clanker-server` a real, validated `[cluster]` config surface
-(`ClusterConfig`, completing CLUSTER-D27's own table with two flagged
-field-group extensions — `node_cert`/`node_key`, and `raft_data_dir` —
-each a concrete resolution of a gap a prerequisite blueprint already named)
+(`ClusterConfig`, parsing CLUSTER-D27's own table — including `node_cert`/
+`node_key` — plus one further field-group extension, `raft_data_dir`, a
+concrete resolution of a gap a prerequisite blueprint already named)
 and a real six-step cluster-node startup sequence
 (`ClusterNodeComposition::start`, generic over the exact two
 `RaftNetworkFactory`/`JoinClient` type parameters M7-B02 already fixed,

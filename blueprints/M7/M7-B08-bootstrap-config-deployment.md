@@ -77,6 +77,18 @@ pub struct ClusterConfig {
     /// Context §B's own extension — this node's own TLS identity (M7-B01 §F).
     pub node_cert: std::path::PathBuf,
     pub node_key: std::path::PathBuf,
+    /// `role = "proxy"` only (M7-B06 §D) — this proxy's own outbound-dialing QUIC
+    /// address for the proxy<->node link. `None` on a `role = "node"` config.
+    #[serde(default)]
+    pub proxy_bind: Option<std::net::SocketAddr>,
+    /// `role = "node"` only (M7-B06 §D) — this node's second, proxy-facing QUIC
+    /// listen address, distinct from `bind`. `None` on a `role = "proxy"` config.
+    #[serde(default)]
+    pub proxy_accept_bind: Option<std::net::SocketAddr>,
+    /// Required for both roles (M7-B06 §D/§F) — path to the 32-byte shared secret
+    /// every proxy signs, and every node verifies, a `ForwardedIdentity` envelope
+    /// with (CLUSTER-D20), operator-distributed alongside `ca_cert`.
+    pub forwarding_secret_path: std::path::PathBuf,
     /// Context §B's own extension — where THIS node's local raft `redb::Database`
     /// lives. Never shared, never network storage (contrast `shared_storage`).
     /// `None` when the operator left the key out — resolved by
@@ -476,12 +488,12 @@ Restates M7-B02's own already-proven in-process raft-network testing technique l
 ### `crates/server/tests/cluster_config.rs`
 
 1. `cluster_config_absent_returns_none` — a temp TOML file with only `[world]` → `ClusterConfig::load` returns `Ok(None)`.
-2. `cluster_config_parses_full_node_role` — a well-formed `[cluster]` table, `role = "node"`, every field present including `node_cert`/`node_key`/`raft_data_dir` pointing at real (test-fixture, empty-but-existing) files/dirs → `Ok(Some(cfg))`, every field equal to the source TOML.
-3. `cluster_config_parses_proxy_role` — `role = "proxy"` parses to `ClusterRole::Proxy`, `shared_storage` empty string accepted (not validated for the proxy role, Context §B).
+2. `cluster_config_parses_full_node_role` — a well-formed `[cluster]` table, `role = "node"`, every field present including `node_cert`/`node_key`/`raft_data_dir`/`proxy_accept_bind`/`forwarding_secret_path` pointing at real (test-fixture, empty-but-existing) files/dirs → `Ok(Some(cfg))`, every field equal to the source TOML.
+3. `cluster_config_parses_proxy_role` — `role = "proxy"` parses to `ClusterRole::Proxy`, `shared_storage` empty string accepted (not validated for the proxy role, Context §B), `proxy_bind`/`forwarding_secret_path` present, `proxy_accept_bind` absent (`None`).
 4. `cluster_config_rejects_unknown_role` — `role = "server"` → `Err(ClusterConfigError::InvalidRole(_))`.
 5. `cluster_config_rejects_bootstrap_with_seeds` — `bootstrap = true`, `seeds = ["x"]` → `Err(ClusterConfigError::BootstrapWithSeeds)`.
 6. `cluster_config_rejects_missing_shared_storage_for_node` — `role = "node"`, `shared_storage = ""` → `Err(ClusterConfigError::MissingSharedStorageForNode)`.
-7. `cluster_config_rejects_unreadable_tls_paths` — three sub-cases (`ca_cert`/`node_cert`/`node_key` each independently pointed at a nonexistent path) → `Err(ClusterConfigError::TlsMaterialUnreadable { field, .. })` naming the correct field each time.
+7. `cluster_config_rejects_unreadable_tls_paths` — four sub-cases (`ca_cert`/`node_cert`/`node_key`/`forwarding_secret_path` each independently pointed at a nonexistent path) → `Err(ClusterConfigError::TlsMaterialUnreadable { field, .. })` naming the correct field each time.
 8. `cluster_config_defaults_cluster_save_interval_when_world_unset` — `[cluster]` present, `[world]` has no `save_interval_ticks` key → the resolved `WorldConfig.save_interval_ticks == 600`.
 9. `explicit_save_interval_overrides_cluster_default` — as test 8, but `[world].save_interval_ticks = 1200` explicit → resolved value `1200`, cluster's own 600 default never applied.
 

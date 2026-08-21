@@ -157,7 +157,6 @@ flowchart TB
     tnet --> msg
     cluster --> msg
     cluster --> tnet
-    cluster --> sched
     proxy --> cluster
     proxy --> tnet
     proxy --> auth
