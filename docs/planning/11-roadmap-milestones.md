@@ -114,6 +114,7 @@ flowchart LR
 **Scope:**
 - Entity AI/pathfinding/physics (ARCH-D15's 6a/6b split), mob spawning, combat/damage, item entities and pickup, liquid flow (water/lava), lighting exercised at real scale (ARCH-D16), hopper item-transfer chains crossing chunk borders (ARCH-D17).
 - Cross-region entity transfer (ARCH-D10) exercised with real players and mobs crossing a live region boundary for the first time (previously only synthetic messages, per `M0`'s acceptance criteria).
+- Build-order note: `rc-rng` (`crates/rng/`, WS-D14) is authored by blueprint `M5-B01` but consumed by `M4-B02`'s loot rolls — when implementation reaches `M4-B02`, the `rc-rng` crate portion of `M5-B01` is implemented first, a deliberate bounded forward-pull that changes no milestone acceptance gate.
 
 **Acceptance criteria:**
 - A player walks across a live region boundary (two independently-ticking regions, still monolithic — no cluster mode) with position-delta logging on the client showing no observable discontinuity beyond ARCH-D10's documented one-tick transfer budget.

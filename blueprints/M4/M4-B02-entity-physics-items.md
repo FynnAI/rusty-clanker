@@ -4,9 +4,9 @@
 |---|---|
 | ID | M4-B02 |
 | Milestone | M4 — Mechanics Tier 2: Entities, AI, Combat, Items |
-| Prerequisites | M4-B01 (`rc-mechanics::entity`: `BaseEntity`/`LivingEntity`/`EntityKind`/`EntityPayload`/`ItemBundle`/`ZombieBundle`/`VillagerBundle`/`CowBundle`/`ItemStackRecord`, `EntityUuid`/`NetworkEntityIdAllocator`, `EntityRecord`/`EntityNbtFields`, `MetadataValue`/`EntityMetadataFields`, `TrackingDelta`/`compute_tracking_delta`, `ComponentBlob`/`SnapshotPayload`/`serialize_entity_snapshot`, the `rc-scheduler` `Stage::EntityPhysicsIntegration`(7)/`DomainGroup::EntityPhysicsIntegration` split and its ordinary conflict-graph-batched dispatch, `rusty-clanker-server`'s `play::entity_packets`/`entity_persistence`/`entity_tracking` modules, `PlayerMarker.tracked_entities` — every one reused unmodified; this blueprint registers the first real content into `DomainGroup::EntityPhysicsIntegration`, the slot M4-B01 opened and deliberately left unregistered — M4-B04's `system_mob_despawn` and M4-B05's mob-combat system land in that same slot alongside this one, at `order_tag` 1 and 2 respectively, per M4-B09's own governance changeset, which this blueprint does not itself read or bind to); M3-B02 (`rc-physics`: `Vec3`, `Aabb`, `VoxelShape`, `BlockShapeSource`/`BlockPhysicsProperties`/`ShapeTable`/`tier1_shape_table()`, `collide_and_slide`/`sweep_axis`/`overlaps_any_solid`, `step_living_entity_tick`/`LivingMotionState`/`MovementIntent` and its full gravity/drag constant set — `step_living_entity_tick` was explicitly reserved by that blueprint's own doc comment for "a future blueprint's mobs, falling blocks... and the client's own local prediction loop," which is exactly this blueprint's own first real caller); M4-B06 (`rc-mechanics::fluid`: `FluidKind`/`FluidState`/`FluidTables`, `fluid_state_at`/`get_own_height`/`get_height`/`get_flow` — that blueprint's own Context explicitly states "this blueprint does not implement the AABB submersion scan... or any push/drag/drowning constant — those consume this API, they are not part of it," naming this blueprint as the consumer); M3-B03 (`rusty-clanker-server::play::mining`: `BreakOutcome::Applied{pos, drop_eligible}`, `finalize_break` — that blueprint's own Context explicitly states "a future M4 blueprint that implements MECH-D51's real item entities extends `BreakOutcome`'s `Applied` arm to actually spawn one when `drop_eligible` is true — not this blueprint's dig-timing formula... or any other part," naming this blueprint as that extension point); M3-B01 (`rc-mechanics::random`: `RcRandom`, reused unmodified for non-loot RNG needs; `stage4::ecs::ChunkIndex`, the production chunk-lookup resource this blueprint's own read-only world-bridge reuses). |
+| Prerequisites | M4-B01 (`rc-mechanics::entity`: `BaseEntity`/`LivingEntity`/`EntityKind`/`EntityPayload`/`ItemBundle`/`ZombieBundle`/`VillagerBundle`/`CowBundle`/`ItemStackRecord`, `EntityUuid`/`NetworkEntityIdAllocator`, `EntityRecord`/`EntityNbtFields`, `MetadataValue`/`EntityMetadataFields`, `TrackingDelta`/`compute_tracking_delta`, `ComponentBlob`/`SnapshotPayload`/`serialize_entity_snapshot`, the `rc-scheduler` `Stage::EntityPhysicsIntegration`(7)/`DomainGroup::EntityPhysicsIntegration` split and its ordinary conflict-graph-batched dispatch, `rusty-clanker-server`'s `play::entity_packets`/`entity_persistence`/`entity_tracking` modules, `PlayerMarker.tracked_entities` — every one reused unmodified; this blueprint registers the first real content into `DomainGroup::EntityPhysicsIntegration`, the slot M4-B01 opened and deliberately left unregistered — M4-B04's `system_mob_despawn` and M4-B05's mob-combat system land in that same slot alongside this one, at `order_tag` 1 and 2 respectively, per M4-B09's own governance changeset, which this blueprint does not itself read or bind to); M3-B02 (`rc-physics`: `Vec3`, `Aabb`, `VoxelShape`, `BlockShapeSource`/`BlockPhysicsProperties`/`ShapeTable`/`tier1_shape_table()`, `collide_and_slide`/`sweep_axis`/`overlaps_any_solid`, `step_living_entity_tick`/`LivingMotionState`/`MovementIntent` and its full gravity/drag constant set — `step_living_entity_tick` was explicitly reserved by that blueprint's own doc comment for "a future blueprint's mobs, falling blocks... and the client's own local prediction loop," which is exactly this blueprint's own first real caller); M4-B06 (`rc-mechanics::fluid`: `FluidKind`/`FluidState`/`FluidTables`, `fluid_state_at`/`get_own_height`/`get_height`/`get_flow` — that blueprint's own Context explicitly states "this blueprint does not implement the AABB submersion scan... or any push/drag/drowning constant — those consume this API, they are not part of it," naming this blueprint as the consumer); M3-B03 (`rusty-clanker-server::play::mining`: `BreakOutcome::Applied{pos, drop_eligible}`, `finalize_break` — that blueprint's own Context explicitly states "a future M4 blueprint that implements MECH-D51's real item entities extends `BreakOutcome`'s `Applied` arm to actually spawn one when `drop_eligible` is true — not this blueprint's dig-timing formula... or any other part," naming this blueprint as that extension point); M3-B01 (`rc-mechanics::random`: `RcRandom`, reused unmodified for non-loot RNG needs; `stage4::ecs::ChunkIndex`, the production chunk-lookup resource this blueprint's own read-only world-bridge reuses). **Flagged, accepted exception to `PLAN-D2`'s milestone-readiness gate:** this blueprint's own `rc-rng` path dependency (Context §K, `12-workspace-structure.md`'s WS-D14) is a forward reference to `M5-B01` (Milestone 5), which authors that crate — `rc-rng`'s `XoroshiroRandom`/`create_random_sequence`/`create_random_sequence_default` (`M5-B01`'s own Context §D/§F/§I) must therefore exist ahead of this blueprint's own implementation, out of `PLAN-D2`'s stated sequential order; `11-roadmap-milestones.md` does not yet resolve this ordering (WS-D14's own rationale), so implementing M4 in isolation before M5 requires pulling `rc-rng`'s creation forward as a standalone step ahead of the rest of `M5-B01`'s own scope. |
 | Implements | MECH-D36–D39 (extending `rc-physics`'s shared, no-ECS movement/collision core to non-player entities for the first time — full, restated per-kind); MECH-D24 (this blueprint is `rc-mechanics::fluid`'s first entity-facing consumer, closing M4-B06's own explicitly-reserved gap); MECH-D51 (item entities: merge/pickup/despawn constants — full); MECH-D52/D53 (loot-table sourcing stance — hand-authored interim table, restated, with the real `xtask`-generated pipeline flagged as a future blueprint's scope exactly mirroring MECH-D39(b)'s own `xtask extract-shapes` deferral precedent); ARCH-D15 (Stage 6b — real system registration, the first one); ARCH-D8 (conflict-graph domain-group content, extended with real `structural_writes`). |
-| Crates touched | `rc-mechanics` (`crates/mechanics/`) — new `entity/physics/` submodule (five files), new `entity/loot.rs`, new `entity/pickup.rs`; `random.rs` modified (additive: `XoroshiroRandom` + `random_sequence` support, alongside the already-shipped `RcRandom`); `Cargo.toml` modified (one new optional dependency, `md-5`, plus one new `[workspace.dependencies]` pin). `rusty-clanker-server` (`crates/server/`) — `play/mining.rs` modified (additive field on `BreakOutcome::Applied`), new `play/entity_drops.rs`, `play/entity_tracking.rs` modified (additive resync function), `play/entity_packets.rs` modified (one new packet), `play/world.rs` modified (two new tick-loop steps, composition-root wiring). |
+| Crates touched | `rc-mechanics` (`crates/mechanics/`) — new `entity/physics/` submodule (five files), new `entity/loot.rs`, new `entity/pickup.rs`; `random.rs` modified (additive: `XoroshiroRandom` + `random_sequence` support re-exported from the shared `rc-rng` crate, `12-workspace-structure.md`'s WS-D14, alongside the already-shipped `RcRandom`); `Cargo.toml` modified (one new unconditional path dependency, `rc-rng` — replaces what would otherwise have been an independent, `server-systems`-gated `md-5` dependency, per WS-D14). `rusty-clanker-server` (`crates/server/`) — `play/mining.rs` modified (additive field on `BreakOutcome::Applied`), new `play/entity_drops.rs`, `play/entity_tracking.rs` modified (additive resync function), `play/entity_packets.rs` modified (one new packet), `play/world.rs` modified (two new tick-loop steps, composition-root wiring). |
 | Estimated scope | L |
 
 ## Goal & Done definition
@@ -17,7 +17,7 @@ Done when:
 
 - [ ] `cargo build -p rc-mechanics -p rusty-clanker-server --all-features` succeeds with zero warnings.
 - [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-mechanics -p rusty-clanker-server` (default features).
-- [ ] `cargo run -p xtask -- lint-deps` still exits 0 — `rc-mechanics`'s new dependency edge is exactly one line, `md-5` (optional, `server-systems`-gated), already added to `[workspace.dependencies]` by this blueprint at a real, pinned version; no other new crate edge anywhere.
+- [ ] `cargo run -p xtask -- lint-deps` still exits 0 — `rc-mechanics`'s new dependency edge is exactly one line, `rc-rng` (unconditional, WS-D14 — `12-workspace-structure.md`'s already-pinned `[workspace.dependencies]` entries `rand_xoshiro`/`md-5` are `rc-rng`'s own, not this crate's); no other new crate edge anywhere.
 - [ ] Every golden-vector test (per-kind physics, fluid push, loot-roll determinism) reproduces its hand-derived expected value exactly (RNG sequences) or to `1e-9` absolute tolerance (floating-point physics), mirroring M3-B02's own established tolerance discipline.
 - [ ] `cargo run -p xtask -- fmt-check` and `-- lint` both exit 0.
 - [ ] `cargo test --doc -p rc-mechanics -p rusty-clanker-server` exits 0.
@@ -192,9 +192,9 @@ fn roll_loot_table(table: &LootTable, rng: &mut dyn LootRandom, luck: f32) -> Ve
 
 **Why a real, bit-exact `random_sequence` RNG is implemented anyway, despite zero tier-1 draws.** This blueprint's own assigned acceptance-test requirement is explicit: "loot-roll determinism tests (seeded `random_sequences` → exact drops)." Per this project's own binding "vanilla parity is bit-identical by default" rule, and since `rng-parity-notes.md` already supplies the complete, verified formula (§3.1–3.4, §5.2) plus test vectors (§7.2), this blueprint implements Xoroshiro128++ and the `random_sequence` seeding formula properly rather than deferring them — the RNG plumbing is real, general-purpose infrastructure (also needed, unmodified, by a future worldgen blueprint per `rng-parity-notes.md` §4.7's own noted `PositionalRandomFactory` use), tested both against §7.2's own published vectors and against one synthetic, RNG-exercising test fixture table (§ Acceptance tests) that is **not** tied to any real vanilla block — since no real tier-1 table this milestone ships ever draws a bit, a synthetic fixture is the only honest way to prove the weighted-selection/uniform-count draw paths are wired correctly end to end.
 
-### K. `XoroshiroRandom` and `random_sequence` — restated from `rng-parity-notes.md` §3/§5.2
+### K. `XoroshiroRandom` and `random_sequence` — consumed from the shared `rc-rng` crate (WS-D14), restated from `rng-parity-notes.md` §3/§5.2
 
-Extends `crates/mechanics/src/random.rs` (M3-B01's already-shipped module, additive — `RcRandom`, the legacy 48-bit LCG, is untouched) with a second RNG type, since vanilla's `random_sequence` mechanism always resolves to Xoroshiro128++, never the legacy LCG (`rng-parity-notes.md` §5.1 point 2, §5.2's own explicit `-> XoroshiroRandomSource` return type):
+`crates/mechanics/src/random.rs` (M3-B01's already-shipped module, additive — `RcRandom`, the legacy 48-bit LCG, is untouched) re-exports its second RNG type from `rc-rng` (`12-workspace-structure.md`'s WS-D14 shared home for the bit-exact Java-RNG stack, delivered by `M5-B01`) rather than reimplementing it, since vanilla's `random_sequence` mechanism always resolves to Xoroshiro128++, never the legacy LCG (`rng-parity-notes.md` §5.1 point 2, §5.2's own explicit `-> XoroshiroRandomSource` return type). The algorithm `rc-rng` implements — restated here in full only for this blueprint's own self-containedness, not reimplemented a second time in this crate:
 
 ```text
 GOLDEN_RATIO_64: i64 = -7046029254386353131   // 0x9E3779B97F4A7C15
@@ -256,9 +256,11 @@ fn create_random_sequence(sequence_id: &str, world_seed: i64, salt: i32 = 0,
     return XoroshiroRandom::from_raw_pair(stafford_mix13(lo), stafford_mix13(hi))
 ```
 
-The three per-world defaults (`salt=0`, both `include_*` flags `true`) are fixed constants — no `/random`-command-equivalent exists at this milestone's own scope (Constraints). `md5` is computed via the `md-5` crate (new workspace dependency, Deliverables) — implementing MD5 by hand inside a blueprint's own pseudocode would be exactly the kind of "reimplement a well-audited primitive from scratch" anti-pattern this project's own engineering bar ("best possible result over lowest effort") argues against; `md-5` is RustCrypto's own small, MIT OR Apache-2.0-licensed implementation (license-compatible with this project's GPL/AGPL/LGPL-avoidance rule), pinned `0.10.6` — this exact patch version is this blueprint's own best-effort pin, flagged for the implementer to confirm against the live crates.io registry at `cargo add` time and adjust if a newer `0.10.x` patch is current, mirroring this project's own established discipline for every hand-typed external fact.
+The three per-world defaults (`salt=0`, both `include_*` flags `true`) are fixed constants — no `/random`-command-equivalent exists at this milestone's own scope (Constraints). `md5` is computed via the `md-5` crate — `rc-rng`'s own dependency, pinned `0.11.0` in `12-workspace-structure.md`'s `[workspace.dependencies]` table (WS-D14) — implementing MD5 by hand inside a blueprint's own pseudocode would be exactly the kind of "reimplement a well-audited primitive from scratch" anti-pattern this project's own engineering bar ("best possible result over lowest effort") argues against. This blueprint adds no `md-5` dependency and no workspace pin of its own — both are `rc-rng`'s, per WS-D14.
 
-**`RandomSequenceStore`** — one per-region `bevy_ecs::Resource`, `HashMap<String, XoroshiroRandom>`, lazily populated: `get_or_create(&mut self, sequence_id: &str, world_seed: i64) -> &mut XoroshiroRandom` creates via `create_random_sequence` on first reference and returns the **same, already-advanced** instance on every subsequent call for the same id — the concrete mechanism behind `rng-parity-notes.md` §5.2's own "statefulness across invocations... the 2nd invocation's result depends on how much randomness the 1st invocation consumed" rule. `world_seed: i64` is a composition-root-supplied constant (this project has no real world-seed concept yet outside this one consumer — a fixed test/debug seed, `Deliverables`, mirroring M4-B06's own `FluidDimensionProfile`/`LevelRandom` "the mechanism now, the real data-driven wiring later" precedent).
+**`rc_mechanics::random::XoroshiroRandom` is `rc_rng::RcXoroshiroRandom` re-exported, and `create_random_sequence`/`create_random_sequence_default` are `rc-rng`'s own functions re-exported unmodified** (Deliverables) — the identical type and functions `rc-worldgen` (`M5-B01`) consumes, verified once against the vectors above rather than independently a second time.
+
+**`RandomSequenceStore`** — one per-region `bevy_ecs::Resource`, `HashMap<String, rc_rng::RcXoroshiroRandom>` (this blueprint's own stateful cache — `rc-rng`'s own `create_random_sequence` stays a pure function, per `M5-B01`'s own Context), lazily populated: `get_or_create(&mut self, sequence_id: &str, world_seed: i64) -> &mut rc_rng::RcXoroshiroRandom` creates via `create_random_sequence` on first reference and returns the **same, already-advanced** instance on every subsequent call for the same id — the concrete mechanism behind `rng-parity-notes.md` §5.2's own "statefulness across invocations... the 2nd invocation's result depends on how much randomness the 1st invocation consumed" rule. `world_seed: i64` is a composition-root-supplied constant (this project has no real world-seed concept yet outside this one consumer — a fixed test/debug seed, `Deliverables`, mirroring M4-B06's own `FluidDimensionProfile`/`LevelRandom` "the mechanism now, the real data-driven wiring later" precedent).
 
 ### L. Merge rules (MECH-D51)
 
@@ -286,52 +288,36 @@ Restated, not silently dropped: **projectiles** are M4-B01's own already-cited e
 
 ## Deliverables
 
-### `crates/mechanics/Cargo.toml` (modify — one new optional dependency)
+### `crates/mechanics/Cargo.toml` (modify — one new unconditional path dependency)
 
 ```toml
 [dependencies]
-md-5 = { workspace = true, optional = true }
-
-[features]
-server-systems = ["dep:rc-scheduler", "dep:rc-chunk-storage", "dep:rc-brigadier", "dep:md-5"]
+rc-rng = { path = "../rng" }
 ```
 
-(Merge into the `server-systems` feature list M4-B01 already established — do not duplicate the `dep:` entries already present there.) `12-workspace-structure.md`'s `[workspace.dependencies]` table gains one new pinned line: `md-5 = "0.10.6"` (RustCrypto, MIT OR Apache-2.0 — license-compatible, Constraints).
+(Added alongside `rc-core`/`rc-registries`/`rc-mod-api`/`rc-physics`/`rc-entity-macros` — M0-B01's own existing "stay unconditional, needed by both variants" group — not gated behind `server-systems`: `entity::loot`'s own module declaration is itself unconditional, Deliverables' `entity/mod.rs`, so `XoroshiroRandom`'s type must be too, matching the original design's own unconditional `XoroshiroRandom` struct exactly. No `[features]` edit is needed, since this dependency is not optional. No `[workspace.dependencies]` edit and no `md-5` dependency of this crate's own are needed either — `rand_xoshiro`/`md-5` are `rc-rng`'s dependencies, not this one's, WS-D14.) `rc-rng` (`crates/rng/`, WS-D14) is `M5-B01`'s own deliverable.
 
 ### `crates/mechanics/src/random.rs` (modify — additive; `RcRandom` untouched)
 
 ```rust
-/// Xoroshiro128++ (Context §K, `rng-parity-notes.md` §3) — vanilla's modern RNG family.
-/// Distinct from `RcRandom` (the legacy 48-bit LCG, unmodified): every `random_sequence`
-/// (loot) always resolves to this type, never the legacy one.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct XoroshiroRandom { /* private: (i64, i64) state */ }
+/// Xoroshiro128++ (Context §K, `rng-parity-notes.md` §3) — vanilla's modern RNG family,
+/// re-exported from the shared `rc-rng` crate (`12-workspace-structure.md`'s WS-D14) rather
+/// than reimplemented here. Distinct from `RcRandom` (the legacy 48-bit LCG, unmodified,
+/// defined directly in this crate): every `random_sequence` (loot) always resolves to this
+/// type, never the legacy one.
+pub use rc_rng::RcXoroshiroRandom as XoroshiroRandom;
+/// `next_long`/`next_int`/`next_int_bounded`/`next_float`/`next_double`/`next_bool`/
+/// `next_gaussian` are `rc_rng::RcRandomSource` TRAIT methods (`rc-rng`'s own design,
+/// `M5-B01` Context §B), not inherent methods on `XoroshiroRandom` — re-exported here too so
+/// every call site needs only `use crate::random::{RcRandomSource, XoroshiroRandom};`, never a
+/// direct `rc_rng` import.
+pub use rc_rng::RcRandomSource;
 
-impl XoroshiroRandom {
-    /// `upgrade_seed_128` (the MIXED variant — both words through `stafford_mix13`).
-    pub fn from_seed(seed: i64) -> Self;
-    /// Direct two-word construction; substitutes `(GOLDEN_RATIO_64, SILVER_RATIO_64)` if both
-    /// words would be zero (Context §K / `rng-parity-notes.md` §3.1).
-    pub fn from_raw_pair(lo: i64, hi: i64) -> Self;
-    pub fn next_long(&mut self) -> i64;
-    pub fn next_int(&mut self) -> i32;
-    pub fn next_int_bounded(&mut self, bound: i32) -> i32;
-    pub fn next_float(&mut self) -> f32;
-    pub fn next_double(&mut self) -> f64;
-    pub fn next_bool(&mut self) -> bool;
-    /// `mean + spread * (next_double() - next_double())` (`rng-parity-notes.md` §2).
-    pub fn triangle(&mut self, mean: f64, spread: f64) -> f64;
-}
-
-/// Context §K — the `random_sequence` seeding formula. `salt`/`include_world_seed`/
-/// `include_sequence_id` default to this project's own fixed per-world defaults (`0`/`true`/
-/// `true`) via `create_random_sequence_default`; the full-signature form exists for
-/// completeness and future `/random`-command-equivalent work.
-#[cfg(feature = "server-systems")]
-pub fn create_random_sequence(sequence_id: &str, world_seed: i64, salt: i32,
-    include_world_seed: bool, include_sequence_id: bool) -> XoroshiroRandom;
-#[cfg(feature = "server-systems")]
-pub fn create_random_sequence_default(sequence_id: &str, world_seed: i64) -> XoroshiroRandom;
+/// Context §K — the `random_sequence` seeding formula, `rc-rng`'s own function re-exported
+/// unmodified. `salt`/`include_world_seed`/`include_sequence_id` default to this project's own
+/// fixed per-world defaults (`0`/`true`/`true`) via `create_random_sequence_default`; the
+/// full-signature form exists for completeness and future `/random`-command-equivalent work.
+pub use rc_rng::{create_random_sequence, create_random_sequence_default};
 ```
 
 ### `crates/mechanics/src/entity/mod.rs` (modify — three new module declarations)
@@ -557,6 +543,7 @@ impl<'a> rc_physics::BlockShapeSource for EntityBlockShapeSource<'a> {
 ```rust
 use rc_registries::generated_v776::registries::RegistryEntryId;
 use crate::entity::ItemStackRecord;
+use crate::random::RcRandomSource;
 
 pub trait LootRandom {
     fn next_int_bounded(&mut self, bound: i32) -> i32;
@@ -770,8 +757,8 @@ pub struct DebugItemEntityInfo { pub age_ticks: i16, pub pickup_delay_ticks: i16
 
 ### `crates/mechanics/tests/xoroshiro_and_random_sequence.rs` (pure)
 
-1. `xoroshiro_next_long_matches_published_vector` — `XoroshiroRandom::from_seed(0)`, five `next_long()` calls; assert exact match against `rng-parity-notes.md` §7.2's own published values (`3038984756725240190, -3694039286755638414, 4633751808701151732, 2160572957309072155, 1839370574944072389`).
-2. `xoroshiro_from_seed_42_matches_published_vector` — `XoroshiroRandom::from_seed(42)`, three `next_long()` calls; assert exact match against `-4695948378737616609, 7341713790291473579, -7542733514721318211`.
+1. `xoroshiro_next_long_matches_published_vector` — `XoroshiroRandom::new(0)`, five `next_long()` calls; assert exact match against `rng-parity-notes.md` §7.2's own published values (`3038984756725240190, -3694039286755638414, 4633751808701151732, 2160572957309072155, 1839370574944072389`) — the same vector `rc-rng`'s own `xoroshiro_vectors.rs` (`M5-B01`) verifies against `RcXoroshiroRandom::new(0)`, since `XoroshiroRandom` is that exact type re-exported (Context §K).
+2. `xoroshiro_seeded_42_matches_published_vector` — `XoroshiroRandom::new(42)`, three `next_long()` calls; assert exact match against `-4695948378737616609, 7341713790291473579, -7542733514721318211`.
 3. `upgrade_seed_128_unmixed_then_mixed_matches_published_pair` — `upgrade_seed_128_unmixed(0)` then `stafford_mix13` on each word; assert `(3847398142028685078, 7192185014346937746)` (§7.2's own `upgrade_seed_128(0)` vector).
 4. `random_sequence_is_deterministic_and_stateful` — `RandomSequenceStore::default()`; `get_or_create("test:seq_a", 12345)`, draw three `next_int_bounded(100)` values, record them; `get_or_create("test:seq_a", 12345)` again (same store, same id); draw one more `next_int_bounded(100)`; assert this fourth draw is **not** independently reproducible from a *fresh* `create_random_sequence("test:seq_a", 12345, ..)` call's own first draw (proving the stream continues rather than resets) — then construct a fresh store, replay all four draws in order from scratch, and assert the replayed fourth draw matches the original fourth draw exactly (proving full-history reproducibility, `rng-parity-notes.md` §5.2's own "statefulness across invocations" rule).
 5. `random_sequence_with_different_ids_are_independent` — `get_or_create("test:seq_a", 1)` and `get_or_create("test:seq_b", 1)` from the same store, same world seed; assert their first `next_long()` values differ.
@@ -779,7 +766,7 @@ pub struct DebugItemEntityInfo { pub age_ticks: i16, pub pickup_delay_ticks: i16
 ### `crates/mechanics/tests/loot_roll_determinism.rs` (pure)
 
 1. `single_entry_table_never_draws_rng` — a `LootTable` shaped exactly like `tier1_loot_table(Tier1DroppableBlock::Stone)`; a `LootRandom` test double that panics if `next_int_bounded` is ever called; `roll_loot_table` succeeds and returns exactly one `Cobblestone` stack of count `1` — proving the single-candidate shortcut fires (Context §J's own "zero draws" claim, made mechanically checkable).
-2. `synthetic_two_entry_weighted_pool_consumes_exactly_one_draw` — a synthetic, test-only `LootTable` with one pool, two entries (`weight: 1` and `weight: 3`), `rolls: Constant(1)`; a seeded `XoroshiroRandom::from_seed(7)`; assert `roll_loot_table` calls `next_int_bounded(4)` (total weight) exactly once (a counting `LootRandom` wrapper) and that the chosen entry matches a hand-computed expectation from the known first `next_int_bounded(4)` output of that seed.
+2. `synthetic_two_entry_weighted_pool_consumes_exactly_one_draw` — a synthetic, test-only `LootTable` with one pool, two entries (`weight: 1` and `weight: 3`), `rolls: Constant(1)`; a seeded `XoroshiroRandom::new(7)`; assert `roll_loot_table` calls `next_int_bounded(4)` (total weight) exactly once (a counting `LootRandom` wrapper) and that the chosen entry matches a hand-computed expectation from the known first `next_int_bounded(4)` output of that seed.
 3. `synthetic_uniform_count_provider_consumes_one_draw_per_roll` — a synthetic table, `rolls: Constant(2)`, one entry with `count: Uniform{min:1,max:4}`; assert exactly two `next_int_bounded` calls total (one per roll, for the count draw — the single-entry shortcut still applies to entry *selection*, but `count.resolve` still draws) and the two resulting counts are each in `[1,4]` and match hand-computed values for the fixed seed.
 4. `same_seed_same_sequence_id_reproduces_bit_identical_drops` — roll the synthetic weighted-pool table twice from two independently-constructed `RandomSequenceStore`s, same `sequence_id`, same `world_seed`; assert both rolls' results are identical, element-for-element.
 5. `reconciling_two_breaks_of_the_same_block_type_shares_one_continuing_sequence` — using the synthetic weighted-pool table bound to one fixed `sequence_id`, roll it twice through the **same** `RandomSequenceStore` (simulating two block breaks of the same type); assert the second roll's outcome differs from what a **fresh** store's first roll would produce (continuation, not reset — `rng-parity-notes.md` §5.2).
@@ -800,7 +787,7 @@ pub struct DebugItemEntityInfo { pub age_ticks: i16, pub pickup_delay_ticks: i16
 
 ## Implementation steps
 
-1. **`rc-mechanics::random` extension.** Add `XoroshiroRandom` + `stafford_mix13`/`upgrade_seed_128_unmixed`/`md5_seed`/`create_random_sequence[_default]` per Context §K, using the `md-5` crate for the digest. Observable: `xoroshiro_and_random_sequence.rs` passes.
+1. **`rc-mechanics::random` extension.** Add the `rc-rng` path dependency (Deliverables); re-export `XoroshiroRandom`/`create_random_sequence`/`create_random_sequence_default` from `rc-rng` per Context §K — no algorithm is implemented in this crate, `rc-rng` (`M5-B01`) already implements and verifies it. Observable: `xoroshiro_and_random_sequence.rs` passes.
 2. **`entity/loot.rs`.** `RollProvider`/`CountProvider`/`LootEntry`/`LootPool`/`LootTable`/`roll_loot_table` per Context §J, `tier1_loot_table`'s closed match over `Tier1DroppableBlock`, `RandomSequenceStore`. Observable: `loot_roll_determinism.rs` passes.
 3. **`entity/pickup.rs`.** Constants, `PickedUpItems`, `stacks_mergeable` + the merge-eligibility helper. Observable: `drop_merge_pickup_sequence.rs` passes.
 4. **`entity/physics/item.rs`.** `step_item_entity_tick` per Context §C. Observable: `item_physics_golden_vectors.rs` passes.
@@ -819,7 +806,7 @@ pub struct DebugItemEntityInfo { pub age_ticks: i16, pub pickup_delay_ticks: i16
 
 (a) **Test-first changeset boundary is binding** (TEST-D45/D46). No already-merged test file anywhere in the workspace is touched by this blueprint's implementation changeset — every file this blueprint modifies outside its own new test files (`mining.rs`, `entity_tracking.rs`, `world.rs`, `random.rs`, `entity/mod.rs`) is a source file, never a test file. Every file listed in Acceptance tests is committed first, `todo!()`-stubbed exactly as Deliverables shows.
 
-(b) **No new external dependencies beyond `md-5`.** This blueprint's own one addition (`md-5`, Context §K) is pinned in `[workspace.dependencies]` at implementation time, per Deliverables. No other new crate — not `rand`, not a second hashing crate, not a physics/collision library — may be added anywhere this blueprint touches.
+(b) **No new external dependencies.** This blueprint's own one addition is a path dependency on the in-workspace `rc-rng` crate (WS-D14, `M5-B01`'s own deliverable, Context §K); it adds no `[workspace.dependencies]` entry of its own — `rand_xoshiro`/`md-5` are `rc-rng`'s dependencies, already pinned there. No other new crate — not `rand`, not a hashing crate, not a physics/collision library — may be added anywhere this blueprint touches.
 
 (c) **`rc-mechanics` still must never depend on `rc-protocol`, `rc-transport-inproc`, `rc-transport-net`, `rc-auth`, `rc-cluster`, or `rc-proxy`** (WS-D3 rule 2, unchanged from M4-B01's own identical restatement) — `TakeItemEntity` and every other wire-facing concern lives in `rusty-clanker-server::play::entity_packets`, never in `rc-mechanics`.
 

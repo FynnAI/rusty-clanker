@@ -4,36 +4,38 @@
 |---|---|
 | ID | M5-B01 |
 | Milestone | M5 — World Generation Parity |
-| Prerequisites | M0 complete, specifically M0-B01's `rc-worldgen` crate scaffold: `crates/worldgen/Cargo.toml` already declares path dependencies on `rc-core`, `rc-chunk-storage`, `rc-registries` with zero external dependencies; `crates/worldgen/src/lib.rs` is currently a doc-comment-only placeholder ("M0 scaffold placeholder (M0-B01). Real types land in a later M0 blueprint."); the workspace root `Cargo.toml`'s `[workspace.dependencies]` table already pins `rand_xoshiro = "0.8.1"` (M0-B01, earmarked "rc-worldgen, GEN-D3" but unused until now). M1-B03 and M4-B02 each already added an `md-5` `[workspace.dependencies]` pin for their own, unrelated purposes (offline-UUID derivation and `rc-mechanics`'s own separate `random_sequence` support respectively) — this blueprint reuses whichever pin is already present rather than adding a second one (Context §A). |
+| Prerequisites | M0 complete, specifically M0-B01's `rc-worldgen` crate scaffold: `crates/worldgen/Cargo.toml` already declares path dependencies on `rc-core`, `rc-chunk-storage`, `rc-registries` with zero external dependencies; `crates/worldgen/src/lib.rs` is currently a doc-comment-only placeholder ("M0 scaffold placeholder (M0-B01). Real types land in a later M0 blueprint."). `12-workspace-structure.md`'s WS-D14 places every bit-exact Java-RNG primitive this blueprint needs in a new shared crate, `rc-rng` (`crates/rng/`) — this blueprint's own deliverable is that crate's real implementation, consumed by `rc-worldgen` via a path dependency rather than implemented inline (Context §A). The workspace root `Cargo.toml`'s `[workspace.dependencies]` table already pins `rand_xoshiro = "0.8.1"` and `md-5 = "0.11.0"` (WS-D14) for exactly this use. |
 | Implements | GEN-D2 (seed-string parsing), GEN-D3 (two RNG families: hand-rolled legacy LCG, `rand_xoshiro`-core-wrapped Xoroshiro128++), GEN-D4 (derived-value methods hand-matched to vanilla, never a generic crate's bounded-int helper), GEN-D5 (128-bit seed upgrade/mixing, `random_sequence` salt/inclusion-flag formula), GEN-D6 (positional/decoration/feature/large-feature/carver/slime-chunk seed-derivation formulas — restated with one correction to this decision's own carver-formula prose, Context §I). |
-| Crates touched | `rc-worldgen` (`crates/worldgen/`) only: `Cargo.toml` (modify — two new dependency lines), `src/lib.rs` (modify — replace scaffold placeholder), `src/random.rs` (new), `src/random/legacy.rs` (new), `src/random/xoroshiro.rs` (new), `src/random/worldgen_random.rs` (new), `src/random/hash.rs` (new), `src/random/seed_string.rs` (new). |
+| Crates touched | `rc-rng` (`crates/rng/`, new crate per WS-D14): `Cargo.toml` (new), `src/lib.rs` (new — crate root, the former `random.rs` module content), `src/legacy.rs` (new), `src/xoroshiro.rs` (new), `src/worldgen_random.rs` (new), `src/hash.rs` (new), `src/seed_string.rs` (new). `rc-worldgen` (`crates/worldgen/`): `Cargo.toml` (modify — one new path dependency, `rc-rng`), `src/lib.rs` (modify — replace scaffold placeholder, re-export `rc-rng` as `random`). |
 | Estimated scope | L |
 
 ## Goal & Done definition
 
-Give `rc-worldgen` a bit-exact, self-contained RNG foundation — vanilla's two independent RNG algorithm families (the classic 48-bit `java.util.Random`-compatible legacy LCG, and Xoroshiro128++), every hand-matched derived-value formula (`nextInt`, `nextInt(bound)` in both its legacy-rejection-loop and Xoroshiro-Lemire shapes, `nextLong`, `nextFloat`, `nextDouble`, `nextGaussian`), both positional-factory flavors (`at(x,y,z)`, `from_hash_of(name)`, `from_seed(seed)`), the `WorldgenRandom` seed-derivation wrapper and every formula in GEN-D6's hierarchy (decoration/population seed, feature seed, large-feature seed and its carver usage, large-feature-with-salt seed, `random_sequence` seeding, slime-chunk seeding), and GEN-D2's seed-string parsing grammar. This is the one RNG surface every subsequent M5 blueprint (noise router, biome placement, surface rules, carvers, features, structures) is expected to build on rather than re-deriving any RNG algorithm of its own — it must therefore be complete, correct, and usable with no further research-document lookups.
+Give `rc-rng` — WS-D14's shared crate, consumed by `rc-worldgen` (this blueprint) and `rc-mechanics` (M4-B02) alike — a bit-exact RNG foundation — vanilla's two independent RNG algorithm families (the classic 48-bit `java.util.Random`-compatible legacy LCG, and Xoroshiro128++), every hand-matched derived-value formula (`nextInt`, `nextInt(bound)` in both its legacy-rejection-loop and Xoroshiro-Lemire shapes, `nextLong`, `nextFloat`, `nextDouble`, `nextGaussian`), both positional-factory flavors (`at(x,y,z)`, `from_hash_of(name)`, `from_seed(seed)`), the `WorldgenRandom` seed-derivation wrapper and every formula in GEN-D6's hierarchy (decoration/population seed, feature seed, large-feature seed and its carver usage, large-feature-with-salt seed, `random_sequence` seeding, slime-chunk seeding), and GEN-D2's seed-string parsing grammar. This is the one RNG surface every subsequent M5 blueprint (noise router, biome placement, surface rules, carvers, features, structures) is expected to build on rather than re-deriving any RNG algorithm of its own — it must therefore be complete, correct, and usable with no further research-document lookups.
 
 Done when:
 
-- [ ] `cargo build -p rc-worldgen` succeeds with zero warnings.
-- [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-worldgen`.
-- [ ] `cargo run -p xtask -- lint-deps` still exits 0 — `rc-worldgen`'s two new dependency edges (`rand_xoshiro`, `md-5`) are both already-pinned `[workspace.dependencies]` entries; no other new crate edge is introduced anywhere.
+- [ ] `cargo build -p rc-rng -p rc-worldgen` succeeds with zero warnings.
+- [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-rng`.
+- [ ] `cargo run -p xtask -- lint-deps` still exits 0 — this blueprint introduces exactly one new crate, `rc-rng` (WS-D14), depending only on the already-pinned `rand_xoshiro`/`md-5` `[workspace.dependencies]` entries; `rc-worldgen`'s only new edge is its path dependency on `rc-rng` itself, matching `12-workspace-structure.md`'s dependency graph exactly.
 - [ ] Every golden-vector test reproduces its published or independently-derived expected value exactly (integer/long RNG outputs, hash values, seed-derivation results) or, for the one Gaussian-only path where cross-platform `sqrt`/`ln` bit-identity is a documented open question (Context §E), to `1e-9` absolute tolerance.
 - [ ] `cargo run -p xtask -- fmt-check` and `-- lint` both exit 0.
-- [ ] `cargo test --doc -p rc-worldgen` exits 0.
+- [ ] `cargo test --doc -p rc-rng -p rc-worldgen` exits 0.
 - [ ] CI tier: Tier 1 (`fmt-check`, `lint`, `lint-deps`, `test`) green on both `ubuntu-24.04` and `windows-2025` (TEST-D34/D37), on a clean checkout (TEST-D50).
 
 ## Context (self-contained)
 
 ### A. Crate placement, scaffold state, and dependencies
 
-Every deliverable in this blueprint lives inside the single crate `rc-worldgen` (`crates/worldgen/`), already scaffolded by M0-B01 with path dependencies on `rc-core`, `rc-chunk-storage`, `rc-registries` and zero external dependencies. `src/lib.rs` currently contains only a placeholder doc comment; this blueprint replaces it with a real doc comment plus `pub mod random;` and adds no other top-level item — every other future M5 blueprint's own module (noise router, biome source, surface rules, etc.) is a sibling addition, not this blueprint's concern.
+Every RNG primitive this blueprint delivers lives in one new crate, `rc-rng` (`crates/rng/`) — `12-workspace-structure.md`'s WS-D14 designates this as the single shared home for the bit-exact Java-RNG stack, since both `rc-mechanics`'s loot `random_sequence` support (M4-B02) and `rc-worldgen`'s own GEN-D2–D6 stack need the identical algorithms and neither crate depends on the other. `rc-rng` has no `rc-core` dependency — none of its primitives need `rc-core`'s coordinate/addressing types — its only two dependencies are `rand_xoshiro`/`md-5`, both already pinned at the workspace level (below).
 
-Two external crates are added to `crates/worldgen/Cargo.toml`'s `[dependencies]`, both already pinned at the workspace level:
-- `rand_xoshiro = { workspace = true }` — already pinned `"0.8.1"` in the workspace root `Cargo.toml` by M0-B01, earmarked for exactly this use (GEN-D3). Used ONLY for its `Xoroshiro128PlusPlus` type's raw 128-bit-state/64-bit-output scrambler/update arithmetic (rotate/add/xor) — never for its `RngCore`/`Rng`-trait convenience methods (`gen_range` and similar), which do not reproduce vanilla's exact bounded-integer or float/double formulas (GEN-D4).
-- `md-5 = { workspace = true }` — reuses the workspace pin M1-B03 (`0.11.0`) and, independently, M4-B02 (`0.10.6`) each already introduced for their own unrelated purposes. **This blueprint does not add a new `[workspace.dependencies]` line** — by the time M5 is implemented, M1 and M4 have already merged and one of those two pins is already present in the real workspace `Cargo.toml`; this blueprint's own `crates/worldgen/Cargo.toml` addition is simply `md-5 = { workspace = true }`, inheriting whichever version is already there. (If, for some reason, neither pin is present when this blueprint is implemented, add `md-5 = "0.11.0"` — RustCrypto, MIT OR Apache-2.0, matching M1-B03's own choice and the same `digest`-trait-family generation as the already-pinned `sha1 = "0.11.0"` — and flag the M1-B03-vs-M4-B02 version mismatch for `12-workspace-structure.md`'s next revision to reconcile to one pin; reconciling that pre-existing mismatch is explicitly not this blueprint's own job.) The crate's Rust module/import path is `md5` (its own package name has a hyphen, `md-5`; its library name does not) — `use md5::{Md5, Digest};`.
+`rc-worldgen` (`crates/worldgen/`), already scaffolded by M0-B01 with path dependencies on `rc-core`, `rc-chunk-storage`, `rc-registries`, gains exactly one new path dependency, on `rc-rng`. `crates/worldgen/src/lib.rs` currently contains only a placeholder doc comment; this blueprint replaces it with a real doc comment plus `pub use rc_rng as random;` — re-exporting `rc-rng`'s public API under the `rc_worldgen::random` path every later M5 blueprint already expects to build on — and adds no other top-level item; every other future M5 blueprint's own module (noise router, biome source, surface rules, etc.) is a sibling addition, not this blueprint's concern.
 
-**Known, accepted architectural duplication, stated plainly rather than silently left implicit:** `crates/mechanics/src/random.rs` (M4-B02) already independently implements its own `XoroshiroRandom` type, `stafford_mix13`/`upgrade_seed_128_unmixed`/`md5_seed`/`create_random_sequence[_default]` functions, and a `RandomSequenceStore` resource, for `rc-mechanics`'s own loot-table `random_sequence` needs. `12-workspace-structure.md`'s current crate-dependency graph has no edge in either direction between `rc-mechanics` and `rc-worldgen` (each depends independently on the shared `rc-core`/`rc-registries` leaf crates, never on each other), so this blueprint's `rc-worldgen::random` module and `rc-mechanics::random` necessarily contain parallel, independently-verified reimplementations of the same underlying algorithms rather than one sharing the other. This blueprint does not modify `crates/mechanics/src/random.rs` (outside this blueprint's own assigned path) and does not attempt to unify the two — that would require adding a new crate-graph edge or promoting the shared logic into `rc-core`, both of which are `12-workspace-structure.md`'s own call, out of this blueprint's scope. Both implementations were independently verified against the same published test vectors during this blueprint's own derivation (§C–§I below) and produce identical results for identical inputs; a future `12-workspace-structure.md` revision consolidating them into one shared home is a reasonable follow-up but is not performed here.
+Two external crates are added to `crates/rng/Cargo.toml`'s `[dependencies]`, both already pinned at the workspace level:
+- `rand_xoshiro = { workspace = true }` — pinned `"0.8.1"` in the workspace root `Cargo.toml` (WS-D14, GEN-D3). Used ONLY for its `Xoroshiro128PlusPlus` type's raw 128-bit-state/64-bit-output scrambler/update arithmetic (rotate/add/xor) — never for its `RngCore`/`Rng`-trait convenience methods (`gen_range` and similar), which do not reproduce vanilla's exact bounded-integer or float/double formulas (GEN-D4).
+- `md-5 = { workspace = true }` — pinned `"0.11.0"` (WS-D14, reconciling M1-B03's and M4-B02's previously independent pins to the one version current on crates.io). The crate's Rust module/import path is `md5` (its own package name has a hyphen, `md-5`; its library name does not) — `use md5::{Md5, Digest};`.
+
+**Shared home, not duplication.** `rc-mechanics`'s own `crates/mechanics/src/random.rs` (M4-B02) re-exports its `XoroshiroRandom` type and its `create_random_sequence`/`create_random_sequence_default` functions directly from this crate (`rc_rng::RcXoroshiroRandom`/`rc_rng::create_random_sequence[_default]`, M4-B02's own Deliverables per WS-D14) rather than implementing them a second time; only its `RandomSequenceStore` resource — a stateful cache, not an algorithm — stays `rc-mechanics`'s own. Loot's and worldgen's RNG needs now bottom out in one, once-verified implementation instead of two independently-maintained ones — this blueprint's own published-test-vector verification (§C–§I below) is that implementation's verification, shared by both consumers.
 
 ### B. The two RNG families (GEN-D3) — which is which, and why they are not interchangeable
 
@@ -49,7 +51,7 @@ Vanilla ships two unrelated `RandomSource` implementations, and every consumer i
 
 These two are **not interchangeable even when reseeded to reach "the same" logical value** — each has its own `nextInt(bound)` algorithm, its own positional-factory hashing scheme (`String.hashCode()` vs MD5), and produces a completely different bit stream from the same numeric seed. Getting the choice of which family backs a given call site wrong produces a plausible-looking but silently wrong world, with no crash and no type error to catch it.
 
-Both concrete types (`RcLegacyRandom`, `RcXoroshiroRandom`) implement two shared traits, defined once in `crates/worldgen/src/random.rs`:
+Both concrete types (`RcLegacyRandom`, `RcXoroshiroRandom`) implement two shared traits, defined once in `crates/rng/src/lib.rs`:
 
 ```text
 trait BitSource:
@@ -77,7 +79,7 @@ Panic-on-invalid-bound (`next_int_bounded` with `bound <= 0`) mirrors vanilla's 
 
 ### C. Legacy 48-bit LCG — constants and the `next(bits)` primitive
 
-Constants (`crates/worldgen/src/random/legacy.rs`):
+Constants (`crates/rng/src/legacy.rs`):
 
 | Name | Decimal | Hex |
 |---|---|---|
@@ -166,7 +168,7 @@ Two `next_double()` calls per rejection-loop iteration (expected ≈1.273 iterat
 
 ### F. Xoroshiro128++ — seed upgrade/mixing (GEN-D5), core step, and the `rand_xoshiro` wrapping mechanics
 
-Constants (`crates/worldgen/src/random/xoroshiro.rs`):
+Constants (`crates/rng/src/xoroshiro.rs`):
 
 | Name | Decimal (as `i64`) | Hex |
 |---|---|---|
@@ -391,6 +393,20 @@ Stated exhaustively so a future M5 blueprint's own Context section can cite this
 
 ## Deliverables
 
+### `crates/rng/Cargo.toml` (new — WS-D14's shared crate)
+
+```toml
+[package]
+name = "rc-rng"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rand_xoshiro = { workspace = true }
+md-5 = { workspace = true }
+```
+
 ### `crates/worldgen/Cargo.toml` (modify)
 
 ```toml
@@ -398,11 +414,10 @@ Stated exhaustively so a future M5 blueprint's own Context section can cite this
 rc-core = { path = "../core" }
 rc-chunk-storage = { path = "../chunk-storage" }
 rc-registries = { path = "../registries" }
-rand_xoshiro = { workspace = true }
-md-5 = { workspace = true }
+rc-rng = { path = "../rng" }
 ```
 
-(The first three lines already exist from M0-B01 — reproduced here only to show the two new lines' placement; do not duplicate or reorder the existing three.)
+(The first three lines already exist from M0-B01 — reproduced here only to show the new line's placement; do not duplicate or reorder the existing three.)
 
 ### `crates/worldgen/src/lib.rs` (modify — replace M0-B01's scaffold placeholder)
 
@@ -410,28 +425,32 @@ md-5 = { workspace = true }
 //! `rc-worldgen` — noise pipeline, biome/structure/decoration generation,
 //! delivered as Stage-1 structural commands (`04-worldgen-parity.md`).
 //!
-//! [`random`] is this crate's bit-exact RNG foundation (GEN-D2–D6): vanilla's
-//! two RNG algorithm families, every hand-matched derived-value formula, both
-//! positional-factory flavors, the `WorldgenRandom` seed-derivation wrapper,
-//! and seed-string parsing. Every later worldgen subsystem in this crate
-//! builds on `random`'s public API rather than re-deriving any RNG algorithm
-//! of its own.
+//! [`random`] re-exports `rc-rng`'s bit-exact RNG foundation (GEN-D2–D6,
+//! `12-workspace-structure.md`'s WS-D14): vanilla's two RNG algorithm
+//! families, every hand-matched derived-value formula, both positional-
+//! factory flavors, the `WorldgenRandom` seed-derivation wrapper, and
+//! seed-string parsing. Every later worldgen subsystem in this crate builds
+//! on `random`'s public API rather than re-deriving any RNG algorithm of its
+//! own.
 
-pub mod random;
+pub use rc_rng as random;
 ```
 
-### `crates/worldgen/src/random.rs` (new)
+### `crates/rng/src/lib.rs` (new — crate root)
 
 ```rust
-//! Bit-exact RNG core (GEN-D2–D6). Two independent algorithm families exist,
-//! matching vanilla exactly (GEN-D3): [`legacy::RcLegacyRandom`] (the classic
-//! 48-bit `java.util.Random`-compatible LCG) and [`xoroshiro::RcXoroshiroRandom`]
-//! (Xoroshiro128++, vanilla's modern default). They are NOT interchangeable —
-//! see this module's owning blueprint (`M5-B01`) Context §B for why.
-//! [`worldgen_random::WorldgenRandom`] wraps either one and layers vanilla's
-//! decoration/feature/carver/structure seed-derivation formulas (GEN-D6) on
-//! top, ALWAYS using the legacy-style derived-value formulas regardless of
-//! which backend it wraps (Context §H).
+//! Bit-exact RNG core (GEN-D2–D6, `12-workspace-structure.md`'s WS-D14). Two
+//! independent algorithm families exist, matching vanilla exactly (GEN-D3):
+//! [`legacy::RcLegacyRandom`] (the classic 48-bit `java.util.Random`-compatible
+//! LCG) and [`xoroshiro::RcXoroshiroRandom`] (Xoroshiro128++, vanilla's modern
+//! default). They are NOT interchangeable — see this crate's owning blueprint
+//! (`M5-B01`) Context §B for why. [`worldgen_random::WorldgenRandom`] wraps
+//! either one and layers vanilla's decoration/feature/carver/structure
+//! seed-derivation formulas (GEN-D6) on top, ALWAYS using the legacy-style
+//! derived-value formulas regardless of which backend it wraps (Context §H).
+//! `rc-mechanics`'s own loot `random_sequence` support (M4-B02) builds
+//! directly on this crate's `xoroshiro`/`worldgen_random` modules rather than
+//! reimplementing them (WS-D14).
 
 pub mod hash;
 pub mod legacy;
@@ -493,7 +512,7 @@ pub trait RcRandomSource: BitSource {
 
 (`GaussianCache` is a private, non-`pub` implementation detail defined in this same file — not part of the public surface; see Implementation steps for its shape.)
 
-### `crates/worldgen/src/random/legacy.rs` (new)
+### `crates/rng/src/legacy.rs` (new)
 
 ```rust
 use super::{BitSource, GaussianCache, RcRandomSource};
@@ -546,7 +565,7 @@ impl LegacyPositionalFactory {
 }
 ```
 
-### `crates/worldgen/src/random/xoroshiro.rs` (new)
+### `crates/rng/src/xoroshiro.rs` (new)
 
 ```rust
 use rand_xoshiro::rand_core::{Rng, SeedableRng};
@@ -635,7 +654,7 @@ impl XoroshiroPositionalFactory {
 }
 ```
 
-### `crates/worldgen/src/random/worldgen_random.rs` (new)
+### `crates/rng/src/worldgen_random.rs` (new)
 
 ```rust
 use super::hash::md5_seed;
@@ -723,7 +742,7 @@ pub fn create_random_sequence_default(sequence_id: &str, world_seed: i64) -> RcX
 pub fn seed_slime_chunk(x: i32, z: i32, world_seed: i64, salt: i64) -> RcLegacyRandom;
 ```
 
-### `crates/worldgen/src/random/hash.rs` (new)
+### `crates/rng/src/hash.rs` (new)
 
 ```rust
 use md5::{Digest, Md5};
@@ -745,7 +764,7 @@ pub fn java_string_hash_code(s: &str) -> i32;
 pub fn md5_seed(name: &str) -> (i64, i64);
 ```
 
-### `crates/worldgen/src/random/seed_string.rs` (new)
+### `crates/rng/src/seed_string.rs` (new)
 
 ```rust
 /// GEN-D2 world-seed-string grammar: a string that parses as a Java `long`
@@ -756,11 +775,11 @@ pub fn parse_seed_string(input: &str) -> i64;
 
 ## Acceptance tests (write these FIRST — own changeset)
 
-**Changeset boundary (TEST-D45/D46, restated exactly per every prior blueprint's own identical framing):** every file below, plus every `src/random*.rs` file Deliverables lists with each function body replaced by `todo!()` (fields/derives/doc comments/constant declarations unchanged — `FLOAT_UNIT`/`DOUBLE_UNIT`/`GOLDEN_RATIO_64`/`SILVER_RATIO_64` and the other named constants ARE part of the test-authoring changeset, since several tests assert their exact bit patterns directly), is the test-authoring changeset, committed first. The implementation changeset (Implementation steps) fills in bodies only — it must not modify any test file listed here, must not add/remove/rename a test case, and must not weaken or change any golden-vector or expected value.
+**Changeset boundary (TEST-D45/D46, restated exactly per every prior blueprint's own identical framing):** every file below, plus every `crates/rng/src/*.rs` file Deliverables lists with each function body replaced by `todo!()` (fields/derives/doc comments/constant declarations unchanged — `FLOAT_UNIT`/`DOUBLE_UNIT`/`GOLDEN_RATIO_64`/`SILVER_RATIO_64` and the other named constants ARE part of the test-authoring changeset, since several tests assert their exact bit patterns directly), is the test-authoring changeset, committed first. The implementation changeset (Implementation steps) fills in bodies only — it must not modify any test file listed here, must not add/remove/rename a test case, and must not weaken or change any golden-vector or expected value.
 
 Every vector below states its own derivation/confidence: **"published"** = copied verbatim from `docs/research/third-party/rng-parity-notes.md` §7, itself labeled there as hand-derived (independently corroborated for the very first legacy vector only, as noted). **"blueprint-verified"** = independently recomputed by this blueprint's own derivation pass using two independent methods (arbitrary-precision Python re-implementation AND a compiled, real Rust program using the exact wrapping/rotation operations this blueprint specifies) and confirmed to agree with the corpus's published value bit-for-bit, wherever the corpus provided one. **"blueprint-derived, published-format gap-fill"** = a genuinely new vector this blueprint's own derivation pass computed to fill a gap the corpus itself flags as unfilled (e.g. `rng-parity-notes.md` §7.4's explicit "recommended additional vectors... not yet computed here").
 
-### `crates/worldgen/tests/legacy_lcg_vectors.rs` (pure)
+### `crates/rng/tests/legacy_lcg_vectors.rs` (pure)
 
 1. `random_zero_next_int_matches_published_vector` — `RcLegacyRandom::new(0)`, five `next_int()` calls; assert exact match to `[-1155484576, -723955400, 1033096058, -1690734402, -1557280266]` (published; 1st value independently corroborated).
 2. `random_42_next_int_matches_published_vector` — `RcLegacyRandom::new(42)`, three `next_int()` calls; assert `[-1170105035, 234785527, -1360544799]` (published).
@@ -775,7 +794,7 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 11. `next_int_bounded_distribution_sanity` — `RcLegacyRandom::new(1)`, `6000` calls to `next_int_bounded(6)` (a non-power-of-two bound); assert every returned value is in `0..6` (a cheap correctness sanity check independent of any specific golden vector).
 12. `set_seed_clears_gaussian_cache` — `RcLegacyRandom::new(0)`, one `next_gaussian()` call (populates the cache), then `set_seed(0)`, then one more `next_gaussian()`; assert the second call's result equals a FRESH `RcLegacyRandom::new(0)`'s own first `next_gaussian()` call (i.e. `0.8025330637390305`, not the cached second value from the first sequence) — proves the cache was actually cleared, not merely that `set_seed` re-ran.
 
-### `crates/worldgen/tests/xoroshiro_vectors.rs` (pure)
+### `crates/rng/tests/xoroshiro_vectors.rs` (pure)
 
 1. `upgrade_seed_128_zero_matches_published_vector` — `upgrade_seed_128(0)`; assert `(3847398142028685078, 7192185014346937746)` (published).
 2. `upgrade_seed_128_42_matches_published_vector` — assert `(6720814022939733433, -2851323883594622011)` (published).
@@ -789,7 +808,7 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 10. `xoroshiro_gaussian_two_calls_moderate_tolerance` — `RcXoroshiroRandom::new(0)`, two `next_gaussian()` calls; assert `1e-9`-tolerance equality to `[-0.48540690699780015, 0.43399227545320296]` (blueprint-derived, same `sqrt`/`ln` cross-platform caveat as the legacy Gaussian test — self-derived by this blueprint's own pass, not independently cross-checked against a live JVM).
 11. `xoroshiro_next_int_returns_low_bits_of_a_fresh_next_long` — a single `RcXoroshiroRandom::new(7)` instance; call `next_long()` once and separately (on a freshly-reconstructed identical instance) call `next_int()` once; assert `next_int_result as i64 == (next_long_result as i32) as i64` — i.e. `next_int()` is exactly the low-32-bits truncation of what `next_long()` would have returned at the same call position, proving the "opposite end of the word from Legacy" claim mechanically rather than just asserting it in prose.
 
-### `crates/worldgen/tests/positional_and_hash_vectors.rs` (pure)
+### `crates/rng/tests/positional_and_hash_vectors.rs` (pure)
 
 1. `mth_get_seed_zero_matches_published_vector` — `mth_get_seed(0, 0, 0)`; assert `0` (published).
 2. `mth_get_seed_1_2_3_matches_published_vector` — `mth_get_seed(1, 2, 3)`; assert `-33674130277896` (published).
@@ -802,7 +821,7 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 9. `legacy_from_hash_of_uses_string_hash_code_not_md5` — a `LegacyPositionalFactory` from `RcLegacyRandom::new(0).fork_positional()` (its captured seed is therefore `RcLegacyRandom::new(0)`'s own first `next_long()`, independently already verified as `-4962768465676381896` by `legacy_lcg_vectors.rs` test 5); `.from_hash_of("minecraft:aquifer")`; assert its first `next_int()` equals a fresh `RcLegacyRandom::new((java_string_hash_code("minecraft:aquifer") as i64) ^ -4962768465676381896i64).next_int()` — `java_string_hash_code("minecraft:aquifer")` independently equals `-1973797502` (blueprint-verified). This proves the legacy path's underlying reseed used `java_string_hash_code`, NOT any MD5-derived value, entirely through public API composition.
 10. `fork_consumes_exactly_one_next_long_for_legacy_two_for_xoroshiro` — a `RcLegacyRandom::new(1)`, call `.next_int()` after a `.fork()` vs. after manually calling `.next_long()` once and continuing on the SAME instance; assert the post-fork state's subsequent `next_int()` matches (proving `fork` consumed exactly one `next_long()`, no more, no less). Repeat the equivalent check for `RcXoroshiroRandom::fork()` consuming exactly TWO `next_long()` calls.
 
-### `crates/worldgen/tests/worldgen_random_and_seed_derivation.rs` (pure)
+### `crates/rng/tests/worldgen_random_and_seed_derivation.rs` (pure)
 
 1. `worldgen_random_over_legacy_is_bit_identical_to_bare_legacy` — `LegacyWorldgenRandom::new(RcLegacyRandom::new(0))` vs bare `RcLegacyRandom::new(0)`, five `next_int_bounded(10)` calls each; assert identical sequences, `[0, 8, 9, 7, 5]` (blueprint-verified) — proves the wrapper is a pure pass-through in FORMULA for the legacy backend.
 2. `worldgen_random_over_xoroshiro_diverges_from_native_xoroshiro_next_int_bounded` — `XoroshiroWorldgenRandom::new(RcXoroshiroRandom::new(0))` vs bare `RcXoroshiroRandom::new(0)`, four `next_int_bounded(10)` calls each; assert the two sequences are `[8, 5, 8, 6]` (WorldgenRandom, legacy formula over Xoroshiro bits) and `[9, 1, 1, 3]` (native Xoroshiro Lemire) respectively — both blueprint-derived — and assert they DIFFER, mechanically proving Context §H's central quirk rather than merely asserting it in prose. Repeat with seed `0`/bound `7` (`[6, 3, 3, 6]` vs `[6, 1, 1, 2]`) and seed `5`/bound `100` (`[24, 11, 16, 16]` vs `[60, 83, 30, 26]`) as two additional cases (all blueprint-derived) to guard against a coincidental match on any single seed/bound pair.
@@ -819,14 +838,14 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 13. `seed_slime_chunk_matches_hand_derived_vectors` — `seed_slime_chunk(0, 0, world_seed=0, salt=987234911)`, one `next_int_bounded(10)`; assert `7` (blueprint-verified). `seed_slime_chunk(5, -3, world_seed=12345, salt=987234911)`, one `next_int_bounded(10)`; assert `0` (blueprint-verified).
 14. `worldgen_random_gaussian_cache_survives_set_seed_reseed` — construct TWO separate `LegacyWorldgenRandom::new(RcLegacyRandom::new(0))` instances, `a` and `b`. On `b` (the control): call `next_gaussian()` twice with no reseed in between; record `b`'s SECOND result — by the algorithm's own construction (Context §E), this is exactly the cached value the first call computed and stashed. On `a` (the case under test): call `next_gaussian()` once (populates `a`'s own wrapper-level cache identically to `b`'s first call, since both start from the same seed), then call `set_decoration_seed(1, 0, 0)` on `a` (reseeds `a`'s wrapped `inner` only, per `WorldgenRandom`'s `BitSource` impl), then call `next_gaussian()` on `a` once more. Assert `a`'s post-reseed result equals `b`'s recorded second value — proving the reseed did NOT clear `a`'s wrapper-level cache (the leak Context §H documents genuinely reproduces), without requiring any internal-state inspection. This is a mechanical, isolated-unit proof of the documented quirk, explicitly NOT claiming any real vanilla call site exercises this path (Context §H's own stated open question).
 
-### `crates/worldgen/tests/seed_string_parsing.rs` (pure)
+### `crates/rng/tests/seed_string_parsing.rs` (pure)
 
 1. `numeric_seed_strings_parse_directly` — `parse_seed_string("12345") == 12345`, `parse_seed_string("-12345") == -12345`, `parse_seed_string("+42") == 42`, `parse_seed_string("007") == 7`, `parse_seed_string("9223372036854775807") == i64::MAX`, `parse_seed_string("-9223372036854775808") == i64::MIN` (all blueprint-verified via a compiled Rust program during this blueprint's own derivation pass).
 2. `non_numeric_seed_strings_fall_back_to_string_hash_code` — `parse_seed_string("") == 0`, `parse_seed_string("hello world") == 1794106052`, `parse_seed_string("Rusty Clanker") == 616675319` (blueprint-derived).
 3. `overflow_and_malformed_numeric_strings_fall_back_to_hash_not_saturate` — `parse_seed_string("9223372036854775808")` (one past `i64::MAX`) equals `java_string_hash_code("9223372036854775808") as i64`, NOT a saturated/clamped `i64::MAX` — proves overflow is treated as a parse failure (falls through to hashing), matching Java's `NumberFormatException`-on-overflow behavior, not silently clamped.
 4. `whitespace_and_separators_are_rejected_by_the_numeric_path` — `parse_seed_string(" 5")`, `parse_seed_string("5 ")`, and `parse_seed_string("1_000")` each equal their own `java_string_hash_code(...) as i64` (i.e. none of them parse numerically), matching Java's `Long.parseLong` grammar rejecting embedded whitespace and Java having no underscore-digit-separator grammar for `parseLong` either.
 
-### `crates/worldgen/tests/float_double_unit_constants.rs` (pure)
+### `crates/rng/tests/float_double_unit_constants.rs` (pure)
 
 1. `float_unit_is_exact_power_of_two` — assert `legacy::FLOAT_UNIT.to_bits() == 0x33800000u32`.
 2. `double_unit_is_exact_power_of_two` — assert `legacy::DOUBLE_UNIT.to_bits() == 0x3CA0000000000000u64`.
@@ -835,15 +854,15 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 
 ## Implementation steps
 
-1. **`Cargo.toml`.** Add the two new dependency lines to `crates/worldgen/Cargo.toml` per Deliverables. Observable: `cargo metadata` resolves cleanly; `cargo run -p xtask -- lint-deps` still exits 0 (both new edges are already-pinned workspace dependencies, so this should be a no-op on the dependency-graph check).
-2. **`src/random.rs`.** Add module declarations, re-exports, the `BitSource`/`RcRandomSource` trait definitions (Deliverables), and a private `GaussianCache { cached: Option<f64> }` with `take(&mut self) -> Option<f64>` / `store(&mut self, v: f64)` / `reset(&mut self)` methods (no `Eq` derive — `f64` is not `Eq`). Observable: compiles standalone (traits with no implementors yet).
-3. **`src/random/legacy.rs`.** `FLOAT_UNIT`/`DOUBLE_UNIT` constants (Context §C's table, exact powers of two declared via `f32::from_bits(0x33800000)`/`f64::from_bits(0x3CA0000000000000)` per Deliverables — never a decimal literal, and never `2f32.powi(-24)`-style computation inside a `const` unless the pinned toolchain is first confirmed to const-stabilize `powi`); `RcLegacyRandom` per Context §C/§D/§E; `LegacyPositionalFactory` per Context §G. Observable: `legacy_lcg_vectors.rs` and the legacy half of `float_double_unit_constants.rs` pass.
-4. **`src/random/hash.rs`.** `mth_get_seed`, `java_string_hash_code`, `md5_seed` per Context §G, using `md5::{Digest, Md5}` for the latter. Observable: `positional_and_hash_vectors.rs` tests 1–6 pass.
-5. **`src/random/xoroshiro.rs`.** `GOLDEN_RATIO_64`/`SILVER_RATIO_64`/`mix_stafford13`/`upgrade_seed_128_unmixed`/`upgrade_seed_128` per Context §F; `RcXoroshiroRandom` (construction via `rand_xoshiro::Xoroshiro128PlusPlus::from_seed` with manually-assembled little-endian bytes per Context §F's verified API notes, INCLUDING the own-code all-zero-guard applied before calling `from_seed` — never delegate that guard to `rand_xoshiro`) per Context §D/§E/§F; `XoroshiroPositionalFactory` per Context §G. Observable: `xoroshiro_vectors.rs`, the Xoroshiro half of `float_double_unit_constants.rs`, and `positional_and_hash_vectors.rs` tests 7–10 pass.
-6. **`src/random/worldgen_random.rs`.** `WorldgenRandom<B>` per Context §H/§I (its own SEPARATE `gaussian: GaussianCache` field, never reset by `set_seed`); `LegacyWorldgenRandom`/`XoroshiroWorldgenRandom` aliases; `create_random_sequence`/`create_random_sequence_default`/`seed_slime_chunk` per Context §I. Observable: `worldgen_random_and_seed_derivation.rs` passes.
-7. **`src/random/seed_string.rs`.** `parse_seed_string` per Context §J. Observable: `seed_string_parsing.rs` passes.
-8. **`src/lib.rs`.** Replace the M0-B01 scaffold placeholder with the real doc comment plus `pub mod random;` per Deliverables.
-9. **Full crate pass.** `cargo run -p xtask -- fmt-check && -- lint && -- lint-deps && -- test` all exit 0; `cargo test --doc -p rc-worldgen` exits 0 (every doc comment above containing a code-looking claim, e.g. the pseudocode-in-prose blocks, should NOT be written as executable ` ```rust ` doc-tests unless genuinely self-contained and correct — prefer ` ```text ` fences for pseudocode, matching this blueprint's own Context section convention, to avoid spurious doctest failures on non-compiling pseudocode).
+1. **`crates/rng/Cargo.toml`.** Create the new crate per Deliverables (`[package]` block plus the two dependency lines). Observable: `cargo metadata` resolves cleanly; `cargo run -p xtask -- lint-deps` still exits 0 (both new edges are already-pinned workspace dependencies, so this should be a no-op on the dependency-graph check).
+2. **`crates/rng/src/lib.rs`.** Add module declarations, re-exports, the `BitSource`/`RcRandomSource` trait definitions (Deliverables), and a private `GaussianCache { cached: Option<f64> }` with `take(&mut self) -> Option<f64>` / `store(&mut self, v: f64)` / `reset(&mut self)` methods (no `Eq` derive — `f64` is not `Eq`). Observable: compiles standalone (traits with no implementors yet).
+3. **`crates/rng/src/legacy.rs`.** `FLOAT_UNIT`/`DOUBLE_UNIT` constants (Context §C's table, exact powers of two declared via `f32::from_bits(0x33800000)`/`f64::from_bits(0x3CA0000000000000)` per Deliverables — never a decimal literal, and never `2f32.powi(-24)`-style computation inside a `const` unless the pinned toolchain is first confirmed to const-stabilize `powi`); `RcLegacyRandom` per Context §C/§D/§E; `LegacyPositionalFactory` per Context §G. Observable: `legacy_lcg_vectors.rs` and the legacy half of `float_double_unit_constants.rs` pass.
+4. **`crates/rng/src/hash.rs`.** `mth_get_seed`, `java_string_hash_code`, `md5_seed` per Context §G, using `md5::{Digest, Md5}` for the latter. Observable: `positional_and_hash_vectors.rs` tests 1–6 pass.
+5. **`crates/rng/src/xoroshiro.rs`.** `GOLDEN_RATIO_64`/`SILVER_RATIO_64`/`mix_stafford13`/`upgrade_seed_128_unmixed`/`upgrade_seed_128` per Context §F; `RcXoroshiroRandom` (construction via `rand_xoshiro::Xoroshiro128PlusPlus::from_seed` with manually-assembled little-endian bytes per Context §F's verified API notes, INCLUDING the own-code all-zero-guard applied before calling `from_seed` — never delegate that guard to `rand_xoshiro`) per Context §D/§E/§F; `XoroshiroPositionalFactory` per Context §G. Observable: `xoroshiro_vectors.rs`, the Xoroshiro half of `float_double_unit_constants.rs`, and `positional_and_hash_vectors.rs` tests 7–10 pass.
+6. **`crates/rng/src/worldgen_random.rs`.** `WorldgenRandom<B>` per Context §H/§I (its own SEPARATE `gaussian: GaussianCache` field, never reset by `set_seed`); `LegacyWorldgenRandom`/`XoroshiroWorldgenRandom` aliases; `create_random_sequence`/`create_random_sequence_default`/`seed_slime_chunk` per Context §I. Observable: `worldgen_random_and_seed_derivation.rs` passes.
+7. **`crates/rng/src/seed_string.rs`.** `parse_seed_string` per Context §J. Observable: `seed_string_parsing.rs` passes.
+8. **`crates/worldgen/Cargo.toml` and `crates/worldgen/src/lib.rs`.** Add the one new path dependency and replace the M0-B01 scaffold placeholder with the real doc comment plus `pub use rc_rng as random;` per Deliverables.
+9. **Full crate pass.** `cargo run -p xtask -- fmt-check && -- lint && -- lint-deps && -- test` all exit 0; `cargo test --doc -p rc-rng -p rc-worldgen` exits 0 (every doc comment above containing a code-looking claim, e.g. the pseudocode-in-prose blocks, should NOT be written as executable ` ```rust ` doc-tests unless genuinely self-contained and correct — prefer ` ```text ` fences for pseudocode, matching this blueprint's own Context section convention, to avoid spurious doctest failures on non-compiling pseudocode).
 
 ## Constraints & forbidden actions
 
@@ -851,7 +870,7 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 
 (b) **No new external dependencies beyond `rand_xoshiro` and `md-5`, both already-pinned workspace dependencies.** No other crate — not `rand`, not `rand_core` directly (it is reached only via `rand_xoshiro`'s own re-export), not a second hashing crate, not any generic "bounded random integer" helper crate — may be added anywhere this blueprint touches. In particular, `rand_xoshiro`'s own `RngCore`/`Rng`-trait convenience methods (`gen_range` and similar) are never called for any derived-value method this blueprint implements (GEN-D4) — only `Xoroshiro128PlusPlus`'s raw `next_u64`-equivalent state transition and `from_seed`/`SeedableRng` construction are used.
 
-(c) **`rc-worldgen` still must never depend on `rc-scheduler`, `rc-mechanics`, `rc-mod-api`, `rc-protocol`, `rc-transport-inproc`, `rc-transport-net`, `rc-auth`, `rc-cluster`, or `rc-proxy`** (WS-D3's dependency-graph rules, unmodified — this blueprint's own three path dependencies, `rc-core`/`rc-chunk-storage`/`rc-registries`, already exist from M0-B01 and are not extended here).
+(c) **`rc-worldgen` still must never depend on `rc-scheduler`, `rc-mechanics`, `rc-mod-api`, `rc-protocol`, `rc-transport-inproc`, `rc-transport-net`, `rc-auth`, `rc-cluster`, or `rc-proxy`; `rc-rng` depends on nothing beyond `rand_xoshiro`/`md-5`** (WS-D3's dependency-graph rules, unmodified — `rc-worldgen`'s three existing path dependencies from M0-B01, `rc-core`/`rc-chunk-storage`/`rc-registries`, are joined by exactly the one new path dependency this blueprint adds, `rc-rng` (WS-D14); no other crate edge is introduced anywhere).
 
 (d) **No Mojang or third-party reimplementation code.** Every algorithm and constant this blueprint restates (Context §C–§L) is sourced exclusively from `docs/research/third-party/rng-parity-notes.md` and `docs/research/mc-26.2/{16-rng-internals,24-seed-derivation-map,18-float-determinism}.md` (all already produced under this project's own ASSET-D18/D30 research-role process), plus `04-worldgen-parity.md`'s own GEN-D2–D6. No decompiled source and no third-party reimplementation's code were consulted while deriving this blueprint; the `rand_xoshiro` crate's own public `docs.rs` API documentation (a third-party, MIT/Apache-2.0-licensed, unrelated-to-Minecraft crate, not a Minecraft reimplementation) was consulted only to confirm its exact public method/trait surface, not for any Minecraft-specific algorithm content.
 
@@ -866,9 +885,9 @@ Every vector below states its own derivation/confidence: **"published"** = copie
 Run from the workspace root on a clean checkout, on both Windows and Linux (TEST-D43):
 
 ```
-cargo build -p rc-worldgen
-cargo nextest run -p rc-worldgen
-cargo test --doc -p rc-worldgen
+cargo build -p rc-rng -p rc-worldgen
+cargo nextest run -p rc-rng
+cargo test --doc -p rc-rng -p rc-worldgen
 cargo run -p xtask -- fmt-check
 cargo run -p xtask -- lint
 cargo run -p xtask -- lint-deps
