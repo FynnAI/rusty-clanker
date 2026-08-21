@@ -1,0 +1,848 @@
+# M4-B02 — Entity Physics & Item Entities
+
+| Field | Content |
+|---|---|
+| ID | M4-B02 |
+| Milestone | M4 — Mechanics Tier 2: Entities, AI, Combat, Items |
+| Prerequisites | M4-B01 (`rc-mechanics::entity`: `BaseEntity`/`LivingEntity`/`EntityKind`/`EntityPayload`/`ItemBundle`/`ZombieBundle`/`VillagerBundle`/`CowBundle`/`ItemStackRecord`, `EntityUuid`/`NetworkEntityIdAllocator`, `EntityRecord`/`EntityNbtFields`, `MetadataValue`/`EntityMetadataFields`, `TrackingDelta`/`compute_tracking_delta`, `ComponentBlob`/`SnapshotPayload`/`serialize_entity_snapshot`, the `rc-scheduler` `Stage::EntityPhysicsIntegration`(7)/`DomainGroup::EntityPhysicsIntegration` split and its ordinary conflict-graph-batched dispatch, `rusty-clanker-server`'s `play::entity_packets`/`entity_persistence`/`entity_tracking` modules, `PlayerMarker.tracked_entities` — every one reused unmodified; this blueprint registers the first real content into `DomainGroup::EntityPhysicsIntegration`, the slot M4-B01 opened and deliberately left unregistered — M4-B04's `system_mob_despawn` and M4-B05's mob-combat system land in that same slot alongside this one, at `order_tag` 1 and 2 respectively, per M4-B09's own governance changeset, which this blueprint does not itself read or bind to); M3-B02 (`rc-physics`: `Vec3`, `Aabb`, `VoxelShape`, `BlockShapeSource`/`BlockPhysicsProperties`/`ShapeTable`/`tier1_shape_table()`, `collide_and_slide`/`sweep_axis`/`overlaps_any_solid`, `step_living_entity_tick`/`LivingMotionState`/`MovementIntent` and its full gravity/drag constant set — `step_living_entity_tick` was explicitly reserved by that blueprint's own doc comment for "a future blueprint's mobs, falling blocks... and the client's own local prediction loop," which is exactly this blueprint's own first real caller); M4-B06 (`rc-mechanics::fluid`: `FluidKind`/`FluidState`/`FluidTables`, `fluid_state_at`/`get_own_height`/`get_height`/`get_flow` — that blueprint's own Context explicitly states "this blueprint does not implement the AABB submersion scan... or any push/drag/drowning constant — those consume this API, they are not part of it," naming this blueprint as the consumer); M3-B03 (`rusty-clanker-server::play::mining`: `BreakOutcome::Applied{pos, drop_eligible}`, `finalize_break` — that blueprint's own Context explicitly states "a future M4 blueprint that implements MECH-D51's real item entities extends `BreakOutcome`'s `Applied` arm to actually spawn one when `drop_eligible` is true — not this blueprint's dig-timing formula... or any other part," naming this blueprint as that extension point); M3-B01 (`rc-mechanics::random`: `RcRandom`, reused unmodified for non-loot RNG needs; `stage4::ecs::ChunkIndex`, the production chunk-lookup resource this blueprint's own read-only world-bridge reuses). |
+| Implements | MECH-D36–D39 (extending `rc-physics`'s shared, no-ECS movement/collision core to non-player entities for the first time — full, restated per-kind); MECH-D24 (this blueprint is `rc-mechanics::fluid`'s first entity-facing consumer, closing M4-B06's own explicitly-reserved gap); MECH-D51 (item entities: merge/pickup/despawn constants — full); MECH-D52/D53 (loot-table sourcing stance — hand-authored interim table, restated, with the real `xtask`-generated pipeline flagged as a future blueprint's scope exactly mirroring MECH-D39(b)'s own `xtask extract-shapes` deferral precedent); ARCH-D15 (Stage 6b — real system registration, the first one); ARCH-D8 (conflict-graph domain-group content, extended with real `structural_writes`). |
+| Crates touched | `rc-mechanics` (`crates/mechanics/`) — new `entity/physics/` submodule (five files), new `entity/loot.rs`, new `entity/pickup.rs`; `random.rs` modified (additive: `XoroshiroRandom` + `random_sequence` support, alongside the already-shipped `RcRandom`); `Cargo.toml` modified (one new optional dependency, `md-5`, plus one new `[workspace.dependencies]` pin). `rusty-clanker-server` (`crates/server/`) — `play/mining.rs` modified (additive field on `BreakOutcome::Applied`), new `play/entity_drops.rs`, `play/entity_tracking.rs` modified (additive resync function), `play/entity_packets.rs` modified (one new packet), `play/world.rs` modified (two new tick-loop steps, composition-root wiring). |
+| Estimated scope | L |
+
+## Goal & Done definition
+
+Give the four tier-2 entity kinds M4-B01 defined a real, ticking physical presence: a registered `DomainGroup::EntityPhysicsIntegration` (Stage 6b, ARCH-D15) system in `rc-mechanics` that advances every non-player entity's position/velocity every tick, using `rc-physics`'s already-shipped collision core with two genuinely different per-kind tick shapes (item entities vs. the three `LivingEntity`-rung kinds, `14-physics-collision.md` §3.3, restated exactly); fluid interaction for every one of those entities (submersion-height tracking, the entity-facing push vector consuming M4-B06's `get_flow` API, swimming/viscosity drag, and air-supply depletion, closing the gap M4-B06's own Context explicitly left open); a fall-distance-tracking, damage-hook-only landing effect (the actual health/death consequence is a sibling M4 blueprint's own scope, named B05 throughout); and item entities carried through their complete vanilla lifecycle — spawn-on-block-break (completing M3-B03's own explicitly-deferred drops stance), a real, general, `random_sequence`-capable loot-roll engine (MECH-D52 ff., `docs/research/third-party/rng-parity-notes.md` §5) driving a hand-authored interim table for M3's own tier-1 block set, pairwise merge, player pickup (into a minimal, explicitly-interim per-player item log — no real inventory exists yet), and age-based despawn — plus the position/velocity resync packet cadence M4-B01's own tracking system reserved but never wired.
+
+Done when:
+
+- [ ] `cargo build -p rc-mechanics -p rusty-clanker-server --all-features` succeeds with zero warnings.
+- [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-mechanics -p rusty-clanker-server` (default features).
+- [ ] `cargo run -p xtask -- lint-deps` still exits 0 — `rc-mechanics`'s new dependency edge is exactly one line, `md-5` (optional, `server-systems`-gated), already added to `[workspace.dependencies]` by this blueprint at a real, pinned version; no other new crate edge anywhere.
+- [ ] Every golden-vector test (per-kind physics, fluid push, loot-roll determinism) reproduces its hand-derived expected value exactly (RNG sequences) or to `1e-9` absolute tolerance (floating-point physics), mirroring M3-B02's own established tolerance discipline.
+- [ ] `cargo run -p xtask -- fmt-check` and `-- lint` both exit 0.
+- [ ] `cargo test --doc -p rc-mechanics -p rusty-clanker-server` exits 0.
+- [ ] CI tier: Tier 1 (`fmt-check`, `lint`, `lint-deps`, `test`) green on both `ubuntu-24.04` and `windows-2025` (TEST-D34/D37), on a clean checkout (TEST-D50).
+
+## Context (self-contained)
+
+### A. Where this content lives, and how Stage 6b's real registration works
+
+M4-B01 gave `DomainGroup::EntityPhysicsIntegration` (`Stage::EntityPhysicsIntegration = 7`) the **ordinary conflict-graph-batched, deferred** dispatch style — the same style `DomainGroup::RandomTick`/`BlockEntity` already use (M3-B06) — but registered **zero** systems into it. This blueprint registers one system, `system_entity_physics_integration`, via `register_stage6b(builder: &mut RcExecutorBuilder)` (mirroring M3-B06's `register_stage5`/`register_stage7` shape, defined in a new `crates/mechanics/src/entity/physics/ecs.rs`, `server-systems`-feature-gated like every other Stage-4/5/7 registration function). **This is not the group's only content at M4's own scope** — two sibling M4 blueprints independently register their own systems into this identical group (M4-B04's `system_mob_despawn`, M4-B05's mob-combat system); M4-B09's own governance changeset fixes the required `HardcodedWorld` composition-root call order across all three (`register_stage6b` first, `order_tag = 0`) and proves the three co-register without an `AmbiguousMutationAuthority`-class error — this blueprint does not read or depend on that changeset, since its own `order_tag = 0` position is fixed regardless of what registers after it.
+
+**This system never touches a player, and cannot even express a player-exclusion filter.** `PlayerMarker`/`PlayerMotion` (M3-B02) are defined inside `rusty-clanker-server::play`, not `rc-mechanics` — `rc-mechanics` must never depend on `rusty-clanker-server` (the dependency graph runs the other way), so a `Without<PlayerMarker>` query filter is not merely unnecessary here, it is **not expressible** from this crate at all. The real guarantee is structural in a different, stronger way: M4-B01's own Constraints explicitly deferred "migrating `PlayerMarker`/`enter_play`'s own existing player-entity handling onto this blueprint's `BaseEntity`/`LivingEntity` bundle system" to a future blueprint, and this blueprint does not perform that migration either — a player entity in this project's current codebase carries `PlayerMotion`/`TeleportState` (M3-B02) and **no `BaseEntity`/`EntityPayload` component at all**. `system_entity_physics_integration`'s own query, `Query<(Entity, &mut BaseEntity, Option<&mut LivingEntity>, &EntityPayload)>` (Deliverables), therefore structurally never matches a player entity, for the same reason it never matches a chunk entity or any other non-`BaseEntity`-carrying archetype — not because of an exclusion filter, but because the component this system requires simply is not present on a player. The moment a future blueprint migrates players onto `BaseEntity` (M4-B01's own explicitly-flagged future work), that migration's own author must revisit this query — restated here so that future blueprint's own Context section can cite this exact gap directly instead of rediscovering it.
+
+**Stage 6a stays empty.** M4-B01 shipped `DomainGroup::EntityAiSelection` (Stage 6, read-only-dispatched) with zero registered content, and this blueprint registers none either (out of scope, Constraints). The direct, honest consequence: every tier-2 mob this blueprint ticks receives `MovementIntent::default()` every tick (zero strafe/forward, not sprinting, not sneaking, not jumping) — a zombie/villager/cow simply stands in place, falls under gravity, collides with terrain, and reacts to fluid push, but never walks anywhere, because nothing produces a chosen movement command yet. This is the direct, structural consequence of M4-B01's own "zero AI content" scope, restated here so this blueprint's own physics content is not mistaken for AI.
+
+### B. Per-entity-kind tick shape (`14-physics-collision.md` §3.3) — restated exactly
+
+The research corpus is explicit that item entities and living entities are **not** one formula parameterized two ways — the *order* of add-vs-multiply operations genuinely differs:
+
+| Category | Gravity/tick | Tick order | Air drag |
+|---|---|---|---|
+| Item entity | `0.04` | `velocity.y -= gravity` **before** `collide_and_slide`; **after**, multiply all three axes by drag (Y always; X/Z by `drag * ground_friction` if on ground, else `drag`); **then**, if on ground and Y velocity is still negative, `velocity.y *= -0.5` (halve-and-invert) | `0.98` |
+| Living tier-2 mob (Zombie/Villager/Cow) | `Attributes.GRAVITY` default `0.08` | `rc_physics::motion::step_living_entity_tick`'s own already-shipped order (M3-B02: horizontal input computed first from `MovementIntent`, `collide_and_slide` runs with *last* tick's post-drag velocity, gravity/drag computed *after* for storage as *next* tick's velocity) — reused **completely unmodified**, this blueprint's own first real caller | `computeModifiedFriction(0.98, ...)`, already implemented inside `step_living_entity_tick` |
+
+This blueprint implements the **item** row as new code (`entity::physics::item::step_item_entity_tick`, below) and reuses the **living** row verbatim by calling `rc_physics::step_living_entity_tick(state, MovementIntent::default(), ground_friction, shapes)` for every `LivingEntity`-rung tier-2 kind. Falling blocks (MECH-D28) and arrow-family projectiles (§3.3's other two rows) are **out of scope** — falling blocks have no producer yet (no gravity-affected block content exists before a future blueprint), and projectiles are M4-B01's own already-cited, justified exclusion ("`11-roadmap-milestones.md`'s own M4 Scope text names neither ranged combat nor projectiles explicitly, so this blueprint treats them as out of M4's own current scope, not silently dropped" — restated here as still binding, since nothing in this blueprint's own assignment reopens it).
+
+### C. `step_item_entity_tick` — exact algorithm
+
+```text
+fn step_item_entity_tick(state: ItemMotionState, shapes: &dyn BlockShapeSource,
+                          gravity: f64 = ITEM_GRAVITY, air_drag: f64 = ITEM_AIR_DRAG,
+                          ground_friction: f64) -> ItemMotionState {
+    velocity = state.velocity
+    if !state.no_gravity { velocity.y -= gravity }                       // step 1 (14 §3.3)
+
+    (resolved_delta, on_ground) = collide_and_slide(
+        state.position, ITEM_HALF_WIDTH, ITEM_HEIGHT, velocity, shapes, ITEM_STEP_HEIGHT)
+    new_position = state.position + resolved_delta
+    velocity = resolved_delta                                            // step 2
+
+    h_drag = if on_ground { air_drag * ground_friction } else { air_drag }
+    velocity.x *= h_drag; velocity.z *= h_drag; velocity.y *= air_drag   // step 3
+
+    if on_ground && velocity.y < 0.0 { velocity.y *= -0.5 }              // step 4
+
+    fall_distance = state.fall_distance
+    if resolved_delta.y < 0.0 { fall_distance -= resolved_delta.y }
+    if on_ground { fall_distance = 0.0 }
+
+    ItemMotionState { position: new_position, velocity, on_ground, fall_distance, no_gravity: state.no_gravity }
+}
+```
+
+Constants: `ITEM_GRAVITY = 0.04`, `ITEM_AIR_DRAG = 0.98` (both `14 §3.3`, high confidence — a stable, long-cross-referenced vanilla constant pair). `ITEM_STEP_HEIGHT = 0.0` — item entities do not step up onto low ledges the way a player does; this project's own reasonable restatement (not independently sourced from the research corpus, flagged moderate-confidence) — an item resting against a one-block ledge tumbles/bounces rather than climbing it, matching casual vanilla observation. `no_gravity` reads `BaseEntity.no_gravity` (M4-B01's own already-modeled field) exactly as `Entity.getGravity()`'s own `isNoGravity()` gate does (`14 §3.3`, "Key parity-critical details").
+
+### D. Entity dimensions — hand-typed, moderate confidence
+
+No per-type `EntityDimensions` table exists in the research corpus (`09-entities-ai.md` §3.2 documents the *mechanism*, `sized(width, height)`, not per-type values) — this blueprint hand-types the four tier-2 kinds' own dimensions from this project's own long-stable, version-independent understanding of vanilla entity sizes, flagged moderate-confidence, reconciliation deferred exactly like M3-B02's own sprint/sneak multipliers and M4-B01's own tracking-range constants:
+
+| Kind | Width | Height | Eye height |
+|---|---|---|---|
+| Item | `0.25` | `0.25` | n/a (items have no eye-position-dependent behavior in this blueprint's own scope) |
+| Zombie | `0.6` | `1.95` | `height * 0.85` (`09-entities-ai.md` §3.2's own documented default formula, unmodified — no override value is named anywhere in the researched corpus for any tier-2 kind, so this blueprint applies the shared default uniformly rather than inventing a per-type override) |
+| Villager | `0.6` | `1.95` | `height * 0.85` |
+| Cow | `0.9` | `1.4` | `height * 0.85` |
+
+`ITEM_HALF_WIDTH = 0.125`. Living tier-2 mobs use `STEP_HEIGHT = 0.6` (`rc_physics::STEP_HEIGHT`, reused unmodified — the same constant players use).
+
+### E. Fluid interaction — the AABB submersion scan (`14 §3.8`, closing M4-B06's own reserved gap)
+
+M4-B06 ships exactly four query functions this blueprint consumes: `fluid_state_at(world, tables, pos) -> Option<FluidState>`, `get_own_height(state) -> f32`, `get_height(world, tables, pos, state) -> f32`, `get_flow(world, tables, pos, state) -> Vec3`. This blueprint builds the entity-side scan around them, restated from `14 §3.8`, one independent tracker per fluid kind (`water`, `lava` — "one `Tracker` per relevant fluid tag," `14 §3.8`):
+
+```text
+fn scan_fluid_interaction(aabb: Aabb, world, tables, kind: FluidKind) -> FluidInteraction {
+    probe = aabb.deflated(FLUID_PROBE_INSET)         // 0.001, `14 §3.8`'s own documented inset
+    max_submersion = 0.0
+    flow_x = 0.0; flow_z = 0.0
+    for block_pos in probe.overlapped_block_positions():
+        Some(state) = fluid_state_at(world, tables, block_pos) where state.kind == kind else continue
+        fluid_top = block_pos.y as f64 + get_height(world, tables, block_pos, state) as f64
+        submersion = fluid_top - probe.min.y
+        if submersion > 0.0:
+            max_submersion = max(max_submersion, submersion)
+            flow = get_flow(world, tables, block_pos, state)
+            scale = if get_own_height(state) < 0.4 { get_own_height(state) as f64 / 0.4 } else { 1.0 }
+            flow_x += flow.x * scale; flow_z += flow.z * scale
+    FluidInteraction { submersion: max_submersion, flow: Vec3::new(flow_x, 0.0, flow_z) }
+}
+```
+
+`eyes_in_fluid(kind)` (used only by drowning, §F below, and only meaningful for living tier-2 kinds — items never need it) is a single-point query: `fluid_state_at(world, tables, floor(eye_position)).is_some_and(|s| s.kind == kind && get_height(..) as f64 + block_y > eye_position.y)`.
+
+**Pushing.** Applied every tick this blueprint's own physics step runs (item and living tier-2 kinds alike; boats/other non-pushable categories do not exist yet, so no `isPushedByFluid()`-equivalent gate is needed at this milestone's own scope): `push_scale = WATER_PUSH_SCALE` if `kind == Water`, else (`LAVA_PUSH_SCALE_FAST` if `dimension.fast_lava` else `LAVA_PUSH_SCALE_SLOW`) — `WATER_PUSH_SCALE = 0.014`, `LAVA_PUSH_SCALE_FAST = 0.007`, `LAVA_PUSH_SCALE_SLOW = 0.00233` (`14 §3.8`, high confidence, directly restated). The accumulated flow vector is normalized (this blueprint's own entities are never players — only a player gets the *averaged*, non-normalized variant per `14 §3.8`'s own explicit carve-out, and players are out of this blueprint's own scope per §A — so every entity this blueprint ticks always takes the plain-normalized path) and scaled by `push_scale`; if the entity's existing horizontal velocity is within `1e-3` of zero and the scaled impulse's own magnitude is below `PUSH_FLOOR_MAGNITUDE = 0.0045`, the impulse is renormalized up to exactly that floor magnitude (`14 §3.8`'s own "guarantees a stationary entity in current always gets *some* perceptible push" rule). The resulting vector is added directly to the entity's velocity, **after** the kind-specific gravity/drag step (§C/§B) — a fluid push is an additive impulse layered on top of an otherwise-ordinary tick, matching `14 §3.8`'s own framing of `EntityFluidInteraction` as a per-tick post-process, not a replacement for the base tick.
+
+**Swimming/viscosity — a documented, bounded simplification.** When `submersion > entity_height * SUBMERSION_SWIM_THRESHOLD` (`SUBMERSION_SWIM_THRESHOLD = 0.4`, this blueprint's own chosen threshold, reusing the identical `0.4` fraction `get_own_height`'s own flow-scaling rule already uses, for internal consistency rather than an independently-sourced vanilla constant — flagged moderate-confidence), this blueprint applies, **in place of** the kind-specific drag step (§B/§C step 3), one of:
+- **Water:** `velocity *= (0.8, 0.8, 0.8)` (`14 §3.8`'s own base `getWaterSlowDown() = 0.8`, applied uniformly across all three axes — this blueprint's own simplification of vanilla's real `(slowDown, 0.8, slowDown)` shape, since the sprint-vs-non-sprint `0.9`/`0.8` distinction requires `MovementIntent.sprinting`, which is always `false` for every AI-less mob this blueprint ticks, §A). Additionally, terminal-velocity smoothing: if `velocity.y < -gravity/16.0`, clamp `velocity.y = -gravity/16.0` before the multiply (`14 §3.8`'s own `getFluidFallingAdjustedMovement`, restated as a floor on fall speed rather than the smoothing curve's own exact iterative form, a bounded simplification).
+- **Lava:** if `submersion >= entity_height` (fully submerged, "not shallow"): `velocity *= (0.5, 0.5, 0.5)` and `velocity.y -= gravity / 4.0` (extra flat sink, `14 §3.8`); else (shallow): `velocity *= (0.5, 0.8, 0.5)`.
+
+**Explicitly out of scope, cited:** Depth Strider/Dolphin's Grace (no enchantment or status-effect system exists, MECH-D46 out of M4's own scope), the sprint/non-sprint water-slowdown split (no AI ever sets `sprinting = true` for a mob this blueprint ticks, §A — a future AI blueprint that starts producing real `MovementIntent` values reopens this simplification, not silently), `jumpOutOfFluid`'s wall-bob nudge (requires horizontal-collision-while-swimming detection this blueprint does not add), ladder/climbable interaction (`14 §3.9`, no climbable content exists at M4's own scope), bubble columns (`14 §3.8`'s own separate mechanism, no bubble-column-producing block exists at M4's own scope).
+
+### F. Drowning/air (`09-entities-ai.md`'s own `TOTAL_AIR_SUPPLY = 300` constant, restated with cited simplification)
+
+Air-supply tracking applies only to living tier-2 kinds (`is_living()`, M4-B01's own `EntityKind` method) — item entities carry `BaseEntity.air_ticks` (M4-B01's own base-bundle field, present on every entity per vanilla's own base-`Entity`-level field) but never consume it, matching vanilla's own harmless-but-unused field on non-`LivingEntity` kinds. This project's own long-stable, version-independent restatement of vanilla's drowning mechanic (**not** independently sourced from the research corpus for its exact per-tick rate, flagged moderate-confidence, reconciliation deferred): each tick, if `eyes_in_fluid(Water)`, `air_ticks = max(air_ticks - 1, AIR_FLOOR)` (`AIR_FLOOR = -20`); else `air_ticks = min(air_ticks + 1, TOTAL_AIR_SUPPLY)` (`TOTAL_AIR_SUPPLY = 300`, cited above). Whenever `air_ticks` newly reaches `AIR_FLOOR` this tick (a strict edge, not "while at the floor," so the event fires once per drowning cycle rather than every tick spent there — restated precisely so a future implementer does not accidentally re-fire it every tick): `air_ticks` resets to `0` and a `PendingEnvironmentalDamage::Drowning { entity, suggested_magnitude: 2.0 }` event is pushed (§H's own queue — this blueprint never applies the damage itself).
+
+### G. Block collision effects — fall-distance tracking, damage hook only (`14 §3.6`)
+
+Both tick shapes (§B/§C) already produce a `fall_distance` field, threaded through unmodified from `step_living_entity_tick`'s own already-shipped bookkeeping (M3-B02) and this blueprint's own new `step_item_entity_tick`. Every tick, after the physics step, if `on_ground` is newly `true` this tick (was `false` last tick) and `fall_distance > 0.0`: for a living tier-2 kind only (items never take fall damage in vanilla — `ItemEntity` overrides `causeFallDamage` to a no-op, a well-established fact this blueprint restates without independent corpus citation, moderate confidence but low-stakes since no acceptance test depends on it), push `PendingEnvironmentalDamage::FallImpact { entity, fall_distance }` into the same queue §F uses. **This blueprint computes and tracks fall distance and pushes the event; it never computes or applies actual damage** — the damage formula (`14 §3.6`'s `calculateFallDamage`, `SAFE_FALL_DISTANCE`, `FALL_DAMAGE_MULTIPLIER`) and the `health`/death consequence are explicitly a sibling M4 blueprint's own scope (named B05 throughout this project's own current planning), consuming `PendingEnvironmentalDamage` as its own queue's input. Suffocation/in-wall damage (`14 §3.7`) is **not** modeled by this blueprint at all — out of scope, not merely deferred to a hook, since this milestone's own assigned task names only fall damage as a hook target.
+
+### H. `PendingEnvironmentalDamage` — the shared hook queue
+
+```rust
+pub enum PendingEnvironmentalDamage {
+    FallImpact { entity: RcEntityId, fall_distance: f64 },
+    Drowning { entity: RcEntityId, suggested_magnitude: f32 },
+}
+```
+A `Vec<PendingEnvironmentalDamage>`-backed `bevy_ecs::Resource`, `PendingEnvironmentalDamageQueue`, appended to (never drained) by this blueprint's own Stage 6b system, drained by whichever future blueprint owns combat/damage. This blueprint's own acceptance tests assert entries land in the queue with the correct fields; they never assert anything about health, since no consumer exists yet — an explicit, cited scope boundary mirroring every prior "ships the mechanism, zero real content" precedent in this project (M3-B01's Stage 4 substrate, M4-B01's own unregistered `EntityAiSelection` slot).
+
+### I. Item entity lifecycle — spawn-on-drop, superseding M3-B03's interim stance
+
+M3-B03's own `BreakOutcome::Applied { pos, drop_eligible }` is extended, per that blueprint's own explicit, cited permission ("extends `BreakOutcome`'s `Applied` arm... not this blueprint's dig-timing formula, tool-effectiveness computation, or any other part"), with one additive field carrying the pre-break block state `finalize_break` already reads internally but previously discarded: `BreakOutcome::Applied { pos: BlockPos, drop_eligible: bool, broken_state: BlockStateId }`. `world.rs`'s own tick-loop packet-apply substep (M3-B03's own already-shipped shape), immediately after receiving `BreakOutcome::Applied { drop_eligible: true, broken_state, pos, .. }`, calls this blueprint's own new `entity_drops::spawn_break_drop(world, pos, broken_state, region_random_sequences, network_id_allocator)` (Deliverables) — resolving `broken_state`'s tier-1 loot table (§J), rolling it, and, for every resulting `ItemStackRecord`, spawning one real item entity (composing `BaseEntity` + `ItemBundle` + `EntityPayload::Item`, `rc_mechanics::entity::EntityKind::Item`, via `bevy_ecs::World::spawn`) at a randomized position/velocity within the broken block's cell.
+
+**Spawn geometry**, this project's own restatement of vanilla's `Block.popResource` (moderate confidence, not independently corpus-sourced — flagged for reconciliation, non-critical to any acceptance test's own pass/fail since no test asserts exact jitter values): position offset per axis drawn via `rng.next_float() * 0.5 + 0.25` (uniform in `[0.25, 0.75]` of the block's own unit cell — `rng` is the **per-region** `RcRandom` stream this project already established, M3-B01, reused unmodified, seeded once at region bootstrap; this is a non-deterministic-across-restarts, gameplay-feel-only draw, **not** the deterministic `random_sequence` stream §J's loot roll itself uses — the two RNG streams are deliberately independent, matching vanilla's own real split between `Level.random` and a loot table's `random_sequence`); initial velocity `Vec3(rng.triangle(0.0, 0.11485), rng.triangle(0.2, 0.1116), rng.triangle(0.0, 0.11485))` where `triangle(mean, spread) = mean + spread * (rng.next_double() - rng.next_double())` (`rng-parity-notes.md` §2's own documented default `RandomSource::triangle` shape, restated). `pickup_delay_ticks = PICKUP_DELAY_DEFAULT = 10` (MECH-D51), `age_ticks = 0`.
+
+### J. Loot table stance (MECH-D52 ff.) — hand-authored interim table, real general engine
+
+**Sourcing stance, restated and reconciled.** `05-game-mechanics.md`'s own MECH-D52 names `xtask fetch-data`/`codegen`'s eventual extension to produce real, datapack-derived loot-table content under `crates/mechanics/generated/<protocol-version>/`; `12-workspace-structure.md`'s WS-D13 (the project's own later, binding reconciliation of "where does generated content live") instead names `rc-registries` as the home for **all** generated/hand-authored static game data, including "recipes, loot tables — `05-game-mechanics.md`'s content," layered on top of the generated registry base in that same crate. **This blueprint does not build that pipeline.** Exactly mirroring M3-B02's own established precedent for `MECH-D39`'s two named sources (source (a), hand-authored, implemented; source (b), `xtask extract-shapes`, explicitly deferred as a flagged open item) — this blueprint hand-authors a **closed, interim** loot table for exactly M3's own tier-1 block set (the only blocks this project can currently break), directly inside `rc-mechanics::entity::loot`, and flags the real `xtask`-generated/`rc-registries`-homed pipeline MECH-D52/WS-D13 together specify as an Open Question for whichever future blueprint first needs loot content a hand-authored table cannot honestly cover (ore fortune-drops, mob rare-drops, anything with real per-roll randomness or datapack-configurability).
+
+**The engine is real and general**, not a simplification specific to tier-1's own trivial content — `roll_loot_table` (Deliverables) implements `rng-parity-notes.md` §5.3's pool/entry/weighted-selection/single-candidate-shortcut algorithm precisely, restated here:
+
+```text
+fn roll_loot_table(table: &LootTable, rng: &mut dyn LootRandom, luck: f32) -> Vec<ItemStackRecord> {
+    results = []
+    for pool in table.pools:                                            // declaration order
+        roll_count = pool.rolls.resolve(rng) + floor(pool.bonus_rolls.resolve(rng) * luck)
+        repeat roll_count times:
+            valid = []; total_weight = 0
+            for entry in pool.entries:                                  // declaration order
+                weight = max(0, entry.base_weight + floor(entry.quality * luck))  // luck always 0.0 at M4 (no luck source exists)
+                if weight > 0: valid.push((entry, weight)); total_weight += weight
+            if valid.is_empty() or total_weight == 0: continue
+            chosen = if valid.len() == 1 { valid[0].0 }                  // single-candidate shortcut — NO draw
+                     else {
+                         index = rng.next_int_bounded(total_weight)      // exactly ONE draw
+                         walk valid subtracting weight from index, pick first where index goes negative
+                     }
+            count = chosen.count.resolve(rng)
+            results.push(ItemStackRecord { item_id: chosen.item_id, count, components: None })
+    results
+}
+```
+
+`RollProvider`/`CountProvider` are the two number-provider shapes `rng-parity-notes.md` §5.3 names as the ones that matter for this engine's own scope: `Constant(n)` (zero draws) and `Uniform { min, max }` (`rng-parity-notes.md` §5.3's own `uniform.get_int`: `lo=min, hi=max; if lo>=hi return lo (no draw); else lo + rng.next_int_bounded(hi-lo+1)`). `LootCondition`/loot-function content (enchant-randomly, silk-touch/fortune gating, etc.) is **not modeled** — every tier-1 entry is unconditional, matching this project's own already-established stance that survival-vs-creative eligibility is resolved upstream, by `finalize_break`'s own `drop_eligible` (M3-B03), never inside the loot table itself.
+
+**The tier-1 table itself** — every entry below is `weight: 1, quality: 0, count: Constant(1)` (real vanilla's own actual content for every one of these specific blocks: a single, unconditional, fixed-count self-or-cobblestone drop — **not** a simplification this blueprint invented, a fact about which vanilla blocks M3's own tier-1 set happens to contain), so every one of these tables' own rolls consumes **zero** RNG draws via the single-candidate shortcut — restated honestly, not hidden:
+
+| Broken block | Drops | `random_sequence` id |
+|---|---|---|
+| Stone | Cobblestone ×1 | `minecraft:blocks/stone` |
+| Dirt | Dirt ×1 | `minecraft:blocks/dirt` |
+| Grass Block | Dirt ×1 | `minecraft:blocks/grass_block` |
+| Redstone Wire | Redstone (dust) ×1 | `minecraft:blocks/redstone_wire` |
+| Redstone Torch / Wall Torch | Redstone Torch ×1 | `minecraft:blocks/redstone_torch` |
+| Repeater | Repeater ×1 | `minecraft:blocks/repeater` |
+| Comparator | Comparator ×1 | `minecraft:blocks/comparator` |
+| Piston / Sticky Piston | Piston / Sticky Piston ×1 (self) | `minecraft:blocks/piston` / `minecraft:blocks/sticky_piston` |
+| Chest | Chest ×1 | `minecraft:blocks/chest` |
+| Hopper | Hopper ×1 | `minecraft:blocks/hopper` |
+| Furnace / Blast Furnace / Smoker | self ×1 | `minecraft:blocks/furnace` / `.../blast_furnace` / `.../smoker` |
+
+`random_sequence` id strings follow real vanilla's own `minecraft:blocks/<block_id>` convention (1.20+, `rng-parity-notes.md` §5.2's own documented mechanism) — moderate confidence on the exact literal strings (not independently cross-checked against a live capture), flagged for reconciliation alongside every other hand-typed identifier in this project.
+
+**Why a real, bit-exact `random_sequence` RNG is implemented anyway, despite zero tier-1 draws.** This blueprint's own assigned acceptance-test requirement is explicit: "loot-roll determinism tests (seeded `random_sequences` → exact drops)." Per this project's own binding "vanilla parity is bit-identical by default" rule, and since `rng-parity-notes.md` already supplies the complete, verified formula (§3.1–3.4, §5.2) plus test vectors (§7.2), this blueprint implements Xoroshiro128++ and the `random_sequence` seeding formula properly rather than deferring them — the RNG plumbing is real, general-purpose infrastructure (also needed, unmodified, by a future worldgen blueprint per `rng-parity-notes.md` §4.7's own noted `PositionalRandomFactory` use), tested both against §7.2's own published vectors and against one synthetic, RNG-exercising test fixture table (§ Acceptance tests) that is **not** tied to any real vanilla block — since no real tier-1 table this milestone ships ever draws a bit, a synthetic fixture is the only honest way to prove the weighted-selection/uniform-count draw paths are wired correctly end to end.
+
+### K. `XoroshiroRandom` and `random_sequence` — restated from `rng-parity-notes.md` §3/§5.2
+
+Extends `crates/mechanics/src/random.rs` (M3-B01's already-shipped module, additive — `RcRandom`, the legacy 48-bit LCG, is untouched) with a second RNG type, since vanilla's `random_sequence` mechanism always resolves to Xoroshiro128++, never the legacy LCG (`rng-parity-notes.md` §5.1 point 2, §5.2's own explicit `-> XoroshiroRandomSource` return type):
+
+```text
+GOLDEN_RATIO_64: i64 = -7046029254386353131   // 0x9E3779B97F4A7C15
+SILVER_RATIO_64: i64 =  7640891576956012809   // 0x6A09E667F3BCC909
+
+fn stafford_mix13(z: i64) -> i64:
+    z = wrapping_mul(z XOR logical_shr(z, 30), -4658895280553007687)
+    z = wrapping_mul(z XOR logical_shr(z, 27), -7723592293110705685)
+    return z XOR logical_shr(z, 31)
+
+fn upgrade_seed_128_unmixed(legacy_seed: i64) -> (i64, i64):
+    lo = legacy_seed XOR SILVER_RATIO_64
+    hi = wrapping_add(lo, GOLDEN_RATIO_64)
+    return (lo, hi)
+
+fn next_long(state: &mut (i64, i64)) -> i64:
+    (s0, s1) = *state
+    result = wrapping_add(rotate_left(wrapping_add(s0, s1), 17), s0)
+    s1 ^= s0
+    new_lo = rotate_left(s0, 49) XOR s1 XOR (s1 << 21)
+    new_hi = rotate_left(s1, 28)
+    *state = (new_lo, new_hi)
+    return result
+```
+
+(`logical_shr` = unsigned/`>>>`; the three multiplies inside `stafford_mix13` and every add/shift above are wrapping 64-bit operations — `rng-parity-notes.md` §6 points 1–2, restated as binding here exactly as it is there.) `next_int() = next_long() as i32` (low 32 bits, truncating). `next_bits(n) = logical_shr(next_long(), 64-n)`. `next_float() = (next_bits(24) as f32) * FLOAT_UNIT` (`FLOAT_UNIT = 2f32.powi(-24)`, derived as an exact power of two per §6 point 6's own explicit warning against transcribing the truncated decimal literal). `next_double() = (next_bits(53) as f64) * DOUBLE_UNIT` (`DOUBLE_UNIT = 2f64.powi(-53)`, same rule). `next_bool() = (next_long() & 1) != 0`.
+
+`next_int_bounded(bound)` — the Lemire-style algorithm, **not** the legacy rejection loop (§3.3, restated exactly):
+
+```text
+fn next_int_bounded(bound: i32, state) -> i32:
+    bound_u = bound as u32 as u64
+    random_bits = (next_int(state) as u32) as u64
+    product = random_bits * bound_u
+    fractional = product & 0xFFFFFFFF
+    if fractional < bound_u:
+        threshold = (0u32.wrapping_sub(bound_u as u32)) as u64 % bound_u
+        while fractional < threshold:
+            random_bits = (next_int(state) as u32) as u64
+            product = random_bits * bound_u
+            fractional = product & 0xFFFFFFFF
+    return (product >> 32) as i32
+```
+
+**MD5-based `random_sequence` seeding** (`rng-parity-notes.md` §5.2/§3.4, restated exactly):
+
+```text
+fn md5_seed(name: &str) -> (i64, i64):
+    digest = md5(name.as_utf8_bytes())            // 16 bytes
+    return (i64::from_be_bytes(digest[0..8]), i64::from_be_bytes(digest[8..16]))   // BIG-endian halves
+
+fn create_random_sequence(sequence_id: &str, world_seed: i64, salt: i32 = 0,
+                           include_world_seed: bool = true, include_sequence_id: bool = true) -> XoroshiroRandom:
+    base = (if include_world_seed { world_seed } else { 0 }) XOR (salt as i64)
+    (lo, hi) = upgrade_seed_128_unmixed(base)
+    if include_sequence_id:
+        (id_lo, id_hi) = md5_seed(sequence_id)
+        lo ^= id_lo; hi ^= id_hi
+    return XoroshiroRandom::from_raw_pair(stafford_mix13(lo), stafford_mix13(hi))
+```
+
+The three per-world defaults (`salt=0`, both `include_*` flags `true`) are fixed constants — no `/random`-command-equivalent exists at this milestone's own scope (Constraints). `md5` is computed via the `md-5` crate (new workspace dependency, Deliverables) — implementing MD5 by hand inside a blueprint's own pseudocode would be exactly the kind of "reimplement a well-audited primitive from scratch" anti-pattern this project's own engineering bar ("best possible result over lowest effort") argues against; `md-5` is RustCrypto's own small, MIT OR Apache-2.0-licensed implementation (license-compatible with this project's GPL/AGPL/LGPL-avoidance rule), pinned `0.10.6` — this exact patch version is this blueprint's own best-effort pin, flagged for the implementer to confirm against the live crates.io registry at `cargo add` time and adjust if a newer `0.10.x` patch is current, mirroring this project's own established discipline for every hand-typed external fact.
+
+**`RandomSequenceStore`** — one per-region `bevy_ecs::Resource`, `HashMap<String, XoroshiroRandom>`, lazily populated: `get_or_create(&mut self, sequence_id: &str, world_seed: i64) -> &mut XoroshiroRandom` creates via `create_random_sequence` on first reference and returns the **same, already-advanced** instance on every subsequent call for the same id — the concrete mechanism behind `rng-parity-notes.md` §5.2's own "statefulness across invocations... the 2nd invocation's result depends on how much randomness the 1st invocation consumed" rule. `world_seed: i64` is a composition-root-supplied constant (this project has no real world-seed concept yet outside this one consumer — a fixed test/debug seed, `Deliverables`, mirroring M4-B06's own `FluidDimensionProfile`/`LevelRandom` "the mechanism now, the real data-driven wiring later" precedent).
+
+### L. Merge rules (MECH-D51)
+
+Every Stage 6b tick, after individual physics integration, item-vs-item pairs within the **same region** (cross-region merge is out of scope — no distributed transaction exists for it, and M4's own acceptance criteria never require it) are evaluated: two item entities merge if `item_id` and `components` match (`components` is always `None` for every drop this blueprint produces, §I — equality is therefore always satisfied at this milestone's own scope, but the check is written generically, not hardcoded to "always true," so a future blueprint adding real components does not need to revisit this file), distance between centers `<= MERGE_RADIUS = 0.5` (MECH-D51), and `combined_count <= MAX_STACK_SIZE`. `MAX_STACK_SIZE = 64` — this blueprint's own hand-picked default, a documented, bounded simplification (real vanilla varies per item, e.g. eggs cap at 16; no per-item stack-size registry data exists yet, mirroring `ItemStackRecord`'s own already-established `Int`-not-`String` id deviation in spirit) applied uniformly to every tier-1 drop item, none of which vanilla itself caps below 64. The pair with the **greater** `age_ticks` survives and absorbs the count (the younger entity is despawned); ties (equal `age_ticks`, possible when two drops spawn the same tick) are broken by the **lower** `RcEntityId` surviving — a deterministic, this-project's-own tie-break rule (not independently vanilla-sourced, but observationally inert since real vanilla's own tie-break is itself not independently deterministic/tested by this blueprint's acceptance suite either).
+
+### M. Pickup — delay, range, interim insertion order (MECH-D51)
+
+Eligibility: `age_ticks >= pickup_delay_ticks` (default `10`, MECH-D51) **and** a `PlayerMarker`'s own collision `Aabb` (`PLAYER_HALF_WIDTH`/`PLAYER_HEIGHT`, M3-B02, centered on that player's own `PlayerMotion.position`) intersects the item entity's own collision `Aabb` inflated by `ITEM_PICKUP_AABB_INFLATE = 0.5` blocks on every axis — this blueprint's own restatement of vanilla's real AABB-touch-based pickup detection (not a fixed "pickup radius" constant; moderate confidence, flagged for reconciliation, since `14`/`09`'s own researched corpus does not name an exact inflate value). On a hit: the item entity is despawned, a `Take Item Entity` packet (Deliverables, `entity_packets.rs`) is broadcast to every player currently tracking either entity (the purely-visual pickup swoop), and the picked-up `ItemStackRecord` is appended to that player's own `PickedUpItems` component (Deliverables) — a **minimal, explicitly interim** per-player item log, `Vec<ItemStackRecord>` with no slot semantics, no stacking-into-an-existing-inventory-slot logic, and no UI, mirroring M3-B03's own already-established `HeldItemStub` precedent ("this blueprint's own held-item stub has no 'count,' so there is nothing to deplete even conceptually") for "the mechanism's game-visible effect now, the full data structure later."
+
+**Real vanilla's insertion order, restated for a future inventory blueprint to implement verbatim** (this blueprint's own `PickedUpItems.push` does **not** perform this ordering — it is documentation for the eventual real consumer, restated here per this blueprint's own task assignment, "inventory insertion order restated"): `Inventory::add(stack)` first tries the currently-selected hotbar slot if empty or holding a mergeable stack of the same item+components; failing that, it scans every occupied slot (hotbar then main inventory, ascending index, armor/off-hand excluded) for a mergeable partial stack; failing that, it fills the first empty slot in the same scan order; if no slot accepts any remaining count, the un-placed remainder is **not** picked up (the item entity survives, count reduced by whatever *did* fit) — a real, vanilla-observable "inventory full" case this blueprint's own stub cannot reproduce (its `Vec` never fills), flagged as an Open Question for the future inventory blueprint.
+
+### N. Despawn timing (MECH-D51)
+
+`age_ticks` increments by 1 every Stage 6b tick this blueprint's system runs (including ticks the entity does not move, e.g. resting on the ground — matching vanilla's own unconditional per-tick age increment). At `age_ticks >= DESPAWN_AGE_TICKS = 6000` (MECH-D51, "5 minutes"), the entity is despawned with no further effect (no drop-of-a-drop, no packet beyond the ordinary `Remove Entities` M4-B01's own tracking system already sends once the entity is gone). Persistence exemptions (named items, or vanilla's fixed persistent-category list) are **not modeled** — every item entity this blueprint ever spawns is eligible for age-despawn unconditionally, a documented, bounded simplification (no item-naming mechanism exists at this milestone's own scope, so the exemption's own trigger condition can never actually fire either way).
+
+### O. Velocity + position sync cadence for tracked entities (closing M4-B01's own reserved seam)
+
+M4-B01's own tracking system computes `to_spawn`/`to_despawn`/`still_tracked` once per tick, in a **manual, pre-`executor.tick_region`** step (M4-B01's own established "Stage-3-equivalent, manual" pattern) — meaning `still_tracked`'s own membership reflects *last* tick's post-physics positions, which is exactly right for visibility/interest decisions (a tick or two of lag in who-sees-whom is imperceptible) but wrong for *resync content*, which must reflect *this* tick's freshly-computed physics result. This blueprint therefore adds a **second**, new manual step, `entity_resync_step`, positioned **after** `executor.tick_region(...)` returns (so it observes this tick's own Stage 6b output) — mirroring the same "manual tick-loop step, not a real `DomainGroup::NetCodec` registration, because nothing yet conflicts with reading final per-tick state" reasoning every prior manual step in this project's own tick loop already used, restated here for the first genuinely-post-tick manual step.
+
+For every `PlayerMarker`, for every id in that player's own `tracked_entities` (M4-B01), gated at `ENTITY_UPDATE_INTERVAL_TICKS = 3` (`09-entities-ai.md` §3.2's own documented `updateInterval` default, restated, applied uniformly across every tier-2 kind since no per-kind override is named anywhere in the researched corpus — unlike `clientTrackingRange`, which M4-B01 *did* hand-type per kind): if `current_tick % 3 == 0` **and** the entity's position changed since the last sent value by more than `1e-4` (a small, non-zero epsilon — avoids re-sending a bit-for-bit-idle entity every three ticks forever) or its velocity changed by more than the same epsilon, send `Update Entity Position` (delta encoding, `±8`-block range) or, if the per-axis delta would exceed that range, `Teleport Entity` (absolute) — both already-shipped packet types (M4-B01) — followed by `Set Entity Velocity` if velocity changed. `PlayerMarker` gains one new field, `last_sent_entity_state: std::collections::HashMap<RcEntityId, ([f64;3], [f64;3])>` (position, velocity as last actually sent), mutated only by this step.
+
+### P. Projectiles, vehicles, mob-death drops — confirmed out of scope
+
+Restated, not silently dropped: **projectiles** are M4-B01's own already-cited exclusion (§B above); **vehicles/riding** (`14 §3.10`) have no producer (no boat/minecart placeable content exists); **mob death drops** (a zombie/cow's own loot table on death) are **not** this blueprint's scope — death itself requires the combat/health system this blueprint's own §H hook explicitly defers to a sibling M4 blueprint (B05), so a mob loot table has no trigger point to hang off yet. This blueprint's own loot engine (§J/§K) is written generically enough that B05's own future death-drop call site needs no new engine code, only a new `LootTable` value and a new call to the already-shipped `roll_loot_table`.
+
+## Deliverables
+
+### `crates/mechanics/Cargo.toml` (modify — one new optional dependency)
+
+```toml
+[dependencies]
+md-5 = { workspace = true, optional = true }
+
+[features]
+server-systems = ["dep:rc-scheduler", "dep:rc-chunk-storage", "dep:rc-brigadier", "dep:md-5"]
+```
+
+(Merge into the `server-systems` feature list M4-B01 already established — do not duplicate the `dep:` entries already present there.) `12-workspace-structure.md`'s `[workspace.dependencies]` table gains one new pinned line: `md-5 = "0.10.6"` (RustCrypto, MIT OR Apache-2.0 — license-compatible, Constraints).
+
+### `crates/mechanics/src/random.rs` (modify — additive; `RcRandom` untouched)
+
+```rust
+/// Xoroshiro128++ (Context §K, `rng-parity-notes.md` §3) — vanilla's modern RNG family.
+/// Distinct from `RcRandom` (the legacy 48-bit LCG, unmodified): every `random_sequence`
+/// (loot) always resolves to this type, never the legacy one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XoroshiroRandom { /* private: (i64, i64) state */ }
+
+impl XoroshiroRandom {
+    /// `upgrade_seed_128` (the MIXED variant — both words through `stafford_mix13`).
+    pub fn from_seed(seed: i64) -> Self;
+    /// Direct two-word construction; substitutes `(GOLDEN_RATIO_64, SILVER_RATIO_64)` if both
+    /// words would be zero (Context §K / `rng-parity-notes.md` §3.1).
+    pub fn from_raw_pair(lo: i64, hi: i64) -> Self;
+    pub fn next_long(&mut self) -> i64;
+    pub fn next_int(&mut self) -> i32;
+    pub fn next_int_bounded(&mut self, bound: i32) -> i32;
+    pub fn next_float(&mut self) -> f32;
+    pub fn next_double(&mut self) -> f64;
+    pub fn next_bool(&mut self) -> bool;
+    /// `mean + spread * (next_double() - next_double())` (`rng-parity-notes.md` §2).
+    pub fn triangle(&mut self, mean: f64, spread: f64) -> f64;
+}
+
+/// Context §K — the `random_sequence` seeding formula. `salt`/`include_world_seed`/
+/// `include_sequence_id` default to this project's own fixed per-world defaults (`0`/`true`/
+/// `true`) via `create_random_sequence_default`; the full-signature form exists for
+/// completeness and future `/random`-command-equivalent work.
+#[cfg(feature = "server-systems")]
+pub fn create_random_sequence(sequence_id: &str, world_seed: i64, salt: i32,
+    include_world_seed: bool, include_sequence_id: bool) -> XoroshiroRandom;
+#[cfg(feature = "server-systems")]
+pub fn create_random_sequence_default(sequence_id: &str, world_seed: i64) -> XoroshiroRandom;
+```
+
+### `crates/mechanics/src/entity/mod.rs` (modify — three new module declarations)
+
+```rust
+pub mod loot;
+pub mod physics;
+pub mod pickup;
+
+pub use loot::{
+    roll_loot_table, tier1_loot_table, CountProvider, LootEntry, LootPool, LootRandom, LootTable,
+    RandomSequenceStore, RollProvider,
+};
+pub use physics::{
+    step_item_entity_tick, FluidInteraction, ItemMotionState, PendingEnvironmentalDamage,
+    ITEM_AIR_DRAG, ITEM_GRAVITY, ITEM_HALF_WIDTH, ITEM_HEIGHT, ITEM_STEP_HEIGHT,
+};
+pub use pickup::PickedUpItems;
+```
+
+### `crates/mechanics/src/entity/physics/mod.rs` (new)
+
+```rust
+//! Entity physics (Stage 6b, ARCH-D15) — item-entity tick shape, fluid interaction, the
+//! environmental-damage hook queue, and the real `DomainGroup::EntityPhysicsIntegration`
+//! registration (`ecs.rs`, `server-systems` feature). Zero AI/combat content (Context §A).
+
+pub mod ecs;
+pub mod fluid_interaction;
+pub mod item;
+pub mod world_bridge;
+
+pub use fluid_interaction::{scan_fluid_interaction, FluidInteraction};
+pub use item::{step_item_entity_tick, ItemMotionState, ITEM_AIR_DRAG, ITEM_GRAVITY, ITEM_HALF_WIDTH, ITEM_HEIGHT, ITEM_STEP_HEIGHT};
+
+#[cfg(feature = "server-systems")]
+pub use ecs::register_stage6b;
+
+/// Context §H — the shared fall-damage/drowning hook queue.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PendingEnvironmentalDamage {
+    FallImpact { entity: rc_core::RcEntityId, fall_distance: f64 },
+    Drowning { entity: rc_core::RcEntityId, suggested_magnitude: f32 },
+}
+
+#[derive(Default)]
+#[cfg_attr(feature = "server-systems", derive(bevy_ecs::prelude::Resource))]
+pub struct PendingEnvironmentalDamageQueue(pub Vec<PendingEnvironmentalDamage>);
+```
+
+### `crates/mechanics/src/entity/physics/item.rs` (new)
+
+```rust
+use rc_physics::{BlockShapeSource, Vec3};
+
+pub const ITEM_GRAVITY: f64 = 0.04;
+pub const ITEM_AIR_DRAG: f64 = 0.98;
+pub const ITEM_HALF_WIDTH: f64 = 0.125;
+pub const ITEM_HEIGHT: f64 = 0.25;
+pub const ITEM_STEP_HEIGHT: f64 = 0.0;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ItemMotionState {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub on_ground: bool,
+    pub fall_distance: f64,
+    pub no_gravity: bool,
+}
+
+/// Context §C — the complete item-entity tick (subtract-gravity, move, multiply-drag,
+/// conditional halve-invert). `ground_friction` is the supporting block's own friction value
+/// (`rc_physics::BlockPhysicsProperties::friction`, looked up by the caller exactly as
+/// `evaluate_movement`/`step_living_entity_tick` already do).
+pub fn step_item_entity_tick(
+    state: ItemMotionState,
+    shapes: &dyn BlockShapeSource,
+    ground_friction: f64,
+) -> ItemMotionState;
+```
+
+### `crates/mechanics/src/entity/physics/fluid_interaction.rs` (new)
+
+```rust
+use rc_physics::{Aabb, Vec3};
+use crate::fluid::{FluidKind, FluidTables};
+use crate::world_access::BlockWorldAccess;
+
+pub const FLUID_PROBE_INSET: f64 = 0.001;
+pub const WATER_PUSH_SCALE: f64 = 0.014;
+pub const LAVA_PUSH_SCALE_FAST: f64 = 0.007;
+pub const LAVA_PUSH_SCALE_SLOW: f64 = 0.00233;
+pub const PUSH_FLOOR_MAGNITUDE: f64 = 0.0045;
+pub const SUBMERSION_SWIM_THRESHOLD: f64 = 0.4;
+
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct FluidInteraction {
+    /// Height (blocks) the entity's own lowest point is submerged below the fluid's own
+    /// surface at the highest-submersion touched cell; `0.0` if not touching this `kind` at all.
+    pub submersion: f64,
+    /// Accumulated, height-scaled horizontal flow vector across every touched cell of `kind`.
+    pub flow: Vec3,
+}
+
+/// Context §E's own scan algorithm — pure, `bevy_ecs`-free, matching `rc-physics`'s own
+/// established "world access via a trait object" boundary.
+pub fn scan_fluid_interaction(
+    aabb: Aabb,
+    world: &dyn BlockWorldAccess,
+    tables: &FluidTables,
+    kind: FluidKind,
+) -> FluidInteraction;
+
+/// `true` iff the entity's eye position (Context §D's `height * 0.85` formula, or the caller's
+/// own override) sits inside a fluid cell of `kind`.
+pub fn eyes_in_fluid(eye_position: Vec3, world: &dyn BlockWorldAccess, tables: &FluidTables, kind: FluidKind) -> bool;
+
+/// Context §E's own push-vector application (normalize, scale, floor-renormalize).
+pub fn apply_fluid_push(velocity: Vec3, interaction: &FluidInteraction, push_scale: f64) -> Vec3;
+```
+
+### `crates/mechanics/src/entity/physics/world_bridge.rs` (new)
+
+```rust
+use bevy_ecs::prelude::*;
+use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag};
+use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_messaging::Address;
+use crate::stage4::ecs::ChunkIndex;
+use crate::world_access::BlockWorldAccess;
+
+/// A minimal, **read-only** `BlockWorldAccess` adapter for Stage 6b's own physics/fluid
+/// queries — deliberately NOT `stage4::ecs::EcsBlockWorld` (M3-B01), which requires a
+/// `&mut BlockStateColumn` `Query`, forcing an unnecessary write-conflict declaration on a
+/// system (this one) that only ever reads block state. Reuses `stage4::ecs::ChunkIndex`
+/// (M3-B01, unmodified) for the position→chunk-entity lookup. `set_block`/`owner_of`/
+/// `local_identity` are part of the shared `BlockWorldAccess` trait but are never called by
+/// any of this blueprint's own code paths against this adapter — each panics with an
+/// explanatory message rather than silently no-opping, so a future accidental call is a loud
+/// bug, not a silent one.
+pub struct ReadOnlyBlockWorld<'w, 's> {
+    query: &'s Query<'w, 's, (&'static ChunkKeyTag, &'static BlockStateColumn)>,
+    index: &'s ChunkIndex,
+    dimension: DimensionId,
+}
+
+impl<'w, 's> ReadOnlyBlockWorld<'w, 's> {
+    pub fn new(
+        query: &'s Query<'w, 's, (&'static ChunkKeyTag, &'static BlockStateColumn)>,
+        index: &'s ChunkIndex,
+        dimension: DimensionId,
+    ) -> Self;
+}
+
+impl<'w, 's> BlockWorldAccess for ReadOnlyBlockWorld<'w, 's> {
+    fn get_block(&self, pos: BlockPos) -> Option<BlockStateId>;
+    /// Panics: `"ReadOnlyBlockWorld::set_block called — Stage 6b's own physics/fluid queries
+    /// never write block state"`.
+    fn set_block(&mut self, pos: BlockPos, state: BlockStateId) -> bool;
+    fn dimension(&self) -> DimensionId;
+    /// Panics: this adapter never crosses a region border by construction (every entity this
+    /// blueprint ticks stays inside its own owning region within one tick, ARCH-D10's own
+    /// one-tick transfer budget applying to the *next* tick, not this one).
+    fn owner_of(&self, chunk: ChunkKey) -> Address;
+    fn local_identity(&self) -> Address;
+}
+```
+
+### `crates/mechanics/src/entity/physics/ecs.rs` (new, `server-systems` feature)
+
+```rust
+use bevy_ecs::prelude::*;
+use rc_scheduler::{DomainGroup, RcExecutorBuilder};
+use crate::entity::{BaseEntity, EntityPayload, LivingEntity};
+
+/// Registers `system_entity_physics_integration` into `DomainGroup::EntityPhysicsIntegration`
+/// at `order_tag = 0` (Context §A). Not the group's only member — M4-B09's own governance
+/// changeset fixes the required composition-root call order across this system, M4-B04's
+/// `system_mob_despawn`, and M4-B05's mob-combat system, all three landing in this same
+/// `HardcodedWorld` executor; this function must be called first so this system keeps
+/// `order_tag = 0` regardless of which of the other two land afterward.
+pub fn register_stage6b(builder: &mut RcExecutorBuilder);
+
+/// The Stage 6b system itself (Context §A–§N). Never matches a player entity — a player
+/// carries `PlayerMotion`/`TeleportState` (`rusty-clanker-server`, M3-B02), not `BaseEntity`,
+/// so this system's own `Query<(Entity, &mut BaseEntity, ...)>` structurally cannot select one
+/// (Context §A). Also drives fluid
+/// interaction, drowning/air, fall-damage-hook events, merge, pickup, and item-entity
+/// age-despawn every tick, all inside this one system (Context's own algorithms are pure
+/// functions this system calls in sequence per entity; no separate system per concern within
+/// this blueprint's own scope — M4-B04's mob despawn and M4-B05's mob combat are each their
+/// own separate system registered into this same group by a sibling blueprint, M4-B09's own
+/// governance changeset fixing the three's required call order, Context §A).
+fn system_entity_physics_integration(
+    mut query: Query<(Entity, &mut BaseEntity, Option<&mut LivingEntity>, &EntityPayload)>,
+    world_query: Query<(&rc_chunk_storage::ChunkKeyTag, &rc_chunk_storage::BlockStateColumn)>,
+    chunk_index: Res<crate::stage4::ecs::ChunkIndex>,
+    shape_table: Res<ShapeTableResource>,
+    fluid_tables: Res<crate::fluid::FluidTables>,
+    dimension: Res<DimensionResource>,
+    current_tick: Res<rc_scheduler::CurrentTick>,
+    mut damage_queue: ResMut<super::PendingEnvironmentalDamageQueue>,
+    mut commands: Commands,
+);
+
+/// A thin `rc_physics::BlockShapeSource` adapter over `ReadOnlyBlockWorld` +
+/// `rc_physics::tier1_shape_table()`, mirroring `rusty-clanker-server`'s own
+/// `ChunkBlockShapeSource` (M3-B02) exactly, defined here since `rc-mechanics` cannot depend
+/// on `rusty-clanker-server` and this system needs its own copy of the identical bridge.
+struct EntityBlockShapeSource<'a> { world: &'a super::world_bridge::ReadOnlyBlockWorld<'a, 'a>, dimension: rc_core::DimensionId }
+impl<'a> rc_physics::BlockShapeSource for EntityBlockShapeSource<'a> {
+    fn properties_at(&self, pos: rc_core::BlockPos) -> rc_physics::BlockPhysicsProperties;
+}
+
+/// Composition-root-supplied wrapper resources (Context §K's own "the mechanism now, the
+/// real data-driven wiring later" precedent, mirroring `FluidDimensionProfile`).
+#[derive(Resource)] pub struct ShapeTableResource(pub &'static rc_physics::ShapeTable);
+#[derive(Resource)] pub struct DimensionResource(pub rc_core::DimensionId);
+```
+
+### `crates/mechanics/src/entity/loot.rs` (new)
+
+```rust
+use rc_registries::generated_v776::registries::RegistryEntryId;
+use crate::entity::ItemStackRecord;
+
+pub trait LootRandom {
+    fn next_int_bounded(&mut self, bound: i32) -> i32;
+}
+impl LootRandom for crate::random::XoroshiroRandom {
+    fn next_int_bounded(&mut self, bound: i32) -> i32 { self.next_int_bounded(bound) }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum RollProvider { Constant(u32), Uniform { min: u32, max: u32 } }
+impl RollProvider {
+    pub fn resolve(self, rng: &mut dyn LootRandom) -> u32;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum CountProvider { Constant(u8), Uniform { min: u8, max: u8 } }
+impl CountProvider {
+    pub fn resolve(self, rng: &mut dyn LootRandom) -> u8;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LootEntry {
+    pub item_id: RegistryEntryId,
+    pub base_weight: i32,
+    pub quality: i32,
+    pub count: CountProvider,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LootPool {
+    pub rolls: RollProvider,
+    pub bonus_rolls: RollProvider,
+    pub entries: Vec<LootEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LootTable {
+    pub sequence_id: &'static str,
+    pub pools: Vec<LootPool>,
+}
+
+/// Context §J's own algorithm, restated field-precise. `luck` is always `0.0` at this
+/// milestone's own scope (no luck source exists) — the parameter is real, not vestigial, since
+/// `quality`-weighted entries and `bonus_rolls` both consume it structurally, ready for a
+/// future luck-status-effect blueprint to supply a nonzero value with zero engine change.
+pub fn roll_loot_table(table: &LootTable, rng: &mut dyn LootRandom, luck: f32) -> Vec<ItemStackRecord>;
+
+/// Context §J's own closed, hand-authored table — one `LootTable` per tier-1 broken-block
+/// case, keyed by `BlockStateId` range/value via the caller's own resolution (`entity_drops.rs`,
+/// `rusty-clanker-server`), not by this function itself (this module stays free of
+/// `rc-chunk-storage`'s `BlockStateId` concept — `entity_drops.rs` maps a broken block's own
+/// state id to one of these table values before calling `roll_loot_table`).
+pub fn tier1_loot_table(block: Tier1DroppableBlock) -> &'static LootTable;
+
+/// The closed set this blueprint's own tier-1 table covers (Context §J's own table).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Tier1DroppableBlock {
+    Stone, Dirt, GrassBlock, RedstoneWire, RedstoneTorch, Repeater, Comparator,
+    Piston, StickyPiston, Chest, Hopper, Furnace, BlastFurnace, Smoker,
+}
+
+/// Context §K — per-region, lazily-populated `random_sequence` cache.
+#[derive(Default)]
+#[cfg_attr(feature = "server-systems", derive(bevy_ecs::prelude::Resource))]
+pub struct RandomSequenceStore(std::collections::HashMap<String, crate::random::XoroshiroRandom>);
+impl RandomSequenceStore {
+    pub fn get_or_create(&mut self, sequence_id: &str, world_seed: i64) -> &mut crate::random::XoroshiroRandom;
+}
+```
+
+### `crates/mechanics/src/entity/pickup.rs` (new)
+
+```rust
+use crate::entity::ItemStackRecord;
+
+pub const MERGE_RADIUS: f64 = 0.5;
+pub const MAX_STACK_SIZE: u8 = 64;
+pub const PICKUP_DELAY_DEFAULT: i16 = 10;
+pub const ITEM_PICKUP_AABB_INFLATE: f64 = 0.5;
+pub const DESPAWN_AGE_TICKS: i16 = 6000;
+
+/// Context §M — the minimal, explicitly interim per-player item log (no slots, no UI).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PickedUpItems(pub Vec<ItemStackRecord>);
+
+/// Context §L — `true` iff two item stacks are merge-compatible (same item, same components).
+pub fn stacks_mergeable(a: &ItemStackRecord, b: &ItemStackRecord) -> bool;
+```
+
+### `crates/server/src/play/mining.rs` (modify — one additive field)
+
+```rust
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BreakOutcome {
+    Applied { pos: BlockPos, drop_eligible: bool, broken_state: rc_chunk_storage::BlockStateId },
+    Rejected { pos: BlockPos, reason: RejectReason, current_state: u32 },
+}
+```
+
+(`finalize_break`'s own body already computes the pre-break state internally, M3-B03 — this is a pure "return a value already computed, instead of discarding it" change; no new computation, no algorithm change, per M3-B03's own explicit permission, Context §I.)
+
+### `crates/server/src/play/entity_drops.rs` (new)
+
+```rust
+use bevy_ecs::prelude::*;
+use rc_chunk_storage::BlockStateId;
+use rc_core::BlockPos;
+use rc_mechanics::entity::{loot, EntityKind, EntityPayload, ItemBundle};
+
+/// Context §I/§J — maps a broken block's own pre-break `BlockStateId` to one of `rc-mechanics`'
+/// `Tier1DroppableBlock` values (a plain `match` over this server's own known tier-1
+/// `default_state` constants, mirroring every other hand-typed block-id mapping table this
+/// project already has, e.g. `rc_physics::tier1_shape_table`'s own registry). `None` for any
+/// block-state id outside the known tier-1 set (matches M3-B03's own tier-1-only scope — no
+/// block outside that set can currently be broken at all, so this is exhaustive in practice).
+pub fn tier1_block_for_state(state: BlockStateId) -> Option<loot::Tier1DroppableBlock>;
+
+/// Context §I — rolls the loot table for `broken_state` (a no-op, empty `Vec` if
+/// `tier1_block_for_state` returns `None`) and spawns one real item entity per resulting
+/// `ItemStackRecord`, with the Context §I spawn-geometry jitter, into `world` at `pos`.
+/// `region_random: &mut RandomSequenceStore` and `world_seed` resolve the rolled table's own
+/// `LootTable.sequence_id` (via `RandomSequenceStore::get_or_create`) into the `XoroshiroRandom`
+/// stream `roll_loot_table` draws from; `region_entropy: &mut RcRandom` supplies spawn-jitter
+/// draws (Context §I's own explicit split between the two RNG streams). `network_ids` is the
+/// region's own shared `NetworkEntityIdAllocator` (M4-B01).
+pub fn spawn_break_drop(
+    world: &mut World,
+    pos: BlockPos,
+    broken_state: BlockStateId,
+    region_random: &mut loot::RandomSequenceStore,
+    world_seed: i64,
+    region_entropy: &mut rc_mechanics::random::RcRandom,
+    network_ids: &rc_mechanics::entity::NetworkEntityIdAllocator,
+);
+```
+
+### `crates/server/src/play/entity_packets.rs` (modify — one new packet)
+
+```rust
+/// `entity_id`/`collector_id`: `Spawn Entity`'s own network entity id space (M4-B01).
+/// **Moderate confidence on the packet id** — flagged for reconciliation exactly like every
+/// other hand-typed id in `entity_packets.rs` (M4-B01's own already-established caveat class).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "server", id = 0x71)]
+pub struct TakeItemEntity {
+    pub collected_entity_id: i32,
+    pub collector_entity_id: i32,
+    pub pickup_item_count: i32,
+}
+```
+
+(`#[rc(varint)]` on all three fields, per `RcPacket`'s own default-mapping convention for `i32` entity-id fields, M4-B01's own established shape — restated here since this is the derive's already-default behavior, no new attribute needed.)
+
+### `crates/server/src/play/entity_tracking.rs` (modify — additive resync function)
+
+```rust
+pub const ENTITY_UPDATE_INTERVAL_TICKS: u64 = 3;
+
+/// Context §O — the post-`tick_region` resync step. Reads each tracked entity's current
+/// `BaseEntity.pos`/`velocity` (post-physics, this tick), compares against `PlayerMarker.
+/// last_sent_entity_state`, and sends `UpdateEntityPosition`/`TeleportEntity` +
+/// `SetEntityVelocity` for anything that changed beyond `1e-4`, gated to fire only when
+/// `current_tick % ENTITY_UPDATE_INTERVAL_TICKS == 0`.
+pub fn entity_resync_step(world: &mut bevy_ecs::world::World, current_tick: u64);
+```
+
+### `crates/server/src/play/world.rs` (modify)
+
+`HardcodedWorld::new()` gains, alongside M4-B01's own composition-root wiring: `rc_mechanics::entity::physics::register_stage6b(&mut builder)`; `world.insert_resource(rc_mechanics::entity::physics::ecs::ShapeTableResource(rc_physics::tier1_shape_table()))`; `world.insert_resource(rc_mechanics::entity::physics::ecs::DimensionResource(DimensionId::OVERWORLD))`; `world.insert_resource(rc_mechanics::entity::physics::PendingEnvironmentalDamageQueue::default())`; `world.insert_resource(rc_mechanics::entity::loot::RandomSequenceStore::default())`; a fixed `const DEBUG_WORLD_SEED: i64 = 0` (Context §K — this project has no real world-seed concept yet outside this one consumer).
+
+Tick loop gains two new manual steps, in this exact position: the packet-apply substep's own `BreakOutcome::Applied { drop_eligible: true, pos, broken_state, .. }` arm now additionally calls `entity_drops::spawn_break_drop(&mut region.world, pos, broken_state, &mut random_sequence_store, DEBUG_WORLD_SEED, &mut region_entropy, &network_id_allocator)` (inserted at the exact point M3-B03's own tick loop already branches on `BreakOutcome`); and, immediately **after** `executor.tick_region(...)` returns (a new position, later than every other manual step this project's tick loop has added so far), `entity_tracking::entity_resync_step(&mut region.world, current_tick)` runs.
+
+`HardcodedWorld` gains one test/diagnostic method mirroring `debug_query_block`'s/`debug_stage4_counters`'s established precedent:
+
+```rust
+impl HardcodedWorld {
+    /// Test/diagnostic only. Spawns one item entity directly (bypassing the break→loot
+    /// pipeline) for tests that need a known item entity without breaking a block first.
+    pub fn debug_spawn_item_entity(&self, pos: BlockPos, item_id: RegistryEntryId, count: u8) -> impl std::future::Future<Output = rc_core::RcEntityId>;
+    /// Test/diagnostic only. Reads a live item entity's `age_ticks`/`pickup_delay_ticks`/
+    /// position/velocity directly off `region.world`.
+    pub fn debug_query_item_entity(&self, id: rc_core::RcEntityId) -> impl std::future::Future<Output = Option<DebugItemEntityInfo>>;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DebugItemEntityInfo { pub age_ticks: i16, pub pickup_delay_ticks: i16, pub pos: [f64; 3], pub velocity: [f64; 3] }
+```
+
+## Acceptance tests (write these FIRST — own changeset)
+
+**Changeset boundary (TEST-D45/D46, restated exactly per every prior blueprint's own identical framing):** every file below, plus every `src/*.rs` file Deliverables lists with each function body replaced by `todo!()` (fields/derives/doc comments unchanged), is the test-authoring changeset, committed first. The implementation changeset (Implementation steps) fills in bodies only — it must not modify any test file listed here, must not add/remove/rename a test case, and must not weaken or change any golden-vector or expected value.
+
+### `crates/mechanics/tests/item_physics_golden_vectors.rs` (pure)
+
+1. `item_falls_and_lands_on_flat_ground` — `ItemMotionState { position: (0.5,10.0,0.5), velocity: ZERO, on_ground: false, fall_distance: 0.0, no_gravity: false }`, a flat full-cube floor at `y=0` (friction `0.6`), `ground_friction=0.6`; run `step_item_entity_tick` repeatedly; assert `on_ground == true` once `position.y` settles at `0.125` (item half-height resting on the floor top), and that every intermediate tick's `velocity.y` matches the hand-computed `(prev_y_velocity - 0.04) * 0.98` chain (within `1e-9`) until landing.
+2. `item_on_ground_horizontal_velocity_decays_by_air_drag_times_friction` — item resting on ground with `velocity = (1.0, 0.0, 0.0)`; one tick; assert `velocity.x == (1.0 * 0.98 * 0.6)` exactly (within `1e-9`) — the on-ground X/Z drag branch.
+3. `item_bounces_on_landing_tick` — item falling with `velocity.y = -0.3` the tick it first touches ground; assert that tick's **output** `velocity.y` is `((-0.3 - 0.04) * 0.98) * -0.5` (the halve-invert branch fires only on the landing tick itself, after the ordinary drag multiply) — a hand-derived golden value.
+4. `no_gravity_item_does_not_fall` — `no_gravity: true`, starting well above any floor; one tick; assert `position.y` unchanged (within `1e-9`) and `velocity` unchanged.
+
+### `crates/mechanics/tests/living_mob_physics_golden_vectors.rs` (pure)
+
+1. `zombie_with_default_intent_falls_straight_down` — `rc_physics::step_living_entity_tick` called with `MovementIntent::default()`, zombie-sized AABB (`0.6`×`1.95`), starting `10` blocks above a flat floor; run to landing; assert final horizontal position unchanged from spawn (zero drift, since `MovementIntent::default()` has zero strafe/forward) and the same gravity/drag golden chain M3-B02's own acceptance suite already establishes for players applies identically here (this test's own purpose is proving reuse, not re-deriving the formula).
+2. `cow_on_ground_with_default_intent_stays_perfectly_still` — cow already resting on a flat floor, `velocity = ZERO`; ten ticks of `MovementIntent::default()`; assert `position` unchanged across every tick (within `1e-9`) — the direct, observable proof of Context §A's "stands in place" claim.
+
+### `crates/mechanics/tests/fluid_push_vectors.rs` (pure)
+
+1. `stationary_item_in_flowing_water_gets_floor_push` — a single water cell (flowing, amount matching a nonzero `get_flow` result along `+X`) beneath a stationary item entity with near-zero horizontal velocity; `apply_fluid_push`; assert the resulting horizontal velocity's magnitude equals exactly `PUSH_FLOOR_MAGNITUDE` (`0.0045`) and its direction matches the flow's own sign (the floor-renormalization branch).
+2. `strong_current_push_scales_by_water_push_scale` — a synthetic `FluidInteraction { flow: Vec3::new(1.0, 0.0, 0.0), .. }` (already-normalized input); `apply_fluid_push` with `WATER_PUSH_SCALE`; assert output `== Vec3::new(0.014, 0.0, 0.0)` exactly.
+3. `lava_push_uses_fast_or_slow_scale_by_dimension` — same input, `LAVA_PUSH_SCALE_FAST`/`LAVA_PUSH_SCALE_SLOW`; assert the two outputs differ and match `0.007`/`0.00233` respectively.
+4. `submersion_below_point_four_scales_flow_contribution` — two touched fluid cells, one with `get_own_height < 0.4` and one `>= 0.4`; assert `scan_fluid_interaction`'s accumulated `flow` reflects the first cell's own height-proportional scale-down (a table-driven hand-computed expected value).
+
+### `crates/mechanics/tests/xoroshiro_and_random_sequence.rs` (pure)
+
+1. `xoroshiro_next_long_matches_published_vector` — `XoroshiroRandom::from_seed(0)`, five `next_long()` calls; assert exact match against `rng-parity-notes.md` §7.2's own published values (`3038984756725240190, -3694039286755638414, 4633751808701151732, 2160572957309072155, 1839370574944072389`).
+2. `xoroshiro_from_seed_42_matches_published_vector` — `XoroshiroRandom::from_seed(42)`, three `next_long()` calls; assert exact match against `-4695948378737616609, 7341713790291473579, -7542733514721318211`.
+3. `upgrade_seed_128_unmixed_then_mixed_matches_published_pair` — `upgrade_seed_128_unmixed(0)` then `stafford_mix13` on each word; assert `(3847398142028685078, 7192185014346937746)` (§7.2's own `upgrade_seed_128(0)` vector).
+4. `random_sequence_is_deterministic_and_stateful` — `RandomSequenceStore::default()`; `get_or_create("test:seq_a", 12345)`, draw three `next_int_bounded(100)` values, record them; `get_or_create("test:seq_a", 12345)` again (same store, same id); draw one more `next_int_bounded(100)`; assert this fourth draw is **not** independently reproducible from a *fresh* `create_random_sequence("test:seq_a", 12345, ..)` call's own first draw (proving the stream continues rather than resets) — then construct a fresh store, replay all four draws in order from scratch, and assert the replayed fourth draw matches the original fourth draw exactly (proving full-history reproducibility, `rng-parity-notes.md` §5.2's own "statefulness across invocations" rule).
+5. `random_sequence_with_different_ids_are_independent` — `get_or_create("test:seq_a", 1)` and `get_or_create("test:seq_b", 1)` from the same store, same world seed; assert their first `next_long()` values differ.
+
+### `crates/mechanics/tests/loot_roll_determinism.rs` (pure)
+
+1. `single_entry_table_never_draws_rng` — a `LootTable` shaped exactly like `tier1_loot_table(Tier1DroppableBlock::Stone)`; a `LootRandom` test double that panics if `next_int_bounded` is ever called; `roll_loot_table` succeeds and returns exactly one `Cobblestone` stack of count `1` — proving the single-candidate shortcut fires (Context §J's own "zero draws" claim, made mechanically checkable).
+2. `synthetic_two_entry_weighted_pool_consumes_exactly_one_draw` — a synthetic, test-only `LootTable` with one pool, two entries (`weight: 1` and `weight: 3`), `rolls: Constant(1)`; a seeded `XoroshiroRandom::from_seed(7)`; assert `roll_loot_table` calls `next_int_bounded(4)` (total weight) exactly once (a counting `LootRandom` wrapper) and that the chosen entry matches a hand-computed expectation from the known first `next_int_bounded(4)` output of that seed.
+3. `synthetic_uniform_count_provider_consumes_one_draw_per_roll` — a synthetic table, `rolls: Constant(2)`, one entry with `count: Uniform{min:1,max:4}`; assert exactly two `next_int_bounded` calls total (one per roll, for the count draw — the single-entry shortcut still applies to entry *selection*, but `count.resolve` still draws) and the two resulting counts are each in `[1,4]` and match hand-computed values for the fixed seed.
+4. `same_seed_same_sequence_id_reproduces_bit_identical_drops` — roll the synthetic weighted-pool table twice from two independently-constructed `RandomSequenceStore`s, same `sequence_id`, same `world_seed`; assert both rolls' results are identical, element-for-element.
+5. `reconciling_two_breaks_of_the_same_block_type_shares_one_continuing_sequence` — using the synthetic weighted-pool table bound to one fixed `sequence_id`, roll it twice through the **same** `RandomSequenceStore` (simulating two block breaks of the same type); assert the second roll's outcome differs from what a **fresh** store's first roll would produce (continuation, not reset — `rng-parity-notes.md` §5.2).
+
+### `crates/mechanics/tests/drop_merge_pickup_sequence.rs` (pure, `pickup.rs`/merge logic only — no `bevy_ecs::World`)
+
+1. `identical_stacks_within_merge_radius_are_mergeable` — two `ItemStackRecord`s, same `item_id`, `components: None`; `stacks_mergeable` returns `true`.
+2. `different_item_ids_are_never_mergeable` — `stacks_mergeable` returns `false`.
+3. `merge_respects_max_stack_size` — combined count `70 > MAX_STACK_SIZE (64)`; the merge-eligibility check (a small pure helper alongside `stacks_mergeable`, Deliverables) returns `false` even though `stacks_mergeable` alone would say `true`.
+
+### `crates/server/tests/play_entity_drop_pipeline.rs` (integration, `HardcodedWorld`)
+
+1. `breaking_stone_spawns_exactly_one_cobblestone_item_entity` — spawn one bot in survival with a pickaxe held (M3-B03's own `debug_set_held_item`/`debug_set_survival`), place stone at a known position (M2-B07's own place-block seam or a direct block-state write), break it via the real `START_DESTROY_BLOCK`/dig-timing path; after the tick the break finalizes, assert exactly one new tracked item entity exists (via `PlayerMarker.tracked_entities`), and `debug_query_item_entity` on it reports `age_ticks == 0`, `pickup_delay_ticks == 10`.
+2. `dropped_item_becomes_pickupable_after_delay_and_range` — `debug_spawn_item_entity` at a position `0.3` blocks from a bot; before `10` ticks elapse, assert the item entity still exists (pickup delay not yet expired even though in range); after the 10th tick, assert it has been removed and the bot's own `PickedUpItems` (a new debug accessor, `debug_query_picked_up_items`, mirroring `debug_query_item_entity`'s own shape) contains exactly the expected `ItemStackRecord`.
+3. `pickup_out_of_range_never_triggers` — `debug_spawn_item_entity` far from every bot (beyond `ITEM_PICKUP_AABB_INFLATE`); run `20` ticks (well past pickup delay and short of despawn); assert the item entity still exists and no bot's `PickedUpItems` changed.
+4. `two_adjacent_drops_of_the_same_item_merge_within_one_tick_of_both_existing` — `debug_spawn_item_entity` twice, `0.2` blocks apart, same item/count, no player nearby; after one Stage-6b tick following both spawns, assert exactly one item entity remains, carrying the summed count.
+5. `item_despawns_at_exactly_6000_ticks` — `debug_spawn_item_entity`; advance the region exactly `5999` ticks, assert it still exists; advance one more tick (`6000` total), assert it is gone.
+
+## Implementation steps
+
+1. **`rc-mechanics::random` extension.** Add `XoroshiroRandom` + `stafford_mix13`/`upgrade_seed_128_unmixed`/`md5_seed`/`create_random_sequence[_default]` per Context §K, using the `md-5` crate for the digest. Observable: `xoroshiro_and_random_sequence.rs` passes.
+2. **`entity/loot.rs`.** `RollProvider`/`CountProvider`/`LootEntry`/`LootPool`/`LootTable`/`roll_loot_table` per Context §J, `tier1_loot_table`'s closed match over `Tier1DroppableBlock`, `RandomSequenceStore`. Observable: `loot_roll_determinism.rs` passes.
+3. **`entity/pickup.rs`.** Constants, `PickedUpItems`, `stacks_mergeable` + the merge-eligibility helper. Observable: `drop_merge_pickup_sequence.rs` passes.
+4. **`entity/physics/item.rs`.** `step_item_entity_tick` per Context §C. Observable: `item_physics_golden_vectors.rs` passes.
+5. **`entity/physics/fluid_interaction.rs`.** `scan_fluid_interaction`/`eyes_in_fluid`/`apply_fluid_push` per Context §E, consuming M4-B06's already-shipped `fluid_state_at`/`get_own_height`/`get_height`/`get_flow`. Observable: `fluid_push_vectors.rs` passes; `living_mob_physics_golden_vectors.rs`'s own reuse of `step_living_entity_tick` also passes (no fluid touched in those two cases).
+6. **`entity/physics/world_bridge.rs`.** `ReadOnlyBlockWorld` per Deliverables, reusing `stage4::ecs::ChunkIndex` unmodified. Observable: compiles against `world_access::BlockWorldAccess`.
+7. **`entity/physics/ecs.rs`.** `register_stage6b`, `system_entity_physics_integration` (per-entity dispatch to item vs. living tick shape by matching `EntityPayload`; drowning/air per Context §F; fall-damage-hook push per Context §G; merge/pickup/despawn per Context §L/§M/§N — all inside the one system, per Deliverables' own doc comment), `EntityBlockShapeSource`, `ShapeTableResource`/`DimensionResource`. Observable: `cargo build -p rc-mechanics --all-features` succeeds; the `rc-scheduler`-integration slice of `play_entity_drop_pipeline.rs` (test 4, merge) begins passing.
+8. **`entity/mod.rs`.** Add the three new module declarations + re-exports.
+9. **`rusty-clanker-server`: `mining.rs`.** Add `broken_state` to `BreakOutcome::Applied`; `finalize_break`'s own body returns the already-computed value instead of discarding it (a one-line change at its own single `return` site).
+10. **`rusty-clanker-server`: `entity_drops.rs`.** `tier1_block_for_state`, `spawn_break_drop` per Deliverables — resolves the loot table, rolls it, spawns item entities with Context §I's own spawn-geometry jitter.
+11. **`rusty-clanker-server`: `entity_packets.rs`.** Add `TakeItemEntity`.
+12. **`rusty-clanker-server`: `entity_tracking.rs`.** Add `entity_resync_step` per Context §O.
+13. **`rusty-clanker-server`: `world.rs`.** Composition-root wiring (`register_stage6b`, the four new resource inserts, `DEBUG_WORLD_SEED`); the two new tick-loop steps (drop-spawning hook inside the existing `BreakOutcome` branch; `entity_resync_step` after `executor.tick_region`); `debug_spawn_item_entity`/`debug_query_item_entity`/`debug_query_picked_up_items`. Observable: `play_entity_drop_pipeline.rs`'s full suite passes.
+14. **Full workspace pass.** `cargo run -p xtask -- fmt-check && -- lint && -- lint-deps && -- test` all exit 0; `cargo test --doc -p rc-mechanics -p rusty-clanker-server` exits 0.
+
+## Constraints & forbidden actions
+
+(a) **Test-first changeset boundary is binding** (TEST-D45/D46). No already-merged test file anywhere in the workspace is touched by this blueprint's implementation changeset — every file this blueprint modifies outside its own new test files (`mining.rs`, `entity_tracking.rs`, `world.rs`, `random.rs`, `entity/mod.rs`) is a source file, never a test file. Every file listed in Acceptance tests is committed first, `todo!()`-stubbed exactly as Deliverables shows.
+
+(b) **No new external dependencies beyond `md-5`.** This blueprint's own one addition (`md-5`, Context §K) is pinned in `[workspace.dependencies]` at implementation time, per Deliverables. No other new crate — not `rand`, not a second hashing crate, not a physics/collision library — may be added anywhere this blueprint touches.
+
+(c) **`rc-mechanics` still must never depend on `rc-protocol`, `rc-transport-inproc`, `rc-transport-net`, `rc-auth`, `rc-cluster`, or `rc-proxy`** (WS-D3 rule 2, unchanged from M4-B01's own identical restatement) — `TakeItemEntity` and every other wire-facing concern lives in `rusty-clanker-server::play::entity_packets`, never in `rc-mechanics`.
+
+(d) **No Mojang or third-party reimplementation code.** Every algorithm this blueprint restates (`14 §3.3`/`§3.6`/`§3.8`'s item/living tick shapes, fluid push/swim formulas; `rng-parity-notes.md` §3/§5's Xoroshiro/`random_sequence`/loot-roll algorithms) is sourced exclusively from `docs/research/mc-26.2/14-physics-collision.md`, `docs/research/mc-26.2/09-entities-ai.md`, and `docs/research/third-party/rng-parity-notes.md` (all three already produced under this project's own ASSET-D18/D30 research-role process), plus `05-game-mechanics.md`'s own MECH-D24/D36–D42/D51–D53. No decompiled source and no third-party reimplementation's code were consulted while deriving this blueprint.
+
+(e) **No algorithmic deviation from this blueprint's own pinned formulas.** Every constant and operation order in Context §C/§E/§J/§K is binding: item gravity/drag applied in the exact restated order (subtract, move, multiply, conditional halve-invert — never reordered); the `Mth`-lookup-table trig convention (already established, M3-B02) is not reintroduced or bypassed here since no rotation-driven movement exists for AI-less mobs; Xoroshiro's bit operations use the exact wrapping/unsigned-shift discipline `rng-parity-notes.md` §6 documents — no plain arithmetic `>>` where `>>>`/`logical_shr` is specified, no non-wrapping multiply/add.
+
+(f) **No `unsafe` code.** Every function in this blueprint's Deliverables is implementable in 100% safe Rust.
+
+(g) **Scope boundary, restated exhaustively.** This blueprint does not implement: any AI/pathfinding content (Context §A, `EntityAiSelection` stays empty); projectiles, vehicles, or riding (Context §P); mob death drops or any combat/damage application (Context §G/§H — hook only); a real inventory/slot system (Context §M — `PickedUpItems` is explicitly interim); Depth Strider/Dolphin's Grace/sprint-water-slowdown/ladder/bubble-column fluid interactions (Context §E's own explicit exclusion list); suffocation/in-wall damage (Context §G); item persistence-naming exemptions from despawn (Context §N); the real `xtask`-generated/`rc-registries`-homed loot-table pipeline MECH-D52/WS-D13 together specify (Context §J — this blueprint's own tier-1 table is explicitly interim); falling blocks (MECH-D28, no producer exists); cross-region item merge (Context §L). Do not add placeholder implementations of any of these as a shortcut — every out-of-scope item stays exactly as unimplemented as this blueprint's Deliverables show it.
+
+## Verification commands
+
+Run from the workspace root on a clean checkout, on both Windows and Linux (TEST-D43):
+
+```
+cargo build -p rc-mechanics -p rusty-clanker-server --all-features
+cargo nextest run -p rc-mechanics -p rusty-clanker-server
+cargo test --doc -p rc-mechanics -p rusty-clanker-server
+cargo run -p xtask -- fmt-check
+cargo run -p xtask -- lint
+cargo run -p xtask -- lint-deps
+cargo run -p xtask -- test
+```
+
+Expected: every command exits 0. `cargo nextest run -p rc-mechanics` additionally runs: 4 (`item_physics_golden_vectors.rs`) + 2 (`living_mob_physics_golden_vectors.rs`) + 4 (`fluid_push_vectors.rs`) + 5 (`xoroshiro_and_random_sequence.rs`) + 5 (`loot_roll_determinism.rs`) + 3 (`drop_merge_pickup_sequence.rs`) = 23 new test cases; `cargo nextest run -p rusty-clanker-server` additionally runs `play_entity_drop_pipeline.rs`'s 5 cases, alongside every pre-existing test in both crates (unchanged, still passing). CI (`.github/workflows/ci.yml`, M0-B01) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.
