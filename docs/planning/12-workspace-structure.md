@@ -263,6 +263,7 @@ toml              = "1.1.4"    # cluster/general config (CLUSTER-D27)
 ron               = "0.12.2"   # NET-D9 field-layout spec files
 thiserror         = "2.0.20"
 tracing           = "0.1.44"   # CLUSTER-D28 (tracing-opentelemetry + OTLP exporter versions pinned when D28 is implemented)
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }  # rusty-clanker-client terminal `fmt`+`EnvFilter` diagnostics, M9-B01 (sanctioned per-blueprint pin, folded back per 00-blueprint-spec.md)
 syn               = { version = "3.0.3", features = ["full"] }    # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
 quote             = "1.0.47"    # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
 proc-macro2       = "1.0.107"   # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
