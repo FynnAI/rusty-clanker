@@ -2,6 +2,15 @@
 //! blueprint's acceptance test files (M0-B05's own Acceptance tests section),
 //! mirroring `rc-messaging`'s own `MockTransport`-in-test-file convention
 //! (`crates/messaging/tests/fifo_property.rs`).
+//!
+//! Each `tests/*.rs` file that does `mod common;` is compiled as its own,
+//! separate crate (Cargo's own integration-test model), so `dead_code`
+//! analysis runs independently per consuming file -- by this module's own
+//! design (shared across multiple, differently-scoped acceptance test files),
+//! no single consumer uses every item declared here. `#![allow(dead_code)]`
+//! acknowledges that structural fact; it does not weaken any test assertion.
+
+#![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;

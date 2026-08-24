@@ -40,7 +40,12 @@ fn sanitize_mod_name(path: &str) -> String {
 
 fn sanitize_const_name(path: &str) -> String {
     // SCREAMING_SNAKE_CASE output never collides with a Rust keyword (keywords are
-    // always lowercase), so no keyword guard is needed here.
+    // always lowercase), so no keyword guard is needed here. It CAN collide with
+    // `generate_registries_rs`'s own reserved per-module `COUNT` aggregate constant —
+    // real 26.2 data confirms this happens (`minecraft:worldgen/placement_modifier_type`
+    // registers an entry literally named "count") — so that one reserved identifier
+    // gets the same trailing-underscore escape `sanitize_mod_name` already uses for
+    // keyword collisions.
     let mut s: String = path
         .chars()
         .map(|c| {
@@ -53,6 +58,9 @@ fn sanitize_const_name(path: &str) -> String {
         .collect();
     if s.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         s.insert(0, '_');
+    }
+    if s == "COUNT" {
+        s.push('_');
     }
     s
 }
