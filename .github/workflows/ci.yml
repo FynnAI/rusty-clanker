@@ -48,6 +48,12 @@ jobs:
       - name: lint-deps
         run: cargo run -p xtask -- lint-deps
 
+      # xtask's own tests run outside the xtask-driven verb: the verb executes
+      # inside xtask.exe, and on Windows the inner cargo invocation cannot
+      # relink the running binary (file lock, os error 5).
+      - name: test (xtask self)
+        run: cargo nextest run -p xtask
+
       - name: test
         run: cargo run -p xtask -- test
 

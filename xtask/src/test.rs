@@ -23,11 +23,17 @@ pub(crate) fn run_and_report() -> (std::process::ExitCode, bool) {
 
     let mut result = crate::tier_result::TierResult::new("test");
 
-    let workspace_ok = xshell::cmd!(sh, "cargo nextest run --workspace")
+    // `--exclude xtask`: this verb runs inside `xtask.exe`; on Windows the
+    // inner cargo invocation would otherwise try to relink the running binary
+    // (integration tests of the `xtask` package build its bin target for
+    // `CARGO_BIN_EXE_*`) and fail with "Access is denied" on the locked file.
+    // xtask's own tests run via a direct `cargo nextest run -p xtask` outside
+    // this verb (dedicated CI step; locally: run that command directly).
+    let workspace_ok = xshell::cmd!(sh, "cargo nextest run --workspace --exclude xtask")
         .run()
         .is_ok();
     result.push(
-        "cargo nextest run --workspace",
+        "cargo nextest run --workspace --exclude xtask",
         status_of(workspace_ok),
         None,
     );
