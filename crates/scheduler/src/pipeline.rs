@@ -43,12 +43,24 @@ impl DomainGroup {
 
     /// The Deliverables' cited stage mapping table.
     pub const fn stage(self) -> Stage {
-        todo!()
+        match self {
+            DomainGroup::BlockRedstone => Stage::ScheduledBlockTick,
+            DomainGroup::AiPhysics => Stage::EntityAiPhysics,
+            DomainGroup::Lighting => Stage::Lighting,
+            DomainGroup::ChunkSerialize => Stage::ChunkSnapshot,
+            DomainGroup::NetCodec => Stage::NetworkOutboundEncode,
+        }
     }
 
     /// 0-based index into `RcExecutor`'s internal 5-element group array; stable,
     /// matches `Self::ALL`'s declaration order.
     pub const fn index(self) -> usize {
-        todo!()
+        match self {
+            DomainGroup::BlockRedstone => 0,
+            DomainGroup::AiPhysics => 1,
+            DomainGroup::Lighting => 2,
+            DomainGroup::ChunkSerialize => 3,
+            DomainGroup::NetCodec => 4,
+        }
     }
 }

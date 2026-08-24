@@ -24,15 +24,23 @@ impl ComponentAccessSummary {
         reads: impl IntoIterator<Item = ComponentId>,
         writes: impl IntoIterator<Item = ComponentId>,
     ) -> Self {
-        let _ = (reads, writes);
-        todo!()
+        Self {
+            reads: reads.into_iter().collect(),
+            writes: writes.into_iter().collect(),
+            reads_all: false,
+            writes_all: false,
+        }
     }
 
     /// `reads`/`writes` empty, `reads_all`/`writes_all` as given — for systems using
     /// an unrestricted dynamic query (ARCH-D4's `FilteredEntityRef`/`FilteredEntityMut`).
     pub fn wildcard(reads_all: bool, writes_all: bool) -> Self {
-        let _ = (reads_all, writes_all);
-        todo!()
+        Self {
+            reads: HashSet::new(),
+            writes: HashSet::new(),
+            reads_all,
+            writes_all,
+        }
     }
 
     /// Extracted from a real, `.initialize`d `bevy_ecs::system::System`'s combined
@@ -45,13 +53,44 @@ impl ComponentAccessSummary {
     /// no longer generic over its index type (`bevy_ecs::query::Access`, not
     /// `Access<ComponentId>`).
     pub fn from_bevy_access(access: &bevy_ecs::query::Access) -> Self {
-        let _ = access;
-        todo!()
+        // `try_reads_and_writes`/`try_writes` fail (`Err`) exactly when the
+        // underlying access is unbounded (an "all except" dynamic query, e.g. a
+        // `FilteredEntityRef`/`FilteredEntityMut` with exclusions). Treated here as
+        // a conservative full wildcard: always sound for `is_compatible` below (it
+        // only ever serializes *more* than strictly necessary, never less) -- no
+        // native system needs finer handling at M0.
+        match (access.try_reads_and_writes(), access.try_writes()) {
+            (Ok(reads_and_writes), Ok(writes)) => Self {
+                reads: reads_and_writes.iter().collect(),
+                writes: writes.iter().collect(),
+                reads_all: false,
+                writes_all: false,
+            },
+            (_, Err(_)) => Self::wildcard(true, true),
+            (Err(_), Ok(_)) => Self::wildcard(true, false),
+        }
     }
 
     /// True iff `self` and `other` may run concurrently (Context's compatibility rule).
     pub fn is_compatible(&self, other: &Self) -> bool {
-        let _ = other;
-        todo!()
+        if self.writes_all || other.writes_all {
+            return false;
+        }
+        if self.reads_all && (other.writes_all || !other.writes.is_empty()) {
+            return false;
+        }
+        if other.reads_all && (self.writes_all || !self.writes.is_empty()) {
+            return false;
+        }
+        if !self.writes.is_disjoint(&other.writes) {
+            return false;
+        }
+        if !self.writes.is_disjoint(&other.reads) {
+            return false;
+        }
+        if !other.writes.is_disjoint(&self.reads) {
+            return false;
+        }
+        true
     }
 }
