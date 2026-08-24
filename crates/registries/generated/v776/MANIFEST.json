@@ -1,0 +1,18 @@
+{
+  "protocol_version": 776,
+  "mc_version": "26.2",
+  "entries": [
+    {
+      "path": "registries.rs",
+      "sha256": "cdc71a1fd64ea57bbc9f6ebc2f82a3177529b5bca7c696511d065f76d29afdfd",
+      "generator_tool_version": "xtask-codegen/0.1.0",
+      "source_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a"
+    },
+    {
+      "path": "block_states.rs",
+      "sha256": "73246e0260f0f22ee2471975b13ebe149a04ecb83f30394713bd3edf41dc313f",
+      "generator_tool_version": "xtask-codegen/0.1.0",
+      "source_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a"
+    }
+  ]
+}
