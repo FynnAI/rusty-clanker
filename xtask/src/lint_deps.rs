@@ -246,29 +246,56 @@ fn transitive_closure<'a>(
 
 /// CLI entry point for the `lint-deps` verb: fetch + check + print + exit code.
 pub fn run() -> std::process::ExitCode {
+    run_and_report().0
+}
+
+/// Same work as `run`, plus the TEST-D40 JSON side effect (`target/verify/lint-deps.json`).
+pub(crate) fn run_and_report() -> (std::process::ExitCode, bool) {
     let sh = match xshell::Shell::new() {
         Ok(sh) => sh,
         Err(err) => {
             eprintln!("lint-deps: failed to create shell: {err}");
-            return std::process::ExitCode::FAILURE;
+            return (std::process::ExitCode::FAILURE, false);
         }
     };
     let meta = match crate::metadata::fetch_metadata(&sh) {
         Ok(meta) => meta,
         Err(err) => {
             eprintln!("lint-deps: {err}");
-            return std::process::ExitCode::FAILURE;
+            return (std::process::ExitCode::FAILURE, false);
         }
     };
     let crate_count = meta.workspace_members.len();
     let violations = check_rules(&meta);
-    if violations.is_empty() {
+
+    let mut result = crate::tier_result::TierResult::new("lint-deps");
+    let passed = violations.is_empty();
+    if passed {
         println!("lint-deps: 0 forbidden edges across {crate_count} workspace crates");
-        std::process::ExitCode::SUCCESS
+        result.push(
+            "rules",
+            crate::tier_result::Status::Pass,
+            Some(format!(
+                "0 forbidden edges across {crate_count} workspace crates"
+            )),
+        );
     } else {
         for v in &violations {
             eprintln!("[{}] {}", v.rule, v.message);
+            result.push(
+                format!("rules::{}", v.rule),
+                crate::tier_result::Status::Fail,
+                Some(v.message.clone()),
+            );
         }
-        std::process::ExitCode::FAILURE
     }
+    let result = result.finalize();
+    let _ = crate::tier_result::write(&result);
+
+    let exit = if passed {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    };
+    (exit, passed)
 }

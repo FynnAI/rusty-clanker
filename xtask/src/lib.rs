@@ -71,4 +71,44 @@ pub enum Command {
     /// TEST-D47: recompute crates/registries/generated/v776/MANIFEST.json's hashes
     /// against the files on disk and fail on any mismatch.
     VerifyGenerated,
+    /// TEST-D37 Tier 0: fmt-check + lint only, local convenience, never a CI gate
+    Tier0,
+    /// TEST-D37 Tier 1: every gate above plus path-guard, lint-tests, verify-fixtures
+    Tier1 {
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// TEST-D46 CI path-guard
+    PathGuard {
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// TEST-D49 forbidden-pattern lints
+    LintTests {
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// TEST-D47 fixture-manifest integrity check (crates/testing/rc-golden-data)
+    VerifyFixtures,
+    /// TEST-D41 one-command oracle bootstrap
+    SetupOracle {
+        #[arg(long)]
+        accept_eula: bool,
+    },
+    /// TEST-D51 quarantine a flaky test (auto-files a tracked issue)
+    Quarantine {
+        #[arg(long)]
+        test: String,
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// TEST-D51 list every currently-quarantined test
+    ListQuarantine,
+    /// TEST-D52 verifier-agent re-run entry point
+    VerifierReport {
+        #[arg(long)]
+        base: Option<String>,
+    },
 }

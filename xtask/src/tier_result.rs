@@ -40,37 +40,57 @@ impl TierResult {
     /// Starts an empty result for `tier` (e.g. `"path-guard"`); status is computed
     /// by `finalize`, not tracked incrementally.
     pub fn new(tier: impl Into<String>) -> Self {
-        todo!()
+        TierResult {
+            tier: tier.into(),
+            status: Status::Pass,
+            cases: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, name: impl Into<String>, status: Status, detail: Option<String>) {
-        todo!()
+        self.cases.push(CaseResult {
+            name: name.into(),
+            status,
+            detail,
+        });
     }
 
     /// Sets `self.status` to `Fail` if any case is `Fail`, else `Pass`, and returns self.
-    pub fn finalize(self) -> Self {
-        todo!()
+    pub fn finalize(mut self) -> Self {
+        self.status = Self::overall(&self.cases);
+        self
     }
 
     /// `Status::Pass` iff every case passed — the value `finalize` computes.
     pub fn overall(cases: &[CaseResult]) -> Status {
-        todo!()
+        if cases.iter().any(|c| c.status == Status::Fail) {
+            Status::Fail
+        } else {
+            Status::Pass
+        }
     }
 }
 
 /// Writes `result` as pretty JSON to `<VERIFY_OUT_DIR>/<result.tier>.json`, creating
 /// parent directories as needed.
 pub fn write(result: &TierResult) -> std::io::Result<()> {
-    todo!()
+    write_to(Path::new(VERIFY_OUT_DIR), result)
 }
 
 /// Pure variant `write` delegates to, taking an explicit output root — the form
 /// acceptance tests exercise directly against a tempdir.
 pub fn write_to(root: &Path, result: &TierResult) -> std::io::Result<()> {
-    todo!()
+    std::fs::create_dir_all(root)?;
+    let path = root.join(format!("{}.json", result.tier));
+    let json = serde_json::to_string_pretty(result)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, json)
 }
 
 /// `Status::Pass` -> `ExitCode::SUCCESS`, `Status::Fail` -> `ExitCode::FAILURE`.
 pub fn exit_code_for(status: Status) -> ExitCode {
-    todo!()
+    match status {
+        Status::Pass => ExitCode::SUCCESS,
+        Status::Fail => ExitCode::FAILURE,
+    }
 }

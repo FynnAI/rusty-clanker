@@ -107,5 +107,28 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
+        Command::Tier0 => xtask::tier0::run(),
+        Command::Tier1 { base } => xtask::tier1::run(base.as_deref()),
+        Command::PathGuard { base } => xtask::path_guard::run(base.as_deref()),
+        Command::LintTests { base } => xtask::forbidden_patterns::run(base.as_deref()),
+        Command::VerifyFixtures => xtask::verify_fixtures::run(),
+        Command::SetupOracle { accept_eula } => xtask::setup_oracle::run(accept_eula),
+        Command::Quarantine { test, file, reason } => {
+            match xtask::quarantine::quarantine(&test, std::path::Path::new(&file), &reason) {
+                Ok(entry) => {
+                    println!(
+                        "quarantine: {} — {} ({})",
+                        entry.fn_name, entry.issue_url, entry.reason
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("quarantine: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::ListQuarantine => xtask::quarantine::list_quarantined(),
+        Command::VerifierReport { base } => xtask::verifier_report::run(base.as_deref()),
     }
 }

@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # TEST-D37 Tier 2, nightly: M0's own headline acceptance criterion 1 (M0-B06's
+    # soak-tests-gated soak_8_regions_stable_20tps_10min), the only real Tier-2-shaped
+    # content M0 has (Context: "TEST-D37 restated").
+    - cron: "0 7 * * *"
 
 jobs:
   gates:
@@ -14,6 +20,8 @@ jobs:
         os: [ubuntu-24.04, windows-2025]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install pinned toolchain (rust-toolchain.toml)
         run: rustup show
@@ -42,3 +50,115 @@ jobs:
 
       - name: test
         run: cargo run -p xtask -- test
+
+      - name: Upload machine-readable results (TEST-D40)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gates-results-${{ matrix.os }}
+          path: |
+            target/verify/*.json
+            target/nextest/**/junit.xml
+          if-no-files-found: warn
+
+  guardrails:
+    name: guardrails (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Determine base ref (TEST-D46)
+        id: base
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "sha=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: path-guard
+        shell: bash
+        run: |
+          if [ -n "${{ steps.base.outputs.sha }}" ]; then
+            cargo run -p xtask -- path-guard --base "${{ steps.base.outputs.sha }}"
+          else
+            cargo run -p xtask -- path-guard
+          fi
+
+      - name: lint-tests
+        shell: bash
+        run: |
+          if [ -n "${{ steps.base.outputs.sha }}" ]; then
+            cargo run -p xtask -- lint-tests --base "${{ steps.base.outputs.sha }}"
+          else
+            cargo run -p xtask -- lint-tests
+          fi
+
+      - name: verify-fixtures
+        run: cargo run -p xtask -- verify-fixtures
+
+      - name: Upload machine-readable results (TEST-D40)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrails-results-${{ matrix.os }}
+          path: target/verify/*.json
+          if-no-files-found: warn
+
+  soak:
+    name: soak (${{ matrix.os }})
+    # TEST-D37 Tier 2: nightly cron only, never a PR/push gate — M0-B06's own
+    # `soak-tests`-featured `soak_8_regions_stable_20tps_10min`, M0's headline
+    # acceptance criterion 1. Not part of the required-status-check set TEST-D50's
+    # branch-protection script names (`scripts/configure-branch-protection.sh`,
+    # below) — a nightly job cannot block a same-day PR merge, per TEST-D37's own
+    # "not PR-blocking" Tier-2 definition.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      - name: soak_8_regions_stable_20tps_10min
+        run: cargo nextest run -p rc-scheduler --features soak-tests -- soak_8_regions_stable_20tps_10min
+
+      - name: Upload soak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report-${{ matrix.os }}
+          path: target/soak-report/region_soak_8x20tps.json
+          if-no-files-found: warn
