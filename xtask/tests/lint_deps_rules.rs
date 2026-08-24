@@ -255,18 +255,62 @@ fn clean_graph_has_zero_violations() {
 
 #[test]
 fn rule1_flags_missing_shared_crate() {
-    let mut nodes = clean_nodes();
-    let client = nodes
-        .iter_mut()
-        .find(|n| n.id == "rusty-clanker-client")
-        .unwrap();
-    client.dependencies.retain(|d| d != "rc-physics");
-    client.deps.retain(|d| d.pkg != "rc-physics");
+    // A minimal, self-contained fixture rather than `clean_nodes()`: in the
+    // real (corrected) edge table `rc-physics` is reachable from
+    // `rusty-clanker-client` through *two* paths (the direct edge and
+    // `rc-mechanics -> rc-physics`), so merely deleting the direct edge from
+    // a full `clean_nodes()` copy leaves it reachable and produces zero
+    // violations. This fixture instead wires each binary directly to every
+    // SHARED crate (no redundant paths), then omits exactly one edge from
+    // `rusty-clanker-client`, isolating exactly the one violation under test.
+    let shared = [
+        "rc-core",
+        "rc-nbt",
+        "rc-registries",
+        "rc-protocol-macros",
+        "rc-protocol",
+        "rc-mod-api",
+        "rc-mod-host",
+        "rc-physics",
+    ];
+
+    let mut packages: Vec<Package> = shared.iter().map(|s| pkg(s, s)).collect();
+    packages.push(pkg("bevy_ecs", "bevy_ecs"));
+    packages.push(pkg("rusty-clanker-server", "rusty-clanker-server"));
+    packages.push(pkg("rusty-clanker-client", "rusty-clanker-client"));
+
+    let mut nodes: Vec<Node> = shared
+        .iter()
+        .map(|&s| {
+            if s == "rc-mod-api" {
+                // Satisfies Rule 4's exact-set check too, so this fixture
+                // only ever produces the one Rule 1 violation under test.
+                node(
+                    "rc-mod-api",
+                    &["rc-core", "bevy_ecs"],
+                    &["rc-core", "bevy_ecs"],
+                )
+            } else {
+                node(s, &[], &[])
+            }
+        })
+        .collect();
+    nodes.push(node("rusty-clanker-server", &shared, &shared));
+    let client_deps: Vec<&str> = shared
+        .iter()
+        .copied()
+        .filter(|&s| s != "rc-physics")
+        .collect();
+    nodes.push(node("rusty-clanker-client", &client_deps, &client_deps));
+
+    let mut workspace_members: Vec<String> = shared.iter().map(|s| s.to_string()).collect();
+    workspace_members.push("rusty-clanker-server".to_string());
+    workspace_members.push("rusty-clanker-client".to_string());
 
     let meta = CargoMetadata {
-        packages: clean_packages(),
+        packages,
         resolve: Resolve { nodes },
-        workspace_members: workspace_members(),
+        workspace_members,
     };
     let violations = check_rules(&meta);
     assert_eq!(
