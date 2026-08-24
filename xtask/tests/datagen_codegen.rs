@@ -89,6 +89,47 @@ fn sanitizes_slash_and_keyword_identifiers() {
 }
 
 #[test]
+fn sanitizes_entry_name_colliding_with_reserved_count_const() {
+    // Real 26.2 data (`minecraft:worldgen/placement_modifier_type`) registers an entry
+    // literally named "count", which collides with the per-module `COUNT` aggregate
+    // constant every registry module emits — this reproduces that exact collision on a
+    // minimal synthetic fixture (`generated_files_compile_standalone`'s own rustc check
+    // does not catch this, since its fixtures never happened to include a "count" entry).
+    let mut registries = RegistriesReport::new();
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "minecraft:count".to_string(),
+        RegistryEntryReport { protocol_id: 0 },
+    );
+    entries.insert(
+        "minecraft:block".to_string(),
+        RegistryEntryReport { protocol_id: 1 },
+    );
+    registries.insert(
+        "minecraft:worldgen/placement_modifier_type".to_string(),
+        RegistryReport {
+            default: None,
+            entries,
+        },
+    );
+
+    let generated = generate(&registries, &BlocksReport::new());
+    let content = file_content(&generated.files, "registries.rs");
+
+    // The entry's own escaped const, and the module's own aggregate count, must both
+    // be present and distinct — i.e. this must not be the same `COUNT` identifier
+    // defined twice (which would fail to compile).
+    assert!(
+        content.contains("pub const COUNT_: RegistryEntryId = RegistryEntryId(0);"),
+        "missing escaped entry const in:\n{content}"
+    );
+    assert!(
+        content.contains("pub const COUNT: u32 = 2;"),
+        "missing module aggregate count in:\n{content}"
+    );
+}
+
+#[test]
 fn output_is_independent_of_input_insertion_order() {
     fn make_pair(reverse: bool) -> (RegistriesReport, BlocksReport) {
         let mut registries = RegistriesReport::new();
