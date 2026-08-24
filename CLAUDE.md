@@ -4,7 +4,7 @@ Rusty Clanker is a from-scratch Rust reimplementation of the Minecraft: Java Edi
 
 ## Current phase
 
-**BLUEPRINT DERIVATION** (started 2026-08-20, milestone M0 first). Still Markdown-only — no code, no `cargo init`, no source files yet. Planning documents in `docs/planning/` remain the source of truth; implementation blueprints in `blueprints/` are derived per `blueprints/00-blueprint-spec.md` and are the hand-off artifact to less capable AI implementer models — self-contained, unambiguous, test-first. Implementation begins only from finished, audited blueprints. Phase 1 (server) must reach a stable, proven state before Phase 2 (client) implementation begins.
+**IMPLEMENTATION — milestone M0 only** (started 2026-08-24). All milestones M0–M11 are blueprint-complete; code is written strictly from the audited blueprints in `blueprints/` (per-blueprint test-first changesets per TEST-D45/D46, `Changeset-Type` trailer convention per M0-B08). Planning documents in `docs/planning/` remain the source of truth on any conflict. **Hard gate: after M0's acceptance criteria are green, STOP — M1 implementation starts only on the user's explicit go.** Phase 1 (server) must reach a stable, proven state before Phase 2 (client) implementation begins.
 
 ## Binding principles (whole project duration)
 
