@@ -4,7 +4,7 @@
 
 M10 takes the static, cameras-only client `M9` shipped and gives it vanilla's
 core play loop plus the client half of the isomorphic mod API `M8` opened.
-Seven blueprints build the remaining stack: rendered, animated, interpolated
+Eight blueprints build the stack: rendered, animated, interpolated
 entities plus player-skin acquisition (B01); the retained-mode GUI/HUD
 framework, item icons, and the shared `TextComponent` home every later
 text-bearing blueprint consumes (B02); local-asset sound playback via a
@@ -17,10 +17,17 @@ acceptance criterion 3 names (B05); one acceptance harness folding all
 three M10 roadmap criteria into `xtask m10-report`, honestly gating the
 sub-legs three still-open, precisely-named contracts block and closing
 `PLAN-D2`'s Phase-2 (M9+M10, native client) rollup as a machine-readable fact
-for the first time (B06); and the Mod Developer Guide's own Client-Side
+for the first time (B06); the Mod Developer Guide's own Client-Side
 chapter, landed for real against B05's now-completed reference-mod client
 hook — the one M10 roadmap scope bullet the other six blueprints leave
-untouched, closed here rather than left silently owned by nobody (B07).
+untouched, closed here rather than left silently owned by nobody (B07); and
+the client composition root — the one, real, running `rusty-clanker-client`
+process wiring every seam B01–B05 (and M9-B01/B04/B05/B06) declared but left
+unconnected: the composed `Renderer`/`ClientSimulation`/`InputConsumer`
+triple, the real `main.rs` startup sequence, and the complete Play-state
+packet dispatch table — closing Gap 1, the composition-root gap nine prior
+blueprints independently flagged and B06 consolidated into one binding
+contract (B08).
 
 | ID | Title | Scope |
 |---|---|---|
@@ -31,6 +38,7 @@ untouched, closed here rather than left silently owned by nobody (B07).
 | M10-B05 | Client Mod-Host Integration | L |
 | M10-B06 | M10 Acceptance Harness | L |
 | M10-B07 | Mod Developer Guide: Client-Side Chapter | S |
+| M10-B08 | Client Composition Root | L |
 
 ## Dependency graph
 
@@ -45,6 +53,7 @@ flowchart TD
     B05["M10-B05\nClient mod-host integration\n(ClientModRuntime, register-entity-renderer,\nexample_ores client hook, shared_version_audit)"]
     B06["M10-B06\nAcceptance harness\n(xtask m10-report, three gated sub-legs,\nPhase-2 rollup)"]
     B07["M10-B07\nMod guide client chapter\n(docs/mod-guide/src/11-client-side.md,\nCHAPTER_MANIFEST landed)"]
+    B08["M10-B08\nClient composition root\n(composed Renderer/ClientSimulation/\nInputConsumer, real main.rs, dispatch table)"]
 
     Prior --> B01
     Prior --> B02
@@ -60,9 +69,15 @@ flowchart TD
     B01 --> B07
     B02 --> B07
     B05 --> B07
+    B01 --> B08
+    B02 --> B08
+    B03 --> B08
+    B04 --> B08
+    B05 --> B08
 
     style B06 fill:transparent
     style B07 fill:transparent
+    style B08 fill:transparent
 ```
 
 **Recommended execution order:**
@@ -95,6 +110,18 @@ flowchart TD
    B02's already-shipped surfaces by exact name). Independent of B03/B04 and
    of B06 — neither depends on the other; B07 touches only
    `docs/mod-guide/` and `xtask/src/doc_guide/`, no engine crate.
+6. **M10-B08** once B01–B05 all land (hard: it is the sole consolidator of
+   every one of their own composition-root-facing seams — `EntityPass`/
+   `BlockBreakPass`/`ViewmodelRenderer`/`GuiRenderer` (B01/B02/B04), the
+   real `ClientSimulation`/`InputConsumer` drivers (B01/B02/B04/B05), and
+   `connection/play.rs`'s complete dispatch table (B01/B03/B04/B05)).
+   Independent of B06/B07 in either direction — B06 does not consume
+   anything B08 produces (M10's own three roadmap criteria are gated,
+   honestly, on B08 not yet existing at B06's own drafting time, §Context 2
+   below) and B07 touches no engine crate at all — but land B08 **after**
+   B06 and B07 regardless if a single, coherent ordering is wanted, since
+   B08 is this milestone's own last blueprint to touch `connection/play.rs`
+   and every other shared file it extends.
 
 **A three-way `crates/client/src/config.rs` race, resolved here.** B02
 (`gui_scale: u8`), B03 (eleven flat volume/subtitle fields), and B05
@@ -247,11 +274,55 @@ from `Deferred { until: "M10" }` to a landed, enforced `Backing::Cited` entry.
 Authors no engine, render, or mod-host production code — every signature it
 restates is B01's/B02's/B05's/M8-B01's own, unchanged.
 
+**M10-B08 — Client composition root.** Wires every seam nine prior
+blueprints (M9-B04, M9-B05, M9-B06, M9-B07, M10-B01–B05) declared but left
+unconnected into one real, running `rusty-clanker-client` process: a
+composed `Renderer` drawing `TerrainRenderer`'s three terrain layers,
+`EntityPass`, `BlockBreakPass`, `ViewmodelRenderer`, and `GuiRenderer` in
+CLIENT-D3's fixed pass order; a composed `ClientSimulation` driving every
+per-tick consumer in one fixed order; a composed `InputConsumer`; the real
+startup sequence (mod discovery → asset/atlas/bake → device-feature
+negotiation → renderer/audio/entity construction → connection); the
+complete Play-state packet dispatch table, discovering and naming (never
+silently resolving) two real clientbound packet-id collisions between
+M10-B03's and M10-B04's independently-derived tables (`0x68`, `0x69`) plus
+a third, serverbound collision (`0x0A`); real per-frame mesh-job feeding
+from network-received chunk/block-update data through `MeshWorkerPool` into
+`TerrainRenderer`; real audio-listener/incoming-event routing; and graceful
+connect/disconnect/error UI plus ordered shutdown. Authors no new gameplay
+algorithm — every piece of logic it wires already exists, real and tested,
+in a prior blueprint's own crate. Splits `TerrainRenderer::render` into
+`begin_frame`/`render_opaque_cutout`/`render_translucent` (additive, M9-B04's
+own `render` kept as a thin wrapper) so `EntityPass`/`BlockBreakPass` can be
+sandwiched between the terrain sub-passes CLIENT-D3's own fixed order
+requires. Gives mod-contributed block materials a real atlas texture layer
+and a real `BakedBlockstate` (via `AssetStore::insert_synthetic_texture`,
+one additive method), but does not insert either into the live,
+vanilla-indexed `BakedRegistry` — the client-side, network-extensible
+`BlockStateId` space M10-B05 already named remains the one, real gap
+standing between this wiring and an actual live-server-rendered mod block,
+restated here as still open, not closed by this blueprint. Closes Gap 1
+(the client composition root) in full; explicitly, honestly leaves Gap 2
+(inventory/container-content decode) and Gap 3 (`--debug-grant-item`/
+`--debug-spawn-entity`) exactly as open as M10-B06 already states, plus one
+narrower, newly-surfaced gap of its own (`sample_light`'s fixed-constant
+fallback for a section with no light data — a bounded, flagged
+approximation pending a future lighting-propagation blueprint no planning
+document assigns yet). *Decisions covered:* CLIENT-D2–D32 (the first
+blueprint to instantiate `07`'s full picture as one running process),
+CLIENT-D3 (the fixed pass order, wired for real for the first time),
+CLIENT-D26/D28/D30 (tick/render decoupling and local prediction, now
+driving every real consumer), CLIENT-D29 (remote-entity interpolation, now
+fed real per-frame `partial_ticks`), MOD-D6/D18/D20 (registry-build-before-
+first-tick and every client extension point's real or honestly-partial
+realization, composed for the first time), PERF-D63 (the seven-phase frame
+budget, now measurable end to end).
+
 ## M10 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
 |---|---|---|---|
-| 1 | A full play session — join, move, build, fight a mob, open inventory, chat — is completable start to finish using only the native client against a Rusty Clanker server, no Java client involved, for a continuous 30-minute session with zero crashes. | M10-B01 (entities), M10-B02 (UI/HUD/inventory framework), M10-B04 (chat, combat, build loop), **M10-B06** (Leg 1, six sub-legs — join/move/chat fully live and automated; build/fight/inventory Tier-1 proxies only, evidence-gated; the 30-minute session a Tier-3 manual pass) | 1a/1b/1f pass for real against a real server. 1c/1d/1e and the 30-minute qualifier report a correctly-actionable `fail` pending Gap 1 (client composition root) and Gap 3 (test-support spawn/grant flags), never a faked `pass`. |
+| 1 | A full play session — join, move, build, fight a mob, open inventory, chat — is completable start to finish using only the native client against a Rusty Clanker server, no Java client involved, for a continuous 30-minute session with zero crashes. | M10-B01 (entities), M10-B02 (UI/HUD/inventory framework), M10-B04 (chat, combat, build loop), M10-B06 (Leg 1, six sub-legs — join/move/chat fully live and automated; build/fight/inventory Tier-1 proxies only, evidence-gated; the 30-minute session a Tier-3 manual pass), **M10-B08** (closes Gap 1, the client composition root — the one gap M10-B06's own 1c/1d/1e sub-legs and its 30-minute/zero-crash qualifier were jointly waiting on alongside Gap 3) | 1a/1b/1f already passed for real against a real server, unaffected. **With M10-B08 merged, Gap 1 is closed**: the 30-minute continuous session's own Tier-3 manual pass (`docs/MANUAL-VERIFICATION-M10-B08.md`) is executable for the first time in this corpus. 1c (build) and 1d (fight) remain a correctly-actionable Tier-1 proxy/`fail` pending only Gap 3 (`--debug-grant-item`/`--debug-spawn-entity`, still unowned by any merged blueprint); 1e (inventory) remains gated on Gap 2 (container-content decode, still unowned) as well. Re-running `xtask m10-report` against an M10-B08-merged build is what would flip these three sub-legs' own evidence source from "Gap 1 missing" to "Gap 3/Gap 2 missing" — a future, narrower harness update's own job, not this index's. |
 | 2 | The `M8` reference mod's client-side hook — identical Rust mod source, compiled once for the server target and once for the client target — renders its custom visual behavior correctly in the native client, closing the loop `M8` deliberately left open. | **M10-B05** (`example_ores:pulse_crystal`'s completed client render hook, Tier-1 pure bridge + Tier-2 GPU offscreen proof), **M10-B06** (AC2a cited from B05; AC2b — genuinely new — the identical-compiled-source mechanical proof) | AC2a/AC2b both proven for real, automated. |
 | 3 | A `cargo tree` audit (`12-workspace-structure.md`'s WS-D3 rule 1) confirms `rc-core`, `rc-nbt`, `rc-registries`, `rc-protocol`, `rc-mod-api` resolve to the same compiled dependency versions in both `rusty-clanker-server`'s and `rusty-clanker-client`'s dependency graphs. | **M10-B05** (`xtask shared-crate-version-audit`, the real `cargo_metadata`-driven closure check), **M10-B06** (wires it as a required, blocking Tier-1 CI step) | Fully automated and fully proven — no rendering integration needed. |
 
@@ -321,13 +392,42 @@ restates is B01's/B02's/B05's/M8-B01's own, unchanged.
 - **M10 deferrals are named identically and non-contradictorily across
   every blueprint that borders them.** Every named deferral — the client
   composition-root gap (`Shell`/`Renderer`/`ClientSimulation`/
-  `InputConsumer` wiring), container/inventory-content decode, a live
-  ABI-safe `register-entity-renderer` payload bridge (restated once more,
-  honestly, by M10-B07's own chapter content), MOD-D20's send half, a
-  client-side runtime-extensible `BlockStateId` space, and MECH-D69's
-  `rc-brigadier` command system — is restated consistently by every
-  blueprint whose scope borders it and is consolidated, without
-  contradiction, by M10-B06 §2's own "three genuine gaps" accounting.
+  `InputConsumer` wiring, **closed by M10-B08**), container/inventory-content
+  decode (Gap 2, still open), a test-support debug-flag pair (Gap 3, still
+  open), a live ABI-safe `register-entity-renderer` payload bridge (restated
+  once more, honestly, by M10-B07's own chapter content), MOD-D20's send
+  half, a client-side runtime-extensible `BlockStateId` space (restated a
+  third time by M10-B08 §H — still open), and MECH-D69's `rc-brigadier`
+  command system — is restated consistently by every blueprint whose scope
+  borders it and is consolidated, without contradiction, by M10-B06 §2's
+  own "three genuine gaps" accounting and M10-B08 §Context A's own explicit
+  discharge of exactly one of the three.
+
+- **M10-B08 restates M10-B06 §Context 2 "Gap 1"'s own five-item list
+  verbatim, byte-for-byte, verified by this audit against both blueprints'
+  own committed text — no drift found.** M10-B08 §Context A quotes M10-B06's
+  own consolidated Gap 1 list (the `Renderer`/`ClientSimulation`/
+  `InputConsumer` triple, the startup asset-load sequence, and
+  `NetworkHandle::spawn_session`'s real factory) unchanged, and explicitly
+  restates Gap 2 and Gap 3 as untouched by its own scope in the identical
+  words M10-B06 uses — the same "restate the missing contract precisely,
+  never re-derive or narrow it" discipline every acceptance-harness/
+  gap-closing blueprint pair in this corpus already observes.
+
+- **M10-B08 lists M9-B07 in its own Prerequisites field, matching its
+  direct reuse of M9-B07's `RealServer` test harness, verified by this
+  audit against both blueprints' own committed text — no drift found.**
+  M10-B08's `full_stack_integration.rs` acceptance test and its §Context N
+  testing-strategy section both reuse `RealServer::{spawn_offline, addr}`
+  unmodified; M10-B08's own header Prerequisites field cites M9-B07 as a
+  "hard prerequisite, restated in full where load-bearing rather than
+  merely cited," mirroring M10-B06's own identical citation wording for the
+  same reuse of `RealServer` — the established convention this corpus's own
+  M7/M9/M10 index audits apply elsewhere (M7-B00-index's own "verified by
+  this audit" cross-checks). An implementer following M10-B08 alone learns,
+  from its own header, that `RealServer` is M9-B07's own already-shipped
+  type rather than something this blueprint invents or that some other
+  already-listed prerequisite provides.
 
 ## M10 completion, restated
 
@@ -341,21 +441,38 @@ artifacts and a real `rusty-clanker-server` subprocess — authoring no
 production code of its own, only `tests/`- and `xtask`-scoped harness
 content. M10-B07 needs M10-B01, M10-B02, and M10-B05 merged and authors no
 engine code at all, only `docs/mod-guide/` content and an additive
-`xtask/src/doc_guide/manifest.rs` edit — independent of B03/B04/B06. M10's
-own build order is therefore: **{M10-B01, M10-B02, M10-B03} → M10-B04 →
-M10-B05 → {M10-B06, M10-B07}** (B06 and B07 are mutually independent once
-B05 lands).
+`xtask/src/doc_guide/manifest.rs` edit — independent of B03/B04/B06. M10-B08
+needs M10-B01 through M10-B05 all merged (hard: it is the sole consolidator
+of every one of their own composition-root-facing seams) and is mutually
+independent of B06/B07 in either direction, though it touches the same
+`connection/play.rs`/shared-file surface B04 and B05 already extended.
+M10's own build order is therefore: **{M10-B01, M10-B02, M10-B03} → M10-B04 →
+M10-B05 → {M10-B06, M10-B07, M10-B08}** (B06, B07, and B08 are mutually
+independent once B01–B05 land).
 
 M10's three roadmap acceptance criteria are proven, honestly and without
 exception, by M10-B06: AC1's join/move/chat sub-legs, AC2 in full, and AC3
-in full pass for real against real code and a real server subprocess; AC1's
-build/fight/inventory sub-legs and its 30-minute/zero-crash qualifier remain
-a correctly-reported, actionable `fail` pending three precisely-named,
-still-open contracts (the client composition root; container/inventory
-packet decode, still unowned; and a narrow, test-support-only server flag
-pair) — never faked, mirroring the exact "pin the missing contract, prove
-everything else hermetically, fail closed" discipline M6-B01/M6-B06/M8-B05/
-M9-B07 already established for this corpus's own harness-blueprint lineage.
+in full pass for real against real code and a real server subprocess.
+**M10-B08 closes Gap 1** — the client composition root every one of
+M10-B06's own three named gaps partly or wholly depended on — wiring a real
+`Renderer`/`ClientSimulation`/`InputConsumer` triple into `Shell`, the real
+startup sequence, and the complete Play-state dispatch table, all against
+real, already-shipped B01–B05 code, authoring no new gameplay algorithm of
+its own. With M10-B08 merged, AC1's 30-minute/zero-crash qualifier's own
+Tier-3 manual pass (`docs/MANUAL-VERIFICATION-M10-B08.md`) is executable for
+the first time in this corpus; AC1's build/fight/inventory sub-legs remain a
+correctly-reported, actionable `fail`, now pending only the two narrower,
+still-open contracts Gap 1's closure does not touch — container/inventory
+packet decode (Gap 2, still unowned) and a narrow, test-support-only server
+flag pair (Gap 3, still unowned) — never faked, mirroring the exact "pin the
+missing contract, prove everything else hermetically, fail closed"
+discipline M6-B01/M6-B06/M8-B05/M9-B07 already established for this corpus's
+own harness-blueprint lineage. M10-B08 also surfaces, and discharges as an
+explicit `CONFLICT`-flagged fact rather than a silent bug, two real
+clientbound packet-id collisions between M10-B03's and M10-B04's
+independently-derived tables (`0x68`, `0x69`) plus a third, serverbound
+collision (`0x0A`) — named, CI-asserted-present, and left for a future pass
+with real `packets.json`/protocol-capture data to resolve.
 
 `M10-B06`'s own `Phase2Gate` is this corpus's first machine-readable
 statement that `11-roadmap-milestones.md`'s `PLAN-D2` Phase 2 (the native
@@ -365,9 +482,21 @@ complete` reads `true` only once both `M9`'s and `M10`'s own `m9-report`/
 informational (it gates none of `m10-report`'s own three AC cases). The
 mdBook Chapter 11 (Client-Side) gap this index previously surfaced as
 unowned is closed by M10-B07 — `11-roadmap-milestones.md`'s own M10 Scope
-text and `06-modding-api.md`'s MOD-D52 are both satisfied in full. One real
-gap remains between `Phase2Gate`'s milestone-level claim and this
-milestone's own narrower Done-bar: the three composition-root-adjacent
-contracts M10-B06 §2 names precisely and leaves, correctly, for a future
-blueprint to close. `M11` (Bedrock Cross-Play) remains independent of it,
-per CROSS-D22, and is unaffected by it.
+text and `06-modding-api.md`'s MOD-D52 are both satisfied in full. The
+composition-root gap between `Phase2Gate`'s milestone-level claim and this
+milestone's own narrower Done-bar is **now closed by M10-B08** — a
+re-invocation of `xtask m10-report` against an M10-B08-merged build (a
+future, narrower blueprint's or operator's own task, not this index's) is
+what would flip M10-B06's own `m10-acceptance.json` build/fight/inventory
+cases from "Gap 1 missing" to whatever Gap 2/Gap 3's own state then is.
+Two real gaps remain, both narrower than Gap 1 and both explicitly named,
+never silently left implicit: Gap 2 (container/inventory-content decode,
+still unowned by any merged blueprint) and Gap 3 (the `--debug-grant-item`/
+`--debug-spawn-entity` test-support flag pair, still unowned). A third,
+narrower gap M10-B08 itself surfaces and does not close — a real,
+client-side, network-extensible `BlockStateId` space, without which a live,
+network-connected client still cannot correctly render any mod's block
+content against a real server — is restated, honestly, as still open by
+M10-B08 §Context H, the third time this corpus has named it. `M11` (Bedrock
+Cross-Play) remains independent of all of the above, per CROSS-D22, and is
+unaffected by any of it.
