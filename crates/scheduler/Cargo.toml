@@ -8,3 +8,14 @@ publish = false
 rc-core = { path = "../core" }
 rc-messaging = { path = "../messaging" }
 rc-mod-host = { path = "../mod-host" }
+crossbeam-deque = { workspace = true }
+crossbeam-utils = { workspace = true }
+parking_lot = { workspace = true }
+core_affinity = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true }
