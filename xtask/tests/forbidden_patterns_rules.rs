@@ -129,8 +129,7 @@ fn deleted_test_in_test_authoring_changeset_is_allowed() {
 #[test]
 fn assertion_count_regression_in_impl_changeset_is_flagged() {
     let base = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert_eq!(1, 1);\n        assert_eq!(2, 2);\n        assert_eq!(3, 3);\n    }\n}\n";
-    let head =
-        "#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert_eq!(1, 1);\n    }\n}\n";
+    let head = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert_eq!(1, 1);\n    }\n}\n";
     let v = check_weakened_tests("f.rs", base, head, ChangesetType::Implementation);
     assert_eq!(v.len(), 1);
     match &v[0] {

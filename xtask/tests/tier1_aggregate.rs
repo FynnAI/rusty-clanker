@@ -1,5 +1,5 @@
-use xtask::tier1::aggregate;
 use xtask::tier_result::{Status, TierResult};
+use xtask::tier1::aggregate;
 
 fn passing_result(tier: &str, case: &str) -> TierResult {
     let mut result = TierResult::new(tier);
