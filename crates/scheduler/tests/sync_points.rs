@@ -3,8 +3,8 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bevy_ecs::prelude::*;
 use rc_messaging::{
@@ -46,9 +46,11 @@ fn deferred_command_in_stage_9_is_invisible_until_after_stage_10() {
     let observed = Arc::new(AtomicUsize::new(usize::MAX));
 
     let mut builder = RcExecutorBuilder::new(bootstrap_marker);
-    builder.register_system(DomainGroup::ChunkSerialize, spawner_factory(), vec![
-        marker_id,
-    ]);
+    builder.register_system(
+        DomainGroup::ChunkSerialize,
+        spawner_factory(),
+        vec![marker_id],
+    );
     builder.register_system(
         DomainGroup::ChunkSerialize,
         reader_factory(Arc::clone(&observed)),
@@ -77,9 +79,11 @@ fn stage_4_command_is_visible_to_the_very_next_stage_4_system_inline() {
     let observed = Arc::new(AtomicUsize::new(usize::MAX));
 
     let mut builder = RcExecutorBuilder::new(bootstrap_marker);
-    builder.register_system(DomainGroup::BlockRedstone, spawner_factory(), vec![
-        marker_id,
-    ]);
+    builder.register_system(
+        DomainGroup::BlockRedstone,
+        spawner_factory(),
+        vec![marker_id],
+    );
     builder.register_system(
         DomainGroup::BlockRedstone,
         reader_factory(Arc::clone(&observed)),
@@ -140,11 +144,13 @@ fn stage_10_apply_order_is_deterministic_and_matches_declaration_order() {
 
     fn make_mutator(multiplier: i64, add: i64) -> SystemFactory {
         Box::new(move || {
-            Box::new(IntoSystem::into_system(move |mut q: Query<&mut common::A>| {
-                for mut a in q.iter_mut() {
-                    a.0 = a.0 * multiplier + add;
-                }
-            })) as Box<dyn System<In = (), Out = ()>>
+            Box::new(IntoSystem::into_system(
+                move |mut q: Query<&mut common::A>| {
+                    for mut a in q.iter_mut() {
+                        a.0 = a.0 * multiplier + add;
+                    }
+                },
+            )) as Box<dyn System<In = (), Out = ()>>
         })
     }
 
