@@ -7,16 +7,16 @@ isomorphic modding promise: a mod loads and hooks the engine on the
 server side, with zero engine source changes, sandboxed by crash
 isolation rather than trust. Following the roadmap's own explicit
 M8-alpha scoping ("`rc-mod-host`'s dylib loader (`libloading`)"), all
-five blueprints implement **MOD-D1's native tier only** — the WASM
+seven blueprints implement **MOD-D1's native tier only** — the WASM
 tier's toolchain pin, WIT interface package, and guest-side bindings
 are fully specified as data/schema (M8-B01), but WASM-tier *hosting*
 (a real `wasmtime::Engine`, fuel/epoch limits, WASI capability grants)
 is consistently, honestly deferred by every blueprint that touches the
 boundary to "a future, not-yet-numbered `rc-mod-host` blueprint" —
 named identically and non-contradictorily in M8-B01, M8-B02, M8-B04,
-and M8-B05.
+M8-B05, M8-B06a, and M8-B06b.
 
-Five blueprints build the stack bottom-up, strictly linearly: the
+The milestone's original five blueprints build the stack bottom-up, strictly linearly: the
 complete `rc-mod-api` public surface —
 manifest schema, `stabby` ABI-stable native types, the WIT package,
 the hook/capability/registry-insertion contract (M8-B01);
@@ -46,6 +46,10 @@ real-`RcExecutor`-wave stage-position proof, and the milestone's
 | M8-B03 | Mod Systems in RC-Executor: Access Translation, Domain-Group Slotting & Crash-Isolated Dispatch | L |
 | M8-B04 | The Reference Mod: `example_ores`, Its Template Shape, and End-to-End Proof | L |
 | M8-B05 | Mod API Alpha Acceptance Harness | M |
+| M8-B06a | Override & Replacement: Behavior-Level, System-Level, Cross-Mod Diagnostics, Parity Surfacing | L |
+| M8-B06b | Event Layer & Component Attachment to Vanilla Entities | L |
+
+`M8-B06a`/`M8-B06b` implement `06-modding-api.md`'s override/replacement decision block (MOD-D33–D46), added to that document after the roadmap's own three numbered M8 acceptance criteria (below) were already fixed — a binding extension of M8's own scope, not a fourth numbered criterion, per the task mandate that vanilla behavior hold no special position over what the mod API exposes. Both build additively on `M8-B01`/`M8-B02`/`M8-B03`'s already-shipped surfaces and on M3-B01/M4-B06's already-shipped `rc-mechanics` content; neither depends on, or is depended on by, `M8-B04`/`M8-B05`.
 
 ## Dependency graph
 
@@ -69,8 +73,18 @@ flowchart TD
 
     B04 --> B05
 
+    B06a["M8-B06a\nOverride & replacement\n(behavior-level, system-level,\nconflict diagnostics, parity report)"]
+    B06b["M8-B06b\nEvent layer & component\nattachment (vanilla entities)"]
+    B01 --> B06a
+    B02 --> B06a
+    B03 --> B06a
+    B01 --> B06b
+    B06a --> B06b
+
     style B04 fill:transparent
     style B05 fill:transparent
+    style B06a fill:transparent
+    style B06b fill:transparent
 ```
 
 **Recommended execution order:**
@@ -101,6 +115,20 @@ flowchart TD
    loop (M8-B04 uses only repeated synchronous `tick_region` calls), a
    flagship real-`RcExecutor`-wave stage-position proof, and the
    `xtask m8-report` completion artifact.
+5. **M8-B06a** once M8-B01/B02/B03 all land — parallel to M8-B04/B05,
+   sharing only M8-B01/B02/B03 as common ancestors, never M8-B04's own
+   reference mod/bridge and never M8-B05's own harness. Adds an
+   additive `rc-mod-api` dependency to `rc-mechanics` and extends
+   M3-B01's `BlockBehaviorRegistry`/M4-B06's `register_fluids`/M8-B03's
+   `mod_order.rs`/`registry.rs`/`executor.rs`, all in place, all
+   byte-for-byte-unmodified for every pre-existing test.
+6. **M8-B06b** strictly after M8-B06a — its own Header lists M8-B06a as
+   a prerequisite solely to reuse the `rc-mod-api`/`stabby` dependency
+   edge M8-B06a already added to `rc-mechanics` (its own component-
+   attachment resolution functions live in that same crate); its event
+   layer has no mechanism-level dependency on M8-B06a's own override
+   machinery at all (06's own "events sit underneath, composing freely
+   but never depending on, the override tiers").
 
 ## Per-blueprint summary
 
@@ -235,6 +263,58 @@ passing test suites via a supplied JUnit XML rather than re-proving
 them; and three mandatory harness self-tests proving each of its own
 new gates actually catches the failure mode it claims to.
 
+**M8-B06a — Override & replacement.** Gives mods MOD-D33's anchor
+promise a concrete, working mechanism for the two tiers 06 itself
+splits the problem into: `Identifier`-targeted `Wrap`/`Replace` for
+block behaviors (MOD-D35), proven end to end by replacing
+`minecraft:water`'s own real vanilla `FluidBehavior` (M4-B06) and
+proving `BlockBehaviorRegistry::resolve` genuinely returns the
+replacement, never a synthetic stand-in; and named-system export plus
+disable/replace for `RcExecutor`-scheduled systems (MOD-D36/D37),
+proven inside Stage 4's mandatory sequential collapse. Both tiers
+share one new ordering algorithm, `resolve_override_order`
+(`rc-scheduler`'s `mod_order.rs`, a structural sibling of M8-B03's own
+`resolve_hook_order`), extending MOD-D10 exactly as MOD-D38 requires
+rather than inventing a second conflict-resolution model — the same
+function serves the cross-mod double-override diagnostic
+(`OverrideOrderingError::UnresolvedReplaceConflict`) for both
+mechanisms. Closes a real, previously-open gap neither M8-B01 nor
+M8-B02 could resolve on its own: a genuinely engine-wired
+`ModUpdateContext` construction (M8-B01's own doc comment deferred
+this to "host-side" without naming a crate that actually has both a
+live `UpdateContext<'a>` and an `rc-mod-api` dependency; M8-B02
+explicitly confirmed `rc-mod-host` itself cannot build one) — resolved
+here, correctly, in `rc-mechanics`'s new `mod_behavior_adapter.rs`.
+Adds `active_overrides()`/`active_system_overrides()` queries
+satisfying MOD-D34's discoverability requirement at the data layer
+only, honestly short of the `minecraft:brand`/Server List Ping wire
+change 06 itself still leaves open pending `02-protocol-
+networking.md`'s own ratification.
+
+**M8-B06b — Event layer & component attachment.** Ships MOD-D39's
+cancellable/mutable event mechanism — a generic, reusable
+`EventDispatcher<E: Clone>` with five mutating priority tiers plus a
+Monitor tier whose "cannot itself cancel or mutate" contract is
+enforced mechanically (a clone-and-discard technique), not merely
+documented — proven through a full cancellation matrix against 06's
+own first-named illustrative catalog entry, `BlockBreakAttempt`
+(shipped as a real type; wiring it to a real M3-B03 block-breaking
+call site is honestly named as a still-future integration, mirroring
+M8-B02/B03's own "prove the mechanism, defer the real call site"
+precedent). Ships MOD-D41's `ModComponents` persistence encoding — a
+byte-exact, dormant-data-preserving format needing no per-component
+(de)serialize code (MOD-D13's POD guarantee doing the work for free) —
+with a real round-trip proof covering both an unloaded-mod's own
+dormant entry and a version-mismatched entry, both losslessly
+preserved. Ships MOD-D42's two missing world-query resolution
+functions (`ChunkKey`→chunk entity, `BlockPos`→block entity),
+completing the one gap MOD-D6/D13's own existing generic component-
+attachment machinery was missing. Explicitly, honestly out of scope:
+MOD-D43 (region-scoped singleton data) and MOD-D44 (world-scoped data
+piggybacking on `05`'s still-unbuilt GameRules mechanism) — neither
+named in this task's own component-attachment bullet, both flagged as
+a later blueprint's own job rather than silently dropped.
+
 ## M8 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
@@ -310,14 +390,16 @@ new gates actually catches the failure mode it claims to.
   manifest as "a clean, diagnosed skip... never a crash or a silent
   no-op," citing the roadmap's own M8-alpha native-only scoping by
   name. M8-B04 and M8-B05 both restate "native-only" identically in
-  their own Constraints. No blueprint claims WASM-tier hosting is
-  implemented or silently assumes it exists.
+  their own Constraints; M8-B06a and M8-B06b restate the identical
+  native-tier-only boundary, deferring WASM-tier override/event
+  hosting to a future `rc-mod-host` blueprint. No blueprint claims
+  WASM-tier hosting is implemented or silently assumes it exists.
 
 - **WS-D3 rule 4 (mod-API leaf) and rule 1 (shared client+server logic)
   are honored throughout, verified against `12`'s own Dependency Graph
   and Crate Manifest table.** `rc-mod-api` never gains a Cargo edge to
   `rc-scheduler`, `rc-mechanics`, `rc-chunk-storage`, or `rc-registries`
-  anywhere across all five blueprints; every mirror type (`DomainGroup`,
+  anywhere across all seven blueprints; every mirror type (`DomainGroup`,
   `TickPriority`, `ModBlockPos`, `ModAddress`, etc.) is restated
   structurally rather than imported. `rc-mod-host` gains no dependency
   on `bevy_ecs`/`rc-scheduler`/`rc-mechanics` (M8-B02's own `lint-deps`
@@ -326,7 +408,23 @@ new gates actually catches the failure mode it claims to.
   (an undrawn `rc-mod-api`/`rc-scheduler` edge respectively) and resolve
   it identically — "flagged for `12`'s own next revision, not this
   blueprint's job" — a consistent, correctly-bounded pattern across
-  both blueprints, not a contradiction.
+  both blueprints, not a contradiction. M8-B06a's own new
+  `rc-mechanics -> rc-mod-api` edge is the same pattern's third
+  instance — `12`'s own WS-D3 rule 4 prose already names
+  `rc-mechanics` explicitly as an eventual `rc-mod-api` consumer,
+  undrawn on its own diagram exactly as the `rc-scheduler` edge was
+  before M8-B03 drew it.
+
+- **M8-B06a/M8-B06b never touch `rc-mod-host`, and never load a
+  dylib.** Both blueprints' own acceptance tests exercise their
+  mechanisms directly against real `BlockBehaviorRegistry`/
+  `RcExecutorBuilder` state (M8-B06a) or pure data types (M8-B06b),
+  with hand-constructed override/event requests standing in for what a
+  future composition-root blueprint will eventually source from a
+  loaded mod's manifest — the identical "prove the mechanism now,
+  defer the real wiring" discipline M8-B03's own
+  `mod_conflict_graph_integration.rs` already established for hooks,
+  extended here to overrides, systems, and events without exception.
 
 ## M8 completion, restated
 
@@ -344,8 +442,17 @@ directly on M8-B04's own reference mod, dylib-packaging helper, and
 out of scope: the mechanical zero-engine-source-change gate, the real
 wall-clock-paced multi-region 20 TPS crash-isolation loop, the flagship
 stage-position proof, and the milestone's `xtask m8-report` artifact.
-M8's own build order is therefore strictly linear: **M8-B01 → M8-B02 →
-M8-B03 → M8-B04 → M8-B05**.
+M8-B06a needs only M8-B01/B02/B03 merged — it shares no dependency edge,
+in either direction, with M8-B04/B05 — and closes out MOD-D33–D38's
+override/replacement decision block plus MOD-D34's discoverability
+requirement, additively, against M3-B01/M4-B06's already-shipped
+`rc-mechanics` content. M8-B06b needs M8-B06a merged (its own Header) solely
+to reuse the `rc-mod-api` dependency edge M8-B06a already added to
+`rc-mechanics`, and closes out MOD-D39's event layer and MOD-D41/D42's
+persistence/resolution contract. M8's own build order is therefore
+**M8-B01 → M8-B02 → M8-B03**, after which **M8-B04 → M8-B05** and
+**M8-B06a → M8-B06b** proceed independently, in either order or in
+parallel.
 
 Every blueprint's own Tier-1 gate is independently sound: the
 vtable-unwind-catchability smoke test (M8-B02) is exactly the kind of

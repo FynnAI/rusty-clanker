@@ -201,6 +201,7 @@ flowchart LR
 **Provides to `06-modding-api.md`:**
 - The binding `panic = "unwind"` workspace-wide requirement (PERF-D46), pinning at the build-profile level the prerequisite MOD-D32's native-tier crash-isolation model depends on.
 - `tinyvec`'s reservation for mod-dylib-boundary code (PERF-D10) as a concrete collection-type recommendation for `rc-mod-api`/`rc-mod-host`.
+- Confirmed: PERF-D1's fast-path trait seam (engine-authored, observationally-equivalent, startup-only backend swap) and MOD-D37's system-replacement primitive (mod-authored, deliberately-divergent swap, same startup-only/same-ARCH-D8-conflict-graph shape) are two distinct, non-conflicting mechanisms; no PERF-D1 candidate in this document's catalog, present or future, assumes a subsystem has exactly one alternate-implementation slot in a way MOD-D37's own replacement would violate.
 
 **Provides to `07-client-architecture.md`:**
 - Client rendering performance depth beyond meshing (PERF-D40–D44): mesh-build SIMD, GPU-driven Hi-Z occlusion culling with its dedicated correctness test class, buffer-mapping strategy, and shader-permutation/pipeline-cache policy — extending CLIENT-D3/D4/D6–D14 without altering their existing content.
