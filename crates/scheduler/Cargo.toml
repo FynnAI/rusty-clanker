@@ -15,6 +15,13 @@ crossbeam-utils = { workspace = true }
 parking_lot = { workspace = true }
 core_affinity = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+soak-tests = []
 
 [target.'cfg(windows)'.dependencies]
 # Win32_Security: CreateWaitableTimerExW's own signature references

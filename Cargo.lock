@@ -1776,6 +1776,8 @@ dependencies = [
  "rc-core",
  "rc-messaging",
  "rc-mod-host",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
  "windows",
