@@ -22,7 +22,36 @@ impl RegionTickHistogram {
     /// milliseconds). Percentiles use the nearest-rank method (Context). Panics if
     /// `samples` is empty.
     pub fn from_samples(region_id: RegionId, samples: &[f64], tick_budget_ms: f64) -> Self {
-        todo!()
+        assert!(
+            !samples.is_empty(),
+            "RegionTickHistogram::from_samples requires at least one sample"
+        );
+        let n = samples.len();
+        let mean_ms = samples.iter().sum::<f64>() / n as f64;
+
+        let mut sorted: Vec<f64> = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("tick durations are never NaN"));
+
+        let nearest_rank = |p: f64| -> f64 {
+            let rank = (p * n as f64).ceil() as isize - 1;
+            let index = rank.clamp(0, n as isize - 1) as usize;
+            sorted[index]
+        };
+
+        let p50_ms = nearest_rank(0.50);
+        let p99_ms = nearest_rank(0.99);
+        let max_ms = *sorted.last().expect("samples is non-empty");
+        let over_budget_count = samples.iter().filter(|&&s| s > tick_budget_ms).count() as u64;
+
+        Self {
+            region_id,
+            sample_count: n as u64,
+            mean_ms,
+            p50_ms,
+            p99_ms,
+            max_ms,
+            over_budget_count,
+        }
     }
 }
 

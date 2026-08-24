@@ -17,17 +17,22 @@ impl GridCell {
     pub const CHUNKS_PER_SIDE: i32 = 16;
 
     pub const fn new(dimension: DimensionId, x: i32, z: i32) -> Self {
-        todo!()
+        Self { dimension, x, z }
     }
 
     /// The cell containing chunk coordinates `(chunk_x, chunk_z)`.
     pub const fn containing_chunk(dimension: DimensionId, chunk_x: i32, chunk_z: i32) -> Self {
-        todo!()
+        Self::new(dimension, chunk_x >> 4, chunk_z >> 4)
     }
 
     /// The four 4-directionally adjacent cells (order: +x, -x, +z, -z), same dimension.
     /// Does not check whether any neighbor is actually owned by a region.
     pub const fn neighbors(self) -> [GridCell; 4] {
-        todo!()
+        [
+            Self::new(self.dimension, self.x + 1, self.z),
+            Self::new(self.dimension, self.x - 1, self.z),
+            Self::new(self.dimension, self.x, self.z + 1),
+            Self::new(self.dimension, self.x, self.z - 1),
+        ]
     }
 }

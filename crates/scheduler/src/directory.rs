@@ -17,17 +17,17 @@ impl RegionIdAllocator {
     /// First `alloc()` on a fresh instance returns `RegionId(1)`; `0` is reserved as a
     /// never-valid sentinel.
     pub const fn new() -> Self {
-        todo!()
+        Self(AtomicU64::new(1))
     }
     /// Thread-safe; never blocks; every returned value is unique for this instance's
     /// lifetime and strictly greater than every previously-returned value.
     pub fn alloc(&self) -> RegionId {
-        todo!()
+        RegionId(self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 }
 impl Default for RegionIdAllocator {
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }
 
@@ -43,16 +43,16 @@ pub struct RegionDirectory {
 
 impl RegionDirectory {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
     pub fn owner_of(&self, cell: GridCell) -> Option<RegionId> {
-        todo!()
+        self.owner.get(&cell).copied()
     }
     pub(crate) fn assign(&mut self, cell: GridCell, region: RegionId) {
-        todo!()
+        self.owner.insert(cell, region);
     }
     pub(crate) fn unassign(&mut self, cell: GridCell) {
-        todo!()
+        self.owner.remove(&cell);
     }
     /// Every currently-live region id adjacent to `region`'s own `cells` (ARCH-D6's
     /// "neighboring region"): distinct owning-region ids of every 4-directional
@@ -62,6 +62,16 @@ impl RegionDirectory {
         region: RegionId,
         cells: &BTreeSet<GridCell>,
     ) -> BTreeSet<RegionId> {
-        todo!()
+        let mut result = BTreeSet::new();
+        for &cell in cells {
+            for neighbor_cell in cell.neighbors() {
+                if let Some(owner) = self.owner_of(neighbor_cell)
+                    && owner != region
+                {
+                    result.insert(owner);
+                }
+            }
+        }
+        result
     }
 }

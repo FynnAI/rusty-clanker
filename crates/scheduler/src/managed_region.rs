@@ -33,47 +33,74 @@ impl ManagedRegion {
         cells: BTreeSet<GridCell>,
         tick_budget_ms: f64,
     ) -> Self {
-        todo!()
+        assert!(
+            !cells.is_empty(),
+            "ManagedRegion::new requires a non-empty cell set"
+        );
+        assert!(
+            cells.iter().all(|cell| cell.dimension == dimension),
+            "ManagedRegion::new: every cell must share the region's own dimension"
+        );
+        Self {
+            state,
+            dimension,
+            cells,
+            tick_budget_ms,
+            ewma_ms: None,
+            ticks_over_split_threshold: 0,
+            merge_candidates: HashMap::new(),
+        }
     }
 
     pub fn id(&self) -> RegionId {
-        todo!()
+        self.state.id
     }
     pub fn dimension(&self) -> DimensionId {
-        todo!()
+        self.dimension
     }
     pub fn cells(&self) -> &BTreeSet<GridCell> {
-        todo!()
+        &self.cells
     }
     pub fn tick_budget_ms(&self) -> f64 {
-        todo!()
+        self.tick_budget_ms
     }
     /// `0.9 * tick_budget_ms` (ARCH-D6).
     pub fn split_threshold_ms(&self) -> f64 {
-        todo!()
+        0.9 * self.tick_budget_ms
     }
     /// `0.1 * tick_budget_ms` (this blueprint's concrete merge-threshold pin, Context).
     pub fn merge_threshold_ms(&self) -> f64 {
-        todo!()
+        0.1 * self.tick_budget_ms
     }
     /// `None` until the first `record_tick_duration` call.
     pub fn tick_duration_ewma_ms(&self) -> Option<f64> {
-        todo!()
+        self.ewma_ms
     }
     pub fn ticks_over_split_threshold(&self) -> u32 {
-        todo!()
+        self.ticks_over_split_threshold
     }
     /// `0` if `neighbor` has never been tracked (including: not currently adjacent, or
     /// this region is not the responsible side of that pair).
     pub fn merge_candidate_ticks(&self, neighbor: RegionId) -> u32 {
-        todo!()
+        self.merge_candidates.get(&neighbor).copied().unwrap_or(0)
     }
 
     /// ARCH-D19's EWMA update (Context has the exact formula) plus the split-hysteresis
     /// counter update. Returns `true` iff this call just made
     /// `ticks_over_split_threshold` reach exactly 40.
     pub(crate) fn record_tick_duration(&mut self, sample_ms: f64) -> bool {
-        todo!()
+        self.ewma_ms = Some(match self.ewma_ms {
+            None => sample_ms,
+            Some(previous) => 0.2 * sample_ms + 0.8 * previous,
+        });
+
+        if self.ewma_ms.expect("just set above") > self.split_threshold_ms() {
+            self.ticks_over_split_threshold += 1;
+            self.ticks_over_split_threshold == 40
+        } else {
+            self.ticks_over_split_threshold = 0;
+            false
+        }
     }
 
     /// Updates the `(self, neighbor)` merge-hysteresis counter against a caller-supplied
@@ -84,6 +111,14 @@ impl ManagedRegion {
         neighbor: RegionId,
         combined_ewma_ms: f64,
     ) -> bool {
-        todo!()
+        let threshold = self.merge_threshold_ms();
+        let counter = self.merge_candidates.entry(neighbor).or_insert(0);
+        if combined_ewma_ms < threshold {
+            *counter += 1;
+            *counter == 100
+        } else {
+            *counter = 0;
+            false
+        }
     }
 }
