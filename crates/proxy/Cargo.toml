@@ -1,0 +1,11 @@
+[package]
+name = "rc-proxy"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-cluster = { path = "../cluster" }
+rc-transport-net = { path = "../transport-net" }
+rc-auth = { path = "../auth" }
+rc-protocol = { path = "../protocol" }

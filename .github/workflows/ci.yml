@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gates:
+    name: gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      - name: fmt-check
+        run: cargo run -p xtask -- fmt-check
+
+      - name: lint
+        run: cargo run -p xtask -- lint
+
+      - name: lint-deps
+        run: cargo run -p xtask -- lint-deps
+
+      - name: test
+        run: cargo run -p xtask -- test

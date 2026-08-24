@@ -1,0 +1,8 @@
+[package]
+name = "rc-transport-net"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-messaging = { path = "../messaging" }

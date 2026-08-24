@@ -1,0 +1,11 @@
+[package]
+name = "rc-protocol"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-nbt = { path = "../nbt" }
+rc-registries = { path = "../registries" }
+rc-protocol-macros = { path = "../protocol-macros" }

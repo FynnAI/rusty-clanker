@@ -45,5 +45,9 @@ pub struct DepKind {
 /// Runs `cargo metadata --format-version 1 --all-features` via `sh` and parses stdout.
 /// Returns `Err(<process/parse error message>)` on any failure.
 pub fn fetch_metadata(sh: &xshell::Shell) -> Result<CargoMetadata, String> {
-    todo!()
+    let stdout = xshell::cmd!(sh, "cargo metadata --format-version 1 --all-features")
+        .read()
+        .map_err(|err| format!("`cargo metadata` failed: {err}"))?;
+    serde_json::from_str::<CargoMetadata>(&stdout)
+        .map_err(|err| format!("failed to parse `cargo metadata` output: {err}"))
 }

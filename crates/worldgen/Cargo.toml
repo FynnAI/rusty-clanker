@@ -1,0 +1,10 @@
+[package]
+name = "rc-worldgen"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-chunk-storage = { path = "../chunk-storage" }
+rc-registries = { path = "../registries" }

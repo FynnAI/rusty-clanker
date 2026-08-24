@@ -1,0 +1,20 @@
+[package]
+name = "rusty-clanker-client"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "rusty-clanker-client"
+path = "src/main.rs"
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-protocol = { path = "../protocol" }
+rc-registries = { path = "../registries" }
+rc-nbt = { path = "../nbt" }
+rc-assets = { path = "../assets" }
+rc-render = { path = "../render" }
+rc-physics = { path = "../physics" }
+rc-mod-host = { path = "../mod-host" }
+rc-mechanics = { path = "../mechanics", default-features = false, features = ["client-predict"] }

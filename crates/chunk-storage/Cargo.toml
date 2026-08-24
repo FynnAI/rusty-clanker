@@ -1,0 +1,23 @@
+[package]
+name = "rc-chunk-storage"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-nbt = { path = "../nbt" }
+rc-registries = { path = "../registries" }
+
+# `io-uring` is a Linux io_uring syscall wrapper and does not compile at all
+# on non-Linux targets (it is not merely inert there). Scoping it to a
+# `target.cfg` dependency table (rather than a plain optional dependency) is
+# the standard way to keep the `dep:io-uring` feature reference valid on
+# every platform while never even attempting to build the crate off Linux —
+# required for `cargo build --workspace --all-features` to succeed on
+# windows-2025 CI (TEST-D43's two-OS matrix).
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true, optional = true }
+
+[features]
+io_uring = ["dep:io-uring"]

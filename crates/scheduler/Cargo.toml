@@ -1,0 +1,10 @@
+[package]
+name = "rc-scheduler"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-messaging = { path = "../messaging" }
+rc-mod-host = { path = "../mod-host" }

@@ -1,0 +1,20 @@
+[package]
+name = "rc-mechanics"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-registries = { path = "../registries" }
+rc-mod-api = { path = "../mod-api" }
+rc-physics = { path = "../physics" }
+rc-entity-macros = { path = "../entity-macros" }
+rc-scheduler = { path = "../scheduler", optional = true }
+rc-chunk-storage = { path = "../chunk-storage", optional = true }
+rc-brigadier = { path = "../brigadier", optional = true }
+
+[features]
+default = ["server-systems"]
+server-systems = ["dep:rc-scheduler", "dep:rc-chunk-storage", "dep:rc-brigadier"]
+client-predict = []

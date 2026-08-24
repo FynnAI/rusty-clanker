@@ -1,0 +1,8 @@
+[package]
+name = "rc-physics"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }

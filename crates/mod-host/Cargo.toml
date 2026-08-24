@@ -1,0 +1,9 @@
+[package]
+name = "rc-mod-host"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-mod-api = { path = "../mod-api" }

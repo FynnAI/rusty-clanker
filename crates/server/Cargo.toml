@@ -1,0 +1,35 @@
+[package]
+name = "rusty-clanker-server"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "rusty_clanker_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rusty-clanker-server"
+path = "src/main.rs"
+
+[dependencies]
+rc-core = { path = "../core" }
+rc-scheduler = { path = "../scheduler" }
+rc-mechanics = { path = "../mechanics" }
+rc-chunk-storage = { path = "../chunk-storage" }
+rc-worldgen = { path = "../worldgen" }
+rc-protocol = { path = "../protocol" }
+rc-transport-inproc = { path = "../transport-inproc" }
+rc-auth = { path = "../auth" }
+rc-mod-host = { path = "../mod-host" }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+rc-cluster = { path = "../cluster", optional = true }
+rc-transport-net = { path = "../transport-net", optional = true }
+rc-proxy = { path = "../proxy", optional = true }
+
+[features]
+default = ["cluster"]
+cluster = ["dep:rc-cluster", "dep:rc-transport-net", "dep:rc-proxy"]
+monolithic = []

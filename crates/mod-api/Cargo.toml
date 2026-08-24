@@ -1,0 +1,9 @@
+[package]
+name = "rc-mod-api"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-core = { path = "../core" }
+bevy_ecs = { workspace = true }
