@@ -118,8 +118,17 @@ fn split_counter_resets_on_a_single_dip_below_threshold() {
         );
     }
 
+    // The dip's own resulting EWMA (0.2*40.0 + 0.8*46.0 = 44.8) must itself land
+    // below the 45.0 split threshold (to force the reset this test verifies) while
+    // staying close enough to it that a single subsequent 46.0 sample already pulls
+    // the EWMA back above 45.0 (0.2*46.0 + 0.8*44.8 = 45.04) -- otherwise the EWMA's
+    // own smoothing lag would silently swallow several of the "39 more" samples
+    // below the threshold before the streak could even start, and the 40th post-dip
+    // sample below would not yet be a `Split`. A raw sample far below the threshold
+    // (e.g. 10.0) still forces the reset but takes 9 post-dip samples to climb back
+    // over 45.0, not 1 -- see this blueprint's own EWMA formula (Context, ARCH-D19).
     assert_eq!(
-        manager.record_synthetic_tick(id, 10.0, &transport),
+        manager.record_synthetic_tick(id, 40.0, &transport),
         LifecycleOutcome::None
     );
     assert_eq!(manager.region(id).unwrap().ticks_over_split_threshold(), 0);
@@ -214,9 +223,18 @@ fn merge_counter_resets_on_a_single_dip_above_threshold() {
         assert_eq!(outcome, LifecycleOutcome::None);
     }
 
-    // Round 50: the dip -- combined 12.0 >= 5.0 threshold.
+    // Round 50: the dip. `merge_candidate_ticks` is evaluated against the *EWMA*
+    // combination (a's 49-tick-steady 2.0 EWMA smoothed against this one sample), not
+    // the raw sample sum -- 0.2*8.0 + 0.8*2.0 = 3.2, combined with b's steady 2.0 EWMA
+    // gives 5.2 >= 5.0, over the merge threshold, forcing the reset this test
+    // verifies. 8.0 (not e.g. 10.0) is chosen so the very next 2.0 sample already
+    // pulls the combined EWMA back under 5.0 (0.2*2.0 + 0.8*3.2 = 2.96, combined
+    // 4.96 < 5.0) -- otherwise the EWMA's own smoothing lag would swallow several of
+    // the "99 more" rounds below threshold before the streak could even restart, and
+    // the 100th post-dip round would not yet be a `Merged` (see this blueprint's own
+    // EWMA formula, Context, ARCH-D19).
     manager.record_synthetic_tick(b, 2.0, &transport);
-    let outcome = manager.record_synthetic_tick(a, 10.0, &transport);
+    let outcome = manager.record_synthetic_tick(a, 8.0, &transport);
     assert_eq!(outcome, LifecycleOutcome::None);
     assert_eq!(manager.region(a).unwrap().merge_candidate_ticks(b), 0);
 

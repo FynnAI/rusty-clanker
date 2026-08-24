@@ -49,11 +49,20 @@ fn soak_8_regions_stable_20tps_10min() {
     let transport = common::MockTransport::new();
     let mut manager = RegionManager::new(&executor, TARGET_TICK_BUDGET_MS);
 
+    // Spaced two cells apart (never `GridCell::new(_, i, 0)` for consecutive `i`): two
+    // adjacent regions with any non-zero load are, by ARCH-D6's own merge rule, a
+    // combined-EWMA-under-threshold pair racing toward a 100-tick (5s) merge -- for
+    // 8 regions in an unbroken line that fires well inside this test's own run, wiping
+    // out the "every outcome is None" invariant this soak is meant to check. Spacing
+    // every spawned cell 2 apart keeps all 8 regions mutually non-adjacent (`GridCell`
+    // adjacency requires a coordinate difference of exactly 1), so no merge candidate
+    // pair ever exists and this test genuinely measures 8 *independent* regions' TPS
+    // stability, per its own Goal (Context: "Why round-robin, not one-thread-per-region").
     let mut region_ids = Vec::with_capacity(REGION_COUNT);
     for i in 0..REGION_COUNT {
         let id = manager.spawn_region(
             DimensionId::OVERWORLD,
-            [GridCell::new(DimensionId::OVERWORLD, i as i32, 0)],
+            [GridCell::new(DimensionId::OVERWORLD, (i * 2) as i32, 0)],
         );
         manager
             .region_mut(id)
@@ -130,9 +139,25 @@ fn soak_8_regions_stable_20tps_10min() {
         status: SoakStatus::Pass,
     };
 
-    let out_dir = std::path::Path::new("target/soak-report");
-    fs::create_dir_all(out_dir).expect("failed to create target/soak-report");
+    let out_dir = workspace_target_dir().join("soak-report");
+    fs::create_dir_all(&out_dir).expect("failed to create target/soak-report");
     let out_path = out_dir.join("region_soak_8x20tps.json");
     let json = serde_json::to_string_pretty(&report).expect("SoakReport must serialize");
     fs::write(&out_path, json).expect("failed to write soak report");
+}
+
+/// The workspace root's own `target/` directory -- Cargo always runs an integration
+/// test binary with its process working directory set to the *crate's* manifest
+/// directory, never the workspace root, so a bare relative `"target/..."` path would
+/// land inside `crates/scheduler/target/` instead of the workspace-root `target/` this
+/// blueprint's own Verification commands (run from the workspace root) expect. Derived
+/// from `CARGO_MANIFEST_DIR` (a compile-time constant Cargo always sets to this crate's
+/// own directory) rather than the process's runtime working directory, so it is stable
+/// regardless of the caller's own shell cwd.
+fn workspace_target_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent() // crates/
+        .and_then(|p| p.parent()) // workspace root
+        .expect("crates/scheduler is two directories below the workspace root")
+        .join("target")
 }
