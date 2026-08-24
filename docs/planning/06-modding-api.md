@@ -368,13 +368,13 @@ A guide chapter's code block is never typed twice: it is the same bytes as the `
 | 8 | Components on Vanilla Entities & Persistence | `M8` | `examples/08-components` | MOD-D41, MOD-D42 |
 | 9 | Custom World/Chunk Data | post-`M8` (MOD-D43/D44's own mechanism, M8-B06b's stated boundary) | deferred with the mechanism | MOD-D43, MOD-D44 |
 | 10 | Mod Networking Channels | `M8` | `examples/10-networking` | MOD-D20 |
-| 11 | Client-Side: Models, Renderers, GUI, HUD, Input | `M10` | `examples/11-client` (client target) | MOD-D18 |
+| 11 | Client-Side: Models, Renderers, GUI, HUD, Input | `M10` | links `mods/example-ores/client/tests/pulse_material_isomorphism.rs` directly — no separate `examples/` entry, per MOD-D51's own flagship-example-link convention | MOD-D18 |
 | 12 | Isomorphic Packaging & the One-Crate-Two-Targets Build | `M8` | `examples/12-isomorphic` | MOD-D4, MOD-D5 |
 | 13 | Testing Your Mod | `M8` | `examples/13-testing` | MOD-D29 |
 | 14 | Publishing, Versioning & ABI Compatibility | `M8` | — (prose, links `rc-mod-api`'s own version history) | MOD-D21–D23, MOD-D26 |
 | 15 | Migration Notes Policy | `M8` | — (prose, a living index, never a changelog) | MOD-D23 |
 
-Chapter 7's worked example deliberately reuses M8-B06a's own already-shipped, CI-passing test rather than a guide-only reinvention — the clearest instance of MOD-D48's own "never hand-copy, always point at real, already-verified source" rule in practice.
+Chapter 7's worked example deliberately reuses M8-B06a's own already-shipped, CI-passing test rather than a guide-only reinvention — the clearest instance of MOD-D48's own "never hand-copy, always point at real, already-verified source" rule in practice. Chapter 11 follows the identical pattern once `M10`'s own `rc-mod-host` client-side integration blueprint completes `mods/example-ores`'s client render hook for real — the second, not the first, instance of this rule, and the reason MOD-D51 states the flagship-example-link convention generally rather than scoping it to Chapter 7 alone.
 
 ## Interfaces
 
