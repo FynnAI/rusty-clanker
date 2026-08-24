@@ -38,6 +38,5 @@ pub struct BlockStateReport {
 /// The one state in `block.states` flagged `"default": true`. `None` if none is
 /// flagged (a malformed report — every real block has exactly one).
 pub fn find_default_state_id(block: &BlockReport) -> Option<u32> {
-    let _ = block;
-    todo!()
+    block.states.iter().find(|s| s.default).map(|s| s.id)
 }

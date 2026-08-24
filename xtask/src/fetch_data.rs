@@ -49,13 +49,111 @@ pub enum FetchDataError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(serde::Deserialize)]
+struct VersionManifestV2 {
+    versions: Vec<VersionManifestEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct VersionManifestEntry {
+    id: String,
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PerVersionManifest {
+    downloads: Downloads,
+    #[serde(rename = "javaVersion")]
+    java_version: JavaVersion,
+}
+
+#[derive(serde::Deserialize)]
+struct Downloads {
+    server: ServerDownload,
+}
+
+#[derive(serde::Deserialize)]
+struct ServerDownload {
+    sha1: String,
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct JavaVersion {
+    #[serde(rename = "majorVersion")]
+    major_version: u32,
+}
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Resolves `version_id` (e.g. `"26.2"`) against `PISTON_META_MANIFEST_URL`,
 /// downloads the matching `server.jar` to `<repo_root>/<ORACLE_JAR_DIR>/<version_id>/server.jar`
 /// (skipping the download if that path already exists AND its SHA-1 already matches
 /// the manifest's recorded value — the TEST-D44 fast-path), and returns it.
 pub fn fetch_server_jar(version_id: &str, repo_root: &Path) -> Result<FetchedJar, FetchDataError> {
-    let _ = (version_id, repo_root, PISTON_META_MANIFEST_URL);
-    todo!()
+    let manifest_text = reqwest::blocking::get(PISTON_META_MANIFEST_URL)
+        .and_then(|resp| resp.text())
+        .map_err(|e| {
+            FetchDataError::Network(PISTON_META_MANIFEST_URL.to_string(), e.to_string())
+        })?;
+    let manifest: VersionManifestV2 = serde_json::from_str(&manifest_text).map_err(|e| {
+        FetchDataError::Network(PISTON_META_MANIFEST_URL.to_string(), e.to_string())
+    })?;
+
+    let entry = manifest
+        .versions
+        .iter()
+        .find(|v| v.id == version_id)
+        .ok_or_else(|| FetchDataError::VersionNotFound(version_id.to_string()))?;
+
+    let per_version_text = reqwest::blocking::get(&entry.url)
+        .and_then(|resp| resp.text())
+        .map_err(|e| FetchDataError::Network(entry.url.clone(), e.to_string()))?;
+    let per_version: PerVersionManifest = serde_json::from_str(&per_version_text)
+        .map_err(|e| FetchDataError::Network(entry.url.clone(), e.to_string()))?;
+
+    let expected_sha1 = per_version.downloads.server.sha1;
+    let min_java_major = per_version.java_version.major_version;
+
+    let jar_dir = repo_root.join(ORACLE_JAR_DIR).join(version_id);
+    std::fs::create_dir_all(&jar_dir)?;
+    let jar_path = jar_dir.join("server.jar");
+
+    let needs_download = match std::fs::read(&jar_path) {
+        Ok(existing) => sha1_hex(&existing) != expected_sha1,
+        Err(_) => true,
+    };
+
+    if needs_download {
+        let server_url = per_version.downloads.server.url;
+        let bytes = reqwest::blocking::get(&server_url)
+            .and_then(|resp| resp.bytes())
+            .map_err(|e| FetchDataError::Network(server_url.clone(), e.to_string()))?;
+        let actual_sha1 = sha1_hex(&bytes);
+        if actual_sha1 != expected_sha1 {
+            return Err(FetchDataError::HashMismatch {
+                expected: expected_sha1,
+                actual: actual_sha1,
+            });
+        }
+        std::fs::write(&jar_path, &bytes)?;
+    }
+
+    Ok(FetchedJar {
+        jar_path,
+        version_id: version_id.to_string(),
+        sha1: expected_sha1,
+        min_java_major,
+    })
 }
 
 /// Runs `java -DbundlerMainClass=net.minecraft.data.Main -jar <jar.jar_path> --reports`
@@ -70,6 +168,30 @@ pub fn fetch_server_jar(version_id: &str, repo_root: &Path) -> Result<FetchedJar
 /// deterministic per jar). Requires `java` on `PATH`. Returns
 /// `<repo_root>/<DATAGEN_OUTPUT_DIR>/<jar.version_id>/generated/reports/`.
 pub fn run_data_reports(jar: &FetchedJar, repo_root: &Path) -> Result<PathBuf, FetchDataError> {
-    let _ = (jar, repo_root);
-    todo!()
+    let output_dir = repo_root.join(DATAGEN_OUTPUT_DIR).join(&jar.version_id);
+    let reports_dir = output_dir.join("generated").join("reports");
+
+    let already_populated = std::fs::read_dir(&reports_dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if already_populated {
+        return Ok(reports_dir);
+    }
+
+    std::fs::create_dir_all(&output_dir)?;
+
+    let status = std::process::Command::new("java")
+        .arg("-DbundlerMainClass=net.minecraft.data.Main")
+        .arg("-jar")
+        .arg(&jar.jar_path)
+        .arg("--reports")
+        .current_dir(&output_dir)
+        .status()
+        .map_err(|_| FetchDataError::JavaNotFound)?;
+
+    if !status.success() {
+        return Err(FetchDataError::ReportsFailed);
+    }
+
+    Ok(reports_dir)
 }

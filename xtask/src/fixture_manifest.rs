@@ -3,6 +3,8 @@
 //! fixture kinds TEST-D47 also covers — golden data, `rc-gametest` structures, worldgen
 //! seed-corpus entries — none of which this blueprint produces).
 
+use sha2::{Digest, Sha256};
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct FixtureManifest {
     pub protocol_version: u32,
@@ -33,8 +35,13 @@ pub struct ManifestViolation {
 }
 
 pub fn compute_sha256_hex(bytes: &[u8]) -> String {
-    let _ = bytes;
-    todo!()
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Builds a manifest whose every entry's `sha256` is `compute_sha256_hex` of that
@@ -47,14 +54,19 @@ pub fn build_manifest(
     generator_tool_version: &str,
     source_jar_sha1: &str,
 ) -> FixtureManifest {
-    let _ = (
+    FixtureManifest {
         protocol_version,
-        mc_version,
-        files,
-        generator_tool_version,
-        source_jar_sha1,
-    );
-    todo!()
+        mc_version: mc_version.to_string(),
+        entries: files
+            .iter()
+            .map(|(path, bytes)| FixtureEntry {
+                path: path.clone(),
+                sha256: compute_sha256_hex(bytes),
+                generator_tool_version: generator_tool_version.to_string(),
+                source_jar_sha1: source_jar_sha1.to_string(),
+            })
+            .collect(),
+    }
 }
 
 /// Reads the manifest JSON at `manifest_path`, and for every listed entry reads
@@ -67,6 +79,52 @@ pub fn verify_manifest(
     manifest_path: &std::path::Path,
     base_dir: &std::path::Path,
 ) -> Vec<ManifestViolation> {
-    let _ = (manifest_path, base_dir);
-    todo!()
+    let manifest_text = match std::fs::read_to_string(manifest_path) {
+        Ok(text) => text,
+        Err(err) => {
+            return vec![ManifestViolation {
+                path: manifest_path.display().to_string(),
+                kind: "missing",
+                message: format!("failed to read manifest: {err}"),
+            }];
+        }
+    };
+    let manifest: FixtureManifest = match serde_json::from_str(&manifest_text) {
+        Ok(m) => m,
+        Err(err) => {
+            return vec![ManifestViolation {
+                path: manifest_path.display().to_string(),
+                kind: "missing",
+                message: format!("failed to parse manifest: {err}"),
+            }];
+        }
+    };
+
+    let mut violations = Vec::new();
+    for entry in &manifest.entries {
+        match std::fs::read(base_dir.join(&entry.path)) {
+            Err(_) => violations.push(ManifestViolation {
+                path: entry.path.clone(),
+                kind: "missing",
+                message: format!(
+                    "{} listed in the manifest but not found on disk",
+                    entry.path
+                ),
+            }),
+            Ok(bytes) => {
+                let actual = compute_sha256_hex(&bytes);
+                if actual != entry.sha256 {
+                    violations.push(ManifestViolation {
+                        path: entry.path.clone(),
+                        kind: "hash_mismatch",
+                        message: format!(
+                            "{}: manifest says {}, disk has {actual}",
+                            entry.path, entry.sha256
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    violations
 }
