@@ -3,3 +3,6 @@ name = "rc-core"
 version.workspace = true
 edition.workspace = true
 publish = false
+
+[dependencies]
+serde = { workspace = true }

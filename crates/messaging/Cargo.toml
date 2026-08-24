@@ -8,3 +8,7 @@ publish = false
 rc-core = { path = "../core" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+postcard = { workspace = true }
+proptest = { workspace = true }
