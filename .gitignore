@@ -2,6 +2,9 @@
 /target/
 **/*.rs.bk
 
+# Parity/differential test corpora, populated on demand (WS-D10)
+/corpus/
+
 # Mojang-derived material must never enter the repo (ASSET-D18/D19)
 *.jar
 /oracle/
