@@ -112,10 +112,6 @@ fn system_waiter_achieves_tolerance_over_a_short_real_time_run() {
 
     let elapsed = wall_start.elapsed();
     let expected = SERVER_TICK_PERIOD * 40;
-    let diff = if elapsed > expected {
-        elapsed - expected
-    } else {
-        expected - elapsed
-    };
+    let diff = elapsed.abs_diff(expected);
     assert!(diff <= expected.mul_f64(0.05));
 }
