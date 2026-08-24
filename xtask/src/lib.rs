@@ -9,10 +9,19 @@ pub mod datagen;
 pub mod fetch_data;
 pub mod fixture_manifest;
 pub mod fmt_check;
+pub mod forbidden_patterns;
 pub mod lint;
 pub mod lint_deps;
 pub mod metadata;
+pub mod path_guard;
+pub mod quarantine;
+pub mod setup_oracle;
 pub mod test;
+pub mod tier0;
+pub mod tier1;
+pub mod tier_result;
+pub mod verifier_report;
+pub mod verify_fixtures;
 
 use clap::{Parser, Subcommand};
 
