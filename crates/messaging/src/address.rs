@@ -5,7 +5,9 @@ use rc_core::{ChunkKey, RcEntityId};
 /// (this blueprint's Context section explains why). This crate does not allocate
 /// `RegionId` values — that is `rc-scheduler`'s ARCH-D6 region-lifecycle job; this
 /// type only fixes the identifier's shape.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct RegionId(pub u64);
 
 /// Where a `RegionMessage` is headed. Exact shape pinned by ARCH-D25. Resolution of

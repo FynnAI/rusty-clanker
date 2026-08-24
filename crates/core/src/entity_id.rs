@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// enforce uniqueness on construction — use `RcEntityIdAllocator::alloc` for that; a raw
 /// constructor is exposed for deserialization and test-fixture use, where reconstructing
 /// a specific previously-allocated value (not minting a new one) is exactly the point.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct RcEntityId(pub u64);
 
 impl RcEntityId {
@@ -15,7 +17,7 @@ impl RcEntityId {
     /// `RcEntityIdAllocator`). Never call this to mint a *new* id in production code —
     /// that is `RcEntityIdAllocator::alloc`'s exclusive job.
     pub const fn from_raw(id: u64) -> Self {
-        todo!()
+        Self(id)
     }
 }
 
@@ -30,17 +32,17 @@ pub struct RcEntityIdAllocator(AtomicU64);
 impl RcEntityIdAllocator {
     /// The first `alloc()` call on a freshly-constructed instance returns `RcEntityId(1)`.
     pub const fn new() -> Self {
-        todo!()
+        Self(AtomicU64::new(1))
     }
 
     /// Allocate the next id. Thread-safe; never blocks.
     pub fn alloc(&self) -> RcEntityId {
-        todo!()
+        RcEntityId(self.0.fetch_add(1, Ordering::Relaxed))
     }
 }
 
 impl Default for RcEntityIdAllocator {
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }

@@ -10,5 +10,9 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-postcard = { workspace = true }
+# `alloc` is required for `postcard::to_allocvec` (used by
+# tests/envelope_roundtrip.rs); the workspace-pinned version has no default
+# features, so it must be requested here. Test-only (dev-dependency), so
+# `xtask lint-deps` Rule 3 (normal-dependency set only) is unaffected.
+postcard = { workspace = true, features = ["alloc"] }
 proptest = { workspace = true }

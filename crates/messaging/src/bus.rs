@@ -15,14 +15,14 @@ pub struct RegionMessageBus {
 
 impl RegionMessageBus {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Buffer an outbound message. Not visible anywhere else (not in any
     /// `RegionMessageState`, not flushed to `dyn Transport`) until this whole buffer
     /// is passed to `RegionMessageState::merge`.
     pub fn send(&mut self, to: Address, message: RegionMessage) {
-        todo!()
+        self.pending.push((to, message));
     }
 }
 
@@ -39,14 +39,14 @@ pub struct RegionMessageState {
 
 impl RegionMessageState {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Append one finished system's buffered sends onto the outbox, preserving
     /// emission order (this call's entries appended after everything already
     /// merged this tick). Consumes `bus`.
     pub fn merge(&mut self, bus: RegionMessageBus) {
-        todo!()
+        self.outbox.extend(bus.pending);
     }
 
     /// Stage 10: stamp and drain every message merged so far this tick into
@@ -56,17 +56,32 @@ impl RegionMessageState {
     /// counter per distinct `to: Address` value, persisting across ticks (see
     /// Context). Empties the outbox; `seq` counters are **not** reset.
     pub fn drain_outbox(&mut self, from: RegionId, tick_stamp: u64) -> Vec<Message<RegionMessage>> {
-        todo!()
+        let drained = std::mem::take(&mut self.outbox);
+        drained
+            .into_iter()
+            .map(|(to, payload)| {
+                let counter = self.seq_counters.entry(to).or_insert(0);
+                let seq = *counter;
+                *counter += 1;
+                Message {
+                    from,
+                    to,
+                    tick_stamp,
+                    seq,
+                    payload,
+                }
+            })
+            .collect()
     }
 
     /// Stage 1: install this tick's freshly-drained inbound queue (ARCH-D30),
     /// **replacing** whatever was left from last tick (not appending).
     pub fn set_inbox(&mut self, messages: Vec<RegionMessage>) {
-        todo!()
+        self.inbox = messages;
     }
 
     /// Read-only inbound access for any Stage-1..N system.
     pub fn inbox(&self) -> &[RegionMessage] {
-        todo!()
+        &self.inbox
     }
 }
