@@ -23,6 +23,7 @@ Rusty Clanker is a from-scratch Rust reimplementation of the Minecraft: Java Edi
 - **Bring your own assets:** the client reads assets at runtime from the user's legally owned local `.minecraft` installation.
 - **Authentication:** only the Phase 2 client performs the Microsoft/Xbox login flow; ownership is enforced. The server (and cluster proxy) only calls Mojang's public session-validation endpoint.
 - **Dependencies avoid GPL/AGPL/LGPL-family licenses**; no other Minecraft-reimplementation project's code is ever taken as a dependency.
+- **Outbound license: AGPL-3.0-only** (ASSET-D31); every external contribution requires a relicensing CLA before merge (ASSET-D32) — never bare DCO/inbound=outbound.
 - Branding: no Mojang trademark anywhere; every release-facing surface carries the non-affiliation disclaimer. We distribute an engine, not the game. Legal text in planning docs is engineering policy, not legal advice.
 
 ## Load-bearing technical decisions
