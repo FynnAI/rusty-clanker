@@ -32,13 +32,19 @@ fn address_is_hashable() {
     let mut map: HashMap<Address, u32> = HashMap::new();
     map.insert(Address::Region(RegionId(1)), 10);
     map.insert(Address::Entity(RcEntityId(2)), 20);
-    map.insert(Address::Chunk(ChunkKey::new(DimensionId::OVERWORLD, 0, 0)), 30);
+    map.insert(
+        Address::Chunk(ChunkKey::new(DimensionId::OVERWORLD, 0, 0)),
+        30,
+    );
     map.insert(Address::Entity(RcEntityId(3)), 40);
 
     assert_eq!(map.len(), 4);
     assert_eq!(map[&Address::Region(RegionId(1))], 10);
     assert_eq!(map[&Address::Entity(RcEntityId(2))], 20);
-    assert_eq!(map[&Address::Chunk(ChunkKey::new(DimensionId::OVERWORLD, 0, 0))], 30);
+    assert_eq!(
+        map[&Address::Chunk(ChunkKey::new(DimensionId::OVERWORLD, 0, 0))],
+        30
+    );
     assert_eq!(map[&Address::Entity(RcEntityId(3))], 40);
 }
 

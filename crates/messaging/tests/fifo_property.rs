@@ -5,7 +5,9 @@ use rc_messaging::{
 };
 
 struct MockTransport {
-    inboxes: std::sync::Mutex<std::collections::HashMap<RegionId, std::collections::VecDeque<Message<RegionMessage>>>>,
+    inboxes: std::sync::Mutex<
+        std::collections::HashMap<RegionId, std::collections::VecDeque<Message<RegionMessage>>>,
+    >,
 }
 
 impl MockTransport {
@@ -22,11 +24,20 @@ impl Transport for MockTransport {
             Address::Region(r) => r,
             _ => panic!("mock only targets Address::Region"),
         };
-        self.inboxes.lock().unwrap().entry(to).or_default().push_back(msg);
+        self.inboxes
+            .lock()
+            .unwrap()
+            .entry(to)
+            .or_default()
+            .push_back(msg);
         Ok(())
     }
     fn try_recv(&self, into: RegionId) -> Option<Message<RegionMessage>> {
-        self.inboxes.lock().unwrap().get_mut(&into).and_then(|q| q.pop_front())
+        self.inboxes
+            .lock()
+            .unwrap()
+            .get_mut(&into)
+            .and_then(|q| q.pop_front())
     }
 }
 
