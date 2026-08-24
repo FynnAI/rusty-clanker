@@ -60,10 +60,7 @@ fn workspace_members() -> Vec<String> {
 /// Every workspace crate plus the three external crates referenced by
 /// Rule 3 (`rc-messaging`) / Rule 4 (`rc-mod-api`) checks in the clean graph.
 fn clean_packages() -> Vec<Package> {
-    let mut pkgs: Vec<Package> = workspace_members()
-        .iter()
-        .map(|id| pkg(id, id))
-        .collect();
+    let mut pkgs: Vec<Package> = workspace_members().iter().map(|id| pkg(id, id)).collect();
     pkgs.push(pkg("bevy_ecs", "bevy_ecs"));
     pkgs.push(pkg("serde", "serde"));
     pkgs.push(pkg("thiserror", "thiserror"));
@@ -272,7 +269,12 @@ fn rule1_flags_missing_shared_crate() {
         workspace_members: workspace_members(),
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 1, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     assert_eq!(violations[0].rule, "rule1");
     assert!(violations[0].message.contains("rc-physics"));
     assert!(violations[0].message.contains("rusty-clanker-client"));
@@ -281,7 +283,10 @@ fn rule1_flags_missing_shared_crate() {
 #[test]
 fn rule2_flags_scheduler_reaching_render() {
     let meta = CargoMetadata {
-        packages: vec![pkg("rc-scheduler", "rc-scheduler"), pkg("rc-render", "rc-render")],
+        packages: vec![
+            pkg("rc-scheduler", "rc-scheduler"),
+            pkg("rc-render", "rc-render"),
+        ],
         resolve: Resolve {
             nodes: vec![
                 node("rc-scheduler", &["rc-render"], &["rc-render"]),
@@ -291,7 +296,12 @@ fn rule2_flags_scheduler_reaching_render() {
         workspace_members: vec!["rc-scheduler".to_string(), "rc-render".to_string()],
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 1, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     assert_eq!(violations[0].rule, "rule2");
 }
 
@@ -329,7 +339,10 @@ fn rule2_flags_transitive_violation() {
 #[test]
 fn rule2_allows_scheduler_and_mechanics_depending_on_each_other() {
     let meta = CargoMetadata {
-        packages: vec![pkg("rc-mechanics", "rc-mechanics"), pkg("rc-scheduler", "rc-scheduler")],
+        packages: vec![
+            pkg("rc-mechanics", "rc-mechanics"),
+            pkg("rc-scheduler", "rc-scheduler"),
+        ],
         resolve: Resolve {
             nodes: vec![
                 node("rc-mechanics", &["rc-scheduler"], &["rc-scheduler"]),
@@ -366,7 +379,12 @@ fn rule3_flags_extra_normal_dep() {
         workspace_members: vec!["rc-messaging".to_string()],
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 1, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     assert_eq!(violations[0].rule, "rule3");
 }
 
@@ -388,7 +406,12 @@ fn rule3_flags_missing_required_dep() {
         workspace_members: vec!["rc-messaging".to_string()],
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 1, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     assert_eq!(violations[0].rule, "rule3");
 }
 
@@ -446,7 +469,12 @@ fn rule4_flags_extra_normal_dep() {
         workspace_members: vec!["rc-mod-api".to_string()],
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 1, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        1,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     assert_eq!(violations[0].rule, "rule4");
 }
 
@@ -480,7 +508,12 @@ fn multiple_violations_all_reported() {
         ],
     };
     let violations = check_rules(&meta);
-    assert_eq!(violations.len(), 2, "violations: {:?}", violations_debug(&violations));
+    assert_eq!(
+        violations.len(),
+        2,
+        "violations: {:?}",
+        violations_debug(&violations)
+    );
     let mut rules: Vec<&str> = violations.iter().map(|v| v.rule).collect();
     rules.sort_unstable();
     assert_eq!(rules, vec!["rule2", "rule3"]);
@@ -494,10 +527,7 @@ fn real_workspace_has_zero_forbidden_edges() {
     assert!(
         violations.is_empty(),
         "violations: {:?}",
-        violations
-            .iter()
-            .map(|v| &v.message)
-            .collect::<Vec<_>>()
+        violations.iter().map(|v| &v.message).collect::<Vec<_>>()
     );
 }
 
