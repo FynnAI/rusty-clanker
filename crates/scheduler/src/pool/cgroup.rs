@@ -7,15 +7,32 @@
 /// `"max $PERIOD"`). `None` for an unlimited quota or malformed content.
 /// `ceil(quota / period)` on a finite quota (PERF-D57's exact formula).
 pub fn parse_cgroup_v2_max(content: &str) -> Option<u64> {
-    let _ = content;
-    todo!()
+    let mut parts = content.split_whitespace();
+    let quota_str = parts.next()?;
+    let period_str = parts.next()?;
+    if quota_str == "max" {
+        return None;
+    }
+    let quota: u64 = quota_str.parse().ok()?;
+    let period: u64 = period_str.parse().ok()?;
+    if period == 0 {
+        return None;
+    }
+    Some(quota.div_ceil(period))
 }
 
 /// Pure parser for cgroup v1's split quota/period files. `quota <= 0` is the
 /// documented "unlimited" sentinel and returns `None`.
 pub fn parse_cgroup_v1(quota_us: &str, period_us: &str) -> Option<u64> {
-    let _ = (quota_us, period_us);
-    todo!()
+    let quota: i64 = quota_us.trim().parse().ok()?;
+    if quota <= 0 {
+        return None;
+    }
+    let period: u64 = period_us.trim().parse().ok()?;
+    if period == 0 {
+        return None;
+    }
+    Some((quota as u64).div_ceil(period))
 }
 
 /// Reads `/sys/fs/cgroup/cpu.max` (v2), falling back to
@@ -24,5 +41,10 @@ pub fn parse_cgroup_v1(quota_us: &str, period_us: &str) -> Option<u64> {
 /// failure or an unlimited quota.
 #[cfg(target_os = "linux")]
 pub fn read_cgroup_cores() -> Option<usize> {
-    todo!()
+    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/cpu.max") {
+        return parse_cgroup_v2_max(content.trim()).map(|cores| cores as usize);
+    }
+    let quota = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").ok()?;
+    let period = std::fs::read_to_string("/sys/fs/cgroup/cpu/cpu.cfs_period_us").ok()?;
+    parse_cgroup_v1(&quota, &period).map(|cores| cores as usize)
 }

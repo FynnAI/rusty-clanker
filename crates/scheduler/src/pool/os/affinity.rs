@@ -6,12 +6,18 @@
 /// empty on an unsupported host — the caller skips pinning entirely in that
 /// case, never fatally.
 pub(crate) fn get_core_ids() -> Vec<core_affinity::CoreId> {
-    todo!()
+    core_affinity::get_core_ids().unwrap_or_default()
 }
 
 /// Pins the *calling* thread to `core_ids[worker_id % core_ids.len()]`
 /// (round-robin placement). A no-op if `core_ids` is empty.
 pub(crate) fn pin_current_thread(core_ids: &[core_affinity::CoreId], worker_id: usize) {
-    let _ = (core_ids, worker_id);
-    todo!()
+    if core_ids.is_empty() {
+        return;
+    }
+    let core_id = core_ids[worker_id % core_ids.len()];
+    // Best-effort: an unsupported host or a race with a hot-unplugged core
+    // is not treated as fatal (PERF-D14's own "skipped entirely, never
+    // fatal" requirement for the no-core-ids case extends naturally here).
+    let _ = core_affinity::set_for_current(core_id);
 }

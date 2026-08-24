@@ -51,11 +51,24 @@ pub struct SystemTickWaiter;
 
 impl TickWaiter for SystemTickWaiter {
     fn now(&self) -> Instant {
-        todo!()
+        Instant::now()
     }
+
     fn wait_until(&self, deadline: Instant) {
-        let _ = deadline;
-        todo!()
+        let now = Instant::now();
+        if deadline <= now {
+            return;
+        }
+        let remaining = deadline - now;
+
+        #[cfg(windows)]
+        {
+            crate::pool::os::windows::wait_high_res(remaining);
+        }
+        #[cfg(not(windows))]
+        {
+            std::thread::sleep(remaining);
+        }
     }
 }
 
@@ -83,7 +96,7 @@ pub struct TickClock<W: TickWaiter = SystemTickWaiter> {
 impl TickClock<SystemTickWaiter> {
     /// First deadline = construction time + `SERVER_TICK_PERIOD`.
     pub fn new() -> Self {
-        todo!()
+        Self::with_waiter(SystemTickWaiter)
     }
 }
 
@@ -95,16 +108,27 @@ impl Default for TickClock<SystemTickWaiter> {
 
 impl<W: TickWaiter> TickClock<W> {
     pub fn with_waiter(waiter: W) -> Self {
-        let _ = waiter;
-        todo!()
+        let next_deadline = waiter.now() + SERVER_TICK_PERIOD;
+        Self {
+            waiter,
+            next_deadline,
+            tick_counter: 0,
+        }
     }
 
     pub fn tick_counter(&self) -> u64 {
-        todo!()
+        self.tick_counter
     }
 
+    /// The deadline this clock last targeted: before the first
+    /// `await_next_tick` call, that is the upcoming first tick's deadline
+    /// (`TickClock::new`'s own "construction time + SERVER_TICK_PERIOD");
+    /// after any call, it is that same call's own `scheduled_deadline` —
+    /// i.e. `next_deadline()` always reflects the schedule position
+    /// `await_next_tick` most recently used or is about to use, never one
+    /// tick further ahead than the caller has actually observed.
     pub fn next_deadline(&self) -> Instant {
-        todo!()
+        self.next_deadline
     }
 
     /// True if `now` is at or past this clock's next scheduled deadline
@@ -112,14 +136,37 @@ impl<W: TickWaiter> TickClock<W> {
     /// decide scheduling priority is a future blueprint's job, not this
     /// method's).
     pub fn is_overdue(&self, now: Instant) -> bool {
-        let _ = now;
-        todo!()
+        now >= self.next_deadline
     }
 
     /// Waits for `next_deadline`, then advances the schedule by exactly one
     /// more `SERVER_TICK_PERIOD` from that same (never from `actual_wake`)
     /// deadline. Never skips or batches ticks under sustained overrun.
+    ///
+    /// The advance for the *next* call is applied lazily, at the top of
+    /// this method, rather than immediately after computing this call's own
+    /// timing: this keeps `next_deadline()` reporting the deadline this
+    /// call itself just targeted (never a tick further ahead than any
+    /// caller has observed) while still deriving every future deadline
+    /// from the untouched, never-drift-compounding schedule value — the
+    /// two are the same stored field, just advanced one call later than a
+    /// naive "advance right after waiting" ordering would.
     pub fn await_next_tick(&mut self) -> TickTiming {
-        todo!()
+        if self.tick_counter > 0 {
+            self.next_deadline += SERVER_TICK_PERIOD;
+        }
+        let scheduled_deadline = self.next_deadline;
+        self.waiter.wait_until(scheduled_deadline);
+        let actual_wake = self.waiter.now();
+        let overrun = actual_wake.saturating_duration_since(scheduled_deadline);
+
+        self.tick_counter += 1;
+
+        TickTiming {
+            tick_index: self.tick_counter,
+            scheduled_deadline,
+            actual_wake,
+            overrun,
+        }
     }
 }

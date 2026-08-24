@@ -15,7 +15,12 @@ core_affinity = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+# Win32_Security: CreateWaitableTimerExW's own signature references
+# Security::SECURITY_ATTRIBUTES (even though this crate always passes
+# `None` for it), so that module must be enabled for the type to exist.
+# Confirmed against the installed windows 0.62.2 docs at implementation
+# time, per this blueprint's own Context verification note.
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { workspace = true }
