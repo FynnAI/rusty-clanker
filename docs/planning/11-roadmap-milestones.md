@@ -175,11 +175,13 @@ flowchart LR
 - `rc-mod-api`'s hook trait surface and `ComponentDescriptor` builder (wrapping ARCH-D4), `rc-mod-host`'s dylib loader (`libloading`), hook injection points into `01`'s current `ARCH-D8` domain groups (`01` now enumerates eight; this milestone tracks whatever `01` currently names, per `06`'s MOD-D8/D37, not a fixed count restated here).
 - A reference mod: one new block type with custom tick behavior, one new item, one client-side render hook — built as a real showcase, not a stub.
 - Crash isolation: the mod-host boundary catches a panicking hook via `catch_unwind` rather than crashing the server process.
+- The Mod Developer Guide's documentation infrastructure (`06`'s MOD-D47's three-part CI wiring — rustdoc reference, mdBook build/hosting per MOD-D49, `examples/` workspace crates) plus every guide chapter whose underlying capability `M8` itself ships natively (MOD-D50's chapter outline: Getting Started, Core Concepts, Blocks & Behaviors, Items, Custom Systems & Ordering Anchors, Events, Override & Wrap Vanilla, Components on Vanilla Entities & Persistence, Mod Networking Channels, Isomorphic Packaging, Testing Your Mod, Publishing/Versioning & ABI Compatibility, and Migration Notes Policy) — each chapter backed by its own `examples/` crate exercising exactly the `M8`-shipped native tier (MOD-D48). Custom World/Chunk Data (chapter 9) and Client-Side (chapter 11) are explicitly out of `M8`'s own scope, deferred per MOD-D52.
 
 **Acceptance criteria:**
 - The reference mod's dylib loads at server startup with zero engine source changes, registers a new component via `register_component_with_descriptor`, and that component correctly participates in ARCH-D8's startup conflict-graph check — proven by a second, deliberately conflicting test mod being rejected at boot with a clear diagnostic, not a silent misbehavior.
 - A mod-crash isolation test: the reference mod's tick hook is made to panic deliberately; the engine catches it at the `rc-mod-host` boundary, logs the failure, disables only that mod, and the tick pipeline continues at 20 TPS for every other region and every unaffected system without crashing the server process.
 - The reference mod's hook contract is verified via a headless test harness proving each hook fires at the correct pipeline point with correct data — full visual verification of its client-side render hook is explicitly deferred to `M10`, since the native client does not exist yet at this point in the sequence (PLAN-D2).
+- Per MOD-D52's binding definition-of-done rule: none of `M8`'s own mod-API capabilities is considered done on engine-side tests alone — each requires its guide chapter and its tested `examples/` entry to both exist and pass Tier 1 CI (TEST-D37) before `M8` itself is considered complete.
 
 ### M9 — Client Bootstrap: Connect & Render a Static World
 
@@ -202,6 +204,7 @@ flowchart LR
 **Scope:**
 - Entity rendering/animation, inventory/HUD UI, sound playback from local assets, chat.
 - `rc-mod-host` client-side integration: the `M8` reference mod's client-side render hook, deferred at `M8`, is completed and verified here.
+- The Mod Developer Guide's Client-Side chapter (mdBook chapter 11: Models, Renderers, GUI, HUD, Input — MOD-D50/D52) lands here, tied to the same `M8`-reference-mod client-hook completion this milestone's own acceptance criteria already require — it cannot land earlier, since `M10` is the milestone that first proves the hook renders correctly at all.
 
 **Acceptance criteria:**
 - A full play session — join, move, build, fight a mob, open inventory, chat — is completable start to finish using only the native client against a Rusty Clanker server, no Java client involved, for a continuous 30-minute session with zero crashes.

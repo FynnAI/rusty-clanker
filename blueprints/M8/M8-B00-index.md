@@ -48,8 +48,11 @@ real-`RcExecutor`-wave stage-position proof, and the milestone's
 | M8-B05 | Mod API Alpha Acceptance Harness | M |
 | M8-B06a | Override & Replacement: Behavior-Level, System-Level, Cross-Mod Diagnostics, Parity Surfacing | L |
 | M8-B06b | Event Layer & Component Attachment to Vanilla Entities | L |
+| M8-B07 | Mod Developer Documentation: Infrastructure, Rot-Proofing, and the M8 Curriculum | L |
 
 `M8-B06a`/`M8-B06b` implement `06-modding-api.md`'s override/replacement decision block (MOD-D33–D46), added to that document after the roadmap's own three numbered M8 acceptance criteria (below) were already fixed — a binding extension of M8's own scope, not a fourth numbered criterion, per the task mandate that vanilla behavior hold no special position over what the mod API exposes. Both build additively on `M8-B01`/`M8-B02`/`M8-B03`'s already-shipped surfaces and on M3-B01/M4-B06's already-shipped `rc-mechanics` content; neither depends on, or is depended on by, `M8-B04`/`M8-B05`.
+
+`M8-B07` implements `06-modding-api.md`'s documentation decision block (MOD-D47–D52), added to that document after the roadmap's own three numbered M8 acceptance criteria were already fixed but subsequently folded into `11-roadmap-milestones.md`'s own M8 Acceptance criteria as a fourth, explicit bullet (MOD-D52's binding chapter-plus-tested-examples definition-of-done rule) — restated in the mapping table below as acceptance criterion #4. It is the milestone's last blueprint to land: its own Prerequisites cite `M8-B01`'s complete public surface (restated verbatim for every chapter/example to build against), `M8-B02`'s surface as explanatory context only (this blueprint's own `examples/` crates are never dylib-loaded through `ServerModHost` by its own tests), and `M8-B04`/`M8-B06a`/`M8-B06b`'s already-shipped, already-CI-proven worked cases (`mods/example-ores`, `crates/mechanics/tests/water_override_replace.rs`, `crates/mod-api/tests/abi_handshake.rs`) linked directly rather than reinvented. It does not depend on `M8-B05` and is not depended on by any other M8 blueprint.
 
 ## Dependency graph
 
@@ -81,10 +84,16 @@ flowchart TD
     B01 --> B06b
     B06a --> B06b
 
+    B07["M8-B07\nMod Developer Documentation\n(rustdoc + mdBook + examples/,\nrot-proofing, M8 curriculum)"]
+    B01 --> B07
+    B04 --> B07
+    B06b --> B07
+
     style B04 fill:transparent
     style B05 fill:transparent
     style B06a fill:transparent
     style B06b fill:transparent
+    style B07 fill:transparent
 ```
 
 **Recommended execution order:**
@@ -129,6 +138,12 @@ flowchart TD
    layer has no mechanism-level dependency on M8-B06a's own override
    machinery at all (06's own "events sit underneath, composing freely
    but never depending on, the override tiers").
+7. **M8-B07** last, once M8-B01/B02/B04/B06a/B06b all land — it is the
+   milestone's documentation deliverable, restating every prior
+   blueprint's already-shipped public surface into rustdoc, an mdBook
+   guide, and CI-verified `examples/` crates rather than shipping any
+   new mod-facing mechanism of its own. It shares no dependency edge,
+   in either direction, with M8-B05.
 
 ## Per-blueprint summary
 
@@ -315,6 +330,29 @@ piggybacking on `05`'s still-unbuilt GameRules mechanism) — neither
 named in this task's own component-attachment bullet, both flagged as
 a later blueprint's own job rather than silently dropped.
 
+**M8-B07 — Mod Developer Documentation.** Turns MOD-D47–D52's
+"documentation cannot rot" mandate into an actually-enforced CI gate:
+the `docs/mod-guide/` mdBook (MOD-D49) over its full fixed 15-chapter
+navigation (MOD-D50), the anchor-based `{{#rustdoc_include}}`/
+`{{#include}}` rot-proofing mechanism binding every shown code block to
+a real, workspace-member `examples/<NN>-<slug>/` mod crate (MOD-D48),
+`#![deny(missing_docs)]`/`RUSTDOCFLAGS="-D warnings"` plus a runnable-
+doctest audit over `rc-mod-api`'s complete public surface (MOD-D47),
+and a machine-checked `CHAPTER_MANIFEST` proving MOD-D52's own binding
+definition-of-done rule (a chapter and its tested `examples/` entry
+both exist and pass Tier 1 CI) for every M8-landing capability. Writes
+Chapters 1 and 2 verbatim and every other M8-landing chapter as a
+binding outline an implementer transcribes without inventing API
+claims; Chapters 9 (Custom World/Chunk Data) and 11 (Client-Side) ship
+as honest, explicitly-dated stub pages, never silently omitted.
+Reuses `mods/example-ores` (M8-B04) and `crates/mechanics/tests/
+water_override_replace.rs` (M8-B06a) as worked cases rather than
+inventing new ones, and mirrors every `dynptr!`/entry-factory
+construction in its own 11 new `examples/` crates on M8-B04's own
+already-resolved pattern verbatim. Adds no new mod-facing mechanism of
+its own — every capability it documents was already shipped by an
+earlier M8 blueprint.
+
 ## M8 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
@@ -322,6 +360,7 @@ a later blueprint's own job rather than silently dropped.
 | 1 | Reference mod's dylib loads at server startup with zero engine source changes, registers a new component via `register_component_with_descriptor`, participates in ARCH-D8's startup conflict-graph check; a second, conflicting test mod is rejected at boot with a clear diagnostic. | M8-B01 (manifest schema, registration surface), M8-B02 (real discovery/load/ABI handshake), M8-B03 (`resolve_component_access`/`resolve_hook_order`, the real `ModOrderingError::Cycle` rejection), **M8-B04** (`example_ores`/`conflict-probe`, `mod_reference_conflict_graph.rs`/`mod_reference_hook_dispatch.rs` — the real registration-observable and conflict-rejection proofs), **M8-B05** (the mechanically-checked "zero engine source change" gate `mod_reference_conflict_graph.rs` itself does not attempt; cites M8-B04's own registration/rejection proofs by name in its own completion report rather than re-running them) | Registration-observable and conflict-rejection are proven exactly once, by M8-B04, against two real, separately-compiled dylibs; M8-B05 adds the one sub-criterion neither M8-B04 nor any earlier blueprint checks (the mechanical zero-engine-tree-diff gate) and cites the rest. The real `bevy_ecs::component::ComponentDescriptor`/`register_component_with_descriptor` translation and a real `rusty-clanker-server --mods-dir` boot-refusal remain honestly gated on a still-future composition-root blueprint (M8-B05's own `AC1d`, correctly reported `fail`, never faked). |
 | 2 | A deliberate panic in the reference mod's tick hook is caught at the `rc-mod-host` boundary, disables only that mod, and the tick pipeline continues at 20 TPS for every other region/system without crashing the server process. | M8-B02 (`catch_unwind`/`ModStatus::Disabled`, isolated-layer proof), M8-B03 (scheduler-side `Arc<AtomicBool>` disable path, synthetic-`ModHookInvoke` proof), M8-B04 (real dylib, repeated synchronous `tick_region`, no real-time pacing — honestly, explicitly deferred), **M8-B05** (real dylib, real `RegionManager`/`TickClock`-paced 20 TPS loop, `\|drift_ratio\| <= 1%` — the milestone's only real-time-paced proof) | Proven exactly once at the full, wall-clock-accurate fidelity the criterion names — by M8-B05, reusing M8-B04's own dylib and bridge function directly rather than re-authoring either. |
 | 3 | Every hook fires at the correct pipeline point with correct data, headlessly; client render hook visual verification deferred to M10. | M8-B01 (hook catalog contract), M8-B02 (isolated-layer dispatch+data proof, `good_mod` fixture), M8-B03 (real conflict-graph wave membership, synthetic hooks), M8-B04 (`mod_reference_hook_dispatch.rs`, real `example_ores` dylib — lifecycle/registry-content, block-behavior direct-call correctness, and client-registration headless verification), **M8-B05** (the flagship real-`RcExecutor`-wave `Stage`-position proof, plus a lifecycle-call-ordering invariant — the two sub-proofs neither M8-B03's synthetic doubles nor M8-B04's synchronous-dispatch proof attempts; cites M8-B04's own block-behavior and client-registration proofs by name rather than re-running them) | Each sub-proof is owned by exactly one blueprint, with M8-B05's own completion report naming which blueprint's test suite each `AC3_*` case is actually sourced from. |
+| 4 | Per MOD-D52's binding definition-of-done rule (`11-roadmap-milestones.md`'s own fourth M8 Acceptance criterion): none of `M8`'s own mod-API capabilities is considered done on engine-side tests alone — each requires its Mod Developer Guide chapter and its tested `examples/` entry to both exist and pass Tier 1 CI before `M8` itself is considered complete. | **M8-B07** (the complete rustdoc/mdBook/`examples/` infrastructure; the `xtask doc-guide verify-manifest` checker realizing the rule mechanically; every M8-landing chapter of MOD-D50's curriculum) | Proven exactly once, by M8-B07, against the real, final, committed `docs/mod-guide/`/`examples/` trees — it does not re-derive any engine-side proof M8-B01–B06b already own, only that each already-shipped capability also has a passing chapter and example. |
 
 ## Cross-blueprint consistency notes
 
@@ -449,10 +488,17 @@ requirement, additively, against M3-B01/M4-B06's already-shipped
 `rc-mechanics` content. M8-B06b needs M8-B06a merged (its own Header) solely
 to reuse the `rc-mod-api` dependency edge M8-B06a already added to
 `rc-mechanics`, and closes out MOD-D39's event layer and MOD-D41/D42's
-persistence/resolution contract. M8's own build order is therefore
+persistence/resolution contract. M8-B07 needs M8-B01/B02/B04/B06a/B06b
+merged and is the milestone's last blueprint: it closes out MOD-D47–D52's
+documentation decision block by restating every one of the other six
+blueprints' already-shipped public surface into rustdoc, an mdBook
+guide, and CI-verified `examples/` crates, and by mechanically proving
+MOD-D52's own binding chapter-plus-tested-example definition-of-done
+rule for every M8-landing capability. M8's own build order is therefore
 **M8-B01 → M8-B02 → M8-B03**, after which **M8-B04 → M8-B05** and
 **M8-B06a → M8-B06b** proceed independently, in either order or in
-parallel.
+parallel, and **M8-B07** lands last, once M8-B01/B02/B04/B06a/B06b are
+all merged.
 
 Every blueprint's own Tier-1 gate is independently sound: the
 vtable-unwind-catchability smoke test (M8-B02) is exactly the kind of
@@ -460,9 +506,12 @@ vtable-unwind-catchability smoke test (M8-B02) is exactly the kind of
 this corpus values; the two independent Kahn's-algorithm applications
 (M8-B02's dependency order, M8-B03's hook order) are each correctly
 distinguished from `compute_waves`'s own third, pre-existing
-application; and the milestone's three acceptance criteria are fully,
-honestly proven against real, separately-compiled native-tier dylibs —
-each sub-criterion owned by exactly one blueprint, with the one
-remaining gap (a real `rusty-clanker-server --mods-dir` boot run) named
-precisely as a still-future composition-root blueprint's binding
-contract, never faked, in both M8-B04 and M8-B05.
+application; and the milestone's first three acceptance criteria are
+fully, honestly proven against real, separately-compiled native-tier
+dylibs — each sub-criterion owned by exactly one blueprint, with the
+one remaining gap (a real `rusty-clanker-server --mods-dir` boot run)
+named precisely as a still-future composition-root blueprint's binding
+contract, never faked, in both M8-B04 and M8-B05. The fourth
+acceptance criterion — MOD-D52's documentation definition-of-done rule
+— is proven independently, and only, by M8-B07, against the real,
+final, committed `docs/mod-guide/`/`examples/` trees.

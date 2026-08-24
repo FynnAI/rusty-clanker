@@ -46,6 +46,8 @@ This is the entry point to Rusty Clanker's planning documentation, for humans an
 | `14-performance-engineering.md` | Cross-cutting performance engineering | Owns the parity-gated fast-path framework, memory/allocation/SIMD/build-pipeline/OS-tuning policy, and the concrete performance budgets/reference hardware every other document's performance-adjacent decisions point back to. |
 | `15-crossplay.md` | Bedrock Edition cross-play | Defines the Bedrock protocol-translation layer sitting outside the ECS/tick pipeline, the RakNet transport and Bedrock-side identity/auth chain, the translation-scope tier list, the mapping-data pipeline, and the `M11` cross-play milestone — Java Edition semantics remain authoritative without exception. |
 
+This project's documentation surface is not limited to the table above: `06-modding-api.md`'s MOD-D47–D52 define a second, mod-author-facing corpus, an mdBook published at `docs/mod-guide/` on every tagged engine release — outside `docs/planning/`'s own current-state-only scope, since it targets external mod developers rather than this project's own contributors.
+
 ## Foundational Decisions
 
 The most load-bearing decisions across all documents, by ID. This is a pointer index, not a summary of record — read the owning document's Decisions table for full text and rationale.
