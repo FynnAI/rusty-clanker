@@ -6,3 +6,10 @@ publish = false
 
 [dependencies]
 rc-messaging = { path = "../messaging" }
+crossbeam-channel = { workspace = true }
+crossbeam-queue = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+rc-core = { path = "../core" }
+proptest = { workspace = true }
