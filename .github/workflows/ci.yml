@@ -4,10 +4,17 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      m1_report_mode:
+        description: "m1-acceptance report mode when manually triggered"
+        type: choice
+        options: [smoke, full]
+        default: smoke
   schedule:
     # TEST-D37 Tier 2, nightly: M0's own headline acceptance criterion 1 (M0-B06's
     # soak-tests-gated soak_8_regions_stable_20tps_10min), the only real Tier-2-shaped
-    # content M0 has (Context: "TEST-D37 restated").
+    # content M0 has (Context: "TEST-D37 restated"). Also gates the M1-B06
+    # `m1-acceptance` job below (always `smoke` mode on this automatic cadence).
     - cron: "0 7 * * *"
 
 jobs:
@@ -167,4 +174,67 @@ jobs:
         with:
           name: soak-report-${{ matrix.os }}
           path: target/soak-report/region_soak_8x20tps.json
+          if-no-files-found: warn
+
+  m1-acceptance:
+    name: m1-acceptance (${{ matrix.os }})
+    # Nightly cron: always `smoke`. Manual dispatch: whatever `m1_report_mode` was
+    # chosen (default `smoke`) — the real, uncompressed 30-minute `full` run is
+    # deliberately never on the automatic nightly cadence (Context: manual/on-demand
+    # is the one that closes M1, not a routine nightly cost).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      # `rc-paritybot`'s own transitive `azalea` dependency requires a nightly Rust
+      # toolchain (Context, "azalea's own upstream nightly-toolchain requirement") --
+      # this project's root `rust-toolchain.toml` stays pinned to stable (WS-D4) for
+      # every other crate; `crates/testing/paritybot/`'s own nested
+      # `rust-toolchain.toml` override supplies the nightly channel automatically for
+      # any `cargo` invocation whose working directory is at or below that path
+      # (every step below that touches `rc-paritybot` explicitly `cd`s there first).
+      - name: rc-paritybot lint (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
+
+      - name: Build rusty-clanker-server (monolithic)
+        run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: m1-report
+        shell: bash
+        run: |
+          MODE="${{ github.event_name == 'workflow_dispatch' && inputs.m1_report_mode || 'smoke' }}"
+          cargo run -p xtask -- m1-report --server-bin target/release/rusty-clanker-server --mode "$MODE"
+
+      - name: Upload m1-acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1-acceptance-${{ matrix.os }}
+          path: target/verify/m1-acceptance.json
           if-no-files-found: warn

@@ -45,16 +45,16 @@ pub const PROTECTED_PATHS: &[ProtectedPath] = &[
         reason: "the verification-verb source itself",
     },
     ProtectedPath {
-        pattern: "crates/testing/rc-test-harness/**",
-        reason: "harness comparison/assertion logic",
+        pattern: "crates/testing/test-harness/**",
+        reason: "rc-test-harness: process orchestration, probe, fake-server logic (M1-B06)",
     },
     ProtectedPath {
         pattern: "crates/testing/rc-golden-data/src/**",
         reason: "golden-data comparison logic",
     },
     ProtectedPath {
-        pattern: "crates/testing/rc-paritybot/src/**",
-        reason: "differential-comparator logic",
+        pattern: "crates/testing/paritybot/**",
+        reason: "rc-paritybot: bot-driver scenario logic (M1-B06) — covers src/ and tests/ uniformly",
     },
     ProtectedPath {
         pattern: "crates/testing/rc-gametest/src/**",

@@ -4,7 +4,15 @@
 //! exactly what happened. Context, "The vanilla-client stand-in: why azalea" /
 //! "`azalea::ClientBuilder::start`'s infinite-retry behavior."
 
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use azalea::prelude::*;
+
+/// How often the supervisor loop below re-checks the shared, handler-updated
+/// scenario state. Fine-grained enough that every acceptance test's own tolerance
+/// windows (as narrow as `450ms..1000ms`) are comfortably met.
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub struct ScenarioConfig {
     pub host: String,
@@ -61,6 +69,62 @@ pub enum ScenarioError {
     },
 }
 
+/// Handler-updated, poll-observed scenario progress — shared between the azalea
+/// event-handler task and this module's own supervisor loop via `Arc<Mutex<..>>`.
+#[derive(Default)]
+struct Progress {
+    reached_login: bool,
+    reached_spawn: bool,
+    disconnected_at: Option<Duration>,
+    disconnect_reason: Option<String>,
+    client: Option<Client>,
+}
+
+/// The per-bot azalea component (`ClientBuilder::set_handler`'s `S: Default + Send +
+/// Sync + Clone + Component` bound) — a thin, `Clone`-cheap handle onto `Progress` plus
+/// the scenario's own start instant (Context: `disconnected_at` is measured from the
+/// scenario's own start, not from any azalea-internal clock).
+#[derive(Clone, Component)]
+struct SharedState {
+    progress: Arc<Mutex<Progress>>,
+    started_at: Instant,
+}
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            progress: Arc::new(Mutex::new(Progress::default())),
+            started_at: Instant::now(),
+        }
+    }
+}
+
+async fn handle(bot: Client, event: Event, state: SharedState) {
+    match event {
+        Event::Login => {
+            let mut progress = state.progress.lock().unwrap();
+            progress.reached_login = true;
+            progress.client = Some(bot);
+        }
+        Event::Spawn => {
+            let mut progress = state.progress.lock().unwrap();
+            progress.reached_spawn = true;
+            progress.client = Some(bot);
+        }
+        Event::Disconnect(reason) => {
+            let mut progress = state.progress.lock().unwrap();
+            if progress.disconnected_at.is_none() {
+                progress.disconnected_at = Some(state.started_at.elapsed());
+                progress.disconnect_reason = reason.map(|formatted| formatted.to_string());
+            }
+        }
+        _ => {
+            let mut progress = state.progress.lock().unwrap();
+            progress.client = Some(bot);
+        }
+    }
+}
+
 /// Runs one idle-stability scenario against `config.host:config.port`: connects with
 /// `azalea::Account::offline(config.username)`, waits (bounded by
 /// `config.login_timeout`, wrapping the whole `ClientBuilder::start` call per
@@ -75,5 +139,92 @@ pub enum ScenarioError {
 pub async fn run_idle_stability_scenario(
     config: ScenarioConfig,
 ) -> Result<ScenarioOutcome, ScenarioError> {
-    todo!()
+    // Azalea's own `ClientBuilder::start` future is not `Send` (it drives a
+    // `tokio::task::LocalSet` internally) -- a forced deviation from `tokio::spawn`
+    // (which requires `Send`); `spawn_local` inside an explicit `LocalSet` is this
+    // module's own resolution, verified live against the pinned rev.
+    let local = tokio::task::LocalSet::new();
+    local.run_until(run_inner(config)).await
+}
+
+async fn run_inner(config: ScenarioConfig) -> Result<ScenarioOutcome, ScenarioError> {
+    let state = SharedState::default();
+    let progress = state.progress.clone();
+
+    let account = azalea::account::Account::offline(&config.username);
+    let address = format!("{}:{}", config.host, config.port);
+
+    // `start()` drives azalea's own internal ECS/connection loop and, per Context,
+    // retries forever on its own if the initial connection can't be made -- run it
+    // as its own detached local task rather than awaiting it inline, so this
+    // function's own supervisor loop below stays in control of every timeout.
+    tokio::task::spawn_local(async move {
+        let _ = ClientBuilder::new()
+            .set_handler(handle)
+            .set_state(state)
+            .start(account, address)
+            .await;
+    });
+
+    let login_deadline = Instant::now() + config.login_timeout;
+
+    // Wait for Event::Spawn, bounded by `login_timeout` (Context: one login_timeout
+    // window covers both Login and Spawn). A disconnect observed at any point in this
+    // window -- whether or not Event::Login itself had already fired -- is reported
+    // as `DisconnectedBeforeSpawn`, never left to wait out the rest of the deadline;
+    // `LoginTimeout` is reserved for the deadline itself elapsing with neither Spawn
+    // nor a disconnect ever observed (a true hang, e.g. `reports_login_timeout_when_
+    // server_never_responds`'s own fake server, which accepts the connection and then
+    // never responds at all).
+    loop {
+        {
+            let guard = progress.lock().unwrap();
+            if guard.reached_spawn {
+                break;
+            }
+            if guard.disconnected_at.is_some() {
+                return Err(ScenarioError::DisconnectedBeforeSpawn {
+                    reason: guard.disconnect_reason.clone(),
+                });
+            }
+        }
+        if Instant::now() >= login_deadline {
+            return Err(ScenarioError::LoginTimeout(config.login_timeout));
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    // Phase 3: hold the connection open for exactly `idle_duration`, watching for an
+    // early disconnect throughout -- never accelerated, never overriding the real
+    // server's own keep-alive timer (Context, "compressed timescale... never means an
+    // accelerated keep-alive cadence").
+    let idle_deadline = Instant::now() + config.idle_duration;
+    loop {
+        {
+            let guard = progress.lock().unwrap();
+            if let Some(at) = guard.disconnected_at {
+                return Err(ScenarioError::DisconnectedDuringIdle {
+                    after: at,
+                    expected: config.idle_duration,
+                    reason: guard.disconnect_reason.clone(),
+                });
+            }
+        }
+        if Instant::now() >= idle_deadline {
+            break;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    // Survived the full idle window -- perform a clean, client-initiated disconnect.
+    if let Some(client) = progress.lock().unwrap().client.clone() {
+        client.disconnect();
+    }
+
+    Ok(ScenarioOutcome {
+        reached_login: true,
+        reached_spawn: true,
+        disconnected_at: None,
+        disconnect_reason: None,
+    })
 }

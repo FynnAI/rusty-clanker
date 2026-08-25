@@ -1,4 +1,12 @@
 //! `lint` verb: `cargo clippy --workspace --all-targets -- -D warnings`.
+//!
+//! M1-B06 forced deviation: `--exclude rc-paritybot` (Context, "azalea's own
+//! upstream nightly-toolchain requirement") -- that crate's own transitive `azalea`
+//! dependency requires a nightly Rust toolchain (its own `rust-toolchain.toml` pins
+//! `channel = "nightly"`), which this workspace-wide sweep runs under the project's
+//! pinned *stable* toolchain (WS-D4) and can therefore never build. `rc-paritybot`'s
+//! own lint pass is instead run inside the new `m1-acceptance` CI job, where a
+//! nightly-capable environment is set up for exactly that purpose.
 
 pub fn run() -> std::process::ExitCode {
     run_and_report().0
@@ -13,13 +21,16 @@ pub(crate) fn run_and_report() -> (std::process::ExitCode, bool) {
             return (std::process::ExitCode::FAILURE, false);
         }
     };
-    let passed = xshell::cmd!(sh, "cargo clippy --workspace --all-targets -- -D warnings")
-        .run()
-        .is_ok();
+    let passed = xshell::cmd!(
+        sh,
+        "cargo clippy --workspace --exclude rc-paritybot --all-targets -- -D warnings"
+    )
+    .run()
+    .is_ok();
 
     let mut result = crate::tier_result::TierResult::new("lint");
     result.push(
-        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo clippy --workspace --exclude rc-paritybot --all-targets -- -D warnings",
         if passed {
             crate::tier_result::Status::Pass
         } else {

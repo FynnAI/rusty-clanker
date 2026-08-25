@@ -130,5 +130,6 @@ fn main() -> ExitCode {
         }
         Command::ListQuarantine => xtask::quarantine::list_quarantined(),
         Command::VerifierReport { base } => xtask::verifier_report::run(base.as_deref()),
+        Command::M1Report { server_bin, mode } => xtask::m1_report::run(server_bin, mode),
     }
 }

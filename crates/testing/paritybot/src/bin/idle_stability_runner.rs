@@ -22,7 +22,61 @@
 //! ```
 //! Exit code 0 iff `RESULT=OK`.
 
+use std::time::Duration;
+
+use rc_paritybot::idle_stability::{ScenarioConfig, run_idle_stability_scenario};
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    todo!()
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let [host, port, username, login_timeout_secs, idle_duration_secs] =
+        match <[String; 5]>::try_from(args) {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!(
+                    "usage: idle_stability_runner <host> <port> <username> <login_timeout_secs> <idle_duration_secs>"
+                );
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+
+    let port: u16 = match port.parse() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("idle_stability_runner: invalid port {port:?}: {err}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let login_timeout = match login_timeout_secs.parse::<u64>() {
+        Ok(secs) => Duration::from_secs(secs),
+        Err(err) => {
+            eprintln!("idle_stability_runner: invalid login_timeout_secs: {err}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let idle_duration = match idle_duration_secs.parse::<u64>() {
+        Ok(secs) => Duration::from_secs(secs),
+        Err(err) => {
+            eprintln!("idle_stability_runner: invalid idle_duration_secs: {err}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let mut config = ScenarioConfig::new(host, port, username, idle_duration);
+    config.login_timeout = login_timeout;
+
+    match run_idle_stability_scenario(config).await {
+        Ok(outcome) => {
+            println!("RESULT=OK");
+            println!("REACHED_LOGIN={}", outcome.reached_login);
+            println!("REACHED_SPAWN={}", outcome.reached_spawn);
+            std::process::ExitCode::SUCCESS
+        }
+        Err(err) => {
+            let message = err.to_string().replace('\n', " ");
+            println!("RESULT=ERROR");
+            println!("MESSAGE={message}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }

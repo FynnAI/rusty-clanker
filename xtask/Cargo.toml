@@ -17,3 +17,7 @@ thiserror = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+# M1-B06: `m1_report`'s in-process probe/process-orchestration calls only -- never
+# `rc-paritybot` (Context, "azalea's own upstream nightly-toolchain requirement"; this
+# crate's own binary must never link `azalea`/`simdnbt`).
+rc-test-harness = { path = "../crates/testing/test-harness" }

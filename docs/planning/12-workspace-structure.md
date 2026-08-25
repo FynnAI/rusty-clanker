@@ -229,7 +229,18 @@ All versions verified against crates.io as of 2026-08-20. Crates already version
 # Cargo.toml (workspace root, excerpt)
 [workspace]
 resolver = "3"   # implied by edition = "2024"; declared explicitly for clarity
-members = ["crates/*", "xtask"]
+# "crates/*" only matches one path segment (Cargo's own glob semantics); it does not
+# reach crates/testing/*'s own two-level-deep dev/test-only members (WS-D2), so those
+# are listed as their own explicit entries (added by M1-B06). "crates/testing" itself
+# (the container directory, no Cargo.toml of its own) is excluded since "crates/*"
+# would otherwise also match it directly and fail to load.
+members = [
+    "crates/*",
+    "crates/testing/test-harness",
+    "crates/testing/paritybot",
+    "xtask",
+]
+exclude = ["crates/testing"]
 
 [workspace.package]
 version = "0.1.0"      # WS-D12 — independent of NET-D1's tracked protocol version
@@ -325,7 +336,22 @@ xshell  = "0.2.7"
 # so this project tracks its `main` branch directly): pinned to an exact commit `rev`, never a
 # floating branch reference, bumped as its own small, reviewed commit whenever `rc-paritybot`
 # needs a newer azalea fix — mirrors WS-D4's toolchain-pin discipline applied to one dependency.
-azalea = { git = "https://github.com/azalea-rs/azalea", rev = "<pin to the exact commit tracking mc26.2/protocol 776 at implementation time>" }  # TEST-D8
+azalea = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295d353b9b3ef68f665b311cba39211fd19" }  # TEST-D8 -- pinned by M1-B06; workspace version "0.16.0+mc26.2", azalea-protocol::packets::PROTOCOL_VERSION == 776 at this rev
+
+# Discovered by M1-B06: azalea's own `rust-toolchain.toml` pins `channel = "nightly"`
+# (its own transitive `simdnbt` dependency unconditionally uses
+# `#![feature(portable_simd)]`) -- incompatible with this project's own root-level
+# pinned *stable* toolchain (WS-D4), which every other crate (including `xtask.exe`
+# itself, so every Tier-1 gate) must keep building under. `crates/testing/paritybot/`
+# therefore carries its own nested `rust-toolchain.toml` override (a real, specific
+# nightly date, not a floating `"nightly"` channel -- azalea's own current-nightly
+# code does not build under an arbitrarily newer nightly either, verified live), which
+# only takes effect for a `cargo` invocation whose working directory is at or below
+# that crate's own path; every workspace-wide sweep (`cargo clippy --workspace`,
+# `cargo nextest run --workspace`, `xtask`'s own `lint`/`test` verbs) therefore
+# excludes `rc-paritybot` explicitly, and its own lint/test/build happen in a
+# dedicated CI job (`m1-acceptance`) and via `xtask m1-report`'s own subprocess call
+# instead.
 
 [profile.release]   # 14-performance-engineering.md's PERF-D45-D50, adopted verbatim (no release profile was set here before)
 lto = "fat"

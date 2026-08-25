@@ -7,6 +7,12 @@
 //! so `run_and_report` writes one too (a forced, mechanically-necessary reconciliation
 //! of the Context section's "except test" wording against the Implementation steps'
 //! own literal instruction to extend this file — see this blueprint's final report).
+//!
+//! M1-B06 forced deviation: both the `nextest` and `--doc` sweeps below also gain
+//! `--exclude rc-paritybot`, for the identical reason `lint.rs` does (that crate's
+//! own transitive `azalea` dependency requires a nightly toolchain this workspace-
+//! wide, stable-toolchain-pinned sweep can never satisfy). `rc-paritybot`'s own test
+//! suite runs inside the new `m1-acceptance` CI job instead.
 
 pub fn run() -> std::process::ExitCode {
     run_and_report().0
@@ -29,11 +35,15 @@ pub(crate) fn run_and_report() -> (std::process::ExitCode, bool) {
     // `CARGO_BIN_EXE_*`) and fail with "Access is denied" on the locked file.
     // xtask's own tests run via a direct `cargo nextest run -p xtask` outside
     // this verb (dedicated CI step; locally: run that command directly).
-    let workspace_ok = xshell::cmd!(sh, "cargo nextest run --workspace --exclude xtask")
-        .run()
-        .is_ok();
+    // `--exclude rc-paritybot`: module doc comment.
+    let workspace_ok = xshell::cmd!(
+        sh,
+        "cargo nextest run --workspace --exclude xtask --exclude rc-paritybot"
+    )
+    .run()
+    .is_ok();
     result.push(
-        "cargo nextest run --workspace --exclude xtask",
+        "cargo nextest run --workspace --exclude xtask --exclude rc-paritybot",
         status_of(workspace_ok),
         None,
     );
@@ -61,10 +71,14 @@ pub(crate) fn run_and_report() -> (std::process::ExitCode, bool) {
         return finish(result, false);
     }
 
-    let doctest_ok = xshell::cmd!(sh, "cargo test --doc --workspace")
+    let doctest_ok = xshell::cmd!(sh, "cargo test --doc --workspace --exclude rc-paritybot")
         .run()
         .is_ok();
-    result.push("cargo test --doc --workspace", status_of(doctest_ok), None);
+    result.push(
+        "cargo test --doc --workspace --exclude rc-paritybot",
+        status_of(doctest_ok),
+        None,
+    );
 
     finish(result, doctest_ok)
 }
