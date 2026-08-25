@@ -2,8 +2,12 @@
 //! validation — endpoint, response shapes, rate limits"): a rate-limit-aware, bounded-
 //! concurrency async client that never blocks the caller's connection-decode task.
 
+use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use tokio::sync::Semaphore;
 
 /// The subset of a Mojang `hasJoined` success response this crate exposes further up the
 /// stack (NET-D6's "resolved player identity... handed to whichever domain owns
@@ -86,18 +90,63 @@ impl Default for SessionServiceConfig {
     /// `base_url = "https://sessionserver.mojang.com"`, `max_concurrent_requests = 16`,
     /// `rate_limit_max_requests = 200`, `rate_limit_window = 120s` (NET-D6, Context).
     fn default() -> Self {
-        todo!()
+        Self {
+            base_url: "https://sessionserver.mojang.com".to_string(),
+            max_concurrent_requests: 16,
+            rate_limit_max_requests: 200,
+            rate_limit_window: Duration::from_secs(120),
+        }
     }
 }
 
 /// The real, `reqwest`-backed `SessionService` implementation.
 pub struct MojangSessionService {
-    // fields are private; opaque to callers
+    client: reqwest::Client,
+    config: SessionServiceConfig,
+    semaphore: Semaphore,
+    /// Start timestamps of every request within the current `rate_limit_window`, oldest
+    /// first — this service's own proactive local rate-limiting budget (Context, distinct
+    /// from correctly handling a real 429).
+    rate_limiter: Mutex<VecDeque<Instant>>,
 }
 
 impl MojangSessionService {
     pub fn new(config: SessionServiceConfig) -> Self {
-        todo!()
+        let semaphore = Semaphore::new(config.max_concurrent_requests);
+        Self {
+            client: reqwest::Client::new(),
+            config,
+            semaphore,
+            rate_limiter: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Local rate-limit check (Context: proactive, applied *before* the semaphore or any
+    /// request is sent). Drops every timestamp older than `now - rate_limit_window`; if the
+    /// remaining count already meets the configured budget, returns the duration until the
+    /// oldest remaining timestamp ages out of the window. Otherwise records `now` and allows
+    /// the call to proceed.
+    fn check_local_rate_limit(&self) -> Result<(), SessionServiceError> {
+        let now = Instant::now();
+        let window = self.config.rate_limit_window;
+        let mut tracker = self.rate_limiter.lock().unwrap();
+
+        while let Some(&oldest) = tracker.front() {
+            if now.duration_since(oldest) >= window {
+                tracker.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if tracker.len() >= self.config.rate_limit_max_requests {
+            let oldest = *tracker.front().expect("len() >= 1 checked above");
+            let retry_after = window.saturating_sub(now.duration_since(oldest));
+            return Err(SessionServiceError::LocallyRateLimited { retry_after });
+        }
+
+        tracker.push_back(now);
+        Ok(())
     }
 }
 
@@ -108,6 +157,55 @@ impl SessionService for MojangSessionService {
         server_hash: &str,
         client_ip: Option<IpAddr>,
     ) -> Result<Option<HasJoinedProfile>, SessionServiceError> {
-        todo!()
+        self.check_local_rate_limit()?;
+
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .expect("this semaphore is never closed");
+
+        let mut url = reqwest::Url::parse(&format!(
+            "{}/session/minecraft/hasJoined",
+            self.config.base_url
+        ))
+        .expect("base_url + fixed path is always a valid URL");
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("username", username)
+                .append_pair("serverId", server_hash);
+            if let Some(ip) = client_ip {
+                query.append_pair("ip", &ip.to_string());
+            }
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|err| SessionServiceError::Transport(err.to_string()))?;
+
+        match response.status().as_u16() {
+            200 => {
+                let profile = response
+                    .json::<HasJoinedProfile>()
+                    .await
+                    .map_err(|err| SessionServiceError::Malformed(err.to_string()))?;
+                Ok(Some(profile))
+            }
+            204 => Ok(None),
+            429 => {
+                let retry_after = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .map(Duration::from_secs);
+                Err(SessionServiceError::RateLimited { retry_after })
+            }
+            other => Err(SessionServiceError::UnexpectedStatus(other)),
+        }
     }
 }

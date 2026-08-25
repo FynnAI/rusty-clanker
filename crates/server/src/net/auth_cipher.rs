@@ -1,4 +1,4 @@
-use rc_auth::cipher::CipherError;
+use rc_auth::cipher::{Aes128Cfb8Decryptor, Aes128Cfb8Encryptor, CipherError};
 use rc_protocol::ConnectionCipher;
 
 /// Wraps `rc-auth`'s plain, `rc-protocol`-free AES-128/CFB8 primitives to satisfy
@@ -7,7 +7,8 @@ use rc_protocol::ConnectionCipher;
 /// `rusty-clanker-server` is the only crate depending on both (Context, "Why `rc-auth` never
 /// depends on `rc-protocol`").
 pub struct AuthConnectionCipher {
-    // fields are private; opaque to callers
+    encryptor: Aes128Cfb8Encryptor,
+    decryptor: Aes128Cfb8Decryptor,
 }
 
 impl AuthConnectionCipher {
@@ -16,16 +17,19 @@ impl AuthConnectionCipher {
     /// directions are constructed from the same shared secret (Context: key = IV = shared
     /// secret, both directions).
     pub fn new(shared_secret: &[u8]) -> Result<Self, CipherError> {
-        todo!()
+        Ok(Self {
+            encryptor: Aes128Cfb8Encryptor::new(shared_secret)?,
+            decryptor: Aes128Cfb8Decryptor::new(shared_secret)?,
+        })
     }
 }
 
 impl ConnectionCipher for AuthConnectionCipher {
     fn decrypt(&mut self, buf: &mut [u8]) {
-        todo!()
+        self.decryptor.decrypt_in_place(buf);
     }
 
     fn encrypt(&mut self, buf: &mut [u8]) {
-        todo!()
+        self.encryptor.encrypt_in_place(buf);
     }
 }
