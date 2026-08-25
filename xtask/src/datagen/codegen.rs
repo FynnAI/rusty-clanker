@@ -18,7 +18,10 @@ fn strip_namespace(id: &str) -> &str {
     id.split_once(':').map(|(_, path)| path).unwrap_or(id)
 }
 
-fn sanitize_mod_name(path: &str) -> String {
+/// `pub(crate)` — reused by `super::tags`' own generated module-name construction (M1
+/// registry-sync-fix follow-up), for the identical slash/keyword-escaping transform applied
+/// to a discovered registry's own directory path (e.g. `"worldgen/biome"` -> `"worldgen_biome"`).
+pub(crate) fn sanitize_mod_name(path: &str) -> String {
     let mut s: String = path
         .chars()
         .map(|c| {

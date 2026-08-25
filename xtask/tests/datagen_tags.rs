@@ -1,14 +1,15 @@
 //! M1 registry-sync-fix follow-up acceptance tests: `xtask::datagen::tags` — tag-tree
 //! loading, recursive `#tag` resolution (including `required: false` and cycle detection),
-//! and end-to-end generated-source production against a synthetic fixture directory. Never
-//! reads the real local data-generator output (`C:\...\mc-research\...`) — that path exists
-//! only on the machine this fix was developed on, never in CI or on a fresh checkout.
+//! registry discovery (static/dynamic/nested matches, unresolved-directory reporting), and
+//! end-to-end generated-source production against a synthetic fixture directory. Never reads
+//! the real local data-generator output (`C:\...\mc-research\...`) — that path exists only on
+//! the machine this fix was developed on, never in CI or on a fresh checkout.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use xtask::datagen::reports::{RegistriesReport, RegistryEntryReport, RegistryReport};
-use xtask::datagen::tags::{TAG_REGISTRIES, generate_tags_rs, load_tag_tree, resolve_tag};
+use xtask::datagen::tags::{discover_registries, generate_tags_rs, load_tag_tree, resolve_tag};
 
 /// A fresh, empty temp directory unique to this test process — never cleaned up afterward
 /// (mirrors `datagen_codegen.rs`'s own `generated_files_compile_standalone` precedent), since
@@ -67,6 +68,8 @@ fn write_tag_file_with_required_false(
     .unwrap();
 }
 
+// --- resolve_tag / load_tag_tree: unchanged behavior, still exercised directly. ---
+
 #[test]
 fn load_tag_tree_finds_nested_files_by_relative_path() {
     let root = temp_dir("load_nested");
@@ -124,7 +127,6 @@ fn resolve_tag_follows_transitive_sub_tag_references() {
 
 #[test]
 fn resolve_tag_deduplicates_diamond_dependencies() {
-    // Two branches both reach "minecraft:stick" -- the resolved set must contain it once.
     let root = temp_dir("resolve_diamond");
     write_tag_file(&root, "item", "a", &["minecraft:stick"]);
     write_tag_file(&root, "item", "b", &["minecraft:stick"]);
@@ -188,19 +190,7 @@ fn resolve_tag_missing_tag_file_errors_by_name() {
     assert!(err.contains("never_written"));
 }
 
-/// Writes a trivial (`{"values": []}`) file for every root `TAG_REGISTRIES` names, so
-/// `generate_tags_rs` (which always iterates the real, hardcoded `TAG_REGISTRIES` — not a
-/// caller-supplied list) can run to completion against a synthetic fixture directory. Mirrors
-/// `datagen_codegen.rs`'s own `with_full_worldgen_registries` precedent for the same reason:
-/// keep individual test bodies free to override just the one or two roots they actually
-/// assert on.
-fn full_synthetic_tags_root(root: &Path) {
-    for spec in TAG_REGISTRIES {
-        for tag_path in spec.roots {
-            write_tag_file(root, spec.dir, tag_path, &[]);
-        }
-    }
-}
+// --- discover_registries: static / dynamic / nested-dynamic matches, unresolved reporting. ---
 
 fn synthetic_registries_report() -> RegistriesReport {
     let mut registries = RegistriesReport::new();
@@ -236,26 +226,119 @@ fn synthetic_registries_report() -> RegistriesReport {
 }
 
 #[test]
-fn generate_tags_rs_resolves_real_minimal_set_end_to_end() {
-    let root = temp_dir("generate_end_to_end");
-    full_synthetic_tags_root(&root);
-    // Override the three roots this test actually asserts numeric-id content for.
+fn discover_registries_matches_a_static_top_level_directory() {
+    let root = temp_dir("discover_static");
+    write_tag_file(&root, "block", "infiniburn_overworld", &[]);
+
+    let (discovered, unresolved) =
+        discover_registries(&root, &synthetic_registries_report()).unwrap();
+    assert!(unresolved.is_empty());
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].registry_id, "minecraft:block");
+    assert!(!discovered[0].is_dynamic);
+}
+
+#[test]
+fn discover_registries_matches_a_dynamic_top_level_directory() {
+    let root = temp_dir("discover_dynamic");
+    write_tag_file(&root, "dialog", "quick_actions", &[]);
+
+    let (discovered, unresolved) =
+        discover_registries(&root, &synthetic_registries_report()).unwrap();
+    assert!(unresolved.is_empty());
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].registry_id, "minecraft:dialog");
+    assert!(discovered[0].is_dynamic);
+}
+
+#[test]
+fn discover_registries_matches_a_nested_dynamic_registry_but_not_its_ungrouped_siblings() {
+    // Mirrors the real `worldgen/` tree: `worldgen/biome` is a real SYNCHRONIZED_REGISTRIES
+    // entry, `worldgen/structure` is not (never part of the client-facing wire set).
+    let root = temp_dir("discover_nested");
+    write_tag_file(&root, "worldgen/biome", "is_overworld", &[]);
+    write_tag_file(&root, "worldgen/structure", "on_ocean_explorer_map", &[]);
+
+    let (discovered, unresolved) =
+        discover_registries(&root, &synthetic_registries_report()).unwrap();
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].registry_id, "minecraft:worldgen/biome");
+    assert!(discovered[0].is_dynamic);
+    assert_eq!(unresolved, vec!["worldgen/structure".to_string()]);
+}
+
+#[test]
+fn discover_registries_reports_a_leaf_directory_with_no_matching_registry() {
+    let root = temp_dir("discover_unresolved_leaf");
+    // A top-level directory whose own name matches no known registry, and which has no
+    // subdirectories of its own (a genuine leaf) -- reported once, by its own name.
+    write_tag_file(&root, "villager_trade", "armorer", &[]);
+
+    let (discovered, unresolved) =
+        discover_registries(&root, &synthetic_registries_report()).unwrap();
+    assert!(discovered.is_empty());
+    assert_eq!(unresolved, vec!["villager_trade".to_string()]);
+}
+
+#[test]
+fn discover_registries_reports_each_unresolved_leaf_under_an_unresolved_grouping_directory() {
+    // Mirrors the real `villager_trade/armorer/level_1.json` shape exactly: `villager_trade`
+    // itself has subdirectories (one per profession), none of which match anything either --
+    // every such leaf is named individually, never collapsed into a single silent skip.
+    let root = temp_dir("discover_unresolved_nested_leaves");
+    write_tag_file(&root, "villager_trade/armorer", "level_1", &[]);
+    write_tag_file(&root, "villager_trade/butcher", "level_1", &[]);
+
+    let (discovered, unresolved) =
+        discover_registries(&root, &synthetic_registries_report()).unwrap();
+    assert!(discovered.is_empty());
+    assert_eq!(
+        unresolved,
+        vec![
+            "villager_trade/armorer".to_string(),
+            "villager_trade/butcher".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn discover_registries_sorts_discovered_registries_by_id() {
+    let root = temp_dir("discover_sorted");
+    write_tag_file(&root, "item", "enchantable/bow", &[]);
+    write_tag_file(&root, "block", "infiniburn_overworld", &[]);
+    write_tag_file(&root, "dialog", "quick_actions", &[]);
+
+    let (discovered, _) = discover_registries(&root, &synthetic_registries_report()).unwrap();
+    let ids: Vec<&str> = discovered.iter().map(|d| d.registry_id.as_str()).collect();
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(ids, sorted);
+}
+
+// --- generate_tags_rs: end-to-end against a synthetic fixture mixing every discovery case. ---
+
+#[test]
+fn generate_tags_rs_emits_every_discovered_tag_not_a_curated_subset() {
+    let root = temp_dir("generate_complete");
+    // Real names, real numeric ids (via synthetic_registries_report) -- but crucially, MORE
+    // than one tag per registry and no pre-declared "roots" list; every tag file present must
+    // appear in the output.
     write_tag_file(
         &root,
         "block",
         "infiniburn_overworld",
         &["minecraft:netherrack", "minecraft:magma_block"],
     );
+    write_tag_file(&root, "block", "some_other_tag", &["minecraft:netherrack"]);
     write_tag_file(&root, "item", "enchantable/bow", &["minecraft:bow"]);
+    write_tag_file(&root, "villager_trade", "armorer", &[]); // orphan -- must not appear
 
     let registries = synthetic_registries_report();
-    let content = generate_tags_rs(&root, &registries).unwrap();
+    let (content, unresolved) = generate_tags_rs(&root, &registries).unwrap();
 
     assert!(content.contains("pub mod block {"));
     assert!(content.contains("pub mod item {"));
-    assert!(content.contains("pub mod enchantment {"));
-    assert!(content.contains("pub mod dialog {"));
-    assert!(content.contains("pub mod timeline {"));
+    assert!(!content.contains("pub mod villager_trade"));
     assert!(
         content.contains(
             "pub const INFINIBURN_OVERWORLD: TagTable = TagTable { tag_id: \"minecraft:infiniburn_overworld\", entries: &[285, 671] };"
@@ -264,20 +347,27 @@ fn generate_tags_rs_resolves_real_minimal_set_end_to_end() {
     );
     assert!(
         content.contains(
+            "pub const SOME_OTHER_TAG: TagTable = TagTable { tag_id: \"minecraft:some_other_tag\", entries: &[285] };"
+        ),
+        "expected the second, non-curated block tag to also be emitted in:\n{content}"
+    );
+    assert!(
+        content.contains(
             "pub const ENCHANTABLE_BOW: TagTable = TagTable { tag_id: \"minecraft:enchantable/bow\", entries: &[922] };"
         ),
         "expected the real item numeric id in:\n{content}"
     );
     assert!(content.contains("pub static REGISTRIES: &[(&str, &[TagTable])]"));
+    assert_eq!(unresolved, vec!["villager_trade".to_string()]);
 }
 
 #[test]
 fn generate_tags_rs_resolves_dynamic_registry_by_synchronized_registries_index() {
     let root = temp_dir("generate_dynamic_index");
-    full_synthetic_tags_root(&root);
     // enchantment/exclusive_set/armor's real content -- protection, blast_protection,
-    // fire_protection, projectile_protection -- at indices 28, 3, 11, 27 of the hand-authored
-    // ENCHANTMENT_ORDER list (must equal play::world::SYNCHRONIZED_REGISTRIES's own order).
+    // fire_protection, projectile_protection -- at indices 28, 3, 11, 27 of
+    // SYNCHRONIZED_REGISTRIES_ORDER's own `minecraft:enchantment` entry list (must equal
+    // play::world::SYNCHRONIZED_REGISTRIES's own order).
     write_tag_file(
         &root,
         "enchantment",
@@ -291,7 +381,8 @@ fn generate_tags_rs_resolves_dynamic_registry_by_synchronized_registries_index()
     );
 
     let registries = synthetic_registries_report();
-    let content = generate_tags_rs(&root, &registries).unwrap();
+    let (content, unresolved) = generate_tags_rs(&root, &registries).unwrap();
+    assert!(unresolved.is_empty());
 
     assert!(
         content.contains(
@@ -302,39 +393,47 @@ fn generate_tags_rs_resolves_dynamic_registry_by_synchronized_registries_index()
 }
 
 #[test]
-fn generate_tags_rs_errors_when_a_required_root_tag_file_is_missing() {
-    let root = temp_dir("generate_missing_root");
-    // Deliberately incomplete: only write the block registry's own roots, leaving every
-    // other TAG_REGISTRIES root file absent.
-    for tag_path in TAG_REGISTRIES[0].roots {
-        write_tag_file(&root, "block", tag_path, &[]);
-    }
+fn generate_tags_rs_errors_on_a_tag_referencing_an_unknown_member() {
+    let root = temp_dir("generate_unknown_member");
+    write_tag_file(&root, "block", "bad", &["minecraft:not_a_real_block"]);
 
     let registries = synthetic_registries_report();
     let err = generate_tags_rs(&root, &registries).unwrap_err();
-    assert!(
-        err.contains("no tag JSON file found") || err.contains("failed to read tag directory"),
-        "expected a missing-tag-file error, got: {err}"
-    );
+    assert!(err.contains("not_a_real_block"));
 }
 
 #[test]
 fn generate_tags_rs_is_deterministic_across_repeated_calls() {
     let root = temp_dir("generate_deterministic");
-    full_synthetic_tags_root(&root);
+    write_tag_file(
+        &root,
+        "block",
+        "infiniburn_overworld",
+        &["minecraft:netherrack"],
+    );
+    write_tag_file(&root, "item", "enchantable/bow", &["minecraft:bow"]);
+    write_tag_file(&root, "dialog", "quick_actions", &[]);
     let registries = synthetic_registries_report();
 
     let a = generate_tags_rs(&root, &registries).unwrap();
     let b = generate_tags_rs(&root, &registries).unwrap();
-    assert_eq!(a, b);
+    assert_eq!(a.0, b.0);
+    assert_eq!(a.1, b.1);
 }
 
 #[test]
 fn generated_tags_rs_compiles_standalone() {
     let root = temp_dir("generate_compile_check");
-    full_synthetic_tags_root(&root);
+    write_tag_file(
+        &root,
+        "block",
+        "infiniburn_overworld",
+        &["minecraft:netherrack"],
+    );
+    write_tag_file(&root, "item", "enchantable/bow", &["minecraft:bow"]);
+    write_tag_file(&root, "dialog", "quick_actions", &[]);
     let registries = synthetic_registries_report();
-    let content = generate_tags_rs(&root, &registries).unwrap();
+    let (content, _) = generate_tags_rs(&root, &registries).unwrap();
 
     let out_dir = std::env::temp_dir().join(format!(
         "rc_xtask_tags_compile_check_{}",
