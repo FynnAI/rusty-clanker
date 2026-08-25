@@ -3,5 +3,6 @@
 //! (TEST-D9/TEST-D10, starting at M3+) wraps this same module's function twice, once
 //! per server, rather than replacing it.
 
+pub mod chunk_decode_check;
 pub mod idle_stability;
 pub mod vanilla_registry_defaults;
