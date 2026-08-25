@@ -181,8 +181,12 @@ pub async fn enter_play(
         }
     }
 
+    // M1 integration fix, round 4: `batch_size` must track `play::chunk::
+    // placeholder_chunk_coords().len()` exactly (`chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own
+    // doc comment has the full render-radius writeup) -- 25 since that constant became
+    // `2`, not the earlier 9-chunk grid's own count.
     if handle
-        .try_send_payload(encode_payload(&ChunkBatchFinished { batch_size: 9 }))
+        .try_send_payload(encode_payload(&ChunkBatchFinished { batch_size: 25 }))
         .is_err()
     {
         return;

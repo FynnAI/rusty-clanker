@@ -13,8 +13,38 @@ use super::packets::LightArray;
 
 pub const WORLD_MIN_Y: i32 = -64;
 pub const SECTION_COUNT: usize = 24;
-/// `-1..=1` on both axes -- a 3x3 = 9 chunk grid.
-pub const PLACEHOLDER_RADIUS_CHUNKS: i32 = 1;
+/// M1 integration fix, round 4: this blueprint's own first implementation attempt set
+/// this to `1` (a 3x3 = 9 chunk grid, `-1..=1` on both axes) -- every one of those 9
+/// chunks decodes without error (a real client, and this crate's own `play_chunk_set.rs`
+/// acceptance test, both confirmed that already), yet driving a *real, graphical* vanilla
+/// client against it rendered textured blocks in the spawn chunk `(0, 0)` only: every one
+/// of the other 8 chunks showed collision and a block outline on look (block state data
+/// clearly arrived and was applied) but no texture at all -- a real client's own barrier-
+/// block-like rendering of a chunk section it has not yet built a mesh for.
+///
+/// Root cause: this blueprint's own placeholder content is deliberately byte-identical
+/// across every chunk sent (`placeholder_chunk_coords`'s own doc comment, "content is
+/// identical across all 9 chunks, so only chunk coordinates differ between packets" --
+/// still true verbatim of every chunk sent today), and `enter_play` never varies `data`/
+/// `heightmaps`/any light field by chunk position either (every one of those fields is
+/// one `Vec` built once and `.clone()`d per packet, `play::connection`'s own `enter_play`
+/// loop) -- so a defect in the block/biome palette encoding, the block-state ids, or the
+/// light arrays could only ever affect *every* chunk identically, never explain a
+/// spawn-vs-outer difference by itself. The one thing that *does* differ per chunk is
+/// exactly `(chunk_x, chunk_z)` -- and with radius `1`, `(0, 0)` is the unique chunk of
+/// the 9 sent whose own full 3x3 neighborhood (Chebyshev distance 1, all 8 neighbors) is
+/// entirely covered by that same 9-chunk set; every other of the 9 has at least one
+/// neighbor outside it that this server never sends at all. A real vanilla client will
+/// not build a chunk section's render mesh -- though it happily accepts the section's raw
+/// block data for collision/outline purposes immediately, exactly the reported symptom --
+/// until every one of that chunk's own neighboring columns has also been received; this
+/// is the same well-documented reason a real dedicated server must advertise (and send)
+/// a strictly larger radius than the area it actually wants to appear rendered. Radius
+/// `2` (a 5x5 = 25 chunk grid) gives every chunk of the original 3x3 "visible" area its
+/// own full neighbor coverage from this same sent set, with no change needed to
+/// `LoginPlay.view_distance` (already `2`, `play::connection`'s own `enter_play` --
+/// exactly large enough for a real client's own chunk-cache array to hold a 5x5 grid).
+pub const PLACEHOLDER_RADIUS_CHUNKS: i32 = 2;
 
 /// `minecraft:worldgen/biome` is a dynamic/datapack registry -- Configuration's own
 /// registry sync (`net::run_configuration`'s `worldgen_registries` parameter), never one of
@@ -52,7 +82,7 @@ fn ceil_log2(count: u32) -> u32 {
 /// Every `(chunk_x, chunk_z)` this blueprint sends, in the exact clientbound send order
 /// (Context, step 8): `cx` outer ascending, `cz` inner ascending.
 pub fn placeholder_chunk_coords() -> Vec<(i32, i32)> {
-    let mut coords = Vec::with_capacity(9);
+    let mut coords = Vec::with_capacity(25);
     for cx in -PLACEHOLDER_RADIUS_CHUNKS..=PLACEHOLDER_RADIUS_CHUNKS {
         for cz in -PLACEHOLDER_RADIUS_CHUNKS..=PLACEHOLDER_RADIUS_CHUNKS {
             coords.push((cx, cz));
@@ -348,9 +378,37 @@ mod tests {
     #[test]
     fn placeholder_chunk_coords_are_row_major_ascending() {
         let coords = placeholder_chunk_coords();
-        assert_eq!(coords.len(), 9);
-        assert_eq!(coords[0], (-1, -1));
-        assert_eq!(coords[8], (1, 1));
+        assert_eq!(coords.len(), 25);
+        assert_eq!(coords[0], (-2, -2));
+        assert_eq!(coords[24], (2, 2));
+    }
+
+    /// M1 integration fix, round 4 (`PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment): every
+    /// chunk of the original 3x3 "visible" area (`-1..=1` on both axes) must have its own
+    /// full 3x3 neighborhood -- all 8 Chebyshev-distance-1 neighbors -- present in the
+    /// sent set, or a real client will not build a render mesh for it. This is the exact
+    /// regression guard for the round-4 root cause: radius `1` fails this check for every
+    /// one of the 8 non-center chunks (each has at least one neighbor outside the 9-chunk
+    /// set); radius `2` passes it for all 9.
+    #[test]
+    fn every_originally_visible_chunk_has_full_neighbor_coverage() {
+        let sent: std::collections::HashSet<(i32, i32)> =
+            placeholder_chunk_coords().into_iter().collect();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for dx in -1..=1 {
+                    for dz in -1..=1 {
+                        assert!(
+                            sent.contains(&(cx + dx, cz + dz)),
+                            "chunk ({cx}, {cz})'s own neighbor ({}, {}) is missing from the \
+                             sent set -- a real client will not render ({cx}, {cz})",
+                            cx + dx,
+                            cz + dz
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
