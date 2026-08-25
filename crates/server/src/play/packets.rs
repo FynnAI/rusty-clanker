@@ -46,24 +46,52 @@ pub struct LoginPlay {
     pub enforces_secure_chat: bool,
 }
 
-#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+/// M1 integration fix: this blueprint's own first implementation attempt wrongly assumed a
+/// bare packed-position-plus-angle-byte shape with no dimension identifier
+/// (`location: i64, angle: u8`) -- driving a real client (azalea) against it produced
+/// `Error reading packet set_default_spawn_position (id 97): failed to fill whole buffer`
+/// (the client's own decoder expects strictly more bytes than that shape ever wrote).
+/// Corrected to azalea's own real `ClientboundSetDefaultSpawnPosition { global_pos:
+/// GlobalPos { dimension: Identifier, pos: BlockPos }, yaw: f32, pitch: f32 }`
+/// (`azalea-protocol`/`azalea-core`'s own source, Constraints (d) sanctions reading a
+/// client library's source this way) -- the exact same reference shape
+/// `crates/testing/test-harness/src/fake_server.rs`'s own `SendFinishConfiguration` step
+/// had already independently proven correct, now ported into this production packet
+/// definition instead of only the test double.
+#[derive(RcPacket, Debug, Clone, PartialEq)]
 #[packet(state = "play", bound = "client", id = 0x61)]
 pub struct SetDefaultSpawnPosition {
+    pub dimension: String,
     pub location: i64,
-    pub angle: u8,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
+/// M1 integration fix: this blueprint's own first implementation attempt wrongly assumed a
+/// flat x/y/z/yaw/pitch/flags/teleport_id shape with no velocity ("delta") fields and
+/// `teleport_id` last -- driving a real client (azalea) against it produced
+/// `Error reading packet player_position (id 72): failed to fill whole buffer`. Corrected
+/// to azalea's own real `ClientboundPlayerPosition { #[var] id: u32, change:
+/// PositionMoveRotation { pos: Vec3, delta: Vec3, look_direction: LookDirection { y_rot:
+/// f32, x_rot: f32 } }, relative: RelativeMovements }` (`azalea-protocol`/`common/
+/// movements.rs`'s own source, Constraints (d)) -- `teleport_id` first, three extra `delta`
+/// `f64` fields, and `relative` as a raw 4-byte bitset (`i32`, not `u8` -- `rc_protocol`
+/// has no `u32` `WireWrite` impl, `i32`'s identical 4-byte big-endian bit pattern for `0`
+/// is used instead, matching `fake_server.rs`'s own already-proven encoding exactly).
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
 #[packet(state = "play", bound = "client", id = 0x48)]
 pub struct SynchronizePlayerPosition {
+    #[rc(varint)]
+    pub teleport_id: i32,
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    pub delta_x: f64,
+    pub delta_y: f64,
+    pub delta_z: f64,
     pub yaw: f32,
     pub pitch: f32,
-    pub relative_arguments: u8,
-    #[rc(varint)]
-    pub teleport_id: i32,
+    pub relative_arguments: i32,
 }
 
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
@@ -73,8 +101,16 @@ pub struct GameEvent {
     pub value: f32,
 }
 
+/// M1 integration fix: id `0x58` (this blueprint's own first implementation attempt) is
+/// azalea's own `set_border_center`'s declaration-order id, not `set_chunk_cache_center`'s
+/// -- driving a real client against it produced
+/// `Error reading packet set_border_center (id 88): failed to fill whole buffer` (a real
+/// client tried to decode this packet's `chunk_x`/`chunk_z` `VarInt`s as `set_border_center`'s
+/// own two `f64` fields instead). Corrected to `0x5E`, `set_chunk_cache_center`'s real
+/// declaration-order id (`azalea-protocol`'s own `declare_state_packets!` expansion,
+/// Constraints (d)) -- the same id `fake_server.rs`'s own already-proven script uses.
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
-#[packet(state = "play", bound = "client", id = 0x58)]
+#[packet(state = "play", bound = "client", id = 0x5E)]
 pub struct SetChunkCacheCenter {
     #[rc(varint)]
     pub chunk_x: i32,

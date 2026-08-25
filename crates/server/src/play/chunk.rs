@@ -83,6 +83,24 @@ pub fn pack_bits(values: &[u32], bits_per_entry: u32) -> Vec<i64> {
 /// `SingleValue` (0-bit) path regardless of `indirect_floor_bits`. Otherwise `bits =
 /// max(indirect_floor_bits, ceil(log2(distinct_count)))`, then `Indirect` if `bits <=
 /// max_indirect_bits`, else `Direct` at `direct_bits` (Context's exact threshold table).
+///
+/// M1 integration fix: this blueprint's own first implementation attempt wrote an explicit
+/// `VarInt` "data array length" field after the palette, before the packed longs, in every
+/// branch (`SingleValue` included, as a literal `VarInt(0)`). Driving a real client
+/// (azalea) against it produced a downstream panic inside the client's own chunk-loading
+/// system (`assertion failed: (1..=32).contains(&bits)`, `azalea-world`'s `bit_storage.rs`)
+/// while parsing an *already successfully framed* `LevelChunkWithLight` packet's `data`
+/// blob -- reading azalea's own real container decoder directly
+/// (`azalea-world/src/palette/container.rs::PalettedContainer::read`, Constraints (d))
+/// confirms protocol 776 carries **no such field on the wire at all**: a real client
+/// computes the data array's exact length itself, deterministically, from `bits_per_entry`
+/// and the container's own fixed size (4096 for blocks, 64 for biomes) --
+/// `size.div_ceil(64 / bits_per_entry)`, azalea's own `BitStorage::new` -- and reads
+/// exactly that many longs unconditionally; our extra `VarInt` byte(s) shifted every
+/// following byte, corrupting the next container's own `bits_per_entry` read. Removed in
+/// all three branches; `pack_bits`'s own output length already exactly equals that same
+/// `div_ceil` formula for this blueprint's fixed-size `entries` slices (4096/64), so no
+/// other change is needed for a real client to compute the identical length on its own.
 pub fn encode_paletted_container(
     out: &mut BytesMut,
     entries: &[u32],
@@ -102,7 +120,6 @@ pub fn encode_paletted_container(
     if palette.len() == 1 {
         out.put_u8(0);
         rc_protocol::VarInt::new(palette[0] as i32).encode(out);
-        rc_protocol::VarInt::new(0).encode(out); // data_array_length = 0
         return;
     }
 
@@ -120,14 +137,12 @@ pub fn encode_paletted_container(
             .map(|v| palette.iter().position(|p| p == v).unwrap() as u32)
             .collect();
         let longs = pack_bits(&indices, bits);
-        rc_protocol::VarInt::new(longs.len() as i32).encode(out);
         for long in &longs {
             out.put_i64(*long);
         }
     } else {
         out.put_u8(direct_bits as u8);
         let longs = pack_bits(entries, direct_bits);
-        rc_protocol::VarInt::new(longs.len() as i32).encode(out);
         for long in &longs {
             out.put_i64(*long);
         }
@@ -135,12 +150,26 @@ pub fn encode_paletted_container(
 }
 
 /// One full section (Context's `block_count` + two paletted containers).
+///
+/// M1 integration fix: this blueprint's own first implementation attempt wrote only
+/// `block_count` before the two paletted containers. Reading azalea's own real `Section`
+/// decoder directly (`azalea-world/src/chunk/mod.rs::Section::azalea_read`, Constraints
+/// (d)) shows a second `u16` field, `fluid_count`, sits between `block_count` and the
+/// block `PalettedContainer` -- omitting it shifted every following byte in every section
+/// by two, corrupting the next paletted container's own `bits_per_entry` read (the
+/// concrete failure this produced: a downstream panic inside the client's own chunk-
+/// loading system, `assertion failed: (1..=32).contains(&bits)`,
+/// `azalea-world`'s `bit_storage.rs`, while parsing an already successfully framed
+/// `LevelChunkWithLight` packet). This blueprint's own placeholder world has no fluid
+/// content anywhere, so `fluid_count` is always `0` -- a real, always-correct value, not a
+/// placeholder approximation.
 pub fn encode_section(block_state_ids: &[u32; 4096], biome_ids: &[u32; 64]) -> Vec<u8> {
     let mut out = BytesMut::new();
 
     let air = blocks::AIR.0;
     let block_count: i16 = block_state_ids.iter().filter(|&&id| id != air).count() as i16;
     out.put_i16(block_count);
+    out.put_i16(0); // fluid_count -- always 0, no fluid content exists in this world.
 
     let block_registry_bits = ceil_log2(block_states::BLOCK_STATE_COUNT);
     encode_paletted_container(&mut out, block_state_ids, 4, 8, block_registry_bits);
@@ -185,29 +214,25 @@ pub fn build_placeholder_chunk_data() -> Vec<u8> {
     data
 }
 
-/// The network-NBT heightmaps compound (Context's hand-rolled writer; `WORLD_SURFACE`,
-/// `MOTION_BLOCKING`, `MOTION_BLOCKING_NO_LEAVES`, all value `5`, 9 bits/entry, 37 longs).
+/// M1 integration fix: this blueprint's own first implementation attempt hand-rolled
+/// `heightmaps` as a network-NBT compound (`WORLD_SURFACE`/`MOTION_BLOCKING`/
+/// `MOTION_BLOCKING_NO_LEAVES`, each a `TAG_Long_Array`) -- a fundamentally wrong wire
+/// shape. Driving a real client (azalea) against `LevelChunkWithLight` carrying that NBT
+/// blob produced `Error reading packet level_chunk_with_light (id 45): failed to fill
+/// whole buffer` on every single chunk: `ClientboundLevelChunkPacketData.heightmaps` is a
+/// plain `VarInt`-prefixed list of `(HeightmapKind, Box<[u64]>)` tuples (`azalea-protocol`'s
+/// own source, Constraints (d)), never NBT at all -- a real client reads our NBT blob's own
+/// leading byte count as a tuple count and desyncs immediately trying to decode bogus
+/// tuples from it. `crates/testing/test-harness/src/fake_server.rs`'s own
+/// `SendPlayLogin`/`encode_play_entry_sequence` step had already independently discovered
+/// and worked around this (sending an empty heightmaps list, `VarInt(0)`) -- ported here
+/// into the real production path instead of only the test double. Sending no precomputed
+/// heightmaps is legal, parity-neutral vanilla wire behavior, not an approximation: a real
+/// client recomputes the exact same heightmap values itself from the chunk's own block
+/// data whenever none are supplied, so this changes nothing observable, only which side
+/// does the (identical) computation.
 pub fn build_placeholder_heightmaps() -> Vec<u8> {
-    let mut buf = BytesMut::new();
-    buf.put_u8(0x0A); // root TAG_Compound, unnamed (network NBT).
-
-    for name in [
-        "WORLD_SURFACE",
-        "MOTION_BLOCKING",
-        "MOTION_BLOCKING_NO_LEAVES",
-    ] {
-        let longs = pack_bits(&[5u32; 256], 9);
-        buf.put_u8(0x0C); // TAG_Long_Array
-        buf.put_u16(name.len() as u16);
-        buf.put_slice(name.as_bytes());
-        buf.put_i32(longs.len() as i32);
-        for long in &longs {
-            buf.put_i64(*long);
-        }
-    }
-
-    buf.put_u8(0x00); // TAG_End
-    buf.to_vec()
+    Vec::new()
 }
 
 /// Every section index (26, WORLD-D8's "+2 padding") set to full sky light, zero block
@@ -252,11 +277,14 @@ pub(crate) fn decode_paletted_container(
     buf: &mut Bytes,
     entry_count: usize,
 ) -> DecodedPalettedContainer {
+    // M1 integration fix: no explicit "data array length" `VarInt` exists on the wire for
+    // protocol 776 (`encode_paletted_container`'s own doc comment) -- a real client
+    // computes it deterministically from `bits_per_entry` and the container's own fixed
+    // `entry_count`, exactly mirroring `pack_bits`'s own `div_ceil` formula here.
     let bits_per_entry = buf.get_u8();
     match bits_per_entry {
         0 => {
             let value = rc_protocol::VarInt::decode(buf).unwrap().get() as u32;
-            let _data_array_length = rc_protocol::VarInt::decode(buf).unwrap().get();
             DecodedPalettedContainer {
                 bits_per_entry,
                 palette: vec![value],
@@ -269,12 +297,12 @@ pub(crate) fn decode_paletted_container(
             for _ in 0..palette_length {
                 palette.push(rc_protocol::VarInt::decode(buf).unwrap().get() as u32);
             }
-            let data_array_length = rc_protocol::VarInt::decode(buf).unwrap().get() as usize;
+            let entries_per_long = (64 / bits as u32) as usize;
+            let data_array_length = entry_count.div_ceil(entries_per_long);
             let mut longs = Vec::with_capacity(data_array_length);
             for _ in 0..data_array_length {
                 longs.push(buf.get_i64());
             }
-            let entries_per_long = (64 / bits as u32) as usize;
             let mask = (1u64 << bits) - 1;
             let mut indices = Vec::with_capacity(entry_count);
             'outer: for long in &longs {

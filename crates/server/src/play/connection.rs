@@ -88,8 +88,10 @@ pub async fn enter_play(
     }
 
     let spawn_position = SetDefaultSpawnPosition {
+        dimension: "minecraft:overworld".to_string(),
         location: pack_position(SPAWN_POSITION),
-        angle: 0,
+        yaw: 0.0,
+        pitch: 0.0,
     };
     if handle
         .try_send_payload(encode_payload(&spawn_position))
@@ -99,13 +101,16 @@ pub async fn enter_play(
     }
 
     let sync_position = SynchronizePlayerPosition {
+        teleport_id: 1,
         x: SPAWN_POSITION.x as f64,
         y: SPAWN_POSITION.y as f64,
         z: SPAWN_POSITION.z as f64,
+        delta_x: 0.0,
+        delta_y: 0.0,
+        delta_z: 0.0,
         yaw: 0.0,
         pitch: 0.0,
         relative_arguments: 0x00,
-        teleport_id: 1,
     };
     if handle
         .try_send_payload(encode_payload(&sync_position))
