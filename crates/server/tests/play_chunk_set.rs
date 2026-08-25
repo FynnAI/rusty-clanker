@@ -1,6 +1,14 @@
 //! M1-B05 acceptance test: `enter_play` sends a well-formed Play-entry sequence and the
-//! full 9-chunk superflat placeholder batch over a real loopback socket, no M1-B02/B03/B04
-//! dependency (Deliverables, "write these FIRST").
+//! full 25-chunk superflat placeholder batch over a real loopback socket, no
+//! M1-B02/B03/B04 dependency (Deliverables, "write these FIRST").
+//!
+//! M1 integration fix, round 4, test-authoring commit: the chunk count grew from 9
+//! (radius 1) to 25 (radius 2) once a real, graphical vanilla client's own render-mesh
+//! neighbor requirement was diagnosed (`rusty_clanker_server::play::chunk::
+//! PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment has the full writeup) -- every assertion
+//! below that hard-coded `9` now hard-codes `25` instead, and a new assertion checks the
+//! actual regression this fix exists for: every chunk of the original 3x3 "visible" area
+//! has its own full 3x3 neighborhood present in the sent set.
 
 use bytes::{Buf, Bytes};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -167,13 +175,13 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         assert_eq!(id, ChunkBatchStart::ID);
         decode_one::<ChunkBatchStart>(body).unwrap();
 
-        let expected_coords: Vec<(i32, i32)> = (-1..=1)
-            .flat_map(|cx| (-1..=1).map(move |cz| (cx, cz)))
+        let expected_coords: Vec<(i32, i32)> = (-2..=2)
+            .flat_map(|cx| (-2..=2).map(move |cz| (cx, cz)))
             .collect();
-        assert_eq!(expected_coords.len(), 9);
+        assert_eq!(expected_coords.len(), 25);
 
-        let mut chunks = Vec::with_capacity(9);
-        for _ in 0..9 {
+        let mut chunks = Vec::with_capacity(25);
+        for _ in 0..25 {
             let (id, body) = recv_packet(&mut client, &mut accumulator).await;
             assert_eq!(id, LevelChunkWithLight::ID);
             chunks.push(decode_one::<LevelChunkWithLight>(body).unwrap());
@@ -182,6 +190,28 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let actual_coords: Vec<(i32, i32)> =
             chunks.iter().map(|c| (c.chunk_x, c.chunk_z)).collect();
         assert_eq!(actual_coords, expected_coords);
+
+        // M1 integration fix, round 4: the actual regression guard for the "only the
+        // spawn chunk renders" root cause -- a real client will not build a render mesh
+        // for a chunk unless every one of its own neighboring columns was also sent.
+        // Every chunk of the original 3x3 "visible" area (`-1..=1` on both axes) must
+        // have its own full 3x3 neighborhood present in `actual_coords`.
+        let sent: std::collections::HashSet<(i32, i32)> = actual_coords.iter().copied().collect();
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                for dx in -1..=1 {
+                    for dz in -1..=1 {
+                        assert!(
+                            sent.contains(&(cx + dx, cz + dz)),
+                            "chunk ({cx}, {cz})'s own neighbor ({}, {}) is missing from the \
+                             sent set -- a real client will not render ({cx}, {cz})",
+                            cx + dx,
+                            cz + dz
+                        );
+                    }
+                }
+            }
+        }
 
         let first = &chunks[0];
         for other in &chunks[1..] {
@@ -194,7 +224,7 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, ChunkBatchFinished::ID);
         let finished = decode_one::<ChunkBatchFinished>(body).unwrap();
-        assert_eq!(finished.batch_size, 9);
+        assert_eq!(finished.batch_size, 25);
 
         // Decode section 0 and section 1 of the first chunk's `data` blob.
         // M1 integration fix, test-authoring commit: a real section carries a second
