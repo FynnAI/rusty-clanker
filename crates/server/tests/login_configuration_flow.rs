@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{
-    AcknowledgeFinishConfiguration, CompressionState, ConfigurationKeepAliveServerbound,
-    ConfigurationPluginMessage, ConnectionState, FinishConfiguration, Identifier, KnownPack,
-    KnownPacksClientbound, KnownPacksServerbound, LoginAcknowledged, LoginDisconnect, LoginStart,
-    LoginSuccess, RcPacket, RegistryData, SetCompression, UpdateEnabledFeatures, VarInt,
-    decode_one, encode_payload,
+    AcknowledgeFinishConfiguration, ClientboundUpdateTags, CompressionState,
+    ConfigurationKeepAliveServerbound, ConfigurationPluginMessage, ConnectionState,
+    FinishConfiguration, Identifier, KnownPack, KnownPacksClientbound, KnownPacksServerbound,
+    LoginAcknowledged, LoginDisconnect, LoginStart, LoginSuccess, RcPacket, RegistryData,
+    SetCompression, UpdateEnabledFeatures, VarInt, decode_one, encode_payload,
 };
 use rusty_clanker_server::net::{
     ConnectionConfig, DriveError, LoginError, PlayerSession, PlayerSessionSink,
@@ -201,6 +201,20 @@ async fn drive_configuration_setup(codec: &mut ClientCodec, client: &mut TcpStre
         .await;
 }
 
+/// Receives and decodes the Step 5 Update Tags packet (docs/research/mc-26.2/26-registry-
+/// sync-configuration.md) — sent after the `TEST_WORLDGEN_REGISTRIES` `RegistryData` loop and
+/// before `FinishConfiguration`, regardless of which (possibly synthetic) `worldgen_registries`
+/// fixture a given call to `run_configuration` used, since `build_update_tags_packet` always
+/// sources its content from `rc-registries`' own real generated tag tables.
+async fn recv_and_decode_update_tags(
+    codec: &mut ClientCodec,
+    client: &mut TcpStream,
+) -> ClientboundUpdateTags {
+    let (id, body) = codec.recv(client).await;
+    assert_eq!(id, ClientboundUpdateTags::ID);
+    decode_one::<ClientboundUpdateTags>(body).unwrap()
+}
+
 #[tokio::test]
 async fn full_login_configuration_play_handoff_offline_mode() {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -218,6 +232,19 @@ async fn full_login_configuration_play_handoff_offline_mode() {
             assert_eq!(registry_data.registry_id, Identifier::new(*registry_id));
             assert_eq!(registry_data.entries.len(), entries.len());
         }
+
+        let update_tags = recv_and_decode_update_tags(&mut codec, &mut client).await;
+        assert!(
+            !update_tags.registries.is_empty(),
+            "Update Tags must carry at least the doc's §5.3 minimal registry set"
+        );
+        assert!(
+            update_tags
+                .registries
+                .iter()
+                .any(|r| r.registry_id == Identifier::new("minecraft:block")),
+            "Update Tags must include minecraft:block (infiniburn_*)"
+        );
 
         let (id, body) = codec.recv(&mut client).await;
         assert_eq!(id, FinishConfiguration::ID);
@@ -386,6 +413,8 @@ async fn configuration_accepts_empty_known_packs_response() {
             assert_eq!(registry_data.entries.len(), entries.len());
         }
 
+        recv_and_decode_update_tags(&mut codec, &mut client).await;
+
         let (id, body) = codec.recv(&mut client).await;
         assert_eq!(id, FinishConfiguration::ID);
         decode_one::<FinishConfiguration>(body).unwrap();
@@ -460,6 +489,8 @@ async fn configuration_ignores_unsolicited_plugin_message_and_keep_alive_reply()
             decode_one::<RegistryData>(body).unwrap();
         }
 
+        recv_and_decode_update_tags(&mut codec, &mut client).await;
+
         let (id, body) = codec.recv(&mut client).await;
         assert_eq!(id, FinishConfiguration::ID);
         decode_one::<FinishConfiguration>(body).unwrap();
@@ -493,6 +524,8 @@ async fn player_session_carries_inbound_receiver_still_configuration_state() {
             assert_eq!(id, RegistryData::ID);
             decode_one::<RegistryData>(body).unwrap();
         }
+
+        recv_and_decode_update_tags(&mut codec, &mut client).await;
 
         let (id, body) = codec.recv(&mut client).await;
         assert_eq!(id, FinishConfiguration::ID);
