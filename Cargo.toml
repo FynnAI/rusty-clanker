@@ -16,7 +16,7 @@ crossbeam-queue   = "0.3.13"
 parking_lot       = "0.12.5"
 tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 bytes             = "1.12.1"
-flate2            = { version = "1.1.9", features = ["zlib-ng"] }
+flate2            = "1.1.9"
 simdnbt           = "0.10.0"
 rsa               = "0.9.10"
 aes               = "0.9.2"

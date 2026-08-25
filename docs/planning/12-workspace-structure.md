@@ -245,7 +245,7 @@ crossbeam-queue   = "0.3.13"   # ARCH-D28
 parking_lot       = "0.12.5"   # ARCH-D23
 tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }  # ARCH-D21/NET-D7; io-util added by M1-B01 for AsyncReadExt/AsyncWriteExt (the connection reader/writer task pair)
 bytes             = "1.12.1"   # ARCH-D22
-flate2            = { version = "1.1.9", features = ["zlib-ng"] }  # NET-D5
+flate2            = "1.1.9"  # NET-D5; default (rust_backend/miniz_oxide) — M1-B01 dropped the "zlib-ng" feature after reproducing a native access-violation crash (STATUS_ACCESS_VIOLATION) from the bundled zlib-ng C library the first time this dependency was actually exercised (frame compression); the pure-Rust default backend is verified crash-free and additionally keeps this dependency free of a CMake/C-toolchain build requirement. Re-adopting a native backend for throughput is `14-performance-engineering.md`'s call, behind its own parity-gated fast-path seam, not a default dependency pin.
 simdnbt           = "0.10.0"   # NET-D5
 rsa               = "0.9.10"   # NET-D6
 aes               = "0.9.2"    # NET-D6

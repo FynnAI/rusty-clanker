@@ -23,27 +23,52 @@ impl VarInt {
     pub const MAX_ENCODED_LEN: usize = 5;
 
     pub const fn new(value: i32) -> Self {
-        todo!()
+        Self(value)
     }
 
     pub const fn get(self) -> i32 {
-        todo!()
+        self.0
     }
 
     /// Number of bytes this specific value encodes to, `1..=Self::MAX_ENCODED_LEN`.
     pub fn encoded_len(self) -> usize {
-        todo!()
+        let mut v = self.0 as u32;
+        let mut len = 1usize;
+        while v & !0x7F != 0 {
+            v >>= 7;
+            len += 1;
+        }
+        len
     }
 
     /// Never fails — every `i32` fits within `MAX_ENCODED_LEN` bytes.
     pub fn encode(self, buf: &mut impl BufMut) {
-        todo!()
+        let mut v = self.0 as u32;
+        loop {
+            if v & !0x7F == 0 {
+                buf.put_u8(v as u8);
+                return;
+            }
+            buf.put_u8((v as u8 & 0x7F) | 0x80);
+            v >>= 7;
+        }
     }
 
     /// Decodes one `VarInt` from the front of `buf`, advancing it by exactly the bytes
     /// consumed on success. Never consumes more than `MAX_ENCODED_LEN` bytes.
     pub fn decode(buf: &mut impl Buf) -> Result<Self, VarNumError> {
-        todo!()
+        let mut result: i32 = 0;
+        for i in 0..Self::MAX_ENCODED_LEN {
+            if !buf.has_remaining() {
+                return Err(VarNumError::UnexpectedEof);
+            }
+            let byte = buf.get_u8();
+            result |= ((byte & 0x7F) as i32) << (7 * i);
+            if byte & 0x80 == 0 {
+                return Ok(Self(result));
+            }
+        }
+        Err(VarNumError::TooLong)
     }
 }
 
@@ -55,22 +80,47 @@ impl VarLong {
     pub const MAX_ENCODED_LEN: usize = 10;
 
     pub const fn new(value: i64) -> Self {
-        todo!()
+        Self(value)
     }
 
     pub const fn get(self) -> i64 {
-        todo!()
+        self.0
     }
 
     pub fn encoded_len(self) -> usize {
-        todo!()
+        let mut v = self.0 as u64;
+        let mut len = 1usize;
+        while v & !0x7F != 0 {
+            v >>= 7;
+            len += 1;
+        }
+        len
     }
 
     pub fn encode(self, buf: &mut impl BufMut) {
-        todo!()
+        let mut v = self.0 as u64;
+        loop {
+            if v & !0x7F == 0 {
+                buf.put_u8(v as u8);
+                return;
+            }
+            buf.put_u8((v as u8 & 0x7F) | 0x80);
+            v >>= 7;
+        }
     }
 
     pub fn decode(buf: &mut impl Buf) -> Result<Self, VarNumError> {
-        todo!()
+        let mut result: i64 = 0;
+        for i in 0..Self::MAX_ENCODED_LEN {
+            if !buf.has_remaining() {
+                return Err(VarNumError::UnexpectedEof);
+            }
+            let byte = buf.get_u8();
+            result |= ((byte & 0x7F) as i64) << (7 * i);
+            if byte & 0x80 == 0 {
+                return Ok(Self(result));
+            }
+        }
+        Err(VarNumError::TooLong)
     }
 }

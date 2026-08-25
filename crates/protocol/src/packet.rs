@@ -72,14 +72,23 @@ pub trait RcPacket: Sized {
 /// "a decoded packet consumes the entire frame" rule. The building block a `PacketCatalog`
 /// impl's per-id match arms call; not itself part of `PacketCatalog`.
 pub fn decode_one<P: RcPacket>(mut body: Bytes) -> Result<P, PacketDecodeError> {
-    todo!()
+    let value = P::decode_body(&mut body)?;
+    if body.has_remaining() {
+        return Err(PacketDecodeError::TrailingBytes {
+            remaining: body.remaining(),
+        });
+    }
+    Ok(value)
 }
 
 /// Encodes `packet` into its full outbound payload — packet-id `VarInt` followed by the
 /// packet's own body — ready to hand to a `Connection`'s outbound channel (framing,
 /// compression, and encryption are the Tokio writer task's job, not this function's).
 pub fn encode_payload<P: RcPacket>(packet: &P) -> Bytes {
-    todo!()
+    let mut buf = BytesMut::new();
+    crate::varint::VarInt::new(P::ID).encode(&mut buf);
+    packet.encode_body(&mut buf);
+    buf.freeze()
 }
 
 /// The seam a later blueprint's per-connection-state packet enum (e.g. a `HandshakePacket`
