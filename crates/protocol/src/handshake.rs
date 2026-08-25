@@ -39,6 +39,11 @@ impl Intent {
     /// `None` for any wire value other than the three legal ones (`1`/`2`/`3`) — a malformed
     /// handshake, per NET-D4.
     pub fn from_wire(value: i32) -> Option<Self> {
-        todo!()
+        match value {
+            1 => Some(Intent::Status),
+            2 => Some(Intent::Login),
+            3 => Some(Intent::Transfer),
+            _ => None,
+        }
     }
 }

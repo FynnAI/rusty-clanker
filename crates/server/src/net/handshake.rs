@@ -43,5 +43,51 @@ pub async fn read_handshake(
     inbound: &mut mpsc::Receiver<RawPacket>,
     handle: &ConnectionHandle,
 ) -> Result<HandshakeInfo, HandshakeError> {
-    todo!()
+    let Some(raw) = inbound.recv().await else {
+        handle.close();
+        return Err(HandshakeError::ConnectionClosed);
+    };
+
+    if raw.id != 0x00 {
+        handle.close();
+        return Err(HandshakeError::UnexpectedPacket { id: raw.id });
+    }
+
+    let intention = match decode_one::<Intention>(raw.body) {
+        Ok(intention) => intention,
+        Err(err) => {
+            handle.close();
+            return Err(HandshakeError::Decode(err));
+        }
+    };
+
+    let hostname_len = intention.server_address.chars().count();
+    if hostname_len > MAX_HOST_LENGTH {
+        handle.close();
+        return Err(HandshakeError::HostnameTooLong {
+            actual: hostname_len,
+            max: MAX_HOST_LENGTH,
+        });
+    }
+
+    let Some(intent) = Intent::from_wire(intention.next_state) else {
+        handle.close();
+        return Err(HandshakeError::InvalidIntent {
+            value: intention.next_state,
+        });
+    };
+
+    let target_state = match intent {
+        Intent::Status => ConnectionState::Status,
+        Intent::Login | Intent::Transfer => ConnectionState::Login,
+    };
+    handle.set_outbound_state(target_state);
+    handle.set_inbound_state(target_state);
+
+    Ok(HandshakeInfo {
+        protocol_version: intention.protocol_version,
+        server_address: intention.server_address,
+        server_port: intention.server_port,
+        intent,
+    })
 }

@@ -82,7 +82,20 @@ impl StatusResponsePayload {
         max_players: i32,
         online_players: i32,
     ) -> Self {
-        todo!()
+        Self {
+            version: StatusVersion {
+                name: version_name.into(),
+                protocol: STATUS_PROTOCOL_VERSION,
+            },
+            players: Some(StatusPlayers {
+                max: max_players,
+                online: online_players,
+                sample: None,
+            }),
+            description: serde_json::json!({ "text": motd.into() }),
+            favicon: None,
+            enforces_secure_chat: false,
+        }
     }
 
     /// Serializes to the wire `StatusResponse` packet. Never fails: every field type here
@@ -90,6 +103,8 @@ impl StatusResponsePayload {
     /// JSON-serializable — no non-string map keys, nothing that can trip `serde_json`'s own
     /// failure modes.
     pub fn into_packet(self) -> StatusResponse {
-        todo!()
+        StatusResponse {
+            json: serde_json::to_string(&self).expect("StatusResponsePayload always serializes"),
+        }
     }
 }

@@ -17,7 +17,12 @@ pub const DEFAULT_MOTD_DISCLAIMER: &str = "Rusty Clanker is not an official Mine
 /// Builds M1's own default Status Response payload: version name `"Rusty Clanker 26.2"`,
 /// `ASSET-D22`'s disclaimer as the MOTD, no favicon, no player sample.
 pub fn default_status_payload(max_players: i32, online_players: i32) -> StatusResponsePayload {
-    todo!()
+    StatusResponsePayload::with_motd(
+        "Rusty Clanker 26.2",
+        DEFAULT_MOTD_DISCLAIMER,
+        max_players,
+        online_players,
+    )
 }
 
 /// Outcome of `handle_new_connection` once the Handshake resolves.
@@ -40,9 +45,20 @@ pub enum ConnectionOutcome {
 /// boundary") but is exactly the function such a composition root calls per accepted
 /// connection once it exists.
 pub async fn handle_new_connection(
-    inbound: mpsc::Receiver<RawPacket>,
+    mut inbound: mpsc::Receiver<RawPacket>,
     handle: ConnectionHandle,
     status: StatusResponsePayload,
 ) -> ConnectionOutcome {
-    todo!()
+    let info = match read_handshake(&mut inbound, &handle).await {
+        Ok(info) => info,
+        Err(err) => return ConnectionOutcome::HandshakeFailed(err),
+    };
+
+    match info.intent {
+        Intent::Status => {
+            let result = serve_status(&handle, &mut inbound, &status).await;
+            ConnectionOutcome::StatusServed(result)
+        }
+        Intent::Login | Intent::Transfer => ConnectionOutcome::AwaitingLogin(info, inbound, handle),
+    }
 }
