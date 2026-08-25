@@ -57,6 +57,6 @@ pub use packet::{
 pub use rc_protocol_macros::RcPacket;
 pub use varint::{VarInt, VarLong, VarNumError};
 pub use wire::{
-    MAX_STRING_LENGTH, WireRead, WireWrite, read_prefixed_vec, read_varint_field,
+    MAX_STRING_LENGTH, NbtTextComponent, WireRead, WireWrite, read_prefixed_vec, read_varint_field,
     read_varlong_field, write_prefixed_vec, write_varint_field, write_varlong_field,
 };

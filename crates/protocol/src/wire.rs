@@ -180,6 +180,81 @@ impl WireRead for String {
     }
 }
 
+/// A plain-text chat/text-component field encoded as network NBT (`{"text": "..."}`'s NBT
+/// equivalent: an unnamed root `TAG_Compound` holding one `TAG_String` field named `text`),
+/// per protocol 776's real wire shape for `Disconnect` (Login/Configuration) reason fields —
+/// M1 integration fix, discovered by driving a real client (azalea) against
+/// `rusty-clanker-server`: a raw `WireWrite`-`String` (VarInt-length-prefixed UTF-8) reason
+/// is what M1-B04 originally shipped, but a real client's NBT decoder chokes on it (a short
+/// JSON reason's own VarInt length byte gets misread as an invalid raw NBT tag id). No real
+/// `rc-nbt` integration exists yet (`configuration.rs`'s own `#[rc(nbt)]` deferral, M1-B04)
+/// — this is a minimal, purpose-built stand-in for exactly this one field shape, not a
+/// general NBT codec; a later blueprint wiring real `rc-nbt` support should replace it.
+/// Every text this type actually carries in this codebase today is plain ASCII, so a raw
+/// UTF-8 byte count (rather than Java's "modified UTF-8" scheme, which only differs for
+/// astral-plane characters and embedded NULs) is exact for every real call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NbtTextComponent(pub String);
+
+const NBT_TAG_END: u8 = 0x00;
+const NBT_TAG_STRING: u8 = 0x08;
+const NBT_TAG_COMPOUND: u8 = 0x0A;
+
+impl WireWrite for NbtTextComponent {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        buf.put_u8(NBT_TAG_COMPOUND);
+        buf.put_u8(NBT_TAG_STRING);
+        let key = b"text";
+        buf.put_u16(key.len() as u16);
+        buf.put_slice(key);
+        let value = self.0.as_bytes();
+        buf.put_u16(value.len() as u16);
+        buf.put_slice(value);
+        buf.put_u8(NBT_TAG_END);
+    }
+}
+impl WireRead for NbtTextComponent {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        need(buf, 1)?;
+        let root_tag = buf.get_u8();
+        if root_tag != NBT_TAG_COMPOUND {
+            return Err(PacketDecodeError::MalformedNbtTextComponent(format!(
+                "expected root TAG_Compound (0x0A), got {root_tag:#04x}"
+            )));
+        }
+        let mut text: Option<String> = None;
+        loop {
+            need(buf, 1)?;
+            let tag = buf.get_u8();
+            if tag == NBT_TAG_END {
+                break;
+            }
+            need(buf, 2)?;
+            let key_len = buf.get_u16() as usize;
+            need(buf, key_len)?;
+            let key = buf.copy_to_bytes(key_len);
+            if tag != NBT_TAG_STRING {
+                return Err(PacketDecodeError::MalformedNbtTextComponent(format!(
+                    "unsupported field tag {tag:#04x} for key {key:?}"
+                )));
+            }
+            need(buf, 2)?;
+            let value_len = buf.get_u16() as usize;
+            need(buf, value_len)?;
+            let value = buf.copy_to_bytes(value_len);
+            let value = String::from_utf8(value.to_vec()).map_err(|_| {
+                PacketDecodeError::MalformedNbtTextComponent("value not valid UTF-8".to_string())
+            })?;
+            if key.as_ref() == b"text" {
+                text = Some(value);
+            }
+        }
+        text.map(NbtTextComponent).ok_or_else(|| {
+            PacketDecodeError::MalformedNbtTextComponent("missing \"text\" field".to_string())
+        })
+    }
+}
+
 /// Java's UUID is the standard RFC 4122 big-endian 16-byte layout (most-significant 8
 /// bytes, then least-significant 8 bytes) — `uuid::Uuid::as_bytes`/`from_bytes` already use
 /// exactly that layout, so no byte reordering is needed. No length prefix (M1-B04).

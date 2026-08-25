@@ -41,6 +41,8 @@ pub enum PacketDecodeError {
         state: ConnectionState,
         bound: PacketBound,
     },
+    #[error("malformed NBT text component: {0}")]
+    MalformedNbtTextComponent(String),
 }
 
 /// One raw, id-and-body-only packet flowing across the reader-task/consumer boundary — this

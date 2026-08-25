@@ -8,6 +8,11 @@
 use bytes::Buf;
 use rc_protocol::{Bytes, BytesMut, RcPacket};
 
+/// M1 integration fix: `online_mode` (between the `CommonPlayerSpawnInfo`-equivalent
+/// fields, ending at `sea_level`, and `enforces_secure_chat`) was missing entirely from
+/// this blueprint's own field list — discovered by driving a real client (azalea, M1-B06)
+/// and reading its own `ClientboundLogin` struct directly. Without it, every field from
+/// `enforces_secure_chat` onward decoded one field short on a real client.
 #[derive(RcPacket, Debug, Clone, PartialEq)]
 #[packet(state = "play", bound = "client", id = 0x31)]
 pub struct LoginPlay {
@@ -37,6 +42,7 @@ pub struct LoginPlay {
     pub portal_cooldown: i32,
     #[rc(varint)]
     pub sea_level: i32,
+    pub online_mode: bool,
     pub enforces_secure_chat: bool,
 }
 

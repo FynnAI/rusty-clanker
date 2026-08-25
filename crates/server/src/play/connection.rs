@@ -70,6 +70,14 @@ pub async fn enter_play(
         has_death_location: false,
         portal_cooldown: 0,
         sea_level: 63,
+        // Purely informational to a real client (never gates `Event::Spawn`); this
+        // blueprint's own `enter_play` has no route to the real `ServerLoginConfig::
+        // online_mode` flag a much earlier connection stage already resolved (threading it
+        // through is left to whichever later blueprint wires real Play-state session
+        // plumbing) -- `false` matches every automated test and manual-verification path
+        // this milestone actually exercises (M1-B04's own scope: "Every test uses
+        // ServerLoginConfig{ online_mode: false, .. }").
+        online_mode: false,
         enforces_secure_chat: false,
     };
     if handle

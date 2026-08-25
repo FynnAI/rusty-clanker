@@ -9,8 +9,8 @@ use bytes::Bytes;
 use rc_auth::{ServerKeyPair, SessionService};
 use rc_protocol::{
     EncryptionRequest, EncryptionResponse, LoginAcknowledged, LoginDisconnect, LoginProfile,
-    LoginProfileProperty, LoginStart, LoginSuccess, RawPacket, RcPacket, SetCompression,
-    decode_one, encode_payload,
+    LoginProfileProperty, LoginStart, LoginSuccess, NbtTextComponent, RawPacket, RcPacket,
+    SetCompression, decode_one, encode_payload,
 };
 use tokio::sync::mpsc;
 
@@ -92,28 +92,17 @@ pub fn is_valid_player_name(name: &str) -> bool {
     (1..=16).contains(&char_count) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Minimal JSON text-component encoder (`{"text": "<escaped>"}`) for Disconnect reasons —
-/// no new dependency; escapes `"`, `\`, and ASCII control characters only, sufficient for
-/// this module's own fixed diagnostic strings plus a validated (`[a-zA-Z0-9_]`-only)
-/// username.
-pub fn disconnect_reason_json(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len() + 2);
-    for c in text.chars() {
-        match c {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            c if (c as u32) < 0x20 => escaped.push_str(&format!("\\u{:04x}", c as u32)),
-            other => escaped.push(other),
-        }
-    }
-    format!("{{\"text\": \"{escaped}\"}}")
-}
-
 /// Best-effort: sends a `LoginDisconnect` (ignoring any send failure — the connection may
 /// already be unusable) then unconditionally closes the connection.
+///
+/// M1 integration fix: the reason field is network-NBT (`NbtTextComponent`), not the raw
+/// JSON `String` this module originally built by hand (`wire::NbtTextComponent`'s own doc
+/// comment explains why a real client rejected that shape) — no escaping is needed for the
+/// NBT string encoding itself, only the fixed diagnostic strings and a validated
+/// (`[a-zA-Z0-9_]`-only) username this module ever actually sends here.
 async fn disconnect(handle: &ConnectionHandle, reason: &str) {
     let payload = encode_payload(&LoginDisconnect {
-        reason: disconnect_reason_json(reason),
+        reason: NbtTextComponent(reason.to_string()),
     });
     let _ = handle.try_send_payload(payload);
     // `try_send_payload` only enqueues onto the writer task's outbound channel; it does not

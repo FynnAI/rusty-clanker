@@ -8,12 +8,15 @@ use uuid::Uuid;
 
 use crate::RcPacket;
 use crate::packet::PacketDecodeError;
-use crate::wire::{WireRead, WireWrite};
+use crate::wire::{NbtTextComponent, WireRead, WireWrite};
 
+/// M1 integration fix: `reason` is network-NBT (`NbtTextComponent`), not a raw
+/// `WireWrite`-`String` — see `wire::NbtTextComponent`'s own doc comment for why a real
+/// client rejects the plain-`String` shape this field originally shipped with.
 #[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
 #[packet(state = "login", bound = "client", id = 0x00)]
 pub struct LoginDisconnect {
-    pub reason: String,
+    pub reason: NbtTextComponent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RcPacket)]

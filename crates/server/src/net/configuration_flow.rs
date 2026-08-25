@@ -45,8 +45,6 @@ impl Default for ServerConfigurationConfig {
 pub enum ConfigurationError {
     #[error("connection closed by peer during configuration")]
     Closed,
-    #[error("known-pack mismatch — client did not echo the requested pack")]
-    KnownPackMismatch,
     #[error("keep-alive timed out")]
     KeepAliveTimeout,
     #[error("unsolicited or mismatched keep-alive reply")]
@@ -84,12 +82,13 @@ fn encode_brand_payload(brand: &str) -> Vec<u8> {
 /// Best-effort: sends a Configuration-phase Disconnect (ignoring any send failure — the
 /// connection may already be unusable) then unconditionally closes the connection.
 /// Configuration-phase disconnects reuse Login's own `Disconnect` byte shape (`reason:
-/// String`, a JSON text component) hand-encoded under Configuration's own `Disconnect` id
-/// (`0x02`) — Context's packet-catalog table; no separate derived Rust type exists for this.
+/// NbtTextComponent`, network-NBT — M1 integration fix, `wire::NbtTextComponent`'s own doc
+/// comment) hand-encoded under Configuration's own `Disconnect` id (`0x02`) — Context's
+/// packet-catalog table; no separate derived Rust type exists for this.
 async fn disconnect(handle: &ConnectionHandle, reason: &str) {
     let mut payload = BytesMut::new();
     VarInt::new(0x02).encode(&mut payload);
-    crate::net::login_flow::disconnect_reason_json(reason).write_wire(&mut payload);
+    rc_protocol::NbtTextComponent(reason.to_string()).write_wire(&mut payload);
     let _ = handle.try_send_payload(payload.freeze());
     // Same enqueue/close race `net::login_flow::disconnect` and `net::status::serve_status`
     // (M1-B02) already document and work around identically — yield once so the writer task
@@ -108,7 +107,6 @@ async fn drive_until_gate(
     interval: &mut Interval,
     keep_alive_pending: &mut Option<i64>,
     gate: ConfigGate,
-    config: &ServerConfigurationConfig,
 ) -> Result<(), ConfigurationError> {
     loop {
         tokio::select! {
@@ -141,18 +139,25 @@ async fn drive_until_gate(
                     // scope — decoded and dropped; a malformed body here is non-gating.
                     let _ = decode_one::<ClientInformation>(raw.body);
                 } else if raw.id == KnownPacksServerbound::ID && gate == ConfigGate::KnownPacks {
-                    let response = match decode_one::<KnownPacksServerbound>(raw.body) {
-                        Ok(response) => response,
-                        Err(err) => {
-                            disconnect(handle, "unsupported registry configuration (known-pack mismatch)")
-                                .await;
-                            return Err(ConfigurationError::Decode(err));
-                        }
-                    };
-                    if response.known_packs != [config.known_pack.clone()] {
-                        disconnect(handle, "unsupported registry configuration (known-pack mismatch)")
-                            .await;
-                        return Err(ConfigurationError::KnownPackMismatch);
+                    // M1 integration fix: this used to require the client's echoed
+                    // `known_packs` to exactly equal the one offered pack, disconnecting on
+                    // any other response (M1-B04's own "defensive design" against an
+                    // unverifiable assumption, its Context section's own words). Driving a
+                    // real client (azalea) against this exact gate showed the assumption was
+                    // wrong: a real, fresh client always echoes an *empty* list (it has
+                    // nothing cached locally yet), which this check treated as a fatal
+                    // mismatch -- disconnecting every real client during Configuration. The
+                    // response's actual real-vanilla purpose is purely informational (which
+                    // already-cached entries the server may then omit full data for); this
+                    // server always sends every registry entry with `has_data=false`
+                    // regardless of the response (Context, "why every entry is sent with
+                    // has_data=false"), so the response is decoded (a malformed body is still
+                    // a fatal protocol violation) but never gates on its *content* -- any
+                    // echoed list, including an empty one, is accepted and the sequence
+                    // proceeds.
+                    if let Err(err) = decode_one::<KnownPacksServerbound>(raw.body) {
+                        disconnect(handle, "malformed packet").await;
+                        return Err(ConfigurationError::Decode(err));
                     }
                     return Ok(());
                 } else if raw.id == AcknowledgeFinishConfiguration::ID && gate == ConfigGate::FinishAck {
@@ -219,7 +224,6 @@ pub async fn run_configuration(
         &mut interval,
         &mut keep_alive_pending,
         ConfigGate::KnownPacks,
-        config,
     )
     .await?;
 
@@ -247,7 +251,6 @@ pub async fn run_configuration(
         &mut interval,
         &mut keep_alive_pending,
         ConfigGate::FinishAck,
-        config,
     )
     .await?;
 
