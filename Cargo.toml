@@ -1,6 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+# "crates/*" only matches one path segment (Cargo's own glob semantics, same as a
+# plain shell glob) -- it does not reach crates/testing/*'s own two-level-deep dev/
+# test-only members (WS-D2), so those are listed explicitly. "crates/testing" itself
+# (the container directory, no Cargo.toml of its own) is excluded since "crates/*"
+# would otherwise also match it directly (it now exists on disk) and fail to load.
+members = [
+    "crates/*",
+    "crates/testing/test-harness",
+    "crates/testing/paritybot",
+    "xtask",
+]
+exclude = ["crates/testing"]
 
 [workspace.package]
 version = "0.1.0"
@@ -79,6 +90,12 @@ rstar             = "0.13.0"
 windows           = "0.62.2"
 nix               = "0.31.3"
 criterion         = "0.8.2"
+# TEST-D8/TEST-D35's reviewed git-dependency exception (M1-B06): the vanilla-client
+# stand-in `rc-paritybot` drives. `rev`-pinned, never a floating branch reference.
+# Verified live against the pinned commit's own Cargo.toml (2026-08-25): workspace
+# version "0.16.0+mc26.2", azalea-protocol::packets::PROTOCOL_VERSION == 776 -- an
+# exact match for this project's own NET-D1 pin.
+azalea            = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295d353b9b3ef68f665b311cba39211fd19" }
 
 [profile.release]
 lto = "fat"

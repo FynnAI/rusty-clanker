@@ -1,0 +1,29 @@
+[package]
+name = "rc-paritybot"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rc-test-harness = { path = "../test-harness" }
+tokio = { workspace = true }
+azalea = { workspace = true } # TEST-D8 — git dependency, see 12-workspace-structure.md
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# none beyond the above — this crate's own self-tests use rc-test-harness's
+# fake_server directly, no additional test-only dependency needed
+
+# Forced deviation (Context, "azalea's own upstream nightly-toolchain requirement"):
+# `xtask`'s own binary must never gain a Cargo dependency edge on this crate --
+# azalea's own `rust-toolchain.toml` pins `channel = "nightly"` (its transitive
+# `simdnbt` dependency unconditionally uses `#![feature(portable_simd)]`, verified
+# live against the pinned rev, August 2026), and every other Tier-1 CI gate compiles
+# `xtask.exe` under this project's own pinned *stable* toolchain (WS-D4). `xtask
+# m1-report` therefore drives this scenario as a subprocess (`std::process::Command`,
+# `RUSTC_BOOTSTRAP=1` set on the child) rather than an in-process
+# `rc_paritybot::idle_stability` call — this bin target is that subprocess's entry
+# point.
+[[bin]]
+name = "idle_stability_runner"
+path = "src/bin/idle_stability_runner.rs"

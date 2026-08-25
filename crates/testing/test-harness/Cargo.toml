@@ -1,0 +1,19 @@
+[package]
+name = "rc-test-harness"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+# Forced deviation from this blueprint's own Deliverables manifest sketch (which lists
+# only serde_json/thiserror): Implementation steps 3 and 5 explicitly instruct
+# `probe.rs`/`fake_server.rs` to "use rc_protocol's frame/varint/wire primitives
+# directly (M1-B01's public API)" -- impossible without this dependency. Recorded as a
+# forced deviation in this blueprint's implementation commit body/report.
+rc-protocol = { path = "../../protocol" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[[bin]]
+name = "status_probe"
+path = "src/bin/status_probe.rs"

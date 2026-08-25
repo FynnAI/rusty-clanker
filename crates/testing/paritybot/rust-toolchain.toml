@@ -1,0 +1,14 @@
+# Forced deviation (Context, "azalea's own upstream nightly-toolchain requirement"):
+# azalea's own `rust-toolchain.toml` pins `channel = "nightly"` and its own build
+# script refuses to proceed on a stable-labeled `rustc` even with `RUSTC_BOOTSTRAP=1`
+# set (verified live: azalea's `build.rs` checks the reported channel string
+# directly, not merely whether nightly-gated features are unlockable). Cargo/rustup
+# resolve the nearest `rust-toolchain.toml` walking *up* from the invocation's own
+# working directory — this file therefore only takes effect for a `cargo` invocation
+# whose cwd is at or below this directory (never for a `--workspace`-wide build
+# invoked from the repository root, which keeps using the root's own pinned stable
+# toolchain, WS-D4). `xtask::m1_report` invokes this crate's `idle_stability_runner`
+# binary as its own subprocess with this directory as `current_dir`, precisely so
+# this override applies to that one subprocess and nowhere else.
+[toolchain]
+channel = "nightly-2026-07-25"
