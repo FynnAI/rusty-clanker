@@ -79,23 +79,38 @@ pub struct ConfigurationKeepAliveClientbound {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryDataEntryOut {
     pub entry_id: Identifier,
+    /// Pre-encoded network-NBT bytes (unnamed root `TAG_Compound`, `TAG_End`-terminated —
+    /// `crate::wire`'s own `nbt_raw` shape) sent verbatim after the `has_data=true` byte;
+    /// `None` sends the bare `has_data=false` byte with no payload. M1 integration fix: the
+    /// blanket `has_data=false`-for-everything default M1-B04 originally shipped (Context,
+    /// "why every entry is sent with has_data=false") does not hold for every registry a
+    /// real client cannot already resolve on its own — `minecraft:dimension_type` in
+    /// particular (`crate::configuration`'s own callers decide, per registry, which entries
+    /// need `Some`; this type only carries the already-encoded bytes, it never decides).
+    pub data: Option<Vec<u8>>,
 }
 impl WireWrite for RegistryDataEntryOut {
     fn write_wire(&self, buf: &mut BytesMut) {
         self.entry_id.write_wire(buf);
-        false.write_wire(buf);
+        match &self.data {
+            Some(nbt) => {
+                true.write_wire(buf);
+                buf.put_slice(nbt);
+            }
+            None => false.write_wire(buf),
+        }
     }
 }
 impl WireRead for RegistryDataEntryOut {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
         let entry_id = Identifier::read_wire(buf)?;
         let has_data = bool::read_wire(buf)?;
-        if has_data {
-            unimplemented!(
-                "registry entries with inline NBT data are out of M1-B04's scope — no #[rc(nbt)]/rc-nbt support exists yet"
-            )
-        }
-        Ok(Self { entry_id })
+        let data = if has_data {
+            Some(crate::wire::read_raw_compound(buf)?)
+        } else {
+            None
+        };
+        Ok(Self { entry_id, data })
     }
 }
 

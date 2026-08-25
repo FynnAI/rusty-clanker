@@ -43,6 +43,8 @@ pub enum PacketDecodeError {
     },
     #[error("malformed NBT text component: {0}")]
     MalformedNbtTextComponent(String),
+    #[error("malformed registry-entry NBT payload: {0}")]
+    MalformedRegistryEntryNbt(String),
 }
 
 /// One raw, id-and-body-only packet flowing across the reader-task/consumer boundary — this

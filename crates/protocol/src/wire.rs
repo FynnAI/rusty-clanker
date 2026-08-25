@@ -255,6 +255,134 @@ impl WireRead for NbtTextComponent {
     }
 }
 
+/// Tag ids for the binary NBT format (network variant: unnamed root, no name field) —
+/// `crates/registries/generated/v776/registry_entries.rs`'s own future content and every
+/// `RegistryDataEntryOut` inline payload this crate ever sends is shaped this way. Unlike
+/// `NbtTextComponent` (which only understands one fixed `{"text": ...}` shape), a registry
+/// entry's payload is, in general, an arbitrary Mojang registry element
+/// (`DimensionKindElement` and friends) whose exact field set this crate does not model —
+/// decoding it therefore only needs to measure/skip it byte-for-byte, never interpret it.
+/// No real `rc-nbt` integration exists yet (`configuration.rs`'s own `#[rc(nbt)]` deferral,
+/// M1-B04); this is a minimal, purpose-built stand-in for exactly this one need, mirroring
+/// `NbtTextComponent`'s own precedent (M1 integration fix) rather than a general NBT codec.
+mod nbt_raw {
+    use super::{Buf, Bytes, PacketDecodeError, need};
+
+    const TAG_END: u8 = 0x00;
+    const TAG_BYTE: u8 = 0x01;
+    const TAG_SHORT: u8 = 0x02;
+    const TAG_INT: u8 = 0x03;
+    const TAG_LONG: u8 = 0x04;
+    const TAG_FLOAT: u8 = 0x05;
+    const TAG_DOUBLE: u8 = 0x06;
+    const TAG_BYTE_ARRAY: u8 = 0x07;
+    const TAG_STRING: u8 = 0x08;
+    const TAG_LIST: u8 = 0x09;
+    const TAG_COMPOUND: u8 = 0x0A;
+    const TAG_INT_ARRAY: u8 = 0x0B;
+    const TAG_LONG_ARRAY: u8 = 0x0C;
+
+    fn skip_nbt_string(buf: &mut Bytes) -> Result<(), PacketDecodeError> {
+        need(buf, 2)?;
+        let len = buf.get_u16() as usize;
+        need(buf, len)?;
+        buf.advance(len);
+        Ok(())
+    }
+
+    fn skip_nbt_payload(tag: u8, buf: &mut Bytes) -> Result<(), PacketDecodeError> {
+        match tag {
+            TAG_BYTE => {
+                need(buf, 1)?;
+                buf.advance(1);
+            }
+            TAG_SHORT => {
+                need(buf, 2)?;
+                buf.advance(2);
+            }
+            TAG_INT | TAG_FLOAT => {
+                need(buf, 4)?;
+                buf.advance(4);
+            }
+            TAG_LONG | TAG_DOUBLE => {
+                need(buf, 8)?;
+                buf.advance(8);
+            }
+            TAG_BYTE_ARRAY => {
+                need(buf, 4)?;
+                let len = buf.get_i32().max(0) as usize;
+                need(buf, len)?;
+                buf.advance(len);
+            }
+            TAG_STRING => skip_nbt_string(buf)?,
+            TAG_LIST => {
+                need(buf, 1)?;
+                let element_tag = buf.get_u8();
+                need(buf, 4)?;
+                let count = buf.get_i32().max(0);
+                if element_tag != TAG_END {
+                    for _ in 0..count {
+                        skip_nbt_payload(element_tag, buf)?;
+                    }
+                }
+            }
+            TAG_COMPOUND => skip_nbt_compound_body(buf)?,
+            TAG_INT_ARRAY => {
+                need(buf, 4)?;
+                let len = buf.get_i32().max(0) as usize;
+                let bytes = len.saturating_mul(4);
+                need(buf, bytes)?;
+                buf.advance(bytes);
+            }
+            TAG_LONG_ARRAY => {
+                need(buf, 4)?;
+                let len = buf.get_i32().max(0) as usize;
+                let bytes = len.saturating_mul(8);
+                need(buf, bytes)?;
+                buf.advance(bytes);
+            }
+            other => {
+                return Err(PacketDecodeError::MalformedRegistryEntryNbt(format!(
+                    "unsupported NBT tag {other:#04x}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn skip_nbt_compound_body(buf: &mut Bytes) -> Result<(), PacketDecodeError> {
+        loop {
+            need(buf, 1)?;
+            let tag = buf.get_u8();
+            if tag == TAG_END {
+                return Ok(());
+            }
+            skip_nbt_string(buf)?; // field name
+            skip_nbt_payload(tag, buf)?;
+        }
+    }
+
+    /// Reads one full network-NBT value (unnamed root `TAG_Compound`, `TAG_End`-terminated —
+    /// protocol 776's Registry Data entry-payload shape) starting at `buf`'s current
+    /// position, returning the exact raw bytes consumed (leading tag byte through the
+    /// matching `TAG_End`) without interpreting any field's meaning.
+    pub fn read_raw_compound(buf: &mut Bytes) -> Result<Vec<u8>, PacketDecodeError> {
+        let start_remaining = buf.remaining();
+        let snapshot = buf.clone();
+        need(buf, 1)?;
+        let root_tag = buf.get_u8();
+        if root_tag != TAG_COMPOUND {
+            return Err(PacketDecodeError::MalformedRegistryEntryNbt(format!(
+                "expected root TAG_Compound (0x0A), got {root_tag:#04x}"
+            )));
+        }
+        skip_nbt_compound_body(buf)?;
+        let consumed = start_remaining - buf.remaining();
+        Ok(snapshot.slice(0..consumed).to_vec())
+    }
+}
+pub(crate) use nbt_raw::read_raw_compound;
+
 /// Java's UUID is the standard RFC 4122 big-endian 16-byte layout (most-significant 8
 /// bytes, then least-significant 8 bytes) — `uuid::Uuid::as_bytes`/`from_bytes` already use
 /// exactly that layout, so no byte reordering is needed. No length prefix (M1-B04).

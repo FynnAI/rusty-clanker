@@ -17,6 +17,31 @@ use crate::net::{PlayerSession, PlayerSessionSink};
 
 pub const HARDCODED_REGION_ID: RegionId = RegionId(1);
 
+/// The `worldgen_registries` table the real composition root (`main.rs`) actually advertises
+/// during Configuration's registry-data sync (M1 integration fix -- before this fix, `main.rs`
+/// passed `&[]`, so no `RegistryData` packet was ever sent to a real client at all, regardless
+/// of `net::configuration_flow`'s own has_data handling; that emptiness was the deeper half of
+/// the gap the completion report's diagnosis surfaced). Matches `crates/server/tests/
+/// login_configuration_flow.rs`'s own `TEST_WORLDGEN_REGISTRIES` fixture exactly -- the
+/// convention `chunk.rs`'s own `PLACEHOLDER_BIOME_ID` doc comment already assumed this
+/// composition root would eventually supply (`"minecraft:plains"` listed first). Only
+/// `minecraft:dimension_type`'s one entry needs real inline NBT
+/// (`net::configuration_flow::encode_dimension_type_nbt`, keyed off this exact registry-id
+/// string) -- `minecraft:worldgen/biome`'s two entries stay `has_data=false`, matching
+/// M1-B04's original default (Context, "why every entry is sent with has_data=false"): this
+/// blueprint's placeholder chunks reference biome ids by raw `SingleValue` palette index
+/// (`chunk.rs`'s own `PLACEHOLDER_BIOME_ID`), never by resolving a biome's own registry
+/// content, so a real client accepting this server's chunks has never needed biome data --
+/// `crates/testing/test-harness/src/fake_server.rs`'s own already-proven script reaches
+/// `Event::Spawn` without ever sending a `worldgen/biome` `RegistryData` packet at all.
+pub const PLACEHOLDER_WORLDGEN_REGISTRIES: &[(&str, &[&str])] = &[
+    ("minecraft:dimension_type", &["minecraft:overworld"]),
+    (
+        "minecraft:worldgen/biome",
+        &["minecraft:plains", "minecraft:desert"],
+    ),
+];
+
 #[derive(Component)]
 pub struct PlayerMarker {
     pub network_entity_id: i32,

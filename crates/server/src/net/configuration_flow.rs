@@ -79,6 +79,51 @@ fn encode_brand_payload(brand: &str) -> Vec<u8> {
     buf.to_vec()
 }
 
+/// The one registry a real client cannot resolve on its own (M1 integration fix — Context,
+/// completion-report diagnosis: a real client logs `Couldn't resolve dimension_type
+/// DimensionKind { id: 0 }`, then desyncs and fails to parse every subsequent packet, and
+/// `Event::Spawn` never fires, because a real client's `DimensionKind` resolves to the
+/// strongly-typed `DimensionKindElement`, which a `has_data=false` entry can never produce).
+/// M1-B04's own original "every entry always has_data=false" default (Context, "why every
+/// entry is sent with has_data=false") still holds for every other registry this server
+/// ever advertises -- this is the one bounded, documented exception.
+const DIMENSION_TYPE_REGISTRY: &str = "minecraft:dimension_type";
+
+/// The minimal network-NBT (unnamed root, no name field, `TAG_End`-terminated)
+/// `DimensionKindElement` compound a real client needs to resolve `dimension_type`
+/// (`height`/`min_y` as `TAG_Int`) -- every other field of the real struct is `Option`-typed
+/// or absorbed by its own catch-all, so omitting them is not a further approximation, it is
+/// what a minimal, legal instance of this exact type already looks like. Byte-for-byte the
+/// same shape as `crates/testing/test-harness/src/fake_server.rs`'s own already-proven
+/// `encode_dimension_type_nbt` (M1-B06's own empirical dump of azalea-protocol's real
+/// `ClientboundRegistryData`/`DimensionKindElement` decode expectations, Constraints (d)) --
+/// this is that same reference shape, reused rather than reinvented, now wired into the real
+/// production `run_configuration` path instead of only the test double. `height`/`min_y`
+/// values come from `crate::play::chunk`'s own already-committed world-height constants
+/// (`SECTION_COUNT * 16`, `WORLD_MIN_Y`), not restated as independent magic numbers, so this
+/// payload can never silently drift out of sync with the chunk content the same connection
+/// sends moments later.
+fn encode_dimension_type_nbt() -> Vec<u8> {
+    let height = (crate::play::chunk::SECTION_COUNT as i32) * 16;
+    let min_y = crate::play::chunk::WORLD_MIN_Y;
+
+    let mut buf = BytesMut::new();
+    0x0Au8.write_wire(&mut buf); // root TAG_Compound, unnamed (network NBT).
+
+    0x03u8.write_wire(&mut buf); // TAG_Int
+    6u16.write_wire(&mut buf);
+    buf.extend_from_slice(b"height");
+    height.write_wire(&mut buf);
+
+    0x03u8.write_wire(&mut buf); // TAG_Int
+    5u16.write_wire(&mut buf);
+    buf.extend_from_slice(b"min_y");
+    min_y.write_wire(&mut buf);
+
+    0x00u8.write_wire(&mut buf); // TAG_End
+    buf.to_vec()
+}
+
 /// Best-effort: sends a Configuration-phase Disconnect (ignoring any send failure — the
 /// connection may already be unusable) then unconditionally closes the connection.
 /// Configuration-phase disconnects reuse Login's own `Disconnect` byte shape (`reason:
@@ -149,10 +194,11 @@ async fn drive_until_gate(
                     // mismatch -- disconnecting every real client during Configuration. The
                     // response's actual real-vanilla purpose is purely informational (which
                     // already-cached entries the server may then omit full data for); this
-                    // server always sends every registry entry with `has_data=false`
-                    // regardless of the response (Context, "why every entry is sent with
-                    // has_data=false"), so the response is decoded (a malformed body is still
-                    // a fatal protocol violation) but never gates on its *content* -- any
+                    // server decides which registry entries carry real inline NBT purely by
+                    // `registry_id` (`DIMENSION_TYPE_REGISTRY`, below -- a later M1 integration
+                    // fix on top of this one), never by inspecting the client's echoed
+                    // `known_packs` response, so the response is decoded (a malformed body is
+                    // still a fatal protocol violation) but never gates on its *content* -- any
                     // echoed list, including an empty one, is accepted and the sequence
                     // proceeds.
                     if let Err(err) = decode_one::<KnownPacksServerbound>(raw.body) {
@@ -227,12 +273,19 @@ pub async fn run_configuration(
     )
     .await?;
 
-    // Step 4: registry-data sync — every entry always `has_data=false` (Context).
+    // Step 4: registry-data sync. Every entry is `has_data=false` (Context) *except*
+    // `minecraft:dimension_type`'s own entries, which carry real inline NBT (M1 integration
+    // fix, `encode_dimension_type_nbt`'s own doc comment).
     for (registry_id, entries) in worldgen_registries {
         let entries_out = entries
             .iter()
             .map(|entry_id| RegistryDataEntryOut {
                 entry_id: Identifier::new(*entry_id),
+                data: if *registry_id == DIMENSION_TYPE_REGISTRY {
+                    Some(encode_dimension_type_nbt())
+                } else {
+                    None
+                },
             })
             .collect();
         handle.try_send_payload(encode_payload(&RegistryData {
