@@ -8,12 +8,28 @@ discipline over the whole M1 range, (4) consolidated deviations/open problems fr
 per-blueprint agent plus this integration pass, and (5) the manual-verification
 instructions Acceptance Criterion 3 requires from the project owner.
 
-**Bottom line: M1 is not yet done.** The gate suite is fully green. Criterion 2 (raw TCP
-probe) passes. Criterion 1's status/pong half passes; its Login→Configuration→Play→spawn
-half progressed substantially during this pass (three real, previously-undiagnosed
-protocol bugs fixed) but still fails against a real client on one further, cleanly
-diagnosed, unfixed gap — see "Criterion 1" below. Criterion 3 is unautomatable by design
-and awaits the project owner's one-time manual run.
+**Bottom line: M1 is COMPLETE — all three acceptance criteria met (2026-08-26).**
+The gate suite is fully green and CI-green on both platforms. Criterion 1: the full,
+uncompressed `xtask m1-report --mode full` run (real release server, azalea bot driver)
+passed all four cases including the real 30-minute idle-stability window
+(`target/verify/m1-acceptance.json`, `mode: "full"`, overall `pass`, 2026-08-26 00:38–01:12
+local). Criterion 2: raw-TCP probe passes (protocol 776, version, counts, MOTD).
+Criterion 3: performed manually by the project owner on 2026-08-25/26 with an unmodified
+vanilla Java Edition 26.2 client and a real purchased account against the local
+online-mode server — session validation succeeded, the client joined, spawned in the
+superflat placeholder world, rendered the terrain, and creative flight worked
+(tracking issue #1, closed). Reaching this took six real-client fix rounds after the
+original integration pass, each surfacing a defect the bot oracle could not see:
+(1) zero `RegistryData` packets sent in production; (2) an invalid hand-minimal
+`dimension_type` NBT payload → replaced by the full 29-registry sync with
+`has_data=false`; (3) the `ClientboundUpdateTags` packet was entirely missing
+(root-caused via an ASSET-D18(f) research pass over the decompiled reference,
+`docs/research/mc-26.2/26-registry-sync-configuration.md`); (4) tag coverage widened
+from a 5-registry cherry-pick to the complete discovered vanilla set (15 registries,
+697 tags); (5) chunk render-mesh neighbor rule → send radius 2; (6) send radius 5
+so the unmeshed boundary ring sits out of immediate sight. The sections below preserve
+the state as of the original integration pass; where they say "FAIL" or "not yet done",
+this bottom line and the fix history above are the current truth.
 
 ## 1. Gate suite (CI-equivalent, run from a clean tree)
 
