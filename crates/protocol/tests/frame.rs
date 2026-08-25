@@ -1,7 +1,7 @@
 //! M1-B01 acceptance tests: frame length-prefix + optional zlib-compression codec
 //! (NET-D5).
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use rc_protocol::{CompressionState, FrameError, VarInt, encode_frame, try_decode_frame};
 
 #[test]

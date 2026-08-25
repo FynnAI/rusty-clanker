@@ -1,7 +1,7 @@
 //! M1-B01 acceptance tests: the Tokio reader/writer task pair (ARCH-D21/NET-D7) driven
 //! over a genuine loopback `TcpStream` pair.
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 use rc_protocol::{CompressionState, ConnectionState, VarInt};
 use rusty_clanker_server::net::{ConnectionConfig, SendError, spawn_connection};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
