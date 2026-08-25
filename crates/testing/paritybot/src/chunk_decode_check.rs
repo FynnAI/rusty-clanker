@@ -3,10 +3,10 @@
 //! reads decoded block state directly out of azalea's own real chunk storage
 //! (`azalea_world::World::get_block_state`, `azalea-world`'s own real decoder --
 //! Constraints (d) sanctions reading a client library's source/using it as a decode oracle
-//! this way) at a position inside the original spawn chunk `(0, 0)` and a position inside
-//! an outer chunk of the send radius, to empirically prove -- not just structurally infer
-//! from reading the encoder's own source -- that the wire bytes this server actually sends
-//! decode identically regardless of chunk position.
+//! this way) at a position inside the spawn chunk `(0, 0)` and a caller-chosen position
+//! inside an outer chunk of the send radius, to empirically prove -- not just
+//! structurally infer from reading the encoder's own source -- that the wire bytes this
+//! server actually sends decode identically regardless of chunk position.
 //!
 //! This is the round-4 root-cause finding's own evidence half: `rusty_clanker_server::
 //! play::chunk`'s placeholder content is byte-identical across every chunk sent
@@ -117,22 +117,30 @@ async fn handle(bot: Client, event: Event, state: SharedState) {
 /// connects through the same `vanilla_registry_defaults` relay `idle_stability.rs` uses
 /// (azalea's own missing built-in `dimension_type` default, that module's own doc
 /// comment), waits for `Event::Spawn`, then reads block state at four positions each in
-/// the spawn chunk `(0, 0)` and in outer chunk `(-2, -2)` (a corner of the round-4 send
-/// radius, Chebyshev distance 2 from spawn -- never reachable at all under the pre-fix
-/// radius-1 send).
+/// the spawn chunk `(0, 0)` and at world position `(outer_x, outer_z)` -- the caller's
+/// own choice of an "outer" position, deliberately not hard-coded here (round 5 prep):
+/// the caller derives it from whatever the current send radius actually is (its own test-
+/// local mirror of `play::chunk::PLACEHOLDER_RADIUS_CHUNKS`), so this scenario function
+/// itself never needs editing when that radius changes.
 pub async fn run_chunk_decode_check(
     host: String,
     port: u16,
     login_timeout: Duration,
+    outer_x: i32,
+    outer_z: i32,
 ) -> Result<ChunkDecodeReport, ChunkDecodeError> {
     let local = tokio::task::LocalSet::new();
-    local.run_until(run_inner(host, port, login_timeout)).await
+    local
+        .run_until(run_inner(host, port, login_timeout, outer_x, outer_z))
+        .await
 }
 
 async fn run_inner(
     host: String,
     port: u16,
     login_timeout: Duration,
+    outer_x: i32,
+    outer_z: i32,
 ) -> Result<ChunkDecodeReport, ChunkDecodeError> {
     let state = SharedState::default();
     let progress = state.progress.clone();
@@ -203,7 +211,7 @@ async fn run_inner(
     };
 
     let spawn = read_column(0, 0)?;
-    let outer = read_column(-20, -20)?;
+    let outer = read_column(outer_x, outer_z)?;
 
     Ok(ChunkDecodeReport { spawn, outer })
 }

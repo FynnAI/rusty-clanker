@@ -375,27 +375,42 @@ mod tests {
         assert_eq!(decoded.palette, vec![7]);
     }
 
+    /// M1 integration fix, round 5 prep: parameterized off `PLACEHOLDER_RADIUS_CHUNKS`
+    /// directly (in-crate, unlike the cross-crate mirrors `play_chunk_set.rs`/
+    /// `chunk_decode_diagnostic.rs` need, `mod.rs`'s own doc comment on why `chunk` stays
+    /// crate-internal) rather than hard-coding the radius-2 grid's own shape -- a future
+    /// radius change needs zero edits here ever again.
     #[test]
     fn placeholder_chunk_coords_are_row_major_ascending() {
         let coords = placeholder_chunk_coords();
-        assert_eq!(coords.len(), 25);
-        assert_eq!(coords[0], (-2, -2));
-        assert_eq!(coords[24], (2, 2));
+        let side = (2 * PLACEHOLDER_RADIUS_CHUNKS + 1) as usize;
+        assert_eq!(coords.len(), side * side);
+        assert_eq!(
+            coords[0],
+            (-PLACEHOLDER_RADIUS_CHUNKS, -PLACEHOLDER_RADIUS_CHUNKS)
+        );
+        assert_eq!(
+            coords[coords.len() - 1],
+            (PLACEHOLDER_RADIUS_CHUNKS, PLACEHOLDER_RADIUS_CHUNKS)
+        );
     }
 
     /// M1 integration fix, round 4 (`PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment): every
-    /// chunk of the original 3x3 "visible" area (`-1..=1` on both axes) must have its own
-    /// full 3x3 neighborhood -- all 8 Chebyshev-distance-1 neighbors -- present in the
-    /// sent set, or a real client will not build a render mesh for it. This is the exact
-    /// regression guard for the round-4 root cause: radius `1` fails this check for every
-    /// one of the 8 non-center chunks (each has at least one neighbor outside the 9-chunk
-    /// set); radius `2` passes it for all 9.
+    /// chunk of the render-safe "visible" area -- radius `PLACEHOLDER_RADIUS_CHUNKS - 1`,
+    /// one ring inside the actual send radius -- must have its own full 3x3 neighborhood
+    /// -- all 8 Chebyshev-distance-1 neighbors -- present in the sent set, or a real
+    /// client will not build a render mesh for it. This is the exact regression guard for
+    /// the round-4 root cause: radius `1` fails this check for every one of its 8
+    /// non-center chunks (each has at least one neighbor outside the 9-chunk set); every
+    /// radius `>= 2` passes it for its own render-safe area -- parameterized (round 5
+    /// prep) so raising the radius further never needs to touch this test again.
     #[test]
-    fn every_originally_visible_chunk_has_full_neighbor_coverage() {
+    fn every_render_safe_chunk_has_full_neighbor_coverage() {
         let sent: std::collections::HashSet<(i32, i32)> =
             placeholder_chunk_coords().into_iter().collect();
-        for cx in -1..=1 {
-            for cz in -1..=1 {
+        let render_safe_radius = PLACEHOLDER_RADIUS_CHUNKS - 1;
+        for cx in -render_safe_radius..=render_safe_radius {
+            for cz in -render_safe_radius..=render_safe_radius {
                 for dx in -1..=1 {
                     for dz in -1..=1 {
                         assert!(

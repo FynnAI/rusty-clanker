@@ -1,14 +1,22 @@
 //! M1-B05 acceptance test: `enter_play` sends a well-formed Play-entry sequence and the
-//! full 25-chunk superflat placeholder batch over a real loopback socket, no
+//! full superflat placeholder chunk batch over a real loopback socket, no
 //! M1-B02/B03/B04 dependency (Deliverables, "write these FIRST").
 //!
-//! M1 integration fix, round 4, test-authoring commit: the chunk count grew from 9
-//! (radius 1) to 25 (radius 2) once a real, graphical vanilla client's own render-mesh
-//! neighbor requirement was diagnosed (`rusty_clanker_server::play::chunk::
-//! PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment has the full writeup) -- every assertion
-//! below that hard-coded `9` now hard-codes `25` instead, and a new assertion checks the
-//! actual regression this fix exists for: every chunk of the original 3x3 "visible" area
-//! has its own full 3x3 neighborhood present in the sent set.
+//! M1 integration fix, round 4: the chunk count grew from 9 (radius 1) to 25 (radius 2)
+//! once a real, graphical vanilla client's own render-mesh neighbor requirement was
+//! diagnosed (`rusty_clanker_server::play::chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own doc
+//! comment has the full writeup), and a new assertion checked the actual regression that
+//! fix exists for: every chunk of the render-safe "visible" area has its own full 3x3
+//! neighborhood present in the sent set.
+//!
+//! M1 integration fix, round 5 prep, test-authoring commit: every count/coordinate below
+//! that used to hard-code the radius-2 grid's own shape now derives from
+//! `EXPECTED_RADIUS_CHUNKS` instead -- a single local mirror of `play::chunk::
+//! PLACEHOLDER_RADIUS_CHUNKS`'s own current value, duplicated (not imported) because
+//! `chunk` stays a crate-internal module (`play::mod`'s own doc comment: "every
+//! acceptance test that needs chunk-byte assertions writes its own test-local decode
+//! mirror instead"). A future radius change still needs this one constant bumped here to
+//! match, but nothing else in this file.
 
 use bytes::{Buf, Bytes};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -21,6 +29,11 @@ use rusty_clanker_server::play::packets::{
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// Mirrors `play::chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own current value (module doc
+/// comment above has the full "why a mirror, not an import" writeup). The one line to
+/// change whenever that constant changes.
+const EXPECTED_RADIUS_CHUNKS: i32 = 2;
 
 async fn connected_pair() -> (TcpStream, TcpStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -175,13 +188,15 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         assert_eq!(id, ChunkBatchStart::ID);
         decode_one::<ChunkBatchStart>(body).unwrap();
 
-        let expected_coords: Vec<(i32, i32)> = (-2..=2)
-            .flat_map(|cx| (-2..=2).map(move |cz| (cx, cz)))
+        let expected_coords: Vec<(i32, i32)> = (-EXPECTED_RADIUS_CHUNKS..=EXPECTED_RADIUS_CHUNKS)
+            .flat_map(|cx| {
+                (-EXPECTED_RADIUS_CHUNKS..=EXPECTED_RADIUS_CHUNKS).map(move |cz| (cx, cz))
+            })
             .collect();
-        assert_eq!(expected_coords.len(), 25);
+        let expected_chunk_count = expected_coords.len();
 
-        let mut chunks = Vec::with_capacity(25);
-        for _ in 0..25 {
+        let mut chunks = Vec::with_capacity(expected_chunk_count);
+        for _ in 0..expected_chunk_count {
             let (id, body) = recv_packet(&mut client, &mut accumulator).await;
             assert_eq!(id, LevelChunkWithLight::ID);
             chunks.push(decode_one::<LevelChunkWithLight>(body).unwrap());
@@ -194,11 +209,13 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         // M1 integration fix, round 4: the actual regression guard for the "only the
         // spawn chunk renders" root cause -- a real client will not build a render mesh
         // for a chunk unless every one of its own neighboring columns was also sent.
-        // Every chunk of the original 3x3 "visible" area (`-1..=1` on both axes) must
-        // have its own full 3x3 neighborhood present in `actual_coords`.
+        // Every chunk of the render-safe "visible" area (radius `EXPECTED_RADIUS_CHUNKS -
+        // 1`, one ring inside the actual send radius) must have its own full 3x3
+        // neighborhood present in `actual_coords`.
         let sent: std::collections::HashSet<(i32, i32)> = actual_coords.iter().copied().collect();
-        for cx in -1..=1 {
-            for cz in -1..=1 {
+        let render_safe_radius = EXPECTED_RADIUS_CHUNKS - 1;
+        for cx in -render_safe_radius..=render_safe_radius {
+            for cz in -render_safe_radius..=render_safe_radius {
                 for dx in -1..=1 {
                     for dz in -1..=1 {
                         assert!(
@@ -224,7 +241,7 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, ChunkBatchFinished::ID);
         let finished = decode_one::<ChunkBatchFinished>(body).unwrap();
-        assert_eq!(finished.batch_size, 25);
+        assert_eq!(finished.batch_size, expected_chunk_count as i32);
 
         // Decode section 0 and section 1 of the first chunk's `data` blob.
         // M1 integration fix, test-authoring commit: a real section carries a second
