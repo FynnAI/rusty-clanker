@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use bytes::BytesMut;
 use rc_protocol::{
-    AcknowledgeFinishConfiguration, ClientInformation, ConfigurationKeepAliveClientbound,
-    ConfigurationKeepAliveServerbound, ConfigurationPluginMessage, ConnectionState,
-    FinishConfiguration, Identifier, KnownPack, KnownPacksClientbound, KnownPacksServerbound,
-    RawPacket, RcPacket, RegistryData, RegistryDataEntryOut, UpdateEnabledFeatures, VarInt,
-    WireWrite, decode_one, encode_payload,
+    AcknowledgeFinishConfiguration, ClientInformation, ClientboundUpdateTags,
+    ConfigurationKeepAliveClientbound, ConfigurationKeepAliveServerbound,
+    ConfigurationPluginMessage, ConnectionState, FinishConfiguration, Identifier, KnownPack,
+    KnownPacksClientbound, KnownPacksServerbound, RawPacket, RcPacket, RegistryData,
+    RegistryDataEntryOut, TagEntry, TagRegistryEntry, UpdateEnabledFeatures, VarInt, WireWrite,
+    decode_one, encode_payload,
 };
 use tokio::sync::mpsc;
 use tokio::time::Interval;
@@ -77,6 +78,37 @@ fn encode_brand_payload(brand: &str) -> Vec<u8> {
     let mut buf = BytesMut::new();
     brand.to_string().write_wire(&mut buf);
     buf.to_vec()
+}
+
+/// Builds the Configuration-phase Update Tags packet (docs/research/mc-26.2/26-registry-sync-
+/// configuration.md §5/§6, the fix this function exists for) from `rc_registries`' own
+/// generated tag tables (`crates/registries/generated/v776/tags.rs`, `xtask codegen-tags`'s
+/// output) — real vanilla tag membership for the doc's §5.3 minimal required set, never
+/// hand-authored. A registry whose generated `TAGS` slice is empty is omitted from the
+/// packet's own `registries` list entirely, matching real vanilla's own
+/// `serializeTagsToNetwork`'s `.filter(!isEmpty())` behavior (§5.1/§5.2) — none of the five
+/// registries this project currently generates ever hit that case, but the omission is
+/// checked here rather than assumed.
+fn build_update_tags_packet() -> ClientboundUpdateTags {
+    let registries = rc_registries::generated_v776::tags::REGISTRIES
+        .iter()
+        .filter(|(_, tags)| !tags.is_empty())
+        .map(|(registry_id, tags)| TagRegistryEntry {
+            registry_id: Identifier::new(*registry_id),
+            tags: tags
+                .iter()
+                .map(|table| TagEntry {
+                    tag_id: Identifier::new(table.tag_id),
+                    entries: table
+                        .entries
+                        .iter()
+                        .map(|id| VarInt::new(*id as i32))
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    ClientboundUpdateTags { registries }
 }
 
 /// Best-effort: sends a Configuration-phase Disconnect (ignoring any send failure — the
@@ -249,7 +281,10 @@ pub async fn run_configuration(
         }))?;
     }
 
-    // Step 5 (Update Tags) is deliberately not sent (Constraints (e)).
+    // Step 5: Update Tags -- the fix docs/research/mc-26.2/26-registry-sync-configuration.md
+    // investigates and specifies (§6/§7's ordered fix list). Order relative to Step 4's 29
+    // `RegistryData` sends does not matter (§4.4); it must only precede FinishConfiguration.
+    handle.try_send_payload(encode_payload(&build_update_tags_packet()))?;
 
     // Step 6: Finish Configuration, terminal.
     handle.try_send_payload(encode_payload(&FinishConfiguration {}))?;

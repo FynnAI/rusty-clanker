@@ -8,6 +8,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::RcPacket;
 use crate::identifier::Identifier;
 use crate::packet::{ConnectionState, PacketBound, PacketDecodeError};
+use crate::varint::VarInt;
 use crate::wire::{WireRead, WireWrite};
 
 /// Nested, hand-coded.
@@ -127,6 +128,79 @@ pub struct RegistryData {
 pub struct UpdateEnabledFeatures {
     #[rc(prefixed_array = "VarInt")]
     pub features: Vec<Identifier>,
+}
+
+/// Nested. One tag id + its resolved membership within one `TagRegistryEntry`'s own
+/// `NetworkPayload` map — docs/research/mc-26.2/26-registry-sync-configuration.md §5.2's
+/// `NetworkPayload { tags: Map<Identifier, IntList> }`, one map entry. `entries` holds the
+/// tag's numeric member ids (registry-internal, never resource-location strings — see that
+/// section's own "critical, easy-to-miss wire detail"); an empty `entries` list is a legal,
+/// meaningful payload (§5.4 — "bound empty" tag), never omitted once its `tag_id` is present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagEntry {
+    pub tag_id: Identifier,
+    pub entries: Vec<VarInt>,
+}
+impl WireWrite for TagEntry {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        self.tag_id.write_wire(buf);
+        crate::wire::write_prefixed_vec(&self.entries, buf);
+    }
+}
+impl WireRead for TagEntry {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        let tag_id = Identifier::read_wire(buf)?;
+        let entries = crate::wire::read_prefixed_vec(buf)?;
+        Ok(Self { tag_id, entries })
+    }
+}
+
+/// Nested. One registry's full tag payload within `ClientboundUpdateTags`'s own outer map —
+/// §5.2's `tags: Map<ResourceKey<Registry>, NetworkPayload>`, one entry. A registry with zero
+/// tags to send is simply omitted from the packet's own `registries` list entirely (§5.2's own
+/// closing note, matching vanilla's `serializeTagsToNetwork`'s `.filter(!isEmpty())`) — this
+/// type itself does not enforce that; the caller building the packet's `registries` list is
+/// responsible for the omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagRegistryEntry {
+    pub registry_id: Identifier,
+    pub tags: Vec<TagEntry>,
+}
+impl WireWrite for TagRegistryEntry {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        self.registry_id.write_wire(buf);
+        crate::wire::write_prefixed_vec(&self.tags, buf);
+    }
+}
+impl WireRead for TagRegistryEntry {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        let registry_id = Identifier::read_wire(buf)?;
+        let tags = crate::wire::read_prefixed_vec(buf)?;
+        Ok(Self { registry_id, tags })
+    }
+}
+
+/// `ClientboundUpdateTagsPacket` — Configuration-state clientbound id `0x0D` (docs/research/
+/// mc-26.2/26-registry-sync-configuration.md §5.1: the 14th declared clientbound Configuration
+/// packet, by the same sequential-declaration-order counting method already validated against
+/// `RegistryData` = `0x07`, `UpdateEnabledFeatures` = `0x0C`, and `KnownPacksClientbound` =
+/// `0x0E`). Declared once and reused verbatim by both Configuration and Play in real vanilla
+/// (§5.1); only the Configuration-state use is wired up by this milestone (Constraints (e)'s
+/// bounded scope-exception list).
+///
+/// Wire shape (§5.2): `VarInt` count then, per registry, `(registry_id: Identifier, VarInt
+/// tag-count, then per tag: (tag_id: Identifier, VarInt member-count, then VarInt per numeric
+/// member id))`. Every entry this project's own production call site
+/// (`crates/server/src/net/configuration_flow.rs`) sends is built from
+/// `rc_registries::generated_v776::tags`'s own generated tables — real vanilla tag membership
+/// for the doc's §5.3 minimal required set, resolved (including transitive `#tag` references)
+/// from the vanilla datapack's own tag JSON via `xtask`'s tags codegen, never hand-authored or
+/// raw Mojang JSON.
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x0D)]
+pub struct ClientboundUpdateTags {
+    #[rc(prefixed_array = "VarInt")]
+    pub registries: Vec<TagRegistryEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RcPacket)]

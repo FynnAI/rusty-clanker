@@ -25,9 +25,10 @@ pub mod wire;
 pub use bytes::{Bytes, BytesMut};
 pub use cipher::ConnectionCipher;
 pub use configuration::{
-    AcknowledgeFinishConfiguration, ClientInformation, ConfigurationKeepAliveClientbound,
-    ConfigurationKeepAliveServerbound, ConfigurationPluginMessage, FinishConfiguration, KnownPack,
-    KnownPacksClientbound, KnownPacksServerbound, RegistryData, RegistryDataEntryOut,
+    AcknowledgeFinishConfiguration, ClientInformation, ClientboundUpdateTags,
+    ConfigurationKeepAliveClientbound, ConfigurationKeepAliveServerbound,
+    ConfigurationPluginMessage, FinishConfiguration, KnownPack, KnownPacksClientbound,
+    KnownPacksServerbound, RegistryData, RegistryDataEntryOut, TagEntry, TagRegistryEntry,
     UpdateEnabledFeatures,
 };
 pub use frame::{
