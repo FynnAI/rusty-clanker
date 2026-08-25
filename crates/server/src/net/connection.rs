@@ -55,6 +55,15 @@ struct ConnectionShared {
 
 /// Handle returned by `spawn_connection` alongside the inbound receiver: send outbound
 /// payloads and control the connection's shared, cold-path state.
+///
+/// `Clone` (M1-B04) — every field is either an `Arc<...>` or a `tokio::sync::mpsc`/`watch`
+/// sender, all cheaply `Clone`; needed so `net::session::PlayerSession` (M1-B04) can own a
+/// copy while the original remains usable by whatever called `spawn_connection`. `Debug` is
+/// hand-implemented rather than derived: `ConnectionShared::cipher` is a
+/// `Box<dyn ConnectionCipher>`, and `ConnectionCipher` itself carries no `Debug` bound, so a
+/// derived `Debug` cannot be expressed here — this impl prints every field except the
+/// lock-guarded internals.
+#[derive(Clone)]
 pub struct ConnectionHandle {
     shared: Arc<Mutex<ConnectionShared>>,
     outbound_tx: mpsc::Sender<Bytes>,
@@ -64,6 +73,16 @@ pub struct ConnectionHandle {
     /// every clone/borrow, so there is no lost-wakeup window between `close()` being called
     /// and a subsequent `try_send_payload` observing it.
     close_tx: watch::Sender<bool>,
+}
+
+impl std::fmt::Debug for ConnectionHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionHandle")
+            .field("inbound_state", &self.inbound_state())
+            .field("outbound_state", &self.outbound_state())
+            .field("closed", &*self.close_tx.borrow())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ConnectionHandle {

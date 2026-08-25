@@ -1,0 +1,134 @@
+//! `ConnectionState::Configuration` — the subset of the Configuration-state packet catalog
+//! this milestone's placeholder world needs (NET-D3/NET-D4/NET-D5), protocol 776. Exact
+//! field layouts and the bounded scope-exception list: M1-B04 blueprint Context, "The
+//! Configuration-state packet catalog" / Constraints (e).
+
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+use crate::RcPacket;
+use crate::identifier::Identifier;
+use crate::packet::{ConnectionState, PacketBound, PacketDecodeError};
+use crate::wire::{WireRead, WireWrite};
+
+/// Nested, hand-coded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownPack {
+    pub namespace: String,
+    pub id: String,
+    pub version: String,
+}
+impl WireWrite for KnownPack {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+}
+impl WireRead for KnownPack {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        todo!()
+    }
+}
+
+/// Hand-coded `RcPacket` (not derived — `data` occupies the rest of the packet body
+/// unprefixed, a shape `#[rc(prefixed_array=...)]` cannot express).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigurationPluginMessage {
+    pub channel: Identifier,
+    pub data: Vec<u8>,
+}
+impl crate::packet::RcPacket for ConfigurationPluginMessage {
+    const STATE: ConnectionState = ConnectionState::Configuration;
+    const BOUND: PacketBound = PacketBound::Clientbound;
+    const ID: i32 = 0x01;
+
+    fn encode_body(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+
+    fn decode_body(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x03)]
+pub struct FinishConfiguration {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x04)]
+pub struct ConfigurationKeepAliveClientbound {
+    pub keep_alive_id: i64,
+}
+
+/// Nested. `has_data` is never a stored field — this packet's Rust shape only models the
+/// `has_data=false` path this blueprint ever sends (Context). `WireRead` on an entry whose
+/// wire `has_data` byte is `true` is unreachable by any input this blueprint's own tests
+/// construct; its body is `unimplemented!()` (Constraints (d)) — a named M1 scope boundary
+/// pending `#[rc(nbt)]`/`rc-nbt`, neither of which exists yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryDataEntryOut {
+    pub entry_id: Identifier,
+}
+impl WireWrite for RegistryDataEntryOut {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+}
+impl WireRead for RegistryDataEntryOut {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x07)]
+pub struct RegistryData {
+    pub registry_id: Identifier,
+    #[rc(prefixed_array = "VarInt")]
+    pub entries: Vec<RegistryDataEntryOut>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x0C)]
+pub struct UpdateEnabledFeatures {
+    #[rc(prefixed_array = "VarInt")]
+    pub features: Vec<Identifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "client", id = 0x0E)]
+pub struct KnownPacksClientbound {
+    #[rc(prefixed_array = "VarInt")]
+    pub known_packs: Vec<KnownPack>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "server", id = 0x00)]
+pub struct ClientInformation {
+    pub locale: String,
+    pub view_distance: i8,
+    #[rc(varint)]
+    pub chat_mode: i32,
+    pub chat_colors: bool,
+    pub displayed_skin_parts: u8,
+    #[rc(varint)]
+    pub main_hand: i32,
+    pub enable_text_filtering: bool,
+    pub allow_server_listings: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, RcPacket)]
+#[packet(state = "configuration", bound = "server", id = 0x03)]
+pub struct AcknowledgeFinishConfiguration {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "server", id = 0x04)]
+pub struct ConfigurationKeepAliveServerbound {
+    pub keep_alive_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
+#[packet(state = "configuration", bound = "server", id = 0x07)]
+pub struct KnownPacksServerbound {
+    #[rc(prefixed_array = "VarInt")]
+    pub known_packs: Vec<KnownPack>,
+}

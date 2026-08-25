@@ -12,8 +12,11 @@
 extern crate self as rc_protocol;
 
 pub mod cipher;
+pub mod configuration;
 pub mod frame;
 pub mod handshake;
+pub mod identifier;
+pub mod login;
 pub mod packet;
 pub mod status;
 pub mod varint;
@@ -21,9 +24,20 @@ pub mod wire;
 
 pub use bytes::{Bytes, BytesMut};
 pub use cipher::ConnectionCipher;
+pub use configuration::{
+    AcknowledgeFinishConfiguration, ClientInformation, ConfigurationKeepAliveClientbound,
+    ConfigurationKeepAliveServerbound, ConfigurationPluginMessage, FinishConfiguration, KnownPack,
+    KnownPacksClientbound, KnownPacksServerbound, RegistryData, RegistryDataEntryOut,
+    UpdateEnabledFeatures,
+};
 pub use frame::{
     CompressionState, FrameError, MAX_FRAME_LENGTH, MAX_UNCOMPRESSED_LENGTH, encode_frame,
     try_decode_frame,
+};
+pub use identifier::Identifier;
+pub use login::{
+    EncryptionRequest, EncryptionResponse, LoginAcknowledged, LoginDisconnect, LoginProfile,
+    LoginProfileProperty, LoginStart, LoginSuccess, SetCompression,
 };
 pub use packet::{
     ConnectionState, PacketBound, PacketCatalog, PacketDecodeError, RawPacket, RcPacket,

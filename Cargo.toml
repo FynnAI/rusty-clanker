@@ -24,7 +24,7 @@ cfb8              = "0.9.1"
 sha1              = "0.11.0"
 sha2              = "0.11.0"   # TEST-D47; xtask's fixture-manifest SHA-256 hashing
 md-5              = "0.11.0"   # rc-auth's offline-mode UUID derivation (NET-D6 offline stance), M1-B03
-uuid              = "1.25.0"   # rc-auth's offline-mode UUID type, M1-B03; also rc-bedrock-auth's future UUIDv5 need
+uuid              = { version = "1.25.0", features = ["v4"] }   # rc-auth's offline-mode UUID type, M1-B03; "v4" for M1-B04's LoginSuccess.session_id; also rc-bedrock-auth's future UUIDv5 need
 reqwest           = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 rustls            = "0.23.43"
 quinn             = "0.11.11"

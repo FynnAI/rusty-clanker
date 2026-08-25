@@ -180,6 +180,20 @@ impl WireRead for String {
     }
 }
 
+/// Java's UUID is the standard RFC 4122 big-endian 16-byte layout (most-significant 8
+/// bytes, then least-significant 8 bytes) — `uuid::Uuid::as_bytes`/`from_bytes` already use
+/// exactly that layout, so no byte reordering is needed. No length prefix (M1-B04).
+impl WireWrite for uuid::Uuid {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        todo!()
+    }
+}
+impl WireRead for uuid::Uuid {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        todo!()
+    }
+}
+
 /// Emitted by `#[derive(RcPacket)]` for an `#[rc(varint)]`-attributed `i32` field.
 pub fn write_varint_field(value: i32, buf: &mut BytesMut) {
     VarInt::new(value).encode(buf);
