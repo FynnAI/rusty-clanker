@@ -3,7 +3,7 @@
 //! (`#[ignore]`d) — see the blueprint's "Manual verification procedure" for the exact steps.
 
 #[tokio::test]
-#[ignore = "requires a real Mojang session and network access — see this blueprint's Manual verification procedure"]
+#[ignore = "requires a real Mojang session and network access — tracked in issues/1, see the blueprint's Manual verification procedure"]
 async fn real_hasjoined_call_against_a_genuine_session() {
     let username = std::env::var("RC_AUTH_MANUAL_USERNAME")
         .expect("set RC_AUTH_MANUAL_USERNAME — see Manual verification procedure");
