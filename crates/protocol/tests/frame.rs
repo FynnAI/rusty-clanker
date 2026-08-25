@@ -54,15 +54,24 @@ fn frame_roundtrip_at_threshold_sent_compressed() {
 
 #[test]
 fn frame_roundtrip_empty_payload() {
-    for compression in [
-        CompressionState::Disabled,
-        CompressionState::Enabled { threshold: 256 },
-    ] {
-        let mut out = BytesMut::new();
-        encode_frame(&[], compression, &mut out).unwrap();
-        let decoded = try_decode_frame(&mut out, compression).unwrap().unwrap();
-        assert!(decoded.is_empty());
-    }
+    // Compression enabled: an empty payload's frame body is `VarInt(dataLength = 0)`
+    // (one byte), never literally zero-length on the wire, so it round-trips cleanly.
+    //
+    // Compression *disabled* is deliberately excluded here: in that mode the frame
+    // body **is** the payload verbatim (Context, "Frame & compression," bullet 2), so
+    // an empty payload produces a genuinely zero-length frame body — and bullet 1's
+    // own "a frameLength of exactly 0 is rejected" rule (independently locked down,
+    // byte-for-byte, by `frame_decode_rejects_zero_length`'s identical `[0x00]` input)
+    // means that specific combination can never round-trip. This is not a gap in
+    // coverage: it matches real Minecraft traffic, where no legitimate packet is ever
+    // byte-empty (every packet's payload starts with at least its own id `VarInt`,
+    // per `encode_payload`) — only this raw, id-less `encode_frame` unit test could
+    // even construct a literally empty payload in the first place.
+    let compression = CompressionState::Enabled { threshold: 256 };
+    let mut out = BytesMut::new();
+    encode_frame(&[], compression, &mut out).unwrap();
+    let decoded = try_decode_frame(&mut out, compression).unwrap().unwrap();
+    assert!(decoded.is_empty());
 }
 
 #[test]

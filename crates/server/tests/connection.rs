@@ -10,9 +10,17 @@ use tokio::net::TcpStream;
 async fn connected_pair() -> (TcpStream, TcpStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let client = TcpStream::connect(addr);
-    let (server, _) = listener.accept().await.unwrap();
-    (server, client.await.unwrap())
+    // `TcpStream::connect(addr)` returns a lazy future — like every Rust `async fn`, it
+    // does nothing (not even issue the underlying `connect()` syscall) until first
+    // polled. Awaiting `listener.accept()` to completion *before* ever polling `client`
+    // would leave the connect side permanently unpolled, so `accept()` would wait
+    // forever for a SYN that is never sent — a genuine deadlock under the
+    // single-threaded runtime `#[tokio::test]` uses by default (nothing else drives
+    // the connect future forward). `tokio::join!` polls both futures concurrently
+    // within this one task, so each makes progress as the other yields.
+    let (accept_result, connect_result) = tokio::join!(listener.accept(), TcpStream::connect(addr));
+    let (server, _) = accept_result.unwrap();
+    (server, connect_result.unwrap())
 }
 
 fn build_payload(id: i32, body: &[u8]) -> BytesMut {
