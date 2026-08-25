@@ -3020,6 +3020,8 @@ name = "rc-paritybot"
 version = "0.1.0"
 dependencies = [
  "azalea",
+ "bytes",
+ "rc-protocol",
  "rc-test-harness",
  "thiserror 2.0.20",
  "tokio",

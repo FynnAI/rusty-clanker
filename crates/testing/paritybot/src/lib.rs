@@ -4,3 +4,4 @@
 //! per server, rather than replacing it.
 
 pub mod idle_stability;
+pub mod vanilla_registry_defaults;

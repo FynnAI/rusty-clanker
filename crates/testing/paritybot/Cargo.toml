@@ -6,6 +6,12 @@ publish = false
 
 [dependencies]
 rc-test-harness = { path = "../test-harness" }
+# In-workspace only, not a new external dependency (Constraint (c) restated in this
+# crate's own bin-target doc comment governs *external* deps) — `vanilla_registry_
+# defaults`'s relay needs `rc-protocol`'s own frame/varint/packet primitives directly,
+# the same already-precedented use `rc-test-harness/src/fake_server.rs` makes of it.
+rc-protocol = { path = "../../protocol" }
+bytes = { workspace = true }
 tokio = { workspace = true }
 azalea = { workspace = true } # TEST-D8 — git dependency, see 12-workspace-structure.md
 thiserror = { workspace = true }

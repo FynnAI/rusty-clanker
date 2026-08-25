@@ -1,8 +1,11 @@
 //! TEST-D8's own vanilla-client stand-in scenario: connect a real, offline-mode azalea
-//! client to `config.host:config.port`, drive it through Login/Spawn, hold the
-//! connection open for `config.idle_duration` of real wall-clock time, and report
-//! exactly what happened. Context, "The vanilla-client stand-in: why azalea" /
-//! "`azalea::ClientBuilder::start`'s infinite-retry behavior."
+//! client to `config.host:config.port` (by way of `vanilla_registry_defaults`'s own
+//! transparent relay, which stands in for the one piece of built-in vanilla registry data a
+//! real client has and azalea does not -- that module's own doc comment has the full
+//! writeup), drive it through Login/Spawn, hold the connection open for
+//! `config.idle_duration` of real wall-clock time, and report exactly what happened.
+//! Context, "The vanilla-client stand-in: why azalea" / "`azalea::ClientBuilder::start`'s
+//! infinite-retry behavior."
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -67,6 +70,8 @@ pub enum ScenarioError {
         expected: Duration,
         reason: Option<String>,
     },
+    #[error("failed to start the vanilla_registry_defaults relay: {0}")]
+    RelaySetupFailed(#[from] std::io::Error),
 }
 
 /// Handler-updated, poll-observed scenario progress — shared between the azalea
@@ -152,7 +157,16 @@ async fn run_inner(config: ScenarioConfig) -> Result<ScenarioOutcome, ScenarioEr
     let progress = state.progress.clone();
 
     let account = azalea::account::Account::offline(&config.username);
-    let address = format!("{}:{}", config.host, config.port);
+
+    // Connect through `vanilla_registry_defaults`'s own relay rather than straight to
+    // `config.host:config.port` -- azalea itself has no built-in vanilla registry defaults
+    // the way a real client does (that module's own doc comment has the full writeup), so
+    // without this the scenario never gets past `Event::Login` against a server that
+    // correctly sends `has_data=false` for `minecraft:dimension_type`. The relay changes
+    // nothing about what `rusty-clanker-server` actually sends; it only stands in for the
+    // one piece of built-in client-side knowledge azalea itself is missing.
+    let relay = crate::vanilla_registry_defaults::spawn(config.host.clone(), config.port).await?;
+    let address = relay.local_addr.to_string();
 
     // `start()` drives azalea's own internal ECS/connection loop and, per Context,
     // retries forever on its own if the initial connection can't be made -- run it
