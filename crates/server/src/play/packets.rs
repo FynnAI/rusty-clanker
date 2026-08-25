@@ -94,12 +94,26 @@ pub struct LightArray(pub [u8; 2048]);
 
 impl rc_protocol::WireWrite for LightArray {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        rc_protocol::VarInt::new(2048).encode(buf);
+        buf.extend_from_slice(&self.0);
     }
 }
 impl rc_protocol::WireRead for LightArray {
     fn read_wire(buf: &mut Bytes) -> Result<Self, rc_protocol::PacketDecodeError> {
-        todo!()
+        let declared = rc_protocol::VarInt::decode(buf)?.get();
+        let declared = usize::try_from(declared).unwrap_or(usize::MAX);
+        if declared != 2048 {
+            return Err(rc_protocol::PacketDecodeError::ArrayTooLong {
+                declared,
+                remaining: buf.remaining(),
+            });
+        }
+        if buf.remaining() < 2048 {
+            return Err(rc_protocol::PacketDecodeError::UnexpectedEof);
+        }
+        let mut bytes = [0u8; 2048];
+        buf.copy_to_slice(&mut bytes);
+        Ok(LightArray(bytes))
     }
 }
 
@@ -156,5 +170,20 @@ pub struct ChunkBatchReceived {
 /// Packs a "Position" wire value (Context: 26-bit X, 26-bit Z, 12-bit Y, two's complement),
 /// written as one plain big-endian 8-byte `Long` by the caller (`WireWrite for i64`).
 pub fn pack_position(pos: rc_core::BlockPos) -> i64 {
-    todo!()
+    let x = (pos.x as i64) & 0x3FF_FFFF;
+    let z = (pos.z as i64) & 0x3FF_FFFF;
+    let y = (pos.y as i64) & 0xFFF;
+    (x << 38) | (z << 12) | y
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pack_position_round_trips_negative_y() {
+        let packed = pack_position(rc_core::BlockPos::new(0, -59, 0));
+        // y is the low 12 bits, two's-complement: -59 as u12 == 4096 - 59 == 4037.
+        assert_eq!(packed & 0xFFF, 4037);
+    }
 }

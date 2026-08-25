@@ -4,14 +4,20 @@
 //! exercised, from a bare M1-B01 connection alone -- no dependency on M1-B02/B03/B04's
 //! packet catalogs.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rc_core::BlockPos;
-use rc_protocol::RawPacket;
+use rc_protocol::{ConnectionState, RawPacket, RcPacket, decode_one, encode_payload};
 use tokio::sync::mpsc;
 
-use super::keepalive::KeepAliveDriver;
-use super::world::HardcodedWorld;
+use super::chunk;
+use super::keepalive::{KeepAliveAction, KeepAliveDriver};
+use super::packets::{
+    ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
+    KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay,
+    SetChunkCacheCenter, SetDefaultSpawnPosition, SynchronizePlayerPosition, pack_position,
+};
+use super::world::{HardcodedWorld, PendingJoin};
 use crate::net::ConnectionHandle;
 
 pub struct PlayerProfile {
@@ -36,7 +42,175 @@ pub async fn enter_play(
     profile: PlayerProfile,
     world: &HardcodedWorld,
 ) {
-    todo!()
+    handle.set_inbound_state(ConnectionState::Play);
+    handle.set_outbound_state(ConnectionState::Play);
+
+    // The wire `entity_id` is allocated once and reused both in `LoginPlay` and in the
+    // `PlayerMarker` this connection queues below -- the two must agree so a future
+    // mechanics blueprint can resolve "my own entity" consistently.
+    let network_entity_id = world.alloc_network_entity_id();
+
+    let login_play = LoginPlay {
+        entity_id: network_entity_id,
+        is_hardcore: false,
+        dimension_names: vec!["minecraft:overworld".to_string()],
+        max_players: 20,
+        view_distance: 2,
+        simulation_distance: 2,
+        reduced_debug_info: false,
+        enable_respawn_screen: true,
+        do_limited_crafting: false,
+        dimension_type: 0,
+        dimension_name: "minecraft:overworld".to_string(),
+        hashed_seed: 0,
+        game_mode: 1,
+        previous_game_mode: -1,
+        is_debug: false,
+        is_flat: true,
+        has_death_location: false,
+        portal_cooldown: 0,
+        sea_level: 63,
+        enforces_secure_chat: false,
+    };
+    if handle
+        .try_send_payload(encode_payload(&login_play))
+        .is_err()
+    {
+        return;
+    }
+
+    let spawn_position = SetDefaultSpawnPosition {
+        location: pack_position(SPAWN_POSITION),
+        angle: 0,
+    };
+    if handle
+        .try_send_payload(encode_payload(&spawn_position))
+        .is_err()
+    {
+        return;
+    }
+
+    let sync_position = SynchronizePlayerPosition {
+        x: SPAWN_POSITION.x as f64,
+        y: SPAWN_POSITION.y as f64,
+        z: SPAWN_POSITION.z as f64,
+        yaw: 0.0,
+        pitch: 0.0,
+        relative_arguments: 0x00,
+        teleport_id: 1,
+    };
+    if handle
+        .try_send_payload(encode_payload(&sync_position))
+        .is_err()
+    {
+        return;
+    }
+
+    let game_event = GameEvent {
+        event: 13,
+        value: 0.0,
+    };
+    if handle
+        .try_send_payload(encode_payload(&game_event))
+        .is_err()
+    {
+        return;
+    }
+
+    let chunk_cache_center = SetChunkCacheCenter {
+        chunk_x: 0,
+        chunk_z: 0,
+    };
+    if handle
+        .try_send_payload(encode_payload(&chunk_cache_center))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&ChunkBatchStart {}))
+        .is_err()
+    {
+        return;
+    }
+
+    let heightmaps = chunk::build_placeholder_heightmaps();
+    let data = chunk::build_placeholder_chunk_data();
+    let (
+        sky_light_mask,
+        block_light_mask,
+        empty_sky_light_mask,
+        empty_block_light_mask,
+        sky_light_arrays,
+        block_light_arrays,
+    ) = chunk::build_placeholder_light();
+
+    for (chunk_x, chunk_z) in chunk::placeholder_chunk_coords() {
+        let level_chunk = LevelChunkWithLight {
+            chunk_x,
+            chunk_z,
+            heightmaps: heightmaps.clone(),
+            data: data.clone(),
+            block_entities: Vec::new(),
+            sky_light_mask: sky_light_mask.clone(),
+            block_light_mask: block_light_mask.clone(),
+            empty_sky_light_mask: empty_sky_light_mask.clone(),
+            empty_block_light_mask: empty_block_light_mask.clone(),
+            sky_light_arrays: sky_light_arrays.clone(),
+            block_light_arrays: block_light_arrays.clone(),
+        };
+        if handle
+            .try_send_payload(encode_payload(&level_chunk))
+            .is_err()
+        {
+            return;
+        }
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&ChunkBatchFinished { batch_size: 9 }))
+        .is_err()
+    {
+        return;
+    }
+
+    world.queue_join(PendingJoin {
+        network_entity_id,
+        username: profile.username.clone(),
+    });
+
+    let mut keepalive = KeepAliveDriver::new(Instant::now());
+    let mut poll = tokio::time::interval(KEEPALIVE_POLL_INTERVAL);
+
+    loop {
+        tokio::select! {
+            _ = poll.tick() => {
+                match keepalive.on_tick(Instant::now()) {
+                    KeepAliveAction::None => {}
+                    KeepAliveAction::SendChallenge(id) => {
+                        if handle
+                            .try_send_payload(encode_payload(&KeepAliveClientbound { id }))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    KeepAliveAction::Disconnect(reason) => {
+                        tracing::debug!(?reason, "keep-alive timeout; closing connection");
+                        handle.close();
+                        return;
+                    }
+                }
+            }
+            maybe_raw = inbound.recv() => {
+                let Some(raw) = maybe_raw else {
+                    return;
+                };
+                dispatch_inbound(raw, &mut keepalive);
+            }
+        }
+    }
 }
 
 /// Recognizes the handful of serverbound Play packets this blueprint's own sequence
@@ -44,5 +218,30 @@ pub async fn enter_play(
 /// unread (Context: "Inbound Play-state dispatch -- recognize a few, tolerate everything
 /// else").
 fn dispatch_inbound(raw: RawPacket, keepalive: &mut KeepAliveDriver) {
-    todo!()
+    match raw.id {
+        ConfirmTeleportation::ID => {
+            if let Ok(packet) = decode_one::<ConfirmTeleportation>(raw.body) {
+                tracing::trace!(teleport_id = packet.teleport_id, "confirm teleportation");
+            }
+        }
+        KeepAliveServerbound::ID => {
+            if let Ok(packet) = decode_one::<KeepAliveServerbound>(raw.body) {
+                let _ = keepalive.on_client_response(packet.id);
+            }
+        }
+        ChunkBatchReceived::ID => {
+            if let Ok(packet) = decode_one::<ChunkBatchReceived>(raw.body) {
+                tracing::trace!(
+                    chunks_per_tick = packet.chunks_per_tick,
+                    "chunk batch received"
+                );
+            }
+        }
+        other => {
+            tracing::trace!(
+                id = other,
+                "dropping unrecognized Play-state serverbound packet"
+            );
+        }
+    }
 }

@@ -34,14 +34,28 @@ pub struct KeepAliveDriver {
 impl KeepAliveDriver {
     /// First deadline = construction time + `KEEPALIVE_INTERVAL`.
     pub fn new(now: Instant) -> Self {
-        todo!()
+        Self {
+            next_check: now + KEEPALIVE_INTERVAL,
+            pending: None,
+            next_id: 1,
+        }
     }
 
     /// Call on every scheduler wake. Returns `SendChallenge(id)` at most once per
     /// `KEEPALIVE_INTERVAL`; returns `Disconnect(KeepAliveTimeout)` if a previous
     /// challenge is still unanswered when the next interval elapses.
     pub fn on_tick(&mut self, now: Instant) -> KeepAliveAction {
-        todo!()
+        if now < self.next_check {
+            return KeepAliveAction::None;
+        }
+        if self.pending.is_some() {
+            return KeepAliveAction::Disconnect(DisconnectReason::KeepAliveTimeout);
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.pending = Some((id, now));
+        self.next_check = now + KEEPALIVE_INTERVAL;
+        KeepAliveAction::SendChallenge(id)
     }
 
     /// Call when a serverbound `KeepAliveServerbound.id` arrives. `Ok(())` if it matches
@@ -49,6 +63,13 @@ impl KeepAliveDriver {
     /// pending but the id doesn't match (pending challenge is left intact);
     /// `Err(UnsolicitedKeepAlive)` if none is pending at all.
     pub fn on_client_response(&mut self, id: i64) -> Result<(), DisconnectReason> {
-        todo!()
+        match self.pending {
+            Some((pending_id, _)) if pending_id == id => {
+                self.pending = None;
+                Ok(())
+            }
+            Some(_) => Err(DisconnectReason::KeepAliveIdMismatch),
+            None => Err(DisconnectReason::UnsolicitedKeepAlive),
+        }
     }
 }
