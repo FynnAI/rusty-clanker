@@ -16,7 +16,7 @@ use rc_protocol::{
     decode_one, encode_payload,
 };
 use rusty_clanker_server::net::{
-    ConfigurationError, ConnectionConfig, DriveError, LoginError, PlayerSession, PlayerSessionSink,
+    ConnectionConfig, DriveError, LoginError, PlayerSession, PlayerSessionSink,
     ServerConfigurationConfig, ServerLoginConfig, drive_connection, run_login_with_watchdog,
     spawn_connection,
 };
@@ -337,16 +337,31 @@ async fn login_watchdog_times_out() {
     .unwrap();
 }
 
+/// M1 integration fix, correcting a genuinely wrong test: this test originally asserted the
+/// *opposite* of real vanilla behavior. A `KnownPacksServerbound` response that does not
+/// exactly echo the one offered pack used to be treated as a fatal `KnownPackMismatch`,
+/// disconnecting the connection — but a real, fresh client (verified live against
+/// `rusty-clanker-server` with the `azalea` bot driver, M1-B06) always echoes an *empty*
+/// list, since it has nothing cached locally yet; the old assertion rewarded a server that
+/// disconnects every real client during Configuration. Real vanilla's own known-pack
+/// exchange is purely informational (which already-cached entries the server may then omit
+/// full data for) — this server always sends every registry entry with `has_data=false`
+/// regardless of the client's response (Context, "why every entry is sent with
+/// has_data=false"), so there is nothing to gate on. Corrected to assert the server accepts
+/// an empty echoed list (the real-client case) and proceeds through registry sync to a
+/// successful handoff, exactly as `full_login_configuration_play_handoff_offline_mode`
+/// already proves for the exact-match case.
 #[tokio::test]
-async fn configuration_rejects_known_pack_mismatch() {
-    tokio::time::timeout(Duration::from_secs(5), async {
+async fn configuration_accepts_empty_known_packs_response() {
+    tokio::time::timeout(Duration::from_secs(10), async {
         let sink = Arc::new(TestSink::default());
-        let (mut client, task) = spawn_full_drive(sink).await;
+        let (mut client, task) = spawn_full_drive(sink.clone()).await;
         let mut codec = ClientCodec::new();
 
         drive_login(&mut codec, &mut client, "TestPlayer").await;
 
-        // Drain the three Configuration setup packets without replying to them yet.
+        // Drain the three Configuration setup packets, then echo an empty known_packs list
+        // — exactly what a real, fresh client sends (M1-B06's own live-client finding).
         let (id, _) = codec.recv(&mut client).await;
         assert_eq!(id, ConfigurationPluginMessage::ID);
         let (id, _) = codec.recv(&mut client).await;
@@ -358,25 +373,36 @@ async fn configuration_rejects_known_pack_mismatch() {
             .send(
                 &mut client,
                 &KnownPacksServerbound {
-                    known_packs: vec![KnownPack {
-                        namespace: "minecraft".to_string(),
-                        id: "core".to_string(),
-                        version: "1.0".to_string(),
-                    }],
+                    known_packs: Vec::new(),
                 },
             )
             .await;
 
+        for (registry_id, entries) in TEST_WORLDGEN_REGISTRIES {
+            let (id, body) = codec.recv(&mut client).await;
+            assert_eq!(id, RegistryData::ID);
+            let registry_data = decode_one::<RegistryData>(body).unwrap();
+            assert_eq!(registry_data.registry_id, Identifier::new(*registry_id));
+            assert_eq!(registry_data.entries.len(), entries.len());
+        }
+
+        let (id, body) = codec.recv(&mut client).await;
+        assert_eq!(id, FinishConfiguration::ID);
+        decode_one::<FinishConfiguration>(body).unwrap();
+
+        codec
+            .send(&mut client, &AcknowledgeFinishConfiguration {})
+            .await;
+
         let result = task.await.unwrap();
         assert!(
-            matches!(
-                result,
-                Err(DriveError::Configuration(
-                    ConfigurationError::KnownPackMismatch
-                ))
-            ),
-            "expected KnownPackMismatch, got {result:?}"
+            result.is_ok(),
+            "drive_connection should succeed despite an empty known_packs echo: {result:?}"
         );
+
+        let sessions = sink.sessions.lock().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].profile.name, "TestPlayer");
     })
     .await
     .unwrap();
