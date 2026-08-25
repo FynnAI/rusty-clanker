@@ -14,7 +14,7 @@ crossbeam-utils   = "0.8.22"
 crossbeam-channel = "0.5.16"
 crossbeam-queue   = "0.3.13"
 parking_lot       = "0.12.5"
-tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 bytes             = "1.12.1"
 flate2            = { version = "1.1.9", features = ["zlib-ng"] }
 simdnbt           = "0.10.0"
@@ -36,6 +36,9 @@ toml              = "1.1.4"
 ron               = "0.12.2"
 thiserror         = "2.0.20"
 tracing           = "0.1.44"
+syn               = { version = "3.0.3", features = ["full"] }    # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
+quote             = "1.0.47"    # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
+proc-macro2       = "1.0.107"   # rc-protocol-macros/rc-entity-macros derive implementation, NET-D3
 libloading        = "0.9.0"
 wgpu              = "30.0.0"
 winit             = "0.30.13"

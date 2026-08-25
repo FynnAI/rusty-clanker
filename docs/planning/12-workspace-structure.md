@@ -243,7 +243,7 @@ crossbeam-utils   = "0.8.22"   # ARCH-D18
 crossbeam-channel = "0.5.16"   # ARCH-D22/D27
 crossbeam-queue   = "0.3.13"   # ARCH-D28
 parking_lot       = "0.12.5"   # ARCH-D23
-tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }  # ARCH-D21/NET-D7
+tokio             = { version = "1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }  # ARCH-D21/NET-D7; io-util added by M1-B01 for AsyncReadExt/AsyncWriteExt (the connection reader/writer task pair)
 bytes             = "1.12.1"   # ARCH-D22
 flate2            = { version = "1.1.9", features = ["zlib-ng"] }  # NET-D5
 simdnbt           = "0.10.0"   # NET-D5

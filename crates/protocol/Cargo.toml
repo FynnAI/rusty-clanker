@@ -9,3 +9,9 @@ rc-core = { path = "../core" }
 rc-nbt = { path = "../nbt" }
 rc-registries = { path = "../registries" }
 rc-protocol-macros = { path = "../protocol-macros" }
+bytes = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

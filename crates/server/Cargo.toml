@@ -25,6 +25,9 @@ rc-mod-host = { path = "../mod-host" }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
 rc-cluster = { path = "../cluster", optional = true }
 rc-transport-net = { path = "../transport-net", optional = true }
 rc-proxy = { path = "../proxy", optional = true }
