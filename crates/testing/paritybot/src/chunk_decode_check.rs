@@ -137,7 +137,12 @@ async fn run_inner(
     let state = SharedState::default();
     let progress = state.progress.clone();
 
-    let account = azalea::account::Account::offline("rc_paritybot_chunk_decode_check");
+    // M1 integration fix, round 4: `net::login_flow`'s own username validator requires
+    // `1..=16` ASCII alphanumeric/`_` characters (`login_flow.rs`'s own doc comment) --
+    // this scenario's first username attempt (31 characters) tripped that real
+    // validation rule and produced a Login-state `Disconnect` before `Event::Spawn`
+    // could ever fire, not a defect in anything this diagnostic actually investigates.
+    let account = azalea::account::Account::offline("rc_chunk_diag");
 
     let relay = crate::vanilla_registry_defaults::spawn(host, port).await?;
     let address = relay.local_addr.to_string();
