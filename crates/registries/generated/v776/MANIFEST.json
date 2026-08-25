@@ -13,6 +13,12 @@
       "sha256": "73246e0260f0f22ee2471975b13ebe149a04ecb83f30394713bd3edf41dc313f",
       "generator_tool_version": "xtask-codegen/0.1.0",
       "source_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a"
+    },
+    {
+      "path": "tags.rs",
+      "sha256": "72fbfe3fadb82e52e76c4e10c19366ea5a87d30cd85323a3ccac5b07babdabf9",
+      "generator_tool_version": "xtask-codegen/0.1.0",
+      "source_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a"
     }
   ]
 }
