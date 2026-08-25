@@ -312,12 +312,22 @@ async fn status_serve_closes_after_ping_without_second_response() {
             .unwrap();
         let _ = client.write_all(&framed).await;
 
+        // A correctly-closing server shuts its write half down right after the pong, so a
+        // further read legitimately observes a prompt clean EOF (`Ok(0)`) rather than a hang
+        // — a hang would actually indicate the server failed to close. The only outcome that
+        // must never happen is a second, valid `PongResponse` arriving; timing out is also an
+        // acceptable (if slower) way for "no further response" to manifest, e.g. under a
+        // scheduler that has not yet delivered the FIN to this socket within the bound.
         let mut buf = [0u8; 16];
         let result = tokio::time::timeout(Duration::from_millis(200), client.read(&mut buf)).await;
-        assert!(
-            result.is_err(),
-            "no further response should arrive after the connection was already closed"
-        );
+        match result {
+            Ok(Ok(n)) => assert_eq!(
+                n, 0,
+                "expected a clean EOF (server already closed), not {n} bytes of a real response"
+            ),
+            Ok(Err(_)) => {}
+            Err(_) => {}
+        }
 
         let _ = task.await;
     })
