@@ -22,6 +22,11 @@
 //! crate-boundary reason `play_chunk_set.rs`'s own `EXPECTED_RADIUS_CHUNKS` is -- `chunk`
 //! stays crate-internal) -- a future radius change needs this one constant bumped here,
 //! nothing else in either file.
+//!
+//! M1 integration fix, round 5, test-authoring commit: `SEND_RADIUS_CHUNKS` bumped
+//! `2 -> 5` to match the companion implementation commit's own `PLACEHOLDER_RADIUS_CHUNKS`
+//! raise -- the one line this file ever needs touching for a radius change, exactly as
+//! designed above.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -30,7 +35,7 @@ use rc_paritybot::chunk_decode_check::run_chunk_decode_check;
 use rc_test_harness::process::{ManagedServerConfig, spawn_server};
 
 /// Mirrors `play::chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own current value.
-const SEND_RADIUS_CHUNKS: i32 = 2;
+const SEND_RADIUS_CHUNKS: i32 = 5;
 
 /// World x/z of a position well inside chunk `(-SEND_RADIUS_CHUNKS, -SEND_RADIUS_CHUNKS)`
 /// -- the corner of the current send radius, diagonally as far from spawn as this server

@@ -17,6 +17,12 @@
 //! acceptance test that needs chunk-byte assertions writes its own test-local decode
 //! mirror instead"). A future radius change still needs this one constant bumped here to
 //! match, but nothing else in this file.
+//!
+//! M1 integration fix, round 5, test-authoring commit: `EXPECTED_RADIUS_CHUNKS` bumped
+//! `2 -> 5` to match the companion implementation commit's own `PLACEHOLDER_RADIUS_CHUNKS`
+//! raise (round-5 real-client result: the unmeshed edge at radius 2 sat too close to
+//! spawn to be out of immediate view) -- the one line this file ever needs touching for a
+//! radius change, exactly as designed above.
 
 use bytes::{Buf, Bytes};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -33,7 +39,7 @@ use tokio::net::TcpStream;
 /// Mirrors `play::chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own current value (module doc
 /// comment above has the full "why a mirror, not an import" writeup). The one line to
 /// change whenever that constant changes.
-const EXPECTED_RADIUS_CHUNKS: i32 = 2;
+const EXPECTED_RADIUS_CHUNKS: i32 = 5;
 
 async fn connected_pair() -> (TcpStream, TcpStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
