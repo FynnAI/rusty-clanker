@@ -89,6 +89,50 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::CodegenTags {
+            tags_dir,
+            version,
+            protocol_version,
+        } => {
+            let root = repo_root();
+            let reports_dir = root
+                .join(xtask::fetch_data::DATAGEN_OUTPUT_DIR)
+                .join(&version)
+                .join("generated")
+                .join("reports");
+            let out_dir = root
+                .join("crates/registries/generated")
+                .join(format!("v{protocol_version}"));
+            let sha1_path = root
+                .join(xtask::fetch_data::ORACLE_JAR_DIR)
+                .join(&version)
+                .join("server.jar.sha1");
+            let source_jar_sha1 = match std::fs::read_to_string(&sha1_path) {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!(
+                        "codegen-tags: missing {} — run `cargo xtask fetch-data {version}` first",
+                        sha1_path.display()
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
+            let args = xtask::datagen::tags::TagsCodegenArgs {
+                tags_root: tags_dir,
+                reports_dir,
+                out_dir,
+                source_jar_sha1,
+                protocol_version,
+                mc_version: version,
+            };
+            match xtask::datagen::tags::run(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("codegen-tags: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::VerifyGenerated => {
             let root = repo_root();
             let out_dir = root.join("crates/registries/generated/v776");

@@ -38,7 +38,11 @@ fn sanitize_mod_name(path: &str) -> String {
     s
 }
 
-fn sanitize_const_name(path: &str) -> String {
+/// `pub(crate)` — reused by `super::tags`' own generated-identifier construction (M1
+/// registry-sync-fix follow-up), which needs the identical alphanumeric-uppercase/`_`-escape
+/// transform this module already applies to registry entry names, applied instead to tag
+/// paths (e.g. `"enchantable/armor"` -> `"ENCHANTABLE_ARMOR"`).
+pub(crate) fn sanitize_const_name(path: &str) -> String {
     // SCREAMING_SNAKE_CASE output never collides with a Rust keyword (keywords are
     // always lowercase), so no keyword guard is needed here. It CAN collide with
     // `generate_registries_rs`'s own reserved per-module `COUNT` aggregate constant —

@@ -72,6 +72,23 @@ pub enum Command {
     /// TEST-D47: recompute crates/registries/generated/v776/MANIFEST.json's hashes
     /// against the files on disk and fail on any mismatch.
     VerifyGenerated,
+    /// M1 registry-sync fix follow-up (docs/research/mc-26.2/26-registry-sync-configuration.md
+    /// §5.3/§6): reads a local data-generator "generated" tree's own `data/minecraft/tags/**`
+    /// JSON (never committed — ASSET-D18(f)'s carve-out only covers the derived output) plus a
+    /// prior FetchData run's cached `registries.json`, and emits
+    /// `crates/registries/generated/v<protocol_version>/tags.rs` plus a merged MANIFEST.json
+    /// entry.
+    CodegenTags {
+        /// Directory containing `data/minecraft/tags/**` — typically a full (`--all`) local
+        /// data-generator run's own `generated/` output.
+        #[arg(long)]
+        tags_dir: std::path::PathBuf,
+        /// Minecraft version whose cached `registries.json` to read.
+        #[arg(long, default_value = "26.2")]
+        version: String,
+        #[arg(long, default_value_t = 776)]
+        protocol_version: u32,
+    },
     /// TEST-D37 Tier 0: fmt-check + lint only, local convenience, never a CI gate
     Tier0,
     /// TEST-D37 Tier 1: every gate above plus path-guard, lint-tests, verify-fixtures
