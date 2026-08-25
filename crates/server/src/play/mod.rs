@@ -1,7 +1,9 @@
-//! M1-B05 — the minimal Play state: a hand-built 5x5-chunk superflat placeholder world
-//! (M1 integration fix, round 4: `chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment --
-//! a real client needs every originally-visible 3x3-area chunk's own full neighborhood
-//! sent to render it, not merely that chunk itself),
+//! M1-B05 — the minimal Play state: a hand-built 11x11-chunk superflat placeholder world
+//! (M1 integration fix, rounds 4-5: `chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own doc comment
+//! -- a real client needs every render-safe-area chunk's own full neighborhood sent to
+//! render it, not merely that chunk itself; round 5 pushed the send radius to `5` so the
+//! resulting 9x9 render-safe area, and the unmeshed edge one ring beyond it, both sit far
+//! enough from spawn to match a real server's own edge-of-view-distance behavior),
 //! the exact Play-entry clientbound packet sequence, keep-alive/timeout handling, and the
 //! first real `rc-scheduler` region ticking at 20 TPS. See `blueprints/M1/M1-B05-play-
 //! superflat.md` for the full design.

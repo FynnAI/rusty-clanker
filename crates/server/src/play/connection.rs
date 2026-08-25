@@ -55,7 +55,11 @@ pub async fn enter_play(
         is_hardcore: false,
         dimension_names: vec!["minecraft:overworld".to_string()],
         max_players: 20,
-        view_distance: 2,
+        // M1 integration fix, round 5: raised from `2` to `5` alongside `chunk::
+        // PLACEHOLDER_RADIUS_CHUNKS` (that constant's own doc comment has the full
+        // writeup) -- large enough for a real client's own chunk-cache array to hold the
+        // new 11x11 send grid.
+        view_distance: 5,
         simulation_distance: 2,
         reduced_debug_info: false,
         enable_respawn_screen: true,
@@ -159,7 +163,15 @@ pub async fn enter_play(
         block_light_arrays,
     ) = chunk::build_placeholder_light();
 
-    for (chunk_x, chunk_z) in chunk::placeholder_chunk_coords() {
+    // M1 integration fix, round 5: `batch_size` (below) used to be a literal number kept
+    // in sync with `play::chunk::PLACEHOLDER_RADIUS_CHUNKS` by hand across two separate
+    // fixes (round 4 alone needed 9 -> 25) -- computed directly from the coordinate list's
+    // own real length instead, so it can never drift from what this loop actually sends
+    // again, no matter how the radius changes in the future.
+    let coords = chunk::placeholder_chunk_coords();
+    let chunk_count = coords.len();
+
+    for (chunk_x, chunk_z) in coords {
         let level_chunk = LevelChunkWithLight {
             chunk_x,
             chunk_z,
@@ -181,12 +193,10 @@ pub async fn enter_play(
         }
     }
 
-    // M1 integration fix, round 4: `batch_size` must track `play::chunk::
-    // placeholder_chunk_coords().len()` exactly (`chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own
-    // doc comment has the full render-radius writeup) -- 25 since that constant became
-    // `2`, not the earlier 9-chunk grid's own count.
     if handle
-        .try_send_payload(encode_payload(&ChunkBatchFinished { batch_size: 25 }))
+        .try_send_payload(encode_payload(&ChunkBatchFinished {
+            batch_size: chunk_count as i32,
+        }))
         .is_err()
     {
         return;

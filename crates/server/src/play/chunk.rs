@@ -44,7 +44,22 @@ pub const SECTION_COUNT: usize = 24;
 /// own full neighbor coverage from this same sent set, with no change needed to
 /// `LoginPlay.view_distance` (already `2`, `play::connection`'s own `enter_play` --
 /// exactly large enough for a real client's own chunk-cache array to hold a 5x5 grid).
-pub const PLACEHOLDER_RADIUS_CHUNKS: i32 = 2;
+///
+/// M1 integration fix, round 5: round 4's fix worked exactly as diagnosed -- the real
+/// client's own 3x3 area around spawn rendered fully textured -- but round 4's own radius
+/// `2` put the render-safe boundary (Context above: render-safe radius is always
+/// `PLACEHOLDER_RADIUS_CHUNKS - 1`) only one ring out, so the unmeshed edge this project's
+/// own round-4 fix could never fully eliminate (some ring always exists at the boundary
+/// of whatever is sent, by the same reasoning above) sat close enough to spawn to be
+/// immediately, jarringly visible. Raised to `5` (an 11x11 = 121 chunk grid): the
+/// render-safe area becomes a 9x9 grid (radius `4`) around spawn, and the unmeshed ring
+/// moves out to radius `5` -- far enough out to sit outside a player's immediate view at
+/// spawn, matching how this exact edge behaves on a real vanilla server (a large view
+/// distance does not eliminate the phenomenon, only pushes it past what's normally
+/// visible). `LoginPlay.view_distance` raised to `5` alongside it (`play::connection`'s
+/// own `enter_play`, same reasoning as round 4: large enough for a real client's own
+/// chunk-cache array to hold an 11x11 grid).
+pub const PLACEHOLDER_RADIUS_CHUNKS: i32 = 5;
 
 /// `minecraft:worldgen/biome` is a dynamic/datapack registry -- Configuration's own
 /// registry sync (`net::run_configuration`'s `worldgen_registries` parameter), never one of
@@ -82,7 +97,12 @@ fn ceil_log2(count: u32) -> u32 {
 /// Every `(chunk_x, chunk_z)` this blueprint sends, in the exact clientbound send order
 /// (Context, step 8): `cx` outer ascending, `cz` inner ascending.
 pub fn placeholder_chunk_coords() -> Vec<(i32, i32)> {
-    let mut coords = Vec::with_capacity(25);
+    // M1 integration fix, round 5: this capacity hint used to be a literal number
+    // (`25`, matching round 4's own radius `2`) that silently went stale the moment the
+    // radius changed again -- computed from `PLACEHOLDER_RADIUS_CHUNKS` itself instead,
+    // so it can never drift from the loop below again.
+    let side = (2 * PLACEHOLDER_RADIUS_CHUNKS + 1) as usize;
+    let mut coords = Vec::with_capacity(side * side);
     for cx in -PLACEHOLDER_RADIUS_CHUNKS..=PLACEHOLDER_RADIUS_CHUNKS {
         for cz in -PLACEHOLDER_RADIUS_CHUNKS..=PLACEHOLDER_RADIUS_CHUNKS {
             coords.push((cx, cz));
