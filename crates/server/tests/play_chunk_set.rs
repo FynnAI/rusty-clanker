@@ -2,8 +2,6 @@
 //! full 9-chunk superflat placeholder batch over a real loopback socket, no M1-B02/B03/B04
 //! dependency (Deliverables, "write these FIRST").
 
-use std::collections::HashMap;
-
 use bytes::{Buf, Bytes};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
 use rc_registries::generated_v776::block_states::default_state as blocks;
@@ -58,12 +56,16 @@ struct DecodedContainer {
     longs: Vec<i64>,
 }
 
-fn decode_paletted_container(buf: &mut Bytes) -> DecodedContainer {
+/// M1 integration fix, test-authoring commit: protocol 776 carries no explicit "data
+/// array length" `VarInt` on the wire (`chunk.rs`'s own `encode_paletted_container` doc
+/// comment) -- a real client computes it deterministically from `bits_per_entry` and the
+/// container's own fixed entry count, so this mirror now takes `entry_count` and computes
+/// the same length itself instead of reading a field that no longer exists.
+fn decode_paletted_container(buf: &mut Bytes, entry_count: usize) -> DecodedContainer {
     let bits_per_entry = buf.get_u8();
     match bits_per_entry {
         0 => {
             let value = VarInt::decode(buf).unwrap().get() as u32;
-            let _data_array_length = VarInt::decode(buf).unwrap().get();
             DecodedContainer {
                 bits_per_entry,
                 palette: vec![value],
@@ -76,7 +78,8 @@ fn decode_paletted_container(buf: &mut Bytes) -> DecodedContainer {
             for _ in 0..palette_len {
                 palette.push(VarInt::decode(buf).unwrap().get() as u32);
             }
-            let data_len = VarInt::decode(buf).unwrap().get() as usize;
+            let entries_per_long = 64 / bits_per_entry as usize;
+            let data_len = entry_count.div_ceil(entries_per_long);
             let mut longs = Vec::with_capacity(data_len);
             for _ in 0..data_len {
                 longs.push(buf.get_i64());
@@ -102,51 +105,6 @@ fn index_at(container: &DecodedContainer, index: usize) -> u32 {
     let palette_index =
         (((container.longs[long_index] as u64) >> (slot as u32 * bits)) & mask) as usize;
     container.palette[palette_index]
-}
-
-fn decode_heightmaps(bytes: &[u8]) -> HashMap<String, Vec<i64>> {
-    assert_eq!(
-        bytes[0], 0x0A,
-        "root TAG_Compound must be unnamed type id 0x0A"
-    );
-    let mut pos = 1usize;
-    let mut result = HashMap::new();
-    loop {
-        let type_id = bytes[pos];
-        pos += 1;
-        if type_id == 0x00 {
-            break;
-        }
-        assert_eq!(type_id, 0x0C, "expected TAG_Long_Array");
-        let name_len = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
-        pos += 2;
-        let name = String::from_utf8(bytes[pos..pos + name_len].to_vec()).unwrap();
-        pos += name_len;
-        let count = i32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        let mut longs = Vec::with_capacity(count);
-        for _ in 0..count {
-            longs.push(i64::from_be_bytes(bytes[pos..pos + 8].try_into().unwrap()));
-            pos += 8;
-        }
-        result.insert(name, longs);
-    }
-    result
-}
-
-fn unpack_bits(longs: &[i64], bits_per_entry: u32, count: usize) -> Vec<u32> {
-    let entries_per_long = 64 / bits_per_entry as usize;
-    let mask = (1u64 << bits_per_entry) - 1;
-    let mut out = Vec::with_capacity(count);
-    'outer: for long in longs {
-        for i in 0..entries_per_long {
-            if out.len() == count {
-                break 'outer;
-            }
-            out.push((((*long as u64) >> (i as u32 * bits_per_entry)) & mask) as u32);
-        }
-    }
-    out
 }
 
 #[tokio::test]
@@ -239,42 +197,51 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         assert_eq!(finished.batch_size, 9);
 
         // Decode section 0 and section 1 of the first chunk's `data` blob.
+        // M1 integration fix, test-authoring commit: a real section carries a second
+        // `i16` field, `fluid_count`, between `block_count` and the block paletted
+        // container (`chunk.rs`'s own `encode_section` doc comment) -- read and asserted
+        // here (always `0`, this world has no fluid content) so this decode mirror stays
+        // byte-accurate against the real production format.
         let mut data = Bytes::from(first.data.clone());
         let block_count = data.get_i16();
         assert_eq!(
             block_count, 1280,
             "1 bedrock + 3 dirt + 1 grass, x256 columns"
         );
+        let fluid_count = data.get_i16();
+        assert_eq!(fluid_count, 0);
 
-        let block_states = decode_paletted_container(&mut data);
+        let block_states = decode_paletted_container(&mut data, 4096);
         assert_eq!(block_states.bits_per_entry, 4);
         assert_eq!(block_states.palette.len(), 4);
         assert_eq!(index_at(&block_states, 0), blocks::BEDROCK.0);
         assert_eq!(index_at(&block_states, 15 * 256), blocks::AIR.0);
 
-        let _biomes = decode_paletted_container(&mut data);
+        let _biomes = decode_paletted_container(&mut data, 64);
 
         let section1_block_count = data.get_i16();
         assert_eq!(section1_block_count, 0);
-        let section1_blocks = decode_paletted_container(&mut data);
+        let section1_fluid_count = data.get_i16();
+        assert_eq!(section1_fluid_count, 0);
+        let section1_blocks = decode_paletted_container(&mut data, 4096);
         assert_eq!(section1_blocks.bits_per_entry, 0);
         assert_eq!(section1_blocks.palette, vec![blocks::AIR.0]);
 
-        // Heightmaps.
-        let heightmaps = decode_heightmaps(&first.heightmaps);
-        assert_eq!(heightmaps.len(), 3);
-        for name in [
-            "WORLD_SURFACE",
-            "MOTION_BLOCKING",
-            "MOTION_BLOCKING_NO_LEAVES",
-        ] {
-            let longs = heightmaps
-                .get(name)
-                .unwrap_or_else(|| panic!("missing {name}"));
-            assert_eq!(longs.len(), 37);
-            let values = unpack_bits(longs, 9, 256);
-            assert!(values.iter().all(|&v| v == 5), "{name} must be all 5s");
-        }
+        // M1 integration fix, test-authoring commit: `heightmaps` used to assert a
+        // hand-rolled network-NBT compound (`WORLD_SURFACE`/`MOTION_BLOCKING`/
+        // `MOTION_BLOCKING_NO_LEAVES`, each 37 packed longs) -- a shape a real client
+        // cannot decode at all (`chunk.rs`'s own `build_placeholder_heightmaps` doc
+        // comment: a real client's `ClientboundLevelChunkPacketData.heightmaps` is a
+        // `VarInt`-prefixed tuple list, never NBT, and misreads our NBT byte count as a
+        // bogus tuple count, desyncing immediately). Corrected to assert the now-empty
+        // list this field actually carries -- legal, parity-neutral vanilla wire
+        // behavior: a real client recomputes the identical heightmap values itself from
+        // the chunk's own block data whenever none are supplied.
+        assert!(
+            first.heightmaps.is_empty(),
+            "heightmaps must be sent empty -- a real client cannot decode a populated \
+             field in this wire shape (see chunk.rs's own build_placeholder_heightmaps)"
+        );
 
         task.abort();
     })
