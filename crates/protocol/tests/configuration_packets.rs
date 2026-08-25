@@ -4,8 +4,8 @@
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{
     ClientInformation, ConfigurationPluginMessage, FinishConfiguration, Identifier, KnownPack,
-    KnownPacksClientbound, KnownPacksServerbound, RcPacket, RegistryData, RegistryDataEntryOut,
-    UpdateEnabledFeatures, WireRead, WireWrite, decode_one,
+    KnownPacksClientbound, KnownPacksServerbound, PacketDecodeError, RcPacket, RegistryData,
+    RegistryDataEntryOut, UpdateEnabledFeatures, WireRead, WireWrite, decode_one,
 };
 
 #[test]
@@ -42,12 +42,25 @@ fn known_packs_clientbound_and_serverbound_share_wire_shape() {
     assert_eq!(buf1, buf2);
 }
 
+// M1 integration fix, test-authoring commit: `registry_data_roundtrip_and_always_has_data_false`
+// (this test's original name and body) asserted a behavior the M1 completion report proved
+// genuinely wrong against real vanilla protocol reality — a real client cannot resolve
+// `minecraft:dimension_type` from a `has_data=false` entry at all (it has no built-in fallback
+// for that one dynamic registry), so "always" was never actually correct; only every *other*
+// registry this server advertises still gets `has_data=false` by default (M1-B04's own
+// Context, "why every entry is sent with has_data=false", still holds there). Split into two
+// tests below: the original `has_data=false` roundtrip (renamed, still exercising the still-
+// correct default path) plus a new `has_data=true` roundtrip proving the new inline-NBT
+// capability `RegistryDataEntryOut` gained (`crates/protocol/src/configuration.rs`,
+// `crates/protocol/src/wire.rs`'s `nbt_raw` module).
+
 #[test]
-fn registry_data_roundtrip_and_always_has_data_false() {
+fn registry_data_roundtrip_without_inline_data() {
     let packet = RegistryData {
-        registry_id: Identifier::new("minecraft:dimension_type"),
+        registry_id: Identifier::new("minecraft:worldgen/biome"),
         entries: vec![RegistryDataEntryOut {
-            entry_id: Identifier::new("minecraft:overworld"),
+            entry_id: Identifier::new("minecraft:plains"),
+            data: None,
         }],
     };
     let mut buf = BytesMut::new();
@@ -58,6 +71,69 @@ fn registry_data_roundtrip_and_always_has_data_false() {
 
     let decoded = decode_one::<RegistryData>(buf.freeze()).unwrap();
     assert_eq!(decoded, packet);
+}
+
+/// A minimal `DimensionKindElement`-shaped compound (`height`/`min_y` as `TAG_Int`, unnamed
+/// root `TAG_Compound`, `TAG_End`-terminated) — byte-for-byte the same shape as
+/// `crates/testing/test-harness/src/fake_server.rs`'s own already-proven
+/// `encode_dimension_type_nbt` and `crates/server/src/net/configuration_flow.rs`'s own
+/// production `encode_dimension_type_nbt`.
+fn sample_dimension_kind_nbt(height: i32, min_y: i32) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    0x0Au8.write_wire(&mut buf); // root TAG_Compound, unnamed.
+    0x03u8.write_wire(&mut buf); // TAG_Int
+    6u16.write_wire(&mut buf);
+    buf.extend_from_slice(b"height");
+    height.write_wire(&mut buf);
+    0x03u8.write_wire(&mut buf); // TAG_Int
+    5u16.write_wire(&mut buf);
+    buf.extend_from_slice(b"min_y");
+    min_y.write_wire(&mut buf);
+    0x00u8.write_wire(&mut buf); // TAG_End
+    buf.to_vec()
+}
+
+#[test]
+fn registry_data_roundtrip_with_inline_nbt_data() {
+    let nbt_bytes = sample_dimension_kind_nbt(384, -64);
+
+    let packet = RegistryData {
+        registry_id: Identifier::new("minecraft:dimension_type"),
+        entries: vec![RegistryDataEntryOut {
+            entry_id: Identifier::new("minecraft:overworld"),
+            data: Some(nbt_bytes.clone()),
+        }],
+    };
+    let mut buf = BytesMut::new();
+    packet.encode_body(&mut buf);
+
+    // The encoded body's own trailing bytes are exactly `has_data=true` (0x01) followed by
+    // the raw NBT payload, verbatim — no re-framing or length prefix of its own.
+    let mut expected_tail = vec![0x01u8];
+    expected_tail.extend_from_slice(&nbt_bytes);
+    assert_eq!(
+        &buf[buf.len() - expected_tail.len()..],
+        expected_tail.as_slice()
+    );
+
+    let decoded = decode_one::<RegistryData>(buf.freeze()).unwrap();
+    assert_eq!(decoded, packet);
+    assert_eq!(decoded.entries[0].data, Some(nbt_bytes));
+}
+
+#[test]
+fn registry_data_entry_rejects_non_compound_nbt_root() {
+    let mut buf = BytesMut::new();
+    Identifier::new("minecraft:overworld").write_wire(&mut buf);
+    true.write_wire(&mut buf); // has_data
+    0x03u8.write_wire(&mut buf); // TAG_Int, not TAG_Compound -- malformed root
+
+    let mut bytes = buf.freeze();
+    let err = RegistryDataEntryOut::read_wire(&mut bytes).unwrap_err();
+    assert!(matches!(
+        err,
+        PacketDecodeError::MalformedRegistryEntryNbt(_)
+    ));
 }
 
 #[test]
