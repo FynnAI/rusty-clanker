@@ -9,9 +9,13 @@
 //! No concrete packet type is defined by this crate — every item here is generic
 //! infrastructure a later milestone's per-connection-state packet catalog builds on.
 
+extern crate self as rc_protocol;
+
 pub mod cipher;
 pub mod frame;
+pub mod handshake;
 pub mod packet;
+pub mod status;
 pub mod varint;
 pub mod wire;
 

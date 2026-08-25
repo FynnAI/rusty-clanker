@@ -32,6 +32,9 @@ rc-cluster = { path = "../cluster", optional = true }
 rc-transport-net = { path = "../transport-net", optional = true }
 rc-proxy = { path = "../proxy", optional = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [features]
 default = ["cluster"]
 cluster = ["dep:rc-cluster", "dep:rc-transport-net", "dep:rc-proxy"]
