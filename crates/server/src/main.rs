@@ -134,7 +134,7 @@ async fn run(bind_addr: String, offline: bool) -> std::process::ExitCode {
                     entity_ids,
                     login_config,
                     configuration_config,
-                    rusty_clanker_server::play::PLACEHOLDER_WORLDGEN_REGISTRIES,
+                    rusty_clanker_server::play::SYNCHRONIZED_REGISTRIES,
                     sink,
                 )
                 .await;

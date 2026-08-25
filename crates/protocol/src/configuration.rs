@@ -71,22 +71,22 @@ pub struct ConfigurationKeepAliveClientbound {
     pub keep_alive_id: i64,
 }
 
-/// Nested. `has_data` is never a stored field — this packet's Rust shape only models the
-/// `has_data=false` path this blueprint ever sends (Context). `WireRead` on an entry whose
-/// wire `has_data` byte is `true` is unreachable by any input this blueprint's own tests
-/// construct; its body is `unimplemented!()` (Constraints (d)) — a named M1 scope boundary
-/// pending `#[rc(nbt)]`/`rc-nbt`, neither of which exists yet.
+/// Nested. `has_data` is never a stored field — it is derived from `data` at encode time
+/// (`Some` -> `true` plus the inline payload, `None` -> `false` with no payload); reading a
+/// `has_data=true` entry decodes it verbatim via `crate::wire`'s own `nbt_raw` skip/measure
+/// reader (`WireRead` impl, below) without interpreting its fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryDataEntryOut {
     pub entry_id: Identifier,
     /// Pre-encoded network-NBT bytes (unnamed root `TAG_Compound`, `TAG_End`-terminated —
     /// `crate::wire`'s own `nbt_raw` shape) sent verbatim after the `has_data=true` byte;
-    /// `None` sends the bare `has_data=false` byte with no payload. M1 integration fix: the
-    /// blanket `has_data=false`-for-everything default M1-B04 originally shipped (Context,
-    /// "why every entry is sent with has_data=false") does not hold for every registry a
-    /// real client cannot already resolve on its own — `minecraft:dimension_type` in
-    /// particular (`crate::configuration`'s own callers decide, per registry, which entries
-    /// need `Some`; this type only carries the already-encoded bytes, it never decides).
+    /// `None` sends the bare `has_data=false` byte with no payload. `rusty-clanker-server`'s
+    /// own production `run_configuration` caller (`crate::configuration`'s own callers decide
+    /// per entry, this type only carries already-encoded bytes, it never decides) currently
+    /// never constructs a `Some` — every synchronized-registry entry it sends is `has_data=
+    /// false` (M1 registry-sync fix; `rusty_clanker_server::play::world::
+    /// SYNCHRONIZED_REGISTRIES`'s own doc comment has the full rationale). The `Some` path
+    /// stays fully wired for a later milestone that does need to carry real inline data.
     pub data: Option<Vec<u8>>,
 }
 impl WireWrite for RegistryDataEntryOut {

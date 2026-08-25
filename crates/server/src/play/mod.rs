@@ -3,13 +3,7 @@
 //! first real `rc-scheduler` region ticking at 20 TPS. See `blueprints/M1/M1-B05-play-
 //! superflat.md` for the full design.
 
-/// `pub(crate)`, not private — M1 integration fix: `net::configuration_flow`'s own
-/// dimension_type inline-NBT payload (Registry Data sync) must stay byte-consistent with
-/// this module's own world-height constants (`WORLD_MIN_Y`/`SECTION_COUNT`) rather than
-/// duplicating them as disconnected magic numbers, so `net` needs a crate-internal path to
-/// this module. Still not `pub` — external crates (this blueprint's own acceptance tests)
-/// keep writing their own test-local decode mirrors instead (module doc comment, below).
-pub(crate) mod chunk;
+mod chunk;
 mod connection;
 mod keepalive;
 /// Public, not private as this blueprint's own Deliverables sketch first suggested --
@@ -28,6 +22,4 @@ mod world;
 
 pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
-pub use world::{
-    HARDCODED_REGION_ID, HardcodedWorld, PLACEHOLDER_WORLDGEN_REGISTRIES, PlayerMarker,
-};
+pub use world::{HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES};
