@@ -33,7 +33,19 @@ proptest! {
     }
 
     #[test]
-    fn frame_roundtrip_arbitrary_payload_no_compression(payload in proptest::collection::vec(any::<u8>(), 0..=4096)) {
+    fn frame_roundtrip_arbitrary_payload_no_compression(payload in proptest::collection::vec(any::<u8>(), 1..=4096)) {
+        // Lower bound is 1, not 0: with compression Disabled the frame body *is* the
+        // payload verbatim, so an empty payload produces a genuinely zero-length frame
+        // body -- and a frameLength of exactly 0 is unconditionally rejected as
+        // `FrameError::ZeroLengthFrame` (locked down byte-for-byte by
+        // `frame_decode_rejects_zero_length` in tests/frame.rs). That combination can
+        // never round-trip by design; it is not a gap in coverage, since real Minecraft
+        // traffic never produces a byte-empty payload (every packet's payload starts
+        // with at least its own id `VarInt`). The identical exclusion is already locked
+        // down for the non-property unit test in tests/frame.rs::frame_roundtrip_empty_payload,
+        // which documents the same reasoning at greater length. Before this fix the
+        // property occasionally (nondeterministically, whenever proptest's random shrink
+        // path happened to draw the empty vec) failed CI with exactly this panic.
         let mut out = BytesMut::new();
         encode_frame(&payload, CompressionState::Disabled, &mut out).unwrap();
         let decoded = try_decode_frame(&mut out, CompressionState::Disabled).unwrap().unwrap();
