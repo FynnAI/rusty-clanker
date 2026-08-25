@@ -1,8 +1,10 @@
+mod auth_cipher;
 mod connection;
 mod dispatch;
 mod handshake;
 mod status;
 
+pub use auth_cipher::AuthConnectionCipher;
 pub use connection::{ConnectionConfig, ConnectionHandle, SendError, spawn_connection};
 pub use dispatch::{
     ConnectionOutcome, DEFAULT_MOTD_DISCLAIMER, default_status_payload, handle_new_connection,

@@ -23,7 +23,9 @@ aes               = "0.9.2"
 cfb8              = "0.9.1"
 sha1              = "0.11.0"
 sha2              = "0.11.0"   # TEST-D47; xtask's fixture-manifest SHA-256 hashing
-reqwest           = { version = "0.13.4", default-features = false, features = ["rustls"] }
+md-5              = "0.11.0"   # rc-auth's offline-mode UUID derivation (NET-D6 offline stance), M1-B03
+uuid              = "1.25.0"   # rc-auth's offline-mode UUID type, M1-B03; also rc-bedrock-auth's future UUIDv5 need
+reqwest           = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 rustls            = "0.23.43"
 quinn             = "0.11.11"
 postcard          = "1.1.3"

@@ -5,4 +5,19 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-rc-core = { path = "../core" }
+rc-core    = { path = "../core" }
+rsa        = { workspace = true, features = ["getrandom"] }
+aes        = { workspace = true }
+cfb8       = { workspace = true }
+sha1       = { workspace = true }
+md-5       = { workspace = true }
+uuid       = { workspace = true }
+reqwest    = { workspace = true }
+tokio      = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
