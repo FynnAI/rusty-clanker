@@ -19,12 +19,21 @@ pub struct KnownPack {
 }
 impl WireWrite for KnownPack {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        self.namespace.write_wire(buf);
+        self.id.write_wire(buf);
+        self.version.write_wire(buf);
     }
 }
 impl WireRead for KnownPack {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        let namespace = String::read_wire(buf)?;
+        let id = String::read_wire(buf)?;
+        let version = String::read_wire(buf)?;
+        Ok(Self {
+            namespace,
+            id,
+            version,
+        })
     }
 }
 
@@ -41,11 +50,14 @@ impl crate::packet::RcPacket for ConfigurationPluginMessage {
     const ID: i32 = 0x01;
 
     fn encode_body(&self, buf: &mut BytesMut) {
-        todo!()
+        self.channel.write_wire(buf);
+        buf.put_slice(&self.data);
     }
 
     fn decode_body(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        let channel = Identifier::read_wire(buf)?;
+        let data = buf.copy_to_bytes(buf.remaining()).to_vec();
+        Ok(Self { channel, data })
     }
 }
 
@@ -70,12 +82,20 @@ pub struct RegistryDataEntryOut {
 }
 impl WireWrite for RegistryDataEntryOut {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        self.entry_id.write_wire(buf);
+        false.write_wire(buf);
     }
 }
 impl WireRead for RegistryDataEntryOut {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        let entry_id = Identifier::read_wire(buf)?;
+        let has_data = bool::read_wire(buf)?;
+        if has_data {
+            unimplemented!(
+                "registry entries with inline NBT data are out of M1-B04's scope — no #[rc(nbt)]/rc-nbt support exists yet"
+            )
+        }
+        Ok(Self { entry_id })
     }
 }
 

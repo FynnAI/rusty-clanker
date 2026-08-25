@@ -15,18 +15,18 @@ pub struct Identifier(pub String);
 
 impl Identifier {
     pub fn new(s: impl Into<String>) -> Self {
-        todo!()
+        Self(s.into())
     }
 }
 
 impl WireWrite for Identifier {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        self.0.write_wire(buf);
     }
 }
 
 impl WireRead for Identifier {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        Ok(Self(String::read_wire(buf)?))
     }
 }

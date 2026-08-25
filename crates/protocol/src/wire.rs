@@ -185,12 +185,15 @@ impl WireRead for String {
 /// exactly that layout, so no byte reordering is needed. No length prefix (M1-B04).
 impl WireWrite for uuid::Uuid {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        buf.put_slice(self.as_bytes());
     }
 }
 impl WireRead for uuid::Uuid {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        need(buf, 16)?;
+        let mut bytes = [0u8; 16];
+        buf.copy_to_slice(&mut bytes);
+        Ok(uuid::Uuid::from_bytes(bytes))
     }
 }
 

@@ -46,7 +46,28 @@ pub async fn drive_connection(
     worldgen_registries: &'static [(&'static str, &'static [&'static str])],
     sink: std::sync::Arc<dyn PlayerSessionSink>,
 ) -> Result<(), DriveError> {
-    todo!()
+    let login_outcome = run_login(&mut inbound, &handle, &key_pair, &sessions, &login_config)
+        .await
+        .map_err(DriveError::Login)?;
+
+    run_configuration(
+        &mut inbound,
+        &handle,
+        &configuration_config,
+        worldgen_registries,
+    )
+    .await
+    .map_err(DriveError::Configuration)?;
+
+    let session = PlayerSession {
+        profile: login_outcome.profile,
+        entity_id: entity_ids.alloc(),
+        connection: handle.clone(),
+        inbound,
+    };
+    sink.accept(session);
+
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

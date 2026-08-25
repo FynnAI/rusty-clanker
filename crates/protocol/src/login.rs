@@ -39,12 +39,34 @@ pub struct LoginProfileProperty {
 }
 impl WireWrite for LoginProfileProperty {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        self.name.write_wire(buf);
+        self.value.write_wire(buf);
+        match &self.signature {
+            Some(sig) => {
+                true.write_wire(buf);
+                sig.write_wire(buf);
+            }
+            None => {
+                false.write_wire(buf);
+            }
+        }
     }
 }
 impl WireRead for LoginProfileProperty {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        let name = String::read_wire(buf)?;
+        let value = String::read_wire(buf)?;
+        let has_signature = bool::read_wire(buf)?;
+        let signature = if has_signature {
+            Some(String::read_wire(buf)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            name,
+            value,
+            signature,
+        })
     }
 }
 
@@ -59,17 +81,30 @@ impl LoginProfile {
     /// `rusty_clanker_server::net::login_flow::ResolvedProfile` and the wire type
     /// (`rc-protocol` never depends on `rc-auth`, WS-D3 rule 1).
     pub fn new(id: Uuid, name: String, properties: Vec<LoginProfileProperty>) -> Self {
-        todo!()
+        Self {
+            id,
+            name,
+            properties,
+        }
     }
 }
 impl WireWrite for LoginProfile {
     fn write_wire(&self, buf: &mut BytesMut) {
-        todo!()
+        self.id.write_wire(buf);
+        self.name.write_wire(buf);
+        crate::wire::write_prefixed_vec(&self.properties, buf);
     }
 }
 impl WireRead for LoginProfile {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        let id = Uuid::read_wire(buf)?;
+        let name = String::read_wire(buf)?;
+        let properties = crate::wire::read_prefixed_vec(buf)?;
+        Ok(Self {
+            id,
+            name,
+            properties,
+        })
     }
 }
 
