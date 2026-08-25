@@ -206,6 +206,22 @@ fn run_idle_stability_subprocess(
     command
         .current_dir(&paritybot_dir)
         .env("RUSTC_BOOTSTRAP", "1")
+        // Integration fix (discovered running the real M1 acceptance leg): when this
+        // xtask process is itself launched via `cargo run -p xtask` from the repo
+        // root, rustup's own proxy resolves the root's pinned stable toolchain
+        // (`rust-toolchain.toml`, WS-D4) *before* exec'ing xtask.exe and stamps that
+        // resolution into `RUSTUP_TOOLCHAIN` in xtask's own environment as a caching
+        // optimization. `std::process::Command` inherits the parent environment by
+        // default, so that stamped stable toolchain silently leaked into this nested
+        // `cargo` invocation and overrode `paritybot_dir`'s own `rust-toolchain.toml`
+        // (`channel = "nightly-2026-07-25"`) entirely -- reproduced live: with
+        // `RUSTUP_TOOLCHAIN` set, azalea's `build.rs` panics with "Azalea currently
+        // requires nightly Rust" even though the correct nightly toolchain is
+        // installed and resolves correctly for this exact command run standalone
+        // (no enclosing `cargo run`). Removing the inherited override here lets
+        // rustup re-resolve the toolchain from `paritybot_dir`'s own file, as
+        // originally intended by this module's own doc comment above.
+        .env_remove("RUSTUP_TOOLCHAIN")
         .args([
             "run",
             "--quiet",
