@@ -2305,6 +2305,7 @@ dependencies = [
 name = "rusty-clanker-server"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "bytes",
  "parking_lot",
  "rc-auth",
@@ -2312,13 +2313,16 @@ dependencies = [
  "rc-cluster",
  "rc-core",
  "rc-mechanics",
+ "rc-messaging",
  "rc-mod-host",
  "rc-protocol",
  "rc-proxy",
+ "rc-registries",
  "rc-scheduler",
  "rc-transport-inproc",
  "rc-transport-net",
  "rc-worldgen",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

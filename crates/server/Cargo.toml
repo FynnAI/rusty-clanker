@@ -20,6 +20,8 @@ rc-chunk-storage = { path = "../chunk-storage" }
 rc-worldgen = { path = "../worldgen" }
 rc-protocol = { path = "../protocol" }
 rc-transport-inproc = { path = "../transport-inproc" }
+rc-messaging = { path = "../messaging" }
+rc-registries = { path = "../registries" }
 rc-auth = { path = "../auth" }
 rc-mod-host = { path = "../mod-host" }
 tokio = { workspace = true }
@@ -29,14 +31,17 @@ bytes = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+bevy_ecs = { workspace = true }
 rc-cluster = { path = "../cluster", optional = true }
 rc-transport-net = { path = "../transport-net", optional = true }
 rc-proxy = { path = "../proxy", optional = true }
 
 [dev-dependencies]
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
 default = ["cluster"]
 cluster = ["dep:rc-cluster", "dep:rc-transport-net", "dep:rc-proxy"]
 monolithic = []
+soak-tests = []

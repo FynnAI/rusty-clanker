@@ -2693,7 +2693,8 @@ pub mod incoming_rpc_methods {
     pub const SERVERSETTINGS_STATUS_HEARTBEAT_INTERVAL: RegistryEntryId = RegistryEntryId(56);
     pub const SERVERSETTINGS_STATUS_HEARTBEAT_INTERVAL_SET: RegistryEntryId = RegistryEntryId(57);
     pub const SERVERSETTINGS_OPERATOR_USER_PERMISSION_LEVEL: RegistryEntryId = RegistryEntryId(58);
-    pub const SERVERSETTINGS_OPERATOR_USER_PERMISSION_LEVEL_SET: RegistryEntryId = RegistryEntryId(59);
+    pub const SERVERSETTINGS_OPERATOR_USER_PERMISSION_LEVEL_SET: RegistryEntryId =
+        RegistryEntryId(59);
     pub const SERVERSETTINGS_HIDE_ONLINE_PLAYERS: RegistryEntryId = RegistryEntryId(60);
     pub const SERVERSETTINGS_HIDE_ONLINE_PLAYERS_SET: RegistryEntryId = RegistryEntryId(61);
     pub const SERVERSETTINGS_STATUS_REPLIES: RegistryEntryId = RegistryEntryId(62);
@@ -5651,8 +5652,10 @@ pub mod sound_event {
     pub const BLOCK_POINTED_DRIPSTONE_LAND: RegistryEntryId = RegistryEntryId(555);
     pub const BLOCK_POINTED_DRIPSTONE_DRIP_LAVA: RegistryEntryId = RegistryEntryId(556);
     pub const BLOCK_POINTED_DRIPSTONE_DRIP_WATER: RegistryEntryId = RegistryEntryId(557);
-    pub const BLOCK_POINTED_DRIPSTONE_DRIP_LAVA_INTO_CAULDRON: RegistryEntryId = RegistryEntryId(558);
-    pub const BLOCK_POINTED_DRIPSTONE_DRIP_WATER_INTO_CAULDRON: RegistryEntryId = RegistryEntryId(559);
+    pub const BLOCK_POINTED_DRIPSTONE_DRIP_LAVA_INTO_CAULDRON: RegistryEntryId =
+        RegistryEntryId(558);
+    pub const BLOCK_POINTED_DRIPSTONE_DRIP_WATER_INTO_CAULDRON: RegistryEntryId =
+        RegistryEntryId(559);
     pub const BLOCK_BIG_DRIPLEAF_TILT_DOWN: RegistryEntryId = RegistryEntryId(560);
     pub const BLOCK_BIG_DRIPLEAF_TILT_UP: RegistryEntryId = RegistryEntryId(561);
     pub const ENTITY_DROWNED_AMBIENT: RegistryEntryId = RegistryEntryId(562);
@@ -7017,8 +7020,10 @@ pub mod sound_event {
     pub const BLOCK_POTENT_SULFUR_FALL: RegistryEntryId = RegistryEntryId(1921);
     pub const BLOCK_POTENT_SULFUR_GEYSER_ERUPTION: RegistryEntryId = RegistryEntryId(1922);
     pub const BLOCK_POTENT_SULFUR_GEYSER_ERUPTION_ACTIVE: RegistryEntryId = RegistryEntryId(1923);
-    pub const BLOCK_POTENT_SULFUR_GEYSER_CONTINUOUS_ERUPTION: RegistryEntryId = RegistryEntryId(1924);
-    pub const BLOCK_POTENT_SULFUR_GEYSER_CONTINUOUS_ERUPTION_ACTIVE: RegistryEntryId = RegistryEntryId(1925);
+    pub const BLOCK_POTENT_SULFUR_GEYSER_CONTINUOUS_ERUPTION: RegistryEntryId =
+        RegistryEntryId(1924);
+    pub const BLOCK_POTENT_SULFUR_GEYSER_CONTINUOUS_ERUPTION_ACTIVE: RegistryEntryId =
+        RegistryEntryId(1925);
     pub const BLOCK_CINNABAR_BREAK: RegistryEntryId = RegistryEntryId(1926);
     pub const BLOCK_CINNABAR_STEP: RegistryEntryId = RegistryEntryId(1927);
     pub const BLOCK_CINNABAR_PLACE: RegistryEntryId = RegistryEntryId(1928);
@@ -7649,4 +7654,3 @@ pub mod worldgen_trunk_placer_type {
 
     pub const COUNT: u32 = 9;
 }
-

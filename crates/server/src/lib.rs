@@ -5,3 +5,4 @@
 //! scope, not implemented here.
 
 pub mod net;
+pub mod play;
