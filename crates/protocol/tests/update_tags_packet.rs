@@ -164,6 +164,80 @@ fn generated_tag_tables_cover_the_docs_5_3_minimal_registry_set() {
     }
 }
 
+/// Round-3 real-client evidence (crash report `disconnect-2026-08-25_20.21.13-client.txt`)
+/// proved the earlier 5-registry cherry-pick incomplete: 8 remaining `enchantment` decode
+/// failures whose own codecs reference tags in registries the cherry-pick never sent. This
+/// asserts the *complete* set — every registry directory actually present under the local
+/// tags tree that resolves to a real, network-safe registry, not a hand-picked subset.
+#[test]
+fn generated_tag_tables_cover_the_complete_discovered_registry_set() {
+    use rc_registries::generated_v776::tags::REGISTRIES;
+
+    let registry_ids: Vec<&str> = REGISTRIES.iter().map(|(id, _)| *id).collect();
+    for expected in [
+        "minecraft:banner_pattern",
+        "minecraft:block",
+        "minecraft:damage_type",
+        "minecraft:dialog",
+        "minecraft:enchantment",
+        "minecraft:entity_type",
+        "minecraft:fluid",
+        "minecraft:game_event",
+        "minecraft:instrument",
+        "minecraft:item",
+        "minecraft:painting_variant",
+        "minecraft:point_of_interest_type",
+        "minecraft:potion",
+        "minecraft:timeline",
+        "minecraft:worldgen/biome",
+    ] {
+        assert!(
+            registry_ids.contains(&expected),
+            "missing {expected} from the generated tag tables: {registry_ids:?}"
+        );
+    }
+    assert_eq!(
+        registry_ids.len(),
+        15,
+        "expected exactly the 15 registries the real local datapack's tags tree resolves to \
+         a network-safe registry, got: {registry_ids:?}"
+    );
+
+    // Never a server-only / not-network-safe registry (§3.2's own "absent from
+    // SYNCHRONIZED_REGISTRIES" list, plus `villager_trade`, confirmed absent from both the
+    // static report and SYNCHRONIZED_REGISTRIES).
+    for forbidden in ["minecraft:villager_trade", "minecraft:worldgen/structure"] {
+        assert!(
+            !registry_ids.contains(&forbidden),
+            "{forbidden} is not network-safe and must never appear: {registry_ids:?}"
+        );
+    }
+}
+
+/// The specific gap round 3 found and closed: `bane_of_arthropods`/`impaling`/`smite`'s own
+/// `entity_effects` fields reference `entity_type` tags this server never sent before.
+#[test]
+fn generated_entity_type_tags_cover_the_round_3_enchantment_dependencies() {
+    use rc_registries::generated_v776::tags::entity_type;
+
+    assert!(
+        !entity_type::SENSITIVE_TO_BANE_OF_ARTHROPODS
+            .entries
+            .is_empty()
+    );
+    assert!(!entity_type::SENSITIVE_TO_IMPALING.entries.is_empty());
+    assert!(!entity_type::SENSITIVE_TO_SMITE.entries.is_empty());
+}
+
+/// The specific gap round 3 found and closed: `soul_speed`'s own `location_based_effects`
+/// field references a `block` tag this server's earlier 3-tag cherry-pick never sent.
+#[test]
+fn generated_block_tags_cover_the_round_3_soul_speed_dependency() {
+    use rc_registries::generated_v776::tags::block;
+
+    assert!(!block::SOUL_SPEED_BLOCKS.entries.is_empty());
+}
+
 #[test]
 fn generated_infiniburn_tags_carry_the_real_vanilla_block_ids() {
     use rc_registries::generated_v776::tags::block;
