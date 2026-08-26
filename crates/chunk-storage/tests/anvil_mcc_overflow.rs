@@ -33,7 +33,11 @@ fn oversized_payload_goes_external() {
     rf.write_record(LOCAL_X, LOCAL_Z, 3, &oversized).unwrap();
 
     // In-region allocation is a fixed 1-sector stub, never ~260 sectors.
-    assert_eq!(file_sectors(&path), 3, "2 header sectors + the 1-sector external stub");
+    assert_eq!(
+        file_sectors(&path),
+        3,
+        "2 header sectors + the 1-sector external stub"
+    );
 
     let mcc = mcc_path(dir.path());
     assert!(mcc.exists());
@@ -86,9 +90,16 @@ fn shrinking_below_threshold_removes_the_stale_mcc_file() {
     rf.write_record(LOCAL_X, LOCAL_Z, 3, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         .unwrap();
 
-    assert!(!mcc.exists(), "stale .mcc file must be cleaned up on shrink");
+    assert!(
+        !mcc.exists(),
+        "stale .mcc file must be cleaned up on shrink"
+    );
 
     let (tag, bytes) = rf.read_record(LOCAL_X, LOCAL_Z).unwrap().unwrap();
-    assert_eq!(tag & 0x80, 0, "external bit must be clear after shrinking back in-region");
+    assert_eq!(
+        tag & 0x80,
+        0,
+        "external bit must be clear after shrinking back in-region"
+    );
     assert_eq!(bytes, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 }

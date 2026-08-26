@@ -33,8 +33,9 @@ fn decode_marker(bytes: &[u8]) -> i64 {
 #[test]
 fn concurrent_writes_to_disjoint_chunks_all_succeed_and_are_correct() {
     let dir = TempWorldDir::new("concurrent_writes_to_disjoint_chunks_all_succeed_and_are_correct");
-    let backend =
-        Arc::new(AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap());
+    let backend = Arc::new(
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap(),
+    );
 
     std::thread::scope(|scope| {
         for thread_index in 0..16i64 {
@@ -71,11 +72,11 @@ fn concurrent_writes_to_disjoint_chunks_all_succeed_and_are_correct() {
 
 #[test]
 fn concurrent_reads_and_writes_to_the_same_chunk_never_panic_and_converge() {
-    let dir = TempWorldDir::new(
-        "concurrent_reads_and_writes_to_the_same_chunk_never_panic_and_converge",
+    let dir =
+        TempWorldDir::new("concurrent_reads_and_writes_to_the_same_chunk_never_panic_and_converge");
+    let backend = Arc::new(
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap(),
     );
-    let backend =
-        Arc::new(AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap());
     let next_generation = Arc::new(AtomicU64::new(0));
     let written_generations: Arc<Mutex<HashSet<i64>>> = Arc::new(Mutex::new(HashSet::new()));
 
@@ -118,8 +119,10 @@ fn concurrent_reads_and_writes_to_the_same_chunk_never_panic_and_converge() {
         .unwrap()
         .expect("chunk was written at least once");
     let final_generation = decode_marker(&final_bytes);
-    assert!(written_generations
-        .lock()
-        .unwrap()
-        .contains(&final_generation));
+    assert!(
+        written_generations
+            .lock()
+            .unwrap()
+            .contains(&final_generation)
+    );
 }

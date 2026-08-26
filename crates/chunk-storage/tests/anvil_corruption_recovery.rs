@@ -72,13 +72,15 @@ fn declared_length_exceeding_allocated_sectors_is_rejected() {
 
 #[test]
 fn one_corrupt_chunk_does_not_affect_a_sibling_chunk_in_the_same_file() {
-    let dir = TempWorldDir::new("one_corrupt_chunk_does_not_affect_a_sibling_chunk_in_the_same_file");
+    let dir =
+        TempWorldDir::new("one_corrupt_chunk_does_not_affect_a_sibling_chunk_in_the_same_file");
     let path = dir.path().join("r.0.0.mca");
 
     // A valid, distinct record at (1,0), written through the real API.
     {
         let mut rf = RegionFile::open(path.clone(), 0, 0).unwrap();
-        rf.write_record(1, 0, 3, b"sibling payload is intact").unwrap();
+        rf.write_record(1, 0, 3, b"sibling payload is intact")
+            .unwrap();
     }
 
     // Corrupt slot (0,0) directly (case 1's construction: offset inside the header).
@@ -97,7 +99,8 @@ fn one_corrupt_chunk_does_not_affect_a_sibling_chunk_in_the_same_file() {
 #[test]
 fn nbt_validation_rejects_non_nbt_payload_at_the_backend_level() {
     let dir = TempWorldDir::new("nbt_validation_rejects_non_nbt_payload_at_the_backend_level");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     // Write a non-NBT byte payload directly through the low-level RegionFile/
     // CompressionScheme primitives at the exact slot `read_chunk` looks up for
@@ -111,7 +114,13 @@ fn nbt_validation_rejects_non_nbt_payload_at_the_backend_level() {
     }
 
     let err = backend
-        .read_chunk(rc_core::DimensionId::OVERWORLD, RegionFileKind::Terrain, 0, 0, None)
+        .read_chunk(
+            rc_core::DimensionId::OVERWORLD,
+            RegionFileKind::Terrain,
+            0,
+            0,
+            None,
+        )
         .unwrap_err();
     assert!(matches!(err, StorageError::InvalidNbtPayload(_)));
 }

@@ -18,10 +18,13 @@ fn location_entry_offset(local_x: u8, local_z: u8) -> usize {
 
 #[test]
 fn location_table_index_matches_x_plus_32z() {
-    // Hand-verified formula: index = local_x + 32 * local_z.
-    assert_eq!(5usize + 32 * 3, 101);
-    assert_eq!(31usize + 32 * 31, 1023);
-    assert_eq!(0usize + 32 * 0, 0);
+    // Hand-verified formula: index = local_x + 32 * local_z. Computed through
+    // variables, not literal arithmetic, so this stays a real check rather than
+    // something clippy's constant folders (`identity_op`/`erasing_op`) flag as dead.
+    let index = |local_x: usize, local_z: usize| local_x + 32 * local_z;
+    assert_eq!(index(5, 3), 101);
+    assert_eq!(index(31, 31), 1023);
+    assert_eq!(index(0, 0), 0);
 
     let dir = TempWorldDir::new("location_table_index_matches_x_plus_32z");
 
@@ -32,7 +35,10 @@ fn location_table_index_matches_x_plus_32z() {
         rf.write_record(5, 3, 3, b"a").unwrap();
     }
     let mut raw_a = Vec::new();
-    File::open(&path_a).unwrap().read_to_end(&mut raw_a).unwrap();
+    File::open(&path_a)
+        .unwrap()
+        .read_to_end(&mut raw_a)
+        .unwrap();
     let off_a = location_entry_offset(5, 3);
     assert_eq!(off_a, 101 * 4);
     assert_ne!(&raw_a[off_a..off_a + 4], &[0, 0, 0, 0]);
@@ -44,7 +50,10 @@ fn location_table_index_matches_x_plus_32z() {
         rf.write_record(31, 31, 3, b"b").unwrap();
     }
     let mut raw_b = Vec::new();
-    File::open(&path_b).unwrap().read_to_end(&mut raw_b).unwrap();
+    File::open(&path_b)
+        .unwrap()
+        .read_to_end(&mut raw_b)
+        .unwrap();
     let off_b = location_entry_offset(31, 31);
     assert_eq!(off_b, 1023 * 4);
     assert_ne!(&raw_b[off_b..off_b + 4], &[0, 0, 0, 0]);
@@ -56,7 +65,10 @@ fn location_table_index_matches_x_plus_32z() {
         rf.write_record(0, 0, 3, b"c").unwrap();
     }
     let mut raw_c = Vec::new();
-    File::open(&path_c).unwrap().read_to_end(&mut raw_c).unwrap();
+    File::open(&path_c)
+        .unwrap()
+        .read_to_end(&mut raw_c)
+        .unwrap();
     let off_c = location_entry_offset(0, 0);
     assert_eq!(off_c, 0);
     assert_ne!(&raw_c[0..4], &[0, 0, 0, 0]);
@@ -113,8 +125,12 @@ fn truncated_header_is_corrupt() {
     let path = dir.path().join("r.0.0.mca");
     std::fs::write(&path, vec![0u8; 100]).unwrap();
 
-    let err = RegionFile::open(path, 0, 0).unwrap_err();
-    assert!(matches!(err, StorageError::Corrupt { .. }));
+    // `.unwrap_err()` would require `RegionFile` (the `Ok` type) to implement `Debug`,
+    // which it deliberately does not — match explicitly instead.
+    match RegionFile::open(path, 0, 0) {
+        Ok(_) => panic!("a header shorter than 8192 bytes must be rejected as corrupt"),
+        Err(err) => assert!(matches!(err, StorageError::Corrupt { .. })),
+    }
 }
 
 #[test]
@@ -123,6 +139,8 @@ fn non_sector_aligned_length_is_corrupt() {
     let path = dir.path().join("r.0.0.mca");
     std::fs::write(&path, vec![0u8; 9000]).unwrap();
 
-    let err = RegionFile::open(path, 0, 0).unwrap_err();
-    assert!(matches!(err, StorageError::Corrupt { .. }));
+    match RegionFile::open(path, 0, 0) {
+        Ok(_) => panic!("a non-sector-aligned length must be rejected as corrupt"),
+        Err(err) => assert!(matches!(err, StorageError::Corrupt { .. })),
+    }
 }

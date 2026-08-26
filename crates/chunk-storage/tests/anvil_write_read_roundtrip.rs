@@ -59,7 +59,11 @@ fn write_is_sector_aligned_and_minimal() {
     rf.write_record(0, 0, 3, &[0u8; 10]).unwrap();
 
     assert_eq!(file_sectors(&path), 3, "2 header sectors + 1 record sector");
-    assert_eq!(rf.free_sector_summary(), (0, 0), "the one sector is fully claimed");
+    assert_eq!(
+        rf.free_sector_summary(),
+        (0, 0),
+        "the one sector is fully claimed"
+    );
 }
 
 #[test]

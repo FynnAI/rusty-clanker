@@ -40,7 +40,11 @@ fn shrinking_a_chunk_frees_its_excess_sectors_for_reuse() {
     // file 6 -> 7. A's old 3-sector range at offset 2 becomes free the moment this
     // write's header update lands.
     rf.write_record(0, 0, 3, &payload_of_sectors(1)).unwrap();
-    assert_eq!(file_sectors(&path), 7, "A's shrink-rewrite must append, not reuse in place");
+    assert_eq!(
+        file_sectors(&path),
+        7,
+        "A's shrink-rewrite must append, not reuse in place"
+    );
 
     // Write a brand-new chunk C needing 2 sectors: the 3-sector gap A's shrink left
     // behind (offset 2..5) satisfies it via first-fit reuse — the file must NOT grow
@@ -91,40 +95,47 @@ fn fragmentation_first_fit_reuses_the_earlier_gap_even_when_a_later_gap_fits_mor
     rf.write_record(0, 0, 3, &payload_of_sectors(5)).unwrap();
     assert_eq!(file_sectors(&path), 7);
 
-    // (1,0) needs 2 sectors: offset 7, file -> 9.
-    rf.write_record(1, 0, 3, &payload_of_sectors(2)).unwrap();
-    assert_eq!(file_sectors(&path), 9);
-
-    // (2,0) needs 1 sector: offset 9, file -> 10.
+    // (2,0) needs 1 sector: offset 7, file -> 8. This chunk's own allocation never
+    // moves again for the rest of this test — it is the fixed spacer that keeps the
+    // two gaps freed below from ever becoming adjacent (and therefore merging into
+    // one, under `compute_free_ranges`' own maximal-contiguous-run scan, Context).
     rf.write_record(2, 0, 3, &payload_of_sectors(1)).unwrap();
+    assert_eq!(file_sectors(&path), 8);
+
+    // (1,0) needs 2 sectors: offset 8, file -> 10.
+    rf.write_record(1, 0, 3, &payload_of_sectors(2)).unwrap();
     assert_eq!(file_sectors(&path), 10);
 
     // Rewrite (1,0) with a payload needing 3 sectors: no free range exists yet (the
     // file is fully packed 2..10), so this must extend: offset 10, file -> 13. This
-    // frees the LATER, SMALLER gap at offset 7 (2 sectors).
+    // frees the LATER, SMALLER gap at offset 8 (2 sectors) — bounded on its left by
+    // (2,0)'s still-claimed sector 7, so it stays isolated.
     rf.write_record(1, 0, 3, &payload_of_sectors(3)).unwrap();
     assert_eq!(file_sectors(&path), 13);
 
-    // Rewrite (0,0) with a payload needing 6 sectors: the only free range, (7, 2), is
+    // Rewrite (0,0) with a payload needing 6 sectors: the only free range, (8, 2), is
     // too small, so this too must extend: offset 13, file -> 19. This frees the
-    // EARLIER, LARGER gap at offset 2 (5 sectors).
+    // EARLIER, LARGER gap at offset 2 (5 sectors) — bounded on its right by (2,0)'s
+    // still-claimed sector 7, so it too stays isolated, never merging with (8, 2).
     rf.write_record(0, 0, 3, &payload_of_sectors(6)).unwrap();
     assert_eq!(file_sectors(&path), 19);
 
-    // Exactly two free ranges now coexist: (offset 2, count 5) and (offset 7, count 2).
-    assert_eq!(rf.free_sector_summary(), (2, 5));
+    // Exactly two free ranges now coexist: (offset 2, count 5) and (offset 8, count 2)
+    // — separated by (2,0)'s claimed sector 7 in between, so they do not merge. Two
+    // ranges, 5 + 2 = 7 free sectors total.
+    assert_eq!(rf.free_sector_summary(), (2, 7));
 
     // Write a brand-new chunk (3,0) needing exactly 2 sectors: first-fit (scanning
     // from the lowest offset) must consume 2 sectors out of the EARLIER, LARGER range
-    // at offset 2 — shrinking it to (4, 3) — never the later range at offset 7, which
+    // at offset 2 — shrinking it to (4, 3) — never the later range at offset 8, which
     // exactly matches the request and a best-fit strategy would have chosen instead.
     rf.write_record(3, 0, 3, &payload_of_sectors(2)).unwrap();
 
     // No append: the file's total size is unchanged.
     assert_eq!(file_sectors(&path), 19);
 
-    // Two ranges remain: the shrunk (4,3) plus the untouched (7,2) — 5 free sectors
-    // total. A best-fit allocator would instead have fully consumed the offset-7
+    // Two ranges remain: the shrunk (4,3) plus the untouched (8,2) — 5 free sectors
+    // total. A best-fit allocator would instead have fully consumed the offset-8
     // range, leaving one range, (2,5), and this same total of 5 — the range COUNT
     // alone distinguishes the two strategies unambiguously.
     assert_eq!(rf.free_sector_summary(), (2, 5));

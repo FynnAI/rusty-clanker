@@ -24,8 +24,11 @@ const DIMS: [DimensionId; 3] = [
 
 #[test]
 fn ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches() {
-    let dir = TempWorldDir::new("ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let dir = TempWorldDir::new(
+        "ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches",
+    );
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     let mut mismatches = 0u32;
 
@@ -43,7 +46,9 @@ fn ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches() {
         let x = (i % 4096) as i32;
         let z = (i / 4096) as i32;
 
-        backend.write_chunk(dim, kind, x, z, &encoded, None).unwrap();
+        backend
+            .write_chunk(dim, kind, x, z, &encoded, None)
+            .unwrap();
         let bytes = backend
             .read_chunk(dim, kind, x, z, None)
             .unwrap()
@@ -57,5 +62,8 @@ fn ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches() {
         assert_eq!(bytes, encoded, "byte mismatch at iteration {i}");
     }
 
-    assert_eq!(mismatches, 0, "soak test must have zero checksum mismatches");
+    assert_eq!(
+        mismatches, 0,
+        "soak test must have zero checksum mismatches"
+    );
 }

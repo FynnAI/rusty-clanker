@@ -17,7 +17,8 @@ fn nbt_bytes(marker: i32) -> Vec<u8> {
 #[test]
 fn batch_write_places_every_entry_correctly() {
     let dir = TempWorldDir::new("batch_write_places_every_entry_correctly");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     // 20 entries spanning 3 distinct region files: chunk_x cycles across region
     // boundaries (regions 0, 1, 2 at chunk_x = 0, 32, 64 respectively).
@@ -35,7 +36,12 @@ fn batch_write_places_every_entry_correctly() {
         .collect();
 
     backend
-        .write_chunks_batch(DimensionId::OVERWORLD, RegionFileKind::Terrain, &entries, None)
+        .write_chunks_batch(
+            DimensionId::OVERWORLD,
+            RegionFileKind::Terrain,
+            &entries,
+            None,
+        )
         .unwrap();
 
     for (i, &(x, z)) in coords.iter().enumerate() {
@@ -48,28 +54,49 @@ fn batch_write_places_every_entry_correctly() {
 
 #[test]
 fn batch_write_with_entries_for_a_never_before_seen_region_creates_it() {
-    let dir = TempWorldDir::new("batch_write_with_entries_for_a_never_before_seen_region_creates_it");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let dir =
+        TempWorldDir::new("batch_write_with_entries_for_a_never_before_seen_region_creates_it");
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     let payload_a = nbt_bytes(1);
     let payload_b = nbt_bytes(2);
-    let entries: [(i32, i32, &[u8]); 2] =
-        [(200, 200, payload_a.as_slice()), (201, 200, payload_b.as_slice())];
+    let entries: [(i32, i32, &[u8]); 2] = [
+        (200, 200, payload_a.as_slice()),
+        (201, 200, payload_b.as_slice()),
+    ];
 
     backend
-        .write_chunks_batch(DimensionId::OVERWORLD, RegionFileKind::Terrain, &entries, None)
+        .write_chunks_batch(
+            DimensionId::OVERWORLD,
+            RegionFileKind::Terrain,
+            &entries,
+            None,
+        )
         .unwrap();
 
     assert!(dir.path().join("region").join("r.6.6.mca").exists());
     assert_eq!(
         backend
-            .read_chunk(DimensionId::OVERWORLD, RegionFileKind::Terrain, 200, 200, None)
+            .read_chunk(
+                DimensionId::OVERWORLD,
+                RegionFileKind::Terrain,
+                200,
+                200,
+                None
+            )
             .unwrap(),
         Some(payload_a)
     );
     assert_eq!(
         backend
-            .read_chunk(DimensionId::OVERWORLD, RegionFileKind::Terrain, 201, 200, None)
+            .read_chunk(
+                DimensionId::OVERWORLD,
+                RegionFileKind::Terrain,
+                201,
+                200,
+                None
+            )
             .unwrap(),
         Some(payload_b)
     );

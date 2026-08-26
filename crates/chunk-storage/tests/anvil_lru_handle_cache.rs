@@ -17,7 +17,8 @@ fn nbt_bytes(marker: i32) -> Vec<u8> {
 #[test]
 fn handle_count_grows_as_distinct_regions_are_touched() {
     let dir = TempWorldDir::new("handle_count_grows_as_distinct_regions_are_touched");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     for i in 0..5 {
         // chunk_x = i * 32 lands in a distinct region every iteration.
@@ -39,7 +40,8 @@ fn handle_count_grows_as_distinct_regions_are_touched() {
 #[test]
 fn revisiting_the_same_region_does_not_grow_the_count() {
     let dir = TempWorldDir::new("revisiting_the_same_region_does_not_grow_the_count");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     for i in 0..5 {
         backend
@@ -73,7 +75,8 @@ fn revisiting_the_same_region_does_not_grow_the_count() {
 #[test]
 fn cache_evicts_least_recently_touched_past_256_handles() {
     let dir = TempWorldDir::new("cache_evicts_least_recently_touched_past_256_handles");
-    let backend = AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
+    let backend =
+        AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
     for i in 0..257 {
         backend
