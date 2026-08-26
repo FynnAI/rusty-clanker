@@ -12,6 +12,7 @@ mod block_action;
 mod chunk;
 mod connection;
 mod keepalive;
+mod movement;
 /// Public, not private as this blueprint's own Deliverables sketch first suggested --
 /// forced deviation: this blueprint's own acceptance tests (`play_chunk_set.rs`,
 /// `play_session_handoff.rs`) decode named Play packet types (`LoginPlay`,
@@ -32,8 +33,8 @@ pub use block_action::{
     ApplyOutcome, BLOCK_INTERACTION_RANGE_CREATIVE, BLOCK_INTERACTION_RANGE_SURVIVAL,
     BlockActionKind, ChunkIndex, DebugBlockInfo, ENTITY_INTERACTION_RANGE, EYE_HEIGHT, Face,
     PendingBlockAction, RejectReason, apply_block_action, debug_query_block,
-    resolve_place_position, seed_chunk_column, target_position, to_storage_biome_id, to_storage_id,
-    within_reach,
+    eye_position_from_feet, resolve_place_position, seed_chunk_column, target_position,
+    to_storage_biome_id, to_storage_id, within_reach,
 };
 pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};

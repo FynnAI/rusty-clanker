@@ -210,6 +210,49 @@ pub struct ChunkBatchReceived {
     pub chunks_per_tick: f32,
 }
 
+/// M2 field-report fix (real-client manual test, M2 milestone): the three serverbound
+/// movement packets a real client sends continuously while playing -- decoded here for the
+/// first time; M1-B05's own dispatch loop never recognized any of the three (`id`s `0x1E`/
+/// `0x1F`/`0x20` all fell into `dispatch_inbound`'s `other =>` catch-all), so every claimed
+/// position/rotation update was silently dropped, never reaching `HardcodedWorld` at all.
+/// Field shapes restated from the M3-B02 movement-collision blueprint's own already-
+/// reconciled packet table (`blueprints/M3/M3-B02-movement-collision.md` Deliverables,
+/// reconciled there against a locally-generated `reports/packets.json` for protocol 776 --
+/// the wire shape itself is fixed protocol history, not an M3-scope design decision) --
+/// M3-B02's own replay-validation/speed-check/teleport-correction anti-cheat pipeline built
+/// on top of these same three packets is deliberately NOT implemented here (M3's own job);
+/// this M2-scope fix only decodes and applies the raw claimed position/rotation, with the
+/// basic finite-value clamp `play::movement::finite_position`/`finite_rotation` apply.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "server", id = 0x1E)]
+pub struct SetPlayerPosition {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub on_ground: bool,
+}
+
+/// As `SetPlayerPosition`'s own doc comment, id `0x1F`.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "server", id = 0x1F)]
+pub struct SetPlayerPositionAndRotation {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub on_ground: bool,
+}
+
+/// As `SetPlayerPosition`'s own doc comment, id `0x20`.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "server", id = 0x20)]
+pub struct SetPlayerRotation {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub on_ground: bool,
+}
+
 /// Packs a "Position" wire value (Context: 26-bit X, 26-bit Z, 12-bit Y, two's complement),
 /// written as one plain big-endian 8-byte `Long` by the caller (`WireWrite for i64`).
 pub fn pack_position(pos: rc_core::BlockPos) -> i64 {

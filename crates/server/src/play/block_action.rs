@@ -212,13 +212,15 @@ pub fn seed_chunk_column(
     )
 }
 
-/// The player's fixed eye position given a fixed feet position (Context: `EYE_HEIGHT`).
-pub fn eye_position(feet: BlockPos) -> (f64, f64, f64) {
-    (
-        feet.x as f64 + 0.5,
-        feet.y as f64 + EYE_HEIGHT,
-        feet.z as f64 + 0.5,
-    )
+/// M2 field-report fix: this file's own previous `eye_position(BlockPos)` -- "the player's
+/// fixed eye position given a fixed feet position" -- assumed a discrete, block-center-
+/// snapped feet position, the only kind that existed anywhere in this crate before this fix
+/// (`M1-B05`'s own fixed `SPAWN_POSITION`-only scope). A real, live position
+/// (`PlayerMarker::position`, this same fix's own movement-application consumer) is already
+/// the player's exact fractional feet position and needs no such snapping -- this function
+/// replaces that removed one at its only call site (`world.rs`'s own reach-check gate).
+pub fn eye_position_from_feet(feet: [f64; 3]) -> (f64, f64, f64) {
+    (feet[0], feet[1] + EYE_HEIGHT, feet[2])
 }
 
 /// Straight-line Euclidean distance from `eye` to `target`'s block-center, `<= range`

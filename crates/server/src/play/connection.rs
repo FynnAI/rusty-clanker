@@ -13,10 +13,12 @@ use tokio::sync::mpsc;
 use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
+use super::movement::{PendingMovementUpdate, feet_block_pos};
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
     KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
-    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SynchronizePlayerPosition, UseItemOn,
+    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerPosition,
+    SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition, UseItemOn,
     pack_position, unpack_position,
 };
 use super::persistence::PlayerSessionStore;
@@ -223,8 +225,15 @@ pub async fn enter_play(
 
     // M2 integration addition: the joining player's own chunk, derived from their real
     // loaded/defaulted `pos` (above) instead of a hardcoded `(0, 0)` literal.
-    let player_chunk = BlockPos::new(pos[0] as i32, pos[1] as i32, pos[2] as i32)
-        .chunk_key(DimensionId::OVERWORLD);
+    //
+    // M2 field-report fix: uses `feet_block_pos` (floor on every axis) rather than a plain
+    // `as i32` truncation -- the two disagree for a negative-fractional `pos` (e.g.
+    // `x == -0.5` truncates to chunk `0`, but floors to the correct chunk `-1`), which
+    // matters now that a rejoining player's own persisted `pos` can carry a genuine
+    // fractional part (this same fix's own movement-application/persistence consumer,
+    // `world.rs`'s own per-tick chunk-crossing detection uses the identical helper so the
+    // two can never disagree about which chunk a given live position belongs to).
+    let player_chunk = feet_block_pos(pos).chunk_key(DimensionId::OVERWORLD);
 
     let chunk_cache_center = SetChunkCacheCenter {
         chunk_x: player_chunk.x,
@@ -323,6 +332,14 @@ pub async fn enter_play(
         network_entity_id,
         username: profile.username.clone(),
         connection: handle.clone(),
+        // M2 field-report fix: this player's own real, just-loaded (or freshly defaulted)
+        // uuid/position/rotation -- previously lost the moment `PendingJoin` crossed this
+        // channel boundary, forcing the tick-loop's own `PlayerMarker` (before this fix,
+        // one that did not even carry a position field at all) and its own ticket
+        // registration to fall back on the hardcoded `SPAWN_POSITION` unconditionally.
+        uuid,
+        position: pos,
+        rotation,
     });
 
     let mut keepalive = KeepAliveDriver::new(Instant::now());
@@ -393,6 +410,39 @@ fn dispatch_inbound(
                     chunks_per_tick = packet.chunks_per_tick,
                     "chunk batch received"
                 );
+            }
+        }
+        // M2 field-report fix: the real root cause of the reported "place/break only
+        // works in a sphere around spawn" / "no new chunks stream in" / "position never
+        // persists" symptoms -- these three ids fell into the `other =>` catch-all below
+        // and were silently dropped, unread, on every prior version of this dispatch loop
+        // (`play::packets`' own doc comment on the three structs below has the full
+        // root-cause writeup). Each decodes and enqueues a `PendingMovementUpdate` for the
+        // region's own per-tick apply step (`world.rs`'s own tick loop) -- never applies
+        // anything here directly, matching `PlayerAction`/`UseItemOn`'s own established
+        // "decode and enqueue, apply once per tick" pattern below.
+        SetPlayerPosition::ID => {
+            if let Ok(packet) = decode_one::<SetPlayerPosition>(raw.body) {
+                world.queue_movement(PendingMovementUpdate::from_position(
+                    network_entity_id,
+                    packet,
+                ));
+            }
+        }
+        SetPlayerPositionAndRotation::ID => {
+            if let Ok(packet) = decode_one::<SetPlayerPositionAndRotation>(raw.body) {
+                world.queue_movement(PendingMovementUpdate::from_position_and_rotation(
+                    network_entity_id,
+                    packet,
+                ));
+            }
+        }
+        SetPlayerRotation::ID => {
+            if let Ok(packet) = decode_one::<SetPlayerRotation>(raw.body) {
+                world.queue_movement(PendingMovementUpdate::from_rotation(
+                    network_entity_id,
+                    packet,
+                ));
             }
         }
         PlayerAction::ID => {

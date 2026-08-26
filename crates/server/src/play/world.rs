@@ -3,6 +3,7 @@
 //! No `rc_scheduler::RegionManager` -- a single region that never splits or merges has no
 //! use for its merge/split lifecycle; `RcExecutor::spawn_region` is called directly.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,11 +31,15 @@ use tokio::sync::oneshot;
 
 use super::block_action::{
     ApplyOutcome, BLOCK_INTERACTION_RANGE_CREATIVE, ChunkIndex, DebugBlockInfo, PendingBlockAction,
-    RejectReason, apply_block_action, debug_query_block, eye_position, target_position,
+    RejectReason, apply_block_action, debug_query_block, eye_position_from_feet, target_position,
     to_storage_biome_id, to_storage_id, within_reach,
 };
 use super::connection::SPAWN_POSITION;
-use super::packets::{AcknowledgeBlockChange, BlockUpdate, pack_position};
+use super::movement::{PendingMovementUpdate, feet_block_pos};
+use super::packets::{
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight,
+    SetChunkCacheCenter, pack_position,
+};
 use super::persistence::PlayerSessionStore;
 use super::registry_resolvers::McRegistryResolvers;
 use super::{PlayerProfile, chunk, enter_play};
@@ -594,6 +599,34 @@ pub struct PlayerMarker {
     /// the block-update broadcast every currently-connected player is, by this world's own
     /// fixed shape, interested in.
     pub connection: ConnectionHandle,
+    /// New (M2 field-report movement-application fix): this player's own persisted-record
+    /// uuid -- lets the tick loop sync a live position/rotation update straight back into
+    /// `PlayerSessionStore` (`apply_movement_updates`'s own doc comment) without threading a
+    /// second uuid-keyed lookup through every call site.
+    pub uuid: uuid::Uuid,
+    /// New (M2 field-report movement-application fix): this player's own authoritative
+    /// position/rotation/on_ground state -- the exact "anywhere" a decoded `SetPlayerPosition`/
+    /// `SetPlayerPositionAndRotation`/`SetPlayerRotation` never reached before this fix
+    /// (`play::movement`'s own module doc comment has the full root-cause writeup). Always a
+    /// real fractional value, never block-center-snapped (`eye_position_from_feet`'s own doc
+    /// comment).
+    pub position: [f64; 3],
+    pub rotation: [f32; 2],
+    pub on_ground: bool,
+    /// New (M2 field-report chunk-streaming fix): the chunk key this player's own
+    /// `SetChunkCacheCenter`/streaming ticket was last computed from --
+    /// `stream_chunks_for_moved_players`'s own doc comment has the full cadence rule (only
+    /// recomputed on an actual chunk-key change, matching vanilla's own
+    /// `ClientboundSetChunkCacheCenterPacket` cadence -- `docs/research/mc-26.2/03-world-
+    /// chunks.md`'s own restatement of `ChunkMap.applyChunkTrackingView`: "a
+    /// `ClientboundSetChunkCacheCenterPacket` whenever the view's center chunk itself
+    /// moved").
+    pub last_streamed_center: ChunkKey,
+    /// New (M2 field-report chunk-streaming fix): every chunk coordinate already sent to
+    /// this connection as `LevelChunkWithLight` -- lets the streaming step compute exactly
+    /// the "newly entered" set on each chunk crossing without resending anything already on
+    /// the client's own chunk cache.
+    pub sent_chunks: HashSet<(i32, i32)>,
 }
 
 pub struct PendingJoin {
@@ -602,6 +635,16 @@ pub struct PendingJoin {
     /// New -- carried from `enter_play`'s Tokio task across the same channel boundary
     /// `network_entity_id`/`username` already cross.
     pub connection: ConnectionHandle,
+    /// New (M2 field-report movement-application/persistence fix): this player's own
+    /// persisted-record uuid and the real, just-loaded (or freshly defaulted)
+    /// position/rotation `enter_play` already sent as this same connection's own
+    /// `SynchronizePlayerPosition` -- previously lost the moment `PendingJoin` crossed this
+    /// channel boundary, forcing the tick-loop's own ticket registration (below) to fall
+    /// back on the hardcoded `SPAWN_POSITION` for every join, including a rejoin far from
+    /// spawn.
+    pub uuid: uuid::Uuid,
+    pub position: [f64; 3],
+    pub rotation: [f32; 2],
 }
 
 /// M2 integration addition: one connection's request for a batch of real, storage-backed
@@ -631,6 +674,19 @@ struct PendingChunkGridRequest {
     coords: Vec<(i32, i32)>,
     resolved: Vec<Option<Vec<u8>>>,
     reply: oneshot::Sender<Vec<Vec<u8>>>,
+}
+
+/// New (M2 field-report chunk-streaming fix): one chunk coordinate `stream_chunks_for_
+/// moved_players` has already requested (ticket registered, `PlayerMarker::sent_chunks`
+/// marked) for a specific player on a chunk crossing, still waiting for that column to
+/// become resident -- the streaming-on-move analog of `PendingChunkGridRequest` above,
+/// minus the oneshot-reply/whole-request-batch machinery that only Play-entry's own
+/// bulk-wait-then-reply shape needs. Carried across tick iterations exactly like
+/// `carried_block_actions`/`chunk_grid_requests` -- the requested chunk's async load may
+/// take several ticks to complete.
+struct PendingStreamChunk {
+    network_entity_id: i32,
+    coord: (i32, i32),
 }
 
 /// The region-build-time bootstrap `RcExecutorBuilder::new` requires (a plain `fn`
@@ -687,6 +743,11 @@ pub struct HardcodedWorld {
     /// at this region's own Stage-3-equivalent manual step (Context, "Which pipeline
     /// stage").
     block_action_tx: tokio::sync::mpsc::UnboundedSender<PendingBlockAction>,
+    /// New (M2 field-report movement-application fix): enqueued by `connection.rs`'s
+    /// inbound dispatch on every decoded `SetPlayerPosition`/`SetPlayerPositionAndRotation`/
+    /// `SetPlayerRotation`, drained once per tick alongside `block_action_tx` above
+    /// (`apply_movement_updates`'s own doc comment).
+    movement_tx: tokio::sync::mpsc::UnboundedSender<PendingMovementUpdate>,
     /// New (M2-B07), test/diagnostic only -- `debug_query_block`'s own doc comment.
     query_tx:
         tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<DebugBlockInfo>>)>,
@@ -744,6 +805,8 @@ impl HardcodedWorld {
         let (join_tx, mut join_rx) = tokio::sync::mpsc::unbounded_channel::<PendingJoin>();
         let (block_action_tx, mut block_action_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
+        let (movement_tx, mut movement_rx) =
+            tokio::sync::mpsc::unbounded_channel::<PendingMovementUpdate>();
         let (query_tx, mut query_rx) = tokio::sync::mpsc::unbounded_channel::<(
             BlockPos,
             oneshot::Sender<Option<DebugBlockInfo>>,
@@ -842,6 +905,17 @@ impl HardcodedWorld {
             // grid`'s own doc comment -- the requested chunks' async load may take several
             // ticks to complete).
             let mut chunk_grid_requests: Vec<PendingChunkGridRequest> = Vec::new();
+            // New (M2 field-report movement-application fix): a movement update whose own
+            // `network_entity_id` has no `PlayerMarker` spawned in `region.world` yet this
+            // tick (the same join/action mpsc-ordering race `task_9ce21947` flagged for
+            // block actions, `respond_to_action`'s own doc comment) is carried into the
+            // next tick's own drain instead of being silently dropped.
+            let mut carried_movement_updates: Vec<PendingMovementUpdate> = Vec::new();
+            // New (M2 field-report chunk-streaming fix): every chunk coordinate `stream_
+            // chunks_for_moved_players` has requested for a moved player but that has not
+            // yet become resident, carried across tick iterations exactly like `carried_
+            // block_actions`/`chunk_grid_requests` above.
+            let mut pending_stream_chunks: Vec<PendingStreamChunk> = Vec::new();
             // M2 integration addition (M2-B06's own "Composition-root integration" recipe
             // step 4): a plain per-tick counter driving the periodic player-data save
             // sweep, reusing the same configured interval `lifecycle`'s own Stage-9 chunk
@@ -862,17 +936,48 @@ impl HardcodedWorld {
                 }
 
                 while let Ok(join) = join_rx.try_recv() {
+                    // M2 field-report fix: this player's own real, just-loaded (or freshly
+                    // defaulted) chunk -- previously this registration unconditionally used
+                    // `SPAWN_POSITION`'s own chunk plus `config.simulation_distance_chunks`
+                    // (a leftover of this join-drain step's own pre-M2-B06 shape), clobbering
+                    // the correct, already-registered ticket `connection.rs`'s own
+                    // `request_chunk_grid` call (`chunk_grid_rx`'s own drain, below) had
+                    // already set up moments earlier for this exact player at this exact
+                    // radius -- harmless only by coincidence for a first-ever join at
+                    // `SPAWN_POSITION` itself, but silently reset a rejoining player's own
+                    // ticket back to spawn on every reconnect, undoing this same fix's own
+                    // persistence consumer the moment a player actually rejoined away from
+                    // spawn. Registers (replaces, harmlessly -- `register_player`'s own doc
+                    // comment) at the identical center/radius `request_chunk_grid` already
+                    // used, so this call is now a no-op in the common case and a correct,
+                    // defensive re-assertion in every case (e.g. a future entry point that
+                    // skips `request_chunk_grid`).
+                    let join_chunk =
+                        feet_block_pos(join.position).chunk_key(DimensionId::OVERWORLD);
+                    ticket_manager.register_player(
+                        PlayerTicketId(join.network_entity_id),
+                        join_chunk,
+                        chunk::PLACEHOLDER_RADIUS_CHUNKS as u8,
+                    );
+                    // Every chunk coordinate `connection.rs`'s own Play-entry sequence
+                    // already sent for this player (`enter_play`'s own `coords`, computed
+                    // identically from the same `join.position`) -- so `stream_chunks_for_
+                    // moved_players` (below) only ever streams genuinely new coordinates.
+                    let already_sent: HashSet<(i32, i32)> = chunk::placeholder_chunk_coords()
+                        .into_iter()
+                        .map(|(dx, dz)| (join_chunk.x + dx, join_chunk.z + dz))
+                        .collect();
                     region.world.spawn(PlayerMarker {
                         network_entity_id: join.network_entity_id,
                         username: join.username,
                         connection: join.connection,
+                        uuid: join.uuid,
+                        position: join.position,
+                        rotation: join.rotation,
+                        on_ground: true,
+                        last_streamed_center: join_chunk,
+                        sent_chunks: already_sent,
                     });
-                    let spawn_chunk = SPAWN_POSITION.chunk_key(DimensionId::OVERWORLD);
-                    ticket_manager.register_player(
-                        PlayerTicketId(join.network_entity_id),
-                        spawn_chunk,
-                        config.simulation_distance_chunks,
-                    );
                 }
 
                 // M2 integration addition: registers (or replaces, harmlessly -- Context's
@@ -891,6 +996,103 @@ impl HardcodedWorld {
                         coords: req.coords,
                         reply: req.reply,
                     });
+                }
+
+                // M2 field-report fix: drain and apply every pending movement update
+                // (`play::movement`'s own module doc comment has the full root-cause
+                // writeup) -- previously nothing in this tick loop ever touched
+                // `movement_rx` at all, so a decoded `SetPlayerPosition`/
+                // `SetPlayerPositionAndRotation`/`SetPlayerRotation` (`connection.rs`'s own
+                // dispatch arms) had nowhere to go. Applied before `ticket_manager.step()`
+                // (below) so this same tick's own churn computation already reflects any
+                // chunk-crossing move (`stream_chunks_for_moved_players`'s own doc
+                // comment, further down).
+                let mut movement_updates: Vec<PendingMovementUpdate> =
+                    std::mem::take(&mut carried_movement_updates);
+                while let Ok(update) = movement_rx.try_recv() {
+                    movement_updates.push(update);
+                }
+                for update in movement_updates {
+                    let mut query = region.world.query::<&mut PlayerMarker>();
+                    let Some(mut marker) = query
+                        .iter_mut(&mut region.world)
+                        .find(|marker| marker.network_entity_id == update.network_entity_id)
+                    else {
+                        // The same join/action mpsc-ordering race `task_9ce21947` flagged
+                        // for block actions (`respond_to_action`'s own doc comment) -- this
+                        // player's own `PlayerMarker` has not been spawned into
+                        // `region.world` yet this tick. Carried into the next tick's own
+                        // drain rather than dropped.
+                        carried_movement_updates.push(update);
+                        continue;
+                    };
+                    if let Some(position) = update.position {
+                        marker.position = position;
+                    }
+                    if let Some(rotation) = update.rotation {
+                        marker.rotation = rotation;
+                    }
+                    if let Some(on_ground) = update.on_ground {
+                        marker.on_ground = on_ground;
+                    }
+                    if update.position.is_some() || update.rotation.is_some() {
+                        // M2 field-report persistence fix: syncs the live position/rotation
+                        // straight back into this player's own session record on every
+                        // applied update, not only at disconnect -- `sessions_for_thread.
+                        // save_all()`'s own periodic sweep (below) and `SaveOnDisconnect`'s
+                        // own disconnect-time save (`connection.rs`) both simply persist
+                        // whatever this record currently holds, so both are only ever as
+                        // fresh as this sync. AC1c's own "player rejoins at the position
+                        // they left at" fix.
+                        let uuid = marker.uuid;
+                        let position = marker.position;
+                        let rotation = marker.rotation;
+                        sessions_for_thread.with_record_mut(uuid, |record| {
+                            record.data.pos = position;
+                            record.data.rotation = rotation;
+                        });
+                    }
+                }
+
+                // M2 field-report chunk-streaming fix: recomputes every currently-spawned
+                // player's own current chunk and, for any whose chunk changed since the
+                // last time this ran, re-centers their ticket (`TicketManager::move_player`
+                // -- that method's own doc comment: "no production call site exists at M2...
+                // exposed for a future mechanics blueprint," this is that call site now),
+                // sends the matching `SetChunkCacheCenter` update (cadence: only on an
+                // actual chunk-key change, `PlayerMarker::last_streamed_center`'s own doc
+                // comment -- matches vanilla's own `ClientboundSetChunkCacheCenterPacket`
+                // cadence), and queues every newly-visible, not-yet-sent chunk coordinate
+                // for this tick's own streaming resolution step (below, after the
+                // `ChunkIndex` refresh). Runs every tick unconditionally -- cheap
+                // (`O(players)`) and a correct no-op whenever nobody's chunk changed. This
+                // is AC1b's own "walking N chunks streams new chunks in" fix.
+                let mut moved_query = region.world.query::<&mut PlayerMarker>();
+                for mut marker in moved_query.iter_mut(&mut region.world) {
+                    let current_chunk =
+                        feet_block_pos(marker.position).chunk_key(DimensionId::OVERWORLD);
+                    if current_chunk == marker.last_streamed_center {
+                        continue;
+                    }
+                    marker.last_streamed_center = current_chunk;
+                    ticket_manager
+                        .move_player(PlayerTicketId(marker.network_entity_id), current_chunk);
+                    let _ =
+                        marker
+                            .connection
+                            .try_send_payload(encode_payload(&SetChunkCacheCenter {
+                                chunk_x: current_chunk.x,
+                                chunk_z: current_chunk.z,
+                            }));
+                    for (dx, dz) in chunk::placeholder_chunk_coords() {
+                        let coord = (current_chunk.x + dx, current_chunk.z + dz);
+                        if marker.sent_chunks.insert(coord) {
+                            pending_stream_chunks.push(PendingStreamChunk {
+                                network_entity_id: marker.network_entity_id,
+                                coord,
+                            });
+                        }
+                    }
                 }
 
                 // M2-B05's own load/unload churn, immediately before `tick_region`
@@ -962,6 +1164,95 @@ impl HardcodedWorld {
                     }
                 }
 
+                // M2 field-report chunk-streaming fix: resolves every still-pending
+                // streamed chunk (`stream_chunks_for_moved_players`'s own doc comment,
+                // above) against this tick's own fresh `ChunkIndex` residency directory --
+                // encodes and sends each one the first tick its chunk entity becomes
+                // resident, batched per player behind `ChunkBatchStart`/`ChunkBatchFinished`
+                // (mirroring `enter_play`'s own Play-entry framing exactly -- ordinary
+                // post-login streaming uses the identical batch framing on a real vanilla
+                // server, `docs/research/mc-26.2/03-world-chunks.md`'s own restatement of
+                // `ChunkMap.applyChunkTrackingView`). A not-yet-resident coordinate simply
+                // stays in `pending_stream_chunks` for a later tick (mirrors `chunk_grid_
+                // requests`' own carry-forward pattern above).
+                if !pending_stream_chunks.is_empty() {
+                    let mut ready: std::collections::HashMap<i32, Vec<(i32, i32, Vec<u8>)>> =
+                        std::collections::HashMap::new();
+                    let mut still_pending = Vec::new();
+                    for item in std::mem::take(&mut pending_stream_chunks) {
+                        let key = ChunkKey::new(DimensionId::OVERWORLD, item.coord.0, item.coord.1);
+                        let entity = region.world.resource::<ChunkIndex>().0.get(&key).copied();
+                        match entity {
+                            Some(entity) => {
+                                let blocks = region.world.get::<BlockStateColumn>(entity).expect(
+                                    "every resident chunk entity carries BlockStateColumn (M2-B01's fixed component set)",
+                                );
+                                let biomes = region.world.get::<BiomeColumn>(entity).expect(
+                                    "every resident chunk entity carries BiomeColumn (M2-B01's fixed component set)",
+                                );
+                                let data = chunk::encode_live_chunk_data(blocks, biomes);
+                                ready.entry(item.network_entity_id).or_default().push((
+                                    item.coord.0,
+                                    item.coord.1,
+                                    data,
+                                ));
+                            }
+                            None => still_pending.push(item),
+                        }
+                    }
+                    pending_stream_chunks = still_pending;
+
+                    if !ready.is_empty() {
+                        let heightmaps = chunk::build_placeholder_heightmaps();
+                        let (
+                            sky_light_mask,
+                            block_light_mask,
+                            empty_sky_light_mask,
+                            empty_block_light_mask,
+                            sky_light_arrays,
+                            block_light_arrays,
+                        ) = chunk::build_placeholder_light();
+                        for entity_ref in region.world.iter_entities() {
+                            let Some(marker) = entity_ref.get::<PlayerMarker>() else {
+                                continue;
+                            };
+                            let Some(chunks) = ready.remove(&marker.network_entity_id) else {
+                                continue;
+                            };
+                            let batch_size = chunks.len() as i32;
+                            let _ = marker
+                                .connection
+                                .try_send_payload(encode_payload(&ChunkBatchStart {}));
+                            for (chunk_x, chunk_z, data) in chunks {
+                                let level_chunk = LevelChunkWithLight {
+                                    chunk_x,
+                                    chunk_z,
+                                    heightmaps: heightmaps.clone(),
+                                    data,
+                                    block_entities: Vec::new(),
+                                    sky_light_mask: sky_light_mask.clone(),
+                                    block_light_mask: block_light_mask.clone(),
+                                    empty_sky_light_mask: empty_sky_light_mask.clone(),
+                                    empty_block_light_mask: empty_block_light_mask.clone(),
+                                    sky_light_arrays: sky_light_arrays.clone(),
+                                    block_light_arrays: block_light_arrays.clone(),
+                                };
+                                let _ = marker
+                                    .connection
+                                    .try_send_payload(encode_payload(&level_chunk));
+                            }
+                            let _ = marker.connection.try_send_payload(encode_payload(
+                                &ChunkBatchFinished { batch_size },
+                            ));
+                        }
+                        // Any player whose connection has since dropped (`ready` still
+                        // holding entries after every current `PlayerMarker` was checked)
+                        // simply has its already-resident chunk data discarded here --
+                        // matches `chunk_grid_requests`' own `let _ = req.reply.send(..)`
+                        // best-effort semantics for a reply nobody is left to receive.
+                    }
+                }
+
                 // M2-B07's own Stage-3-equivalent manual step (Context, "Which pipeline
                 // stage"): drain every block action queued since the previous tick,
                 // stable-sort by ascending `network_entity_id` (MECH-D4's "deterministic
@@ -994,9 +1285,27 @@ impl HardcodedWorld {
 
                 for action in pending {
                     let target = target_position(&action.kind);
+                    // M2 field-report fix: reach validation now keys off the acting
+                    // player's own live position (`PlayerMarker::position`, kept current by
+                    // the movement-application step above) instead of the hardcoded
+                    // `SPAWN_POSITION` constant every previous version of this check used
+                    // unconditionally -- the fix for the reported "place/break only works
+                    // in a sphere around spawn" symptom (everything beyond `BLOCK_
+                    // INTERACTION_RANGE_CREATIVE` of `SPAWN_POSITION` was rejected as
+                    // `OutOfReach` no matter where the player actually stood). Falls back to
+                    // `SPAWN_POSITION` for the same join/action mpsc-ordering race `respond_
+                    // to_action`'s own fallback handles (the actor's own `PlayerMarker` has
+                    // not been spawned into `region.world` yet this tick) -- never panics on
+                    // a not-yet-spawned actor.
+                    let actor_position =
+                        player_feet_position(&region.world, action.network_entity_id).unwrap_or([
+                            SPAWN_POSITION.x as f64,
+                            SPAWN_POSITION.y as f64,
+                            SPAWN_POSITION.z as f64,
+                        ]);
                     let out_of_reach = target.is_some_and(|target| {
                         !within_reach(
-                            eye_position(SPAWN_POSITION),
+                            eye_position_from_feet(actor_position),
                             target,
                             BLOCK_INTERACTION_RANGE_CREATIVE,
                         )
@@ -1067,6 +1376,7 @@ impl HardcodedWorld {
         Self {
             join_tx,
             block_action_tx,
+            movement_tx,
             query_tx,
             next_network_entity_id: Arc::new(AtomicI32::new(1)),
             shutdown_flag,
@@ -1111,6 +1421,15 @@ impl HardcodedWorld {
     pub fn queue_block_action(&self, action: PendingBlockAction) {
         self.block_action_tx
             .send(action)
+            .expect("the hardcoded region's tick-loop thread outlives every connection");
+    }
+
+    /// New (M2 field-report movement-application fix). Enqueues a decoded movement claim,
+    /// applied at the start of this region's next tick (`apply_movement_updates`'s own doc
+    /// comment). Never blocks.
+    pub fn queue_movement(&self, update: PendingMovementUpdate) {
+        self.movement_tx
+            .send(update)
             .expect("the hardcoded region's tick-loop thread outlives every connection");
     }
 
@@ -1166,6 +1485,18 @@ impl HardcodedWorld {
     }
 }
 
+/// New (M2 field-report movement-application fix): the live position of the `PlayerMarker`
+/// whose `network_entity_id` matches `network_entity_id`, if currently spawned in `world` --
+/// the reach-check consumer's own lookup (the tick loop's own block-action processing
+/// step, above). `None` for the same join/action mpsc-ordering race `respond_to_action`'s
+/// own fallback handles (never panics on a not-yet-spawned actor).
+fn player_feet_position(world: &World, network_entity_id: i32) -> Option<[f64; 3]> {
+    world.iter_entities().find_map(|entity_ref| {
+        let marker = entity_ref.get::<PlayerMarker>()?;
+        (marker.network_entity_id == network_entity_id).then_some(marker.position)
+    })
+}
+
 /// `apply_block_action`'s response side (Context, Implementation step 8's own
 /// `respond_to_action` algorithm): always one `Acknowledge Block Change` to the acting
 /// connection first (MECH-D63 -- unconditional, whether the action succeeded or was
@@ -1189,10 +1520,31 @@ fn respond_to_action(world: &World, action: &PendingBlockAction, outcome: ApplyO
                 location: pack_position(pos),
                 block_state_id: new_state as i32,
             });
+            // M2 field-report fix (task_9ce21947): the acting player's own `PlayerMarker`
+            // may not be spawned into `world` yet this same tick -- two independent mpsc
+            // channels (`HardcodedWorld::join_tx`/`block_action_tx`) race, with no
+            // guarantee that a join enqueued moments before this same action's own packet
+            // has already been drained into `region.world` by the time this action is
+            // processed. Broadcasting purely by iterating `world`'s own `PlayerMarker`s
+            // silently dropped exactly this actor's own copy in that case (every *other*
+            // already-spawned player still received theirs correctly, since only the
+            // actor's entity could possibly be missing this tick). `actor_reached` tracks
+            // whether the iteration below already found and sent to the actor's own
+            // connection; if not, it is sent once more directly via `action.connection`
+            // (already carried on `PendingBlockAction`, exactly like the unconditional ack
+            // above) -- guaranteeing the actor is reached regardless of spawn ordering,
+            // without ever double-sending when their `PlayerMarker` already existed.
+            let mut actor_reached = false;
             for entity_ref in world.iter_entities() {
                 if let Some(marker) = entity_ref.get::<PlayerMarker>() {
                     let _ = marker.connection.try_send_payload(payload.clone());
+                    if marker.network_entity_id == action.network_entity_id {
+                        actor_reached = true;
+                    }
                 }
+            }
+            if !actor_reached {
+                let _ = action.connection.try_send_payload(payload);
             }
         }
         ApplyOutcome::Rejected {
