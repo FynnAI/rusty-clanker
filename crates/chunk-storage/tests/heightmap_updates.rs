@@ -1,7 +1,7 @@
 //! `HeightmapSet` construction and the `note_block_change` incremental update rule
 //! (M2-B01 Deliverables, `heightmap.rs`).
 
-use rc_chunk_storage::{pack_bits, BlockOpacity, HeightmapKind, HeightmapSet, WORLD_MIN_Y};
+use rc_chunk_storage::{BlockOpacity, HeightmapKind, HeightmapSet, WORLD_MIN_Y, pack_bits};
 
 /// A `column_opacity_below` stub for tests that never need the rescan branch.
 fn always_false(_: HeightmapKind, _: i32) -> bool {

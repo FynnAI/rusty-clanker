@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use proptest::prelude::*;
-use rc_chunk_storage::{BlockStateId, PalettedContainer, PaletteThresholds};
+use rc_chunk_storage::{BlockStateId, PaletteThresholds, PalettedContainer};
 
 /// `PaletteThresholds::blocks(15)`'s own Direct-path bit width bound -- every generated
 /// raw value stays representable at every palette strategy this container can reach.

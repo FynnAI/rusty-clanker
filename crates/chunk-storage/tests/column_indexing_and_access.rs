@@ -2,8 +2,8 @@
 //! (M2-B01 Deliverables, `column.rs`).
 
 use rc_chunk_storage::{
-    biome_index, block_index, local_block_y, section_index_for_y, BiomeColumn, BiomeId,
-    BlockStateColumn, BlockStateId, Palette, PaletteThresholds,
+    BiomeColumn, BiomeId, BlockStateColumn, BlockStateId, Palette, PaletteThresholds, biome_index,
+    block_index, local_block_y, section_index_for_y,
 };
 
 #[test]

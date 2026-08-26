@@ -35,7 +35,11 @@ fn all_eight_components_register_to_distinct_component_ids() {
 fn spawn_full_chunk_entity(world: &mut World) -> Entity {
     world
         .spawn((
-            ChunkKeyTag(rc_core::ChunkKey::new(rc_core::DimensionId::OVERWORLD, 0, 0)),
+            ChunkKeyTag(rc_core::ChunkKey::new(
+                rc_core::DimensionId::OVERWORLD,
+                0,
+                0,
+            )),
             BlockStateColumn::new(BlockStateId(0), PaletteThresholds::blocks(15)),
             BiomeColumn::new(BiomeId(0), PaletteThresholds::biomes(4)),
             LightColumn::new_uninitialized(),
@@ -55,9 +59,11 @@ fn block_state_and_light_queries_declare_disjoint_write_access() {
     let block_state_query = QueryState::<&mut BlockStateColumn>::new(&mut world);
     let light_query = QueryState::<&mut LightColumn>::new(&mut world);
 
-    assert!(block_state_query
-        .component_access()
-        .is_compatible(light_query.component_access()));
+    assert!(
+        block_state_query
+            .component_access()
+            .is_compatible(light_query.component_access())
+    );
 }
 
 #[test]
@@ -68,7 +74,9 @@ fn block_state_and_persistence_queries_are_also_disjoint() {
     let block_state_query = QueryState::<&mut BlockStateColumn>::new(&mut world);
     let persistence_query = QueryState::<&mut ChunkPersistenceState>::new(&mut world);
 
-    assert!(block_state_query
-        .component_access()
-        .is_compatible(persistence_query.component_access()));
+    assert!(
+        block_state_query
+            .component_access()
+            .is_compatible(persistence_query.component_access())
+    );
 }

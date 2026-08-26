@@ -1,6 +1,6 @@
 //! Every `PalettedContainer` strategy-boundary crossing (M2-B01 Deliverables, `palette.rs`).
 
-use rc_chunk_storage::{BiomeId, BlockStateId, Palette, PalettedContainer, PaletteThresholds};
+use rc_chunk_storage::{BiomeId, BlockStateId, Palette, PaletteThresholds, PalettedContainer};
 
 /// `Indirect` covers `2..=4` distinct values at `1..=2` bits; `Direct` triggers at the
 /// 5th distinct value.

@@ -4,7 +4,7 @@
 use bevy_ecs::world::World;
 use rc_chunk_storage::{
     BlockEntityIndex, ChunkGenStatus, ChunkKeyTag, ChunkPersistenceState, ChunkStatus,
-    LightColumn, LIGHT_SECTION_COUNT,
+    LIGHT_SECTION_COUNT, LightColumn,
 };
 
 #[test]
