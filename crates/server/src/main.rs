@@ -203,10 +203,19 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
         }
     });
 
+    // A dropped `oneshot::Sender` (stdin EOF retiring the reader task) resolves the
+    // receiver with `Err` — that is NOT a shutdown request. Only `Ok(())` (the
+    // explicit `shutdown` line) is; on `Err` the arm disarms itself and the server
+    // keeps serving, per the stdin-protocol contract documented above.
+    let mut stdin_shutdown_armed = true;
     loop {
         let (socket, _peer_addr) = tokio::select! {
             biased;
-            _ = &mut shutdown_rx => {
+            res = &mut shutdown_rx, if stdin_shutdown_armed => {
+                if res.is_err() {
+                    stdin_shutdown_armed = false;
+                    continue;
+                }
                 println!("rusty-clanker-server: shutdown requested; flushing world state...");
                 let flush_world = world.clone();
                 let _ = tokio::task::spawn_blocking(move || flush_world.shutdown()).await;
