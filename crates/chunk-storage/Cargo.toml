@@ -8,6 +8,7 @@ publish = false
 rc-core = { path = "../core" }
 rc-nbt = { path = "../nbt" }
 rc-registries = { path = "../registries" }
+bevy_ecs = { workspace = true }
 
 # `io-uring` is a Linux io_uring syscall wrapper and does not compile at all
 # on non-Linux targets (it is not merely inert there). Scoping it to a
@@ -18,6 +19,9 @@ rc-registries = { path = "../registries" }
 # windows-2025 CI (TEST-D43's two-OS matrix).
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
 
 [features]
 io_uring = ["dep:io-uring"]
