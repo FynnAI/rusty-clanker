@@ -61,20 +61,35 @@ pub enum SnapshotError {
 /// (Context: this is what makes `peek_snapshot_version` decodable without knowing any
 /// later version's body shape).
 pub fn encode_snapshot(snapshot: &ChunkSnapshot) -> Vec<u8> {
-    let _ = snapshot;
-    todo!()
+    // Forced deviation from the Implementation steps' literal `postcard::to_stdvec` call:
+    // that function requires postcard's `use-std` feature, which is not enabled
+    // anywhere in this workspace's dependency graph (verified live against the pinned
+    // `postcard = "1.1.3"`, `[workspace.dependencies]`). `to_allocvec` produces the
+    // identical `Vec<u8>` output under the much lighter `alloc` feature this crate's own
+    // `Cargo.toml` now enables -- reported as a deviation, not silently substituted.
+    let mut out = RC_CHUNK_SNAPSHOT_VERSION.to_be_bytes().to_vec();
+    out.extend(postcard::to_allocvec(snapshot).expect("ChunkSnapshot is always serializable"));
+    out
 }
 
 /// Reads only the 2-byte version prefix, without attempting to decode the body.
 pub fn peek_snapshot_version(bytes: &[u8]) -> Result<u16, SnapshotError> {
-    let _ = bytes;
-    todo!()
+    if bytes.len() < 2 {
+        return Err(SnapshotError::Truncated);
+    }
+    Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
 }
 
 /// Full decode. `SnapshotError::UnsupportedVersion` if the prefix does not equal
 /// `RC_CHUNK_SNAPSHOT_VERSION` (Context: exact-match policy, no migration, mirroring
 /// WORLD-D16 on this second, independent versioning axis).
 pub fn decode_snapshot(bytes: &[u8]) -> Result<ChunkSnapshot, SnapshotError> {
-    let _ = bytes;
-    todo!()
+    let found = peek_snapshot_version(bytes)?;
+    if found != RC_CHUNK_SNAPSHOT_VERSION {
+        return Err(SnapshotError::UnsupportedVersion {
+            expected: RC_CHUNK_SNAPSHOT_VERSION,
+            found,
+        });
+    }
+    postcard::from_bytes(&bytes[2..]).map_err(SnapshotError::from)
 }
