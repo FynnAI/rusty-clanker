@@ -1,6 +1,64 @@
 use xtask::path_guard::{
-    ChangesetType, check_paths, docs_only_exemption, glob_match, parse_changeset_type,
+    ChangesetType, check_paths, docs_only_exemption, evaluate_commit, glob_match,
+    parse_changeset_type,
 };
+
+// The mixed-push scenario the guard exists to judge correctly: a test-authoring commit
+// touching tests/ and an implementation commit touching only src/ are BOTH fine — each
+// commit is one changeset, judged by its own trailer against its own diff (never the
+// blended range under HEAD's trailer).
+#[test]
+fn evaluate_commit_accepts_a_test_authoring_commit_touching_tests() {
+    let verdict = evaluate_commit(
+        "Subject\n\nChangeset-Type: test-authoring\n",
+        &["crates/server/tests/play_movement_application.rs".to_string()],
+    );
+    assert!(verdict.is_ok());
+}
+
+#[test]
+fn evaluate_commit_accepts_an_implementation_commit_touching_only_src() {
+    let verdict = evaluate_commit(
+        "Subject\n\nChangeset-Type: implementation\n",
+        &["crates/server/src/play/movement.rs".to_string()],
+    );
+    assert!(verdict.is_ok());
+}
+
+#[test]
+fn evaluate_commit_rejects_an_implementation_commit_touching_tests() {
+    let verdict = evaluate_commit(
+        "Subject\n\nChangeset-Type: implementation\n",
+        &["crates/server/tests/play_movement_application.rs".to_string()],
+    );
+    let failures = verdict.unwrap_err();
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("crates/*/tests/**"));
+}
+
+#[test]
+fn evaluate_commit_accepts_a_trailerless_docs_only_commit() {
+    let verdict = evaluate_commit(
+        "Docs update, no trailer.\n",
+        &["blueprints/M2/M2-COMPLETION-REPORT.md".to_string()],
+    );
+    assert!(verdict.is_ok());
+}
+
+#[test]
+fn evaluate_commit_rejects_a_trailerless_code_commit() {
+    let verdict = evaluate_commit(
+        "Code change, no trailer.\n",
+        &["crates/core/src/lib.rs".to_string()],
+    );
+    let failures = verdict.unwrap_err();
+    assert!(failures[0].contains("Changeset-Type"));
+}
+
+#[test]
+fn evaluate_commit_passes_an_empty_commit() {
+    assert!(evaluate_commit("Subject only, empty diff.\n", &[]).is_ok());
+}
 
 #[test]
 fn docs_only_exemption_accepts_unprotected_markdown() {
