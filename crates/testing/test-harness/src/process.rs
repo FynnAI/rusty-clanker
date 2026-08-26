@@ -64,6 +64,64 @@ impl ManagedServerConfig {
 pub struct ManagedServer {
     child: Child,
     pub addr: SocketAddr,
+    /// M2 integration addition: the child's piped stdin, used by `graceful_shutdown`
+    /// (`main.rs`'s own stdin-line shutdown protocol, doc comment there). `None` only
+    /// if the child's stdin pipe could not be captured at spawn time (never expected
+    /// in practice, since `spawn_server` always requests `Stdio::piped()`) —
+    /// `graceful_shutdown` degrades to an immediate `false` in that case, exactly the
+    /// same outward behavior as a graceful-shutdown attempt that timed out.
+    stdin: Option<std::process::ChildStdin>,
+}
+
+impl ManagedServer {
+    /// M2 integration addition — closes the composition-root gap M2-B05's own
+    /// implementation report flagged (Open problems: "player-data persistence's own
+    /// eventual composition-root wiring" left for "a future blueprint") and, more
+    /// directly, the restart-round-trip acceptance leg's own real needs: proving AC1
+    /// ("the server process restarts *cleanly*") requires an actual clean stop, not
+    /// the hard `Child::kill()` this struct's `Drop` uses as its last-resort,
+    /// guaranteed-teardown fallback. A hard kill races `ChunkLifecycleManager`'s own
+    /// async `RC-IoPool` save jobs -- a chunk already captured by Stage 9 and queued
+    /// for save can still be sitting in-flight, not yet durable on disk, at the exact
+    /// instant a hard kill lands, silently losing exactly the block/player state this
+    /// leg exists to prove survives a restart (the real failure mode this addition
+    /// was written to fix, observed directly: a real `m2-report --mode smoke` run's
+    /// own AC1a/AC1c disk-comparison cases failing with "expected ... found ... on
+    /// disk" for blocks a bot had just placed/broken moments before `drop(managed)`).
+    ///
+    /// Writes a single `shutdown\n` line to the child's piped stdin (`main.rs`'s own
+    /// stdin-line protocol -- reads exactly one line, then calls
+    /// `HardcodedWorld::shutdown()`'s real WORLD-D25 flush-on-shutdown barrier before
+    /// exiting), then polls `Child::try_wait` (50ms interval) until the process exits
+    /// or `timeout` elapses. Returns `true` iff the process exited on its own within
+    /// `timeout` -- the caller (or this struct's own `Drop`, if the caller never calls
+    /// this at all) still falls back to a hard kill on `false`/timeout, so this is
+    /// purely an additive, best-effort upgrade: nothing about this struct's existing
+    /// guaranteed-teardown contract changes.
+    pub fn graceful_shutdown(&mut self, timeout: Duration) -> bool {
+        use std::io::Write;
+        let Some(stdin) = self.stdin.take() else {
+            return false;
+        };
+        let mut stdin = stdin;
+        if stdin.write_all(b"shutdown\n").is_err() {
+            return false;
+        }
+        drop(stdin);
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_status)) => return true,
+                Ok(None) => {}
+                Err(_) => return false,
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 impl Drop for ManagedServer {
@@ -121,16 +179,24 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
         command.arg("--save-event-log").arg(save_event_log);
     }
     command.args(&config.extra_args);
+    // M2 integration addition: a real, capturable pipe for `ManagedServer::
+    // graceful_shutdown`'s own stdin-line shutdown protocol (`main.rs`'s doc
+    // comment) -- explicit rather than relying on `Command`'s own default stdio
+    // inheritance, so this is never accidentally the *test harness's own* stdin
+    // (which may not even be a real, writable stream when `xtask`/`cargo test` runs
+    // this in the background).
+    command.stdin(std::process::Stdio::piped());
 
     let mut child = command.spawn().map_err(|source| SpawnError::Spawn {
         path: config.binary_path.display().to_string(),
         source,
     })?;
+    let stdin = child.stdin.take();
 
     let deadline = Instant::now() + config.startup_timeout;
     loop {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-            return Ok(ManagedServer { child, addr });
+            return Ok(ManagedServer { child, addr, stdin });
         }
         // A child that exited before ever binding is also a startup failure, not
         // worth waiting out the full timeout for -- but we still let the connect

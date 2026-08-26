@@ -19,6 +19,23 @@ pub struct WorldConfig {
     /// WORLD-D24's vanilla default.
     pub simulation_distance_chunks: u8,
     pub world_dir: PathBuf,
+    /// M2 integration addition (`main.rs`'s `--save-interval-ticks <n>`): a direct,
+    /// exact tick count that -- when present -- wins over `save_interval_secs`'s own
+    /// rounded conversion. Never driven by the `[world]` TOML table (`#[serde(skip)]`
+    /// -- CLI/programmatic callers only, e.g. `rc_test_harness::process::
+    /// ManagedServerConfig::save_interval_ticks`'s own acceptance-harness use, which
+    /// needs an exact, un-rounded tick count for `SaveIntervalTicks`, not an
+    /// operator-facing whole-seconds duration).
+    #[serde(skip)]
+    pub save_interval_ticks_override: Option<u32>,
+    /// M2 integration addition (`main.rs`'s `--save-event-log <path>`): when present,
+    /// installed as `ChunkLifecycleManager`'s `SaveEventSink` so
+    /// `rc_test_harness::save_cadence::analyze_cadence` has real save events to
+    /// analyze (AC3, `11-roadmap-milestones.md`). `#[serde(skip)]` for the same
+    /// reason as `save_interval_ticks_override` -- an acceptance-harness diagnostic,
+    /// never an operator-facing config option.
+    #[serde(skip)]
+    pub save_event_log: Option<PathBuf>,
 }
 
 impl Default for WorldConfig {
@@ -27,6 +44,8 @@ impl Default for WorldConfig {
             save_interval_secs: 300,
             simulation_distance_chunks: 10,
             world_dir: "world".into(),
+            save_interval_ticks_override: None,
+            save_event_log: None,
         }
     }
 }
@@ -70,6 +89,9 @@ impl WorldConfig {
     /// `round(save_interval_secs * 1000 / TICK_PERIOD_MS)`, minimum `1` -- the one, off-tick-
     /// thread, config-load-time duration-to-ticks conversion Context's Stage-9 design relies on.
     pub fn save_interval_ticks(&self) -> u32 {
+        if let Some(ticks) = self.save_interval_ticks_override {
+            return ticks.max(1);
+        }
         let millis = self.save_interval_secs.saturating_mul(1000);
         let rounded = (millis + TICK_PERIOD_MS / 2) / TICK_PERIOD_MS;
         rounded.max(1) as u32

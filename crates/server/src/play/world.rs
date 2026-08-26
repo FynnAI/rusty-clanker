@@ -739,6 +739,24 @@ impl HardcodedWorld {
                 config.save_interval_ticks(),
                 4096,
             );
+            // M2 integration addition: opt-in `--save-event-log` wiring (Context,
+            // `SaveEventSink`'s own doc comment) -- absent for every ordinary run
+            // (`WorldConfig::save_event_log` defaults to `None`), so this changes
+            // nothing observable unless the composition root was explicitly asked
+            // for a save-event log. `HARDCODED_REGION_ID.0` (an integer) is this
+            // manager's own stable `region_id` label for the log's whole lifetime --
+            // M2 stays single-region (Context, "M2 stays inside M1-B05's single
+            // HARDCODED_REGION_ID"), so there is exactly one label to pick.
+            if let Some(log_path) = &config.save_event_log
+                && let Err(err) =
+                    lifecycle.install_save_event_log(HARDCODED_REGION_ID.0.to_string(), log_path)
+            {
+                tracing::error!(
+                    path = %log_path.display(),
+                    error = %err,
+                    "failed to open --save-event-log; continuing without save-event logging"
+                );
+            }
 
             let mut builder = RcExecutorBuilder::new(bootstrap_region);
             builder.register_system(

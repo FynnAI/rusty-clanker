@@ -54,6 +54,60 @@ pub struct ChunkSaveSnapshot {
 #[derive(Resource, Clone)]
 pub struct SnapshotOutbox(pub Sender<Arc<ChunkSaveSnapshot>>);
 
+/// M2 integration addition (not part of any M2 blueprint's own Deliverables --
+/// closes the composition-root gap M2-B08's own implementation report flagged: "the
+/// real, end-to-end m2-acceptance CI job... cannot actually pass yet"): an opt-in
+/// append-only sink for `rc_test_harness::save_cadence::SaveEvent`-shaped JSON lines
+/// (`{"tick": u64, "region_id": string, "elapsed_ms": u64}`), one per chunk save this
+/// manager actually submits to `RC-IoPool`. `elapsed_ms` measures wall-clock time
+/// since this sink's own previous event (0 for the first), a diagnostic-only field --
+/// `analyze_cadence` only ever inspects `tick`/`region_id`. Never installed by
+/// default (`ChunkLifecycleManager::new` leaves this `None`); every acceptance test
+/// across M2-B05/M2-B08 constructs a manager without it and observes no behavior
+/// change, since a `None` sink is simply skipped at every call site.
+///
+/// `region_id` in the emitted event is `"{label}:{x},{z}"` -- one grouping key per
+/// *chunk*, not one shared key for the whole region. `chunk_snapshot_system`'s own
+/// algorithm (Context, `M2-B05` implementation note above) gates each chunk's save
+/// cadence independently -- a chunk's first save fires immediately once dirty (the
+/// `last_saved_tick == 0` sentinel), and only *that chunk's own* subsequent saves are
+/// spaced by `interval_ticks`. A single shared label across every chunk in the region
+/// would instead measure the gap between unrelated chunks' independent first-saves
+/// (frequently `0` ticks apart, since several chunks can each hit their own sentinel
+/// on the same or a nearby tick) -- not the configured cadence at all. Per-chunk
+/// grouping is what `11-roadmap-milestones.md`'s own AC3 wording ("the configured
+/// save interval is measured... to fire within its configured cadence") is actually
+/// measurable against: does a *given*, continuously-dirty chunk's own save-to-save
+/// gap hold to the interval.
+struct SaveEventSink {
+    file: std::fs::File,
+    label: String,
+    last_event_at: Option<std::time::Instant>,
+}
+
+impl SaveEventSink {
+    fn record(&mut self, tick: u64, key: ChunkKey) {
+        use std::io::Write;
+        let elapsed_ms = match self.last_event_at {
+            Some(previous) => previous.elapsed().as_millis() as u64,
+            None => 0,
+        };
+        self.last_event_at = Some(std::time::Instant::now());
+        let region_id = format!("{}:{},{}", self.label, key.x, key.z);
+        // A malformed write (disk full, log rotated out from under us, ...) is
+        // logged and otherwise ignored -- this sink is a diagnostic/acceptance-
+        // verification aid, never allowed to interrupt the real save it is
+        // reporting on (mirrors `io_pool.rs`'s own "failures are logged, never a
+        // panic" convention).
+        let line = format!(
+            "{{\"tick\":{tick},\"region_id\":{region_id:?},\"elapsed_ms\":{elapsed_ms}}}\n"
+        );
+        if let Err(err) = self.file.write_all(line.as_bytes()) {
+            tracing::error!(error = %err, "failed to append a save-event-log line");
+        }
+    }
+}
+
 /// The Stage-9 (`DomainGroup::ChunkSerialize`) system this blueprint registers exactly
 /// once, at executor-build time, into every region that owns chunk components (Context --
 /// "why no cross-thread tick-counter synchronization is needed"). Captures a
@@ -202,6 +256,8 @@ pub struct ChunkLifecycleManager {
     load_rx: Receiver<(ChunkKey, Result<LoadedChunk, LoadError>)>,
     snapshot_tx: Sender<Arc<ChunkSaveSnapshot>>,
     snapshot_rx: Receiver<Arc<ChunkSaveSnapshot>>,
+    /// M2 integration addition -- `SaveEventSink`'s own doc comment.
+    save_event_sink: Option<SaveEventSink>,
 }
 
 impl ChunkLifecycleManager {
@@ -231,7 +287,30 @@ impl ChunkLifecycleManager {
             load_rx,
             snapshot_tx,
             snapshot_rx,
+            save_event_sink: None,
         }
+    }
+
+    /// M2 integration addition: opens (creating/truncating) `path` and installs it as
+    /// this manager's `SaveEventSink`, tagging every future recorded event's
+    /// `region_id` with `label` plus that event's own chunk coordinates
+    /// (`SaveEventSink`'s own doc comment explains why per-chunk, not a single shared
+    /// label). Optional -- call at most once, any time before the composition root's
+    /// tick loop starts; skip entirely for every call site that has no
+    /// `--save-event-log` configured (`ChunkLifecycleManager::new`'s own `None`
+    /// default already covers that case with zero overhead).
+    pub fn install_save_event_log(
+        &mut self,
+        label: impl Into<String>,
+        path: &std::path::Path,
+    ) -> std::io::Result<()> {
+        let file = std::fs::File::create(path)?;
+        self.save_event_sink = Some(SaveEventSink {
+            file,
+            label: label.into(),
+            last_event_at: None,
+        });
+        Ok(())
     }
 
     /// Call once, immediately after `RcExecutor::spawn_region` (`M0-B05`), before the
@@ -317,6 +396,9 @@ impl ChunkLifecycleManager {
                 .dirty;
             if dirty {
                 let snapshot = Arc::new(capture_snapshot(world, entity, key));
+                if let Some(sink) = &mut self.save_event_sink {
+                    sink.record(snapshot.last_saved_tick, snapshot.key);
+                }
                 self.io_pool.submit_save(
                     snapshot,
                     Arc::clone(&self.backend),
@@ -332,6 +414,9 @@ impl ChunkLifecycleManager {
     /// snapshots and submits each to `RC-IoPool`.
     pub fn post_tick(&mut self) {
         while let Ok(snapshot) = self.snapshot_rx.try_recv() {
+            if let Some(sink) = &mut self.save_event_sink {
+                sink.record(snapshot.last_saved_tick, snapshot.key);
+            }
             self.io_pool.submit_save(
                 snapshot,
                 Arc::clone(&self.backend),
@@ -348,6 +433,9 @@ impl ChunkLifecycleManager {
         // (the tick loop's own final round) is flushed first, exactly as an ordinary
         // `post_tick` would.
         while let Ok(snapshot) = self.snapshot_rx.try_recv() {
+            if let Some(sink) = &mut self.save_event_sink {
+                sink.record(snapshot.last_saved_tick, snapshot.key);
+            }
             self.io_pool.submit_save(
                 snapshot,
                 Arc::clone(&self.backend),
@@ -362,6 +450,9 @@ impl ChunkLifecycleManager {
                 .dirty;
             if dirty {
                 let snapshot = Arc::new(capture_snapshot(world, entity, key));
+                if let Some(sink) = &mut self.save_event_sink {
+                    sink.record(snapshot.last_saved_tick, snapshot.key);
+                }
                 self.io_pool.submit_save(
                     snapshot,
                     Arc::clone(&self.backend),

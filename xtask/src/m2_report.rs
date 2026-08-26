@@ -179,7 +179,7 @@ pub fn run(server_bin: PathBuf, mode: Mode) -> std::process::ExitCode {
     let restart_world = TempWorldDir::new("restart");
 
     // --- Restart round-trip leg: spawn #1, apply actions, teardown #1. ---
-    let managed1 = match spawn_server_with_world_dir(ManagedServerConfig {
+    let mut managed1 = match spawn_server_with_world_dir(ManagedServerConfig {
         binary_path: server_bin.clone(),
         offline: true,
         startup_timeout: Duration::from_secs(30),
@@ -209,7 +209,17 @@ pub fn run(server_bin: PathBuf, mode: Mode) -> std::process::ExitCode {
         managed1.addr.port(),
         Duration::from_secs(30),
     );
-    drop(managed1); // clean teardown before the disk-comparison leg
+    // M2 integration addition: AC1's own wording is "the server process restarts
+    // *cleanly*" -- a plain `drop` (a hard `Child::kill`, `ManagedServer`'s own doc
+    // comment) races `RC-IoPool`'s async save jobs and can silently lose a chunk
+    // that was captured but not yet durably written, which is exactly what a real
+    // run of this leg observed before this addition (AC1a/AC1c failing with
+    // "expected ... found ... on disk" for blocks the bot had just placed/broken).
+    // `graceful_shutdown` requests a real flush-then-exit and only falls back to the
+    // same hard kill (via `Drop`, once `managed1` goes out of scope below) if the
+    // process does not exit cleanly within the given budget.
+    managed1.graceful_shutdown(Duration::from_secs(10));
+    drop(managed1); // guaranteed teardown either way (Drop's own hard-kill fallback)
 
     if let SubprocessOutcome::Error(message) | SubprocessOutcome::ProcessFailure(message) =
         &apply_outcome
