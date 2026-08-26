@@ -1,6 +1,18 @@
 //! Acceptance test: the milestone's own 10,000-round-trip soak test (M2's milestone
 //! acceptance criterion 2), backed by this crate's own `content_checksum` (M2-B03
 //! Deliverables, `checksum.rs`).
+//!
+//! Tier 2 (nightly) — gated behind the `soak-tests` feature (already declared in this
+//! crate's own `Cargo.toml`, alongside `tests/save_cadence.rs`'s identical use of it) so
+//! `cargo nextest run -p rc-chunk-storage` (default features, every PR) never even
+//! compiles this file. Reclassified from an earlier Tier-1 placement: a full 10,000-chunk
+//! disk round-trip took 401s under ordinary CI-runner disk contention (a shared runner
+//! disk running this test concurrently with `rc-test-harness::chunk_soak_10000`), which is
+//! exactly the kind of real-wall-clock, environment-sensitive cost Tier 2/nightly exists
+//! for -- the fast per-module Anvil tests elsewhere in this crate already cover
+//! correctness on Tier 1.
+
+#![cfg(feature = "soak-tests")]
 
 mod support;
 

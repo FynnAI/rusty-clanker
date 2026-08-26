@@ -12,3 +12,11 @@
 # this override applies to that one subprocess and nowhere else.
 [toolchain]
 channel = "nightly-2026-07-25"
+# CI's `rustup show`-driven auto-install only fetches the bare toolchain, never
+# clippy/rustfmt, for a nightly this specific -- the `m1-acceptance`/`m2-acceptance`
+# jobs' own "rc-paritybot lint (nightly override)" step runs `cargo clippy` from this
+# directory and fails with "'cargo-clippy' is not installed for the toolchain
+# 'nightly-2026-07-25-...'" without this. `rustfmt` is listed alongside it since this
+# nested toolchain is also the one any `cargo fmt` invocation scoped to this crate
+# would resolve to.
+components = ["clippy", "rustfmt"]

@@ -33,3 +33,10 @@ serde = { workspace = true }
 [[bin]]
 name = "status_probe"
 path = "src/bin/status_probe.rs"
+
+[features]
+# M0-B06/M1-B05's own established convention (`rc-scheduler`, `rusty-clanker-server`,
+# `rc-chunk-storage`): Tier-2-only (nightly), real-wall-clock soak tests are gated
+# behind this feature so the default Tier-1 `cargo nextest run --workspace` sweep
+# (`xtask test`) never even compiles them. Gates `tests/chunk_soak_10000.rs`.
+soak-tests = []
