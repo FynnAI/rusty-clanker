@@ -10,7 +10,8 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
-    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, PlayerAction, UseItemOn, pack_position,
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
+    KeepAliveServerbound, PlayerAction, UseItemOn, pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,6 +49,23 @@ async fn send_packet<P: RcPacket>(socket: &mut TcpStream, packet: &P) {
     socket.write_all(&framed).await.unwrap();
 }
 
+/// Reads the next clientbound packet like `recv_packet`, but transparently answers any
+/// `KeepAliveClientbound` challenge it encounters with the matching `KeepAliveServerbound`
+/// reply before returning it -- exactly what a real vanilla client does. Necessary for
+/// correctness, not just politeness: the scans below are willing to wait as long as the
+/// surrounding test's own outer deadline (up to 60s) allows, comfortably longer than the
+/// server's own 15s `KEEPALIVE_INTERVAL` under heavy contention -- a scan that merely
+/// skipped-and-discarded a keep-alive challenge instead of answering it would let
+/// `KeepAliveDriver`'s own timeout close the connection out from under it.
+async fn recv_clientbound(socket: &mut TcpStream, accumulator: &mut BytesMut) -> (i32, Bytes) {
+    let (id, body) = recv_packet(socket, accumulator).await;
+    if id == KeepAliveClientbound::ID {
+        let challenge = decode_one::<KeepAliveClientbound>(body.clone()).unwrap();
+        send_packet(socket, &KeepAliveServerbound { id: challenge.id }).await;
+    }
+    (id, body)
+}
+
 async fn drain_play_entry(socket: &mut TcpStream, accumulator: &mut BytesMut) {
     for _ in 0..6 {
         recv_packet(socket, accumulator).await;
@@ -76,15 +94,64 @@ async fn spawn_actor(world: &HardcodedWorld, username: &str, uuid: u128) -> (Tcp
     (client, accumulator)
 }
 
-/// Asserts no further packet arrives on `socket` within a short bounded timeout.
-async fn assert_silence(socket: &mut TcpStream, accumulator: &mut BytesMut) {
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(400), recv_packet(socket, accumulator)).await;
-    assert!(
-        outcome.is_err(),
-        "expected no further packet, but received {:?}",
-        outcome.ok()
-    );
+/// Scans the clientbound stream for the next packet of `expected_id`, skipping (and
+/// discarding) any other packet along the way. Bounded only by the surrounding
+/// `#[tokio::test]`'s own outer `tokio::time::timeout` -- deliberately no second,
+/// independent deadline here: an inner deadline shorter than that outer one would misfire
+/// under exactly the kind of heavy, legitimate contention the outer 60s budget already
+/// exists to tolerate (confirmed directly: an earlier draft of this helper with its own
+/// tighter 30s deadline produced a new, synthetic-contention-only failure that also
+/// reproduced on an untouched sibling test).
+///
+/// Interleaving contract: since the M2 live-chunk-streaming wiring, unrelated clientbound
+/// packets (late chunk data, `SetHealth`, keep-alives, ...) may legally arrive interleaved
+/// with the response packet under test -- a vanilla client tolerates arbitrary
+/// interleaving, so this scan does too. Safe to call back-to-back for two different
+/// expected ids (as this file's own tests do, for the ack then the corrective update)
+/// because `respond_to_action` always emits a given action's own `AcknowledgeBlockChange`
+/// before its own `BlockUpdate`, in that single-threaded order, on the same connection --
+/// only *other* traffic can land in between, never those two out of order.
+async fn recv_packet_of_type(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    expected_id: i32,
+) -> Bytes {
+    loop {
+        let (id, body) = recv_clientbound(socket, accumulator).await;
+        if id == expected_id {
+            return body;
+        }
+    }
+}
+
+/// Asserts no packet of `forbidden_id` arrives on `socket` within `window`, tolerating and
+/// discarding any other legal clientbound traffic (late chunk data, `SetHealth`,
+/// keep-alives, ...) that might interleave -- since the M2 live-chunk-streaming wiring,
+/// only the specific packet type under test is the actual contract (`OutOfReach` owing no
+/// corrective `Block Update`; a correction never broadcast to another player); unrelated
+/// traffic is not evidence of either. Watches out the full window rather than returning on
+/// the first benign packet, so silence must hold for the whole duration, not merely until
+/// something (anything) shows up.
+async fn assert_no_packet_of_type(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    forbidden_id: i32,
+    window: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match tokio::time::timeout(remaining, recv_clientbound(socket, accumulator)).await {
+            Ok((id, _)) => assert_ne!(
+                id, forbidden_id,
+                "expected no packet of id {forbidden_id}, but received one"
+            ),
+            Err(_) => return,
+        }
+    }
 }
 
 // M2 integration test-authoring fix: every one of this file's four `timeout` budgets
@@ -114,15 +181,20 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             5
         );
 
         // `OutOfReach` owes no corrective `Block Update` at all (Context).
-        assert_silence(&mut a, &mut a_acc).await;
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            BlockUpdate::ID,
+            Duration::from_millis(400),
+        )
+        .await;
 
         assert_eq!(
             world.debug_query_block(BlockPos::new(20, -60, 20)).await,
@@ -154,15 +226,13 @@ async fn reach_accepts_in_range_target() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             6
         );
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
@@ -196,21 +266,25 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             7
         );
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let correction = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(correction.location, pack_position(BlockPos::new(2, -60, 2)));
         assert_eq!(correction.block_state_id, blocks::GRASS_BLOCK.0 as i32);
 
         // The correction is actor-only, never broadcast.
-        assert_silence(&mut b, &mut b_acc).await;
+        assert_no_packet_of_type(
+            &mut b,
+            &mut b_acc,
+            BlockUpdate::ID,
+            Duration::from_millis(400),
+        )
+        .await;
     })
     .await
     .unwrap();
@@ -235,15 +309,13 @@ async fn breaking_air_is_rejected_with_correction() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             8
         );
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let correction = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(correction.location, pack_position(BlockPos::new(2, -59, 2)));
         assert_eq!(correction.block_state_id, blocks::AIR.0 as i32);

@@ -10,7 +10,8 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
-    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, PlayerAction, pack_position,
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
+    KeepAliveServerbound, PlayerAction, pack_position,
 };
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -59,6 +60,65 @@ async fn drain_play_entry(socket: &mut TcpStream, accumulator: &mut BytesMut) {
     }
 }
 
+/// Reads the next clientbound packet like `recv_packet`, but transparently answers any
+/// `KeepAliveClientbound` challenge it encounters with the matching `KeepAliveServerbound`
+/// reply before returning it -- exactly what a real vanilla client does. Necessary for
+/// correctness, not just politeness: the scan below is willing to wait as long as the
+/// surrounding test's own outer deadline (up to 60s) allows, comfortably longer than the
+/// server's own 15s `KEEPALIVE_INTERVAL` under heavy contention -- a scan that merely
+/// skipped-and-discarded a keep-alive challenge instead of answering it would let
+/// `KeepAliveDriver`'s own timeout close the connection out from under it.
+async fn recv_clientbound(socket: &mut TcpStream, accumulator: &mut BytesMut) -> (i32, Bytes) {
+    let (id, body) = recv_packet(socket, accumulator).await;
+    if id == KeepAliveClientbound::ID {
+        let challenge = decode_one::<KeepAliveClientbound>(body.clone()).unwrap();
+        send_packet(socket, &KeepAliveServerbound { id: challenge.id }).await;
+    }
+    (id, body)
+}
+
+/// Scans the clientbound stream once, bucketing every `AcknowledgeBlockChange` and every
+/// `BlockUpdate` packet it sees -- each in the order its own bucket receives it (FIFO
+/// receipt order) -- while discarding anything else, until `count` of both have been
+/// collected. Bounded only by the surrounding `#[tokio::test]`'s own outer
+/// `tokio::time::timeout` -- deliberately no second, independent deadline here: an inner
+/// deadline shorter than that outer one would misfire under exactly the kind of heavy,
+/// legitimate contention the outer 60s budget already exists to tolerate (confirmed
+/// directly: an earlier draft of this helper with its own tighter 30s deadline produced a
+/// new, synthetic-contention-only failure that also reproduced on an untouched sibling
+/// test).
+///
+/// Interleaving contract: since the M2 live-chunk-streaming wiring, unrelated clientbound
+/// packets (late chunk data, `SetHealth`, keep-alives, ...) may legally arrive interleaved
+/// with the response packets under test -- they come from a different producer (the
+/// connection's own keep-alive loop) than the region tick thread's `respond_to_action`,
+/// which is the only thing that ever sends `AcknowledgeBlockChange`/`BlockUpdate`. A single
+/// scan (rather than two separate ones) is required here specifically because
+/// `AcknowledgeBlockChange` and `BlockUpdate` packets are themselves interleaved with each
+/// other (one pair per action) -- a second, separate scan would have nowhere to recover a
+/// `BlockUpdate` already discarded while an earlier scan was hunting for acks. Each
+/// per-type bucket's own FIFO order is the real invariant under test (MECH-D4 /
+/// `respond_to_action`'s single-threaded per-action response order) -- physical adjacency
+/// between an ack and its own `BlockUpdate`, or freedom from unrelated packets in between,
+/// was never the tested contract.
+async fn collect_acks_and_updates(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    count: usize,
+) -> (Vec<Bytes>, Vec<Bytes>) {
+    let mut acks = Vec::with_capacity(count);
+    let mut updates = Vec::with_capacity(count);
+    while acks.len() < count || updates.len() < count {
+        let (id, body) = recv_clientbound(socket, accumulator).await;
+        if id == AcknowledgeBlockChange::ID && acks.len() < count {
+            acks.push(body);
+        } else if id == BlockUpdate::ID && updates.len() < count {
+            updates.push(body);
+        }
+    }
+    (acks, updates)
+}
+
 // M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a real,
 // ticket-driven `RC-IoPool` chunk-grid load per join (`connection.rs`'s own
 // `request_chunk_grid` call), a genuinely asynchronous round trip absent when this budget
@@ -104,16 +164,22 @@ async fn sequence_acks_preserve_fifo_order_under_a_burst() {
             .await;
         }
 
-        for (location, sequence) in targets {
-            let (id, body) = recv_packet(&mut client, &mut accumulator).await;
-            assert_eq!(id, AcknowledgeBlockChange::ID);
+        // Scan-collect, not fixed-position reads (`collect_acks_and_updates`'s own doc
+        // comment has the full interleaving contract) -- unrelated clientbound packets may
+        // legally sit between any two of the six packets this burst owes. The semantic
+        // contract itself (FIFO order, exact count, exact payloads for both the acks and
+        // the block updates) stays fully asserted below, unweakened.
+        let (acks, updates) =
+            collect_acks_and_updates(&mut client, &mut accumulator, targets.len()).await;
+
+        for (body, (_, sequence)) in acks.into_iter().zip(targets) {
             assert_eq!(
                 decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
                 sequence
             );
+        }
 
-            let (id, body) = recv_packet(&mut client, &mut accumulator).await;
-            assert_eq!(id, BlockUpdate::ID);
+        for (body, (location, _)) in updates.into_iter().zip(targets) {
             let update = decode_one::<BlockUpdate>(body).unwrap();
             assert_eq!(update.location, pack_position(location));
             assert_eq!(update.block_state_id, blocks::AIR.0 as i32);

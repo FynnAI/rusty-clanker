@@ -12,7 +12,8 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
-    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, PlayerAction, UseItemOn, pack_position,
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
+    KeepAliveServerbound, PlayerAction, UseItemOn, pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -85,6 +86,54 @@ async fn spawn_actor(world: &HardcodedWorld, username: &str, uuid: u128) -> (Tcp
     (client, accumulator)
 }
 
+/// Reads the next clientbound packet like `recv_packet`, but transparently answers any
+/// `KeepAliveClientbound` challenge it encounters with the matching `KeepAliveServerbound`
+/// reply before returning it -- exactly what a real vanilla client does. Necessary for
+/// correctness, not just politeness: the scan below is willing to wait as long as the
+/// surrounding test's own outer deadline (up to 60s) allows, comfortably longer than the
+/// server's own 15s `KEEPALIVE_INTERVAL` under heavy contention -- a scan that merely
+/// skipped-and-discarded a keep-alive challenge instead of answering it would let
+/// `KeepAliveDriver`'s own timeout close the connection out from under it.
+async fn recv_clientbound(socket: &mut TcpStream, accumulator: &mut BytesMut) -> (i32, Bytes) {
+    let (id, body) = recv_packet(socket, accumulator).await;
+    if id == KeepAliveClientbound::ID {
+        let challenge = decode_one::<KeepAliveClientbound>(body.clone()).unwrap();
+        send_packet(socket, &KeepAliveServerbound { id: challenge.id }).await;
+    }
+    (id, body)
+}
+
+/// Scans the clientbound stream for the next packet of `expected_id`, skipping (and
+/// discarding) any other packet along the way. Bounded only by the surrounding
+/// `#[tokio::test]`'s own outer `tokio::time::timeout` -- deliberately no second,
+/// independent deadline here: an inner deadline shorter than that outer one would misfire
+/// under exactly the kind of heavy, legitimate contention the outer 60s budget already
+/// exists to tolerate (confirmed directly: an earlier draft of this helper with its own
+/// tighter 30s deadline produced a new, synthetic-contention-only failure that also
+/// reproduced on an untouched sibling test).
+///
+/// Interleaving contract: since the M2 live-chunk-streaming wiring, unrelated clientbound
+/// packets (late chunk data, `SetHealth`, keep-alives, ...) may legally arrive interleaved
+/// with the response packets under test -- a vanilla client tolerates arbitrary
+/// interleaving, so this scan does too. Safe to call back-to-back for two different
+/// expected ids on the same connection (as this file's own test does, for an actor's own
+/// ack then its own resulting update) because `respond_to_action` always emits a given
+/// action's own `AcknowledgeBlockChange` before its own `BlockUpdate`, in that
+/// single-threaded order -- only *other* traffic can land in between, never those two out
+/// of order.
+async fn recv_packet_of_type(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    expected_id: i32,
+) -> Bytes {
+    loop {
+        let (id, body) = recv_clientbound(socket, accumulator).await;
+        if id == expected_id {
+            return body;
+        }
+    }
+}
+
 #[tokio::test]
 async fn break_and_place_broadcast_and_persist() {
     // M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a
@@ -114,22 +163,21 @@ async fn break_and_place_broadcast_and_persist() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             1
         );
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
-        // B, uninvolved, receives the identical broadcast next.
-        let (id, body) = recv_packet(&mut b, &mut b_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        // B, uninvolved, receives the identical broadcast -- scanned for on its own
+        // connection, since unrelated clientbound traffic (keep-alives, ...) may legally
+        // interleave ahead of it there too.
+        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
         let observed = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(observed, update);
 
@@ -150,21 +198,18 @@ async fn break_and_place_broadcast_and_persist() {
         )
         .await;
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, AcknowledgeBlockChange::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
         assert_eq!(
             decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
             2
         );
 
-        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 1)));
         assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
 
-        let (id, body) = recv_packet(&mut b, &mut b_acc).await;
-        assert_eq!(id, BlockUpdate::ID);
+        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
         let observed = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(observed, update);
 
