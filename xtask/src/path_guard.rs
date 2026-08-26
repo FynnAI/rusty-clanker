@@ -166,6 +166,20 @@ fn match_segments(pattern: &[&str], path: &[&str]) -> bool {
     }
 }
 
+/// Pure check: a changed-file set qualifies for the documentation exemption when
+/// every entry is a Markdown file (`.md`) AND none of them matches any
+/// `PROTECTED_PATHS` pattern. Such a changeset (completion reports, CLAUDE.md,
+/// READMEs, planning-doc prose outside the protected list) may omit the
+/// `Changeset-Type:` trailer entirely — protected Markdown (e.g. the budget
+/// tables in `docs/planning/09-testing-quality.md`) still requires a typed,
+/// trailer-carrying changeset like any other protected path.
+pub fn docs_only_exemption(changed_files: &[String]) -> bool {
+    !changed_files.is_empty()
+        && changed_files.iter().all(|file| {
+            file.ends_with(".md") && !PROTECTED_PATHS.iter().any(|p| glob_match(p.pattern, file))
+        })
+}
+
 /// Pure check: every `changed_files` entry that matches any `PROTECTED_PATHS` pattern
 /// is a `Violation` — but only when `changeset_type == ChangesetType::Implementation`;
 /// returns `vec![]` unconditionally for the other two types.
@@ -252,6 +266,22 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
 
     let changeset_type = match parse_changeset_type(&commit_message) {
         Ok(Some(t)) => t,
+        Ok(None) if docs_only_exemption(&changed_files) => {
+            result.push(
+                "changeset-type",
+                crate::tier_result::Status::Pass,
+                Some(format!(
+                    "docs-only exemption: {} Markdown file(s), none protected — trailer not required",
+                    changed_files.len()
+                )),
+            );
+            let result = result.finalize();
+            if let Err(err) = crate::tier_result::write(&result) {
+                eprintln!("path-guard: failed to write result JSON: {err}");
+                return std::process::ExitCode::FAILURE;
+            }
+            return crate::tier_result::exit_code_for(result.status);
+        }
         Ok(None) => {
             eprintln!(
                 "path-guard: HEAD commit message is missing a required `Changeset-Type:` trailer"
