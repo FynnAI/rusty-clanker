@@ -3,9 +3,9 @@
 
 use bytes::BytesMut;
 use rc_protocol::{
-    ConnectionState, EncryptionRequest, EncryptionResponse, LoginAcknowledged, LoginProfile,
-    LoginProfileProperty, LoginStart, LoginSuccess, PacketBound, RcPacket, SetCompression,
-    decode_one,
+    ConnectionState, EncryptionRequest, EncryptionResponse, JsonTextComponent, LoginAcknowledged,
+    LoginDisconnect, LoginProfile, LoginProfileProperty, LoginStart, LoginSuccess, PacketBound,
+    RcPacket, SetCompression, WireRead, WireWrite, decode_one,
 };
 use uuid::Uuid;
 
@@ -94,6 +94,53 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// Field-report regression (M2 manual test, 2026-08-26): a real vanilla client rejected our
+/// `login_disconnect` with "Failed to decode packet 'clientbound/minecraft:login_disconnect'".
+/// Protocol 776's Login-phase disconnect reason is a VarInt-length-prefixed UTF-8 **JSON**
+/// string (`ClientboundLoginDisconnectPacket`'s stream codec is a lenient-JSON string codec,
+/// ASSET-D18(f) reference) — NOT the network-NBT shape the Configuration/Play Disconnect
+/// reasons use. azalea tolerated the NBT shape; the real client is the oracle.
+#[test]
+fn login_disconnect_reason_is_a_json_string() {
+    let packet = LoginDisconnect {
+        reason: JsonTextComponent("Failed to verify username!".to_string()),
+    };
+    let mut buf = BytesMut::new();
+    packet.encode_body(&mut buf);
+
+    let expected_json = r#"{"text":"Failed to verify username!"}"#;
+    let mut expected = vec![u8::try_from(expected_json.len()).unwrap()];
+    expected.extend_from_slice(expected_json.as_bytes());
+    assert_eq!(
+        buf.as_ref(),
+        expected.as_slice(),
+        "login_disconnect reason must be one wire String holding {{\"text\":...}} JSON"
+    );
+
+    let decoded = decode_one::<LoginDisconnect>(buf.freeze()).unwrap();
+    assert_eq!(decoded, packet);
+}
+
+/// The JSON string encoding must escape what raw NBT strings never had to: quotes,
+/// backslashes, and control characters inside the reason text.
+#[test]
+fn json_text_component_escapes_quotes_backslashes_and_controls() {
+    let component = JsonTextComponent("say \"hi\" \\ tab\there".to_string());
+    let mut buf = BytesMut::new();
+    component.write_wire(&mut buf);
+
+    // Short string: the VarInt length prefix is exactly one byte. Control characters
+    // (the tab) must come out as `\u00XX` escapes — raw controls are invalid JSON.
+    let body = &buf.as_ref()[1..];
+    assert_eq!(
+        std::str::from_utf8(body).unwrap(),
+        r#"{"text":"say \"hi\" \\ tab\u0009here"}"#
+    );
+
+    let decoded = JsonTextComponent::read_wire(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded, component);
 }
 
 #[test]
