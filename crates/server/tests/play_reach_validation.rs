@@ -182,6 +182,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
                 cursor_y: 0.5,
                 cursor_z: 0.5,
                 inside_block: true,
+                hits_world_border: false,
                 sequence: 7,
             },
         )

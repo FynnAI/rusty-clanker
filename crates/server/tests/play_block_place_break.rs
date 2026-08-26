@@ -134,6 +134,7 @@ async fn break_and_place_broadcast_and_persist() {
                 cursor_y: 0.0,
                 cursor_z: 0.5,
                 inside_block: false,
+                hits_world_border: false,
                 sequence: 2,
             },
         )
