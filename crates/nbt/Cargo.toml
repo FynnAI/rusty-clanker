@@ -4,5 +4,41 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+# KNOWN BLOCKER (not fixable from inside this crate -- see the M2-B02 implementation
+# report): `simdnbt` 0.10.0's own `src/lib.rs` carries unconditional `#![feature
+# (portable_simd)]` / `#![feature(allocator_api)]` crate-root attributes (no `#[cfg]`
+# guard, present regardless of feature flags) -- verified live 2026-08-26 against the
+# exact pinned version. This means `rc-nbt`, once it actually depends on `simdnbt`
+# (as of this Cargo.toml), fails to compile under this workspace's pinned *stable*
+# toolchain (`rust-toolchain.toml`, WS-D4) with `error[E0554]: #![feature] may not be
+# used on the stable release channel` -- for every command that builds it, including
+# `cargo build -p rc-nbt`, `xtask lint` (clippy --workspace), and `xtask test`
+# (nextest --workspace), since none of those set `RUSTC_BOOTSTRAP=1` or resolve a
+# nightly toolchain the way `crates/testing/paritybot/`'s own isolated, non-swept
+# subprocess build does for azalea's transitive `simdnbt` (12-workspace-structure.md's
+# already-committed comment, which frames this as azalea-only, is now known incomplete:
+# it is the same simdnbt crate, reached directly, not merely transitively through
+# azalea). Verified locally that `RUSTC_BOOTSTRAP=1 cargo build -p rc-nbt --all-features`
+# (this project's own stable-labeled 1.97.0 toolchain, not a toolchain swap) resolves
+# it cleanly with zero warnings. This is a workspace-wide toolchain-policy decision
+# (touching `.cargo/config.toml`/CI, outside this blueprint's own declared file scope)
+# that this blueprint's implementer does not make unilaterally -- see the M2-B02
+# implementation report's open problems for the reconciliation this needs.
+
 [dependencies]
 rc-core = { path = "../core" }
+# Forced deviation from the blueprint's own literal `default-features = false`
+# (Deliverables): verified live against the pinned crate (2026-08-26) that
+# `simdnbt` 0.10.0's own `src/lib.rs` has an unconditional `pub use
+# simdnbt_derive::*;` with no `#[cfg(feature = "derive")]` guard -- disabling the
+# `derive` default feature therefore fails to compile at all (E0432, unresolved
+# import) regardless of whether this crate ever invokes a derive macro. Default
+# features (`derive` + `serde`) stay enabled purely to work around this upstream
+# packaging defect; this crate's own code still never uses `#[derive(...)]` for
+# schema conversion (WORLD-D11) or any of `simdnbt`'s own `serde` impls.
+simdnbt = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -1,0 +1,26 @@
+[package]
+name = "rc-nbt-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+rc-nbt = { path = ".." }
+
+[[bin]]
+name = "nbt_decode"
+path = "fuzz_targets/nbt_decode.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+# Empty on purpose — excludes this crate from the root workspace's member/dependency
+# resolution, the standard `cargo fuzz init` shape (TEST-D25). Mirrors, for a
+# non-member crate, WS-D7's own "pin directly, do not touch [workspace.dependencies]"
+# treatment of xtask's clap/xshell.
