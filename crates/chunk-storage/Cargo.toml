@@ -9,6 +9,10 @@ rc-core = { path = "../core" }
 rc-nbt = { path = "../nbt" }
 rc-registries = { path = "../registries" }
 bevy_ecs = { workspace = true }
+flate2 = { workspace = true }             # M2-B03 — WORLD-D13 Zlib
+lz4_flex = { workspace = true }           # M2-B03 — WORLD-D13 LZ4
+parking_lot = { workspace = true }        # M2-B03 — WORLD-D12 per-handle lock
+thiserror = { workspace = true }          # M2-B03 — StorageError
 
 # `io-uring` is a Linux io_uring syscall wrapper and does not compile at all
 # on non-Linux targets (it is not merely inert there). Scoping it to a

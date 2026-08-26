@@ -1,0 +1,30 @@
+[package]
+name = "rc-chunk-storage-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+rc-chunk-storage = { path = ".." }
+
+[workspace]
+# Empty on purpose — mirrors crates/nbt/fuzz/'s identical M2-B02 precedent exactly.
+
+[[bin]]
+name = "anvil_roundtrip"
+path = "fuzz_targets/anvil_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "anvil_decode_never_panics"
+path = "fuzz_targets/anvil_decode_never_panics.rs"
+test = false
+doc = false
+bench = false

@@ -5,6 +5,7 @@
 //! dirty-tracking API. NBT (de)serialization, Anvil region files, and the storage-backend
 //! trait are `M2-B02`'s scope.
 
+mod anvil;
 mod bits;
 mod block_entity;
 mod chunk_key;
@@ -16,6 +17,10 @@ mod persistence;
 mod registry_id;
 mod status;
 
+pub use anvil::{
+    AnvilDiskBackend, ChunkStorageBackend, CompressionScheme, RegionFile, RegionFileKind,
+    StorageError, content_checksum,
+};
 pub use bits::{ceil_log2, pack_bits, read_slot, unpack_bits, write_slot};
 pub use block_entity::BlockEntityIndex;
 pub use chunk_key::ChunkKeyTag;
