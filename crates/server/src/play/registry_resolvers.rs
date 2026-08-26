@@ -47,7 +47,15 @@ impl BlockStateNames for McRegistryResolvers {
         &self,
         id: BlockStateId,
     ) -> Option<(Mutf8String, Vec<(Mutf8String, Mutf8String)>)> {
-        todo!()
+        let name = match id.0 {
+            raw if raw == AIR.0 => "minecraft:air",
+            raw if raw == BEDROCK.0 => "minecraft:bedrock",
+            raw if raw == DIRT.0 => "minecraft:dirt",
+            raw if raw == GRASS_BLOCK.0 => "minecraft:grass_block",
+            raw if raw == STONE.0 => "minecraft:stone",
+            _ => return None,
+        };
+        Some((Mutf8String::from(name), Vec::new()))
     }
 
     /// The exact inverse of `name_and_properties` -- `properties` is always empty for
@@ -58,19 +66,33 @@ impl BlockStateNames for McRegistryResolvers {
         name: &Mutf8Str,
         properties: &[(&Mutf8Str, &Mutf8Str)],
     ) -> Option<BlockStateId> {
-        todo!()
+        let id = match name.to_str().as_ref() {
+            "minecraft:air" => AIR,
+            "minecraft:bedrock" => BEDROCK,
+            "minecraft:dirt" => DIRT,
+            "minecraft:grass_block" => GRASS_BLOCK,
+            "minecraft:stone" => STONE,
+            _ => return None,
+        };
+        debug_assert!(
+            properties.is_empty(),
+            "every state this resolver names is property-less; a non-empty `Properties` \
+             compound for a recognized name would mean the NBT document lied about which \
+             block this is"
+        );
+        Some(BlockStateId(id.0))
     }
 }
 
 impl BiomeNames for McRegistryResolvers {
     /// `id.to_raw() == PLAINS_BIOME_ID` -> `"minecraft:plains"`; any other id -> `None`.
     fn name(&self, id: BiomeId) -> Option<Mutf8String> {
-        todo!()
+        (id.0 == PLAINS_BIOME_ID).then(|| Mutf8String::from("minecraft:plains"))
     }
 
     /// The exact inverse -- `"minecraft:plains"` -> `Some(BiomeId(PLAINS_BIOME_ID))`; any
     /// other name -> `None`.
     fn resolve(&self, name: &Mutf8Str) -> Option<BiomeId> {
-        todo!()
+        (name.to_str().as_ref() == "minecraft:plains").then_some(BiomeId(PLAINS_BIOME_ID))
     }
 }

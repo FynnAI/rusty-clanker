@@ -133,7 +133,37 @@ impl IoPool {
     /// needed at M2's own chunk counts -- implementer's own reasonable default, e.g.
     /// `4096`).
     pub fn new(queue_capacity: usize) -> Self {
-        todo!()
+        let worker_count = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            / 4;
+        let worker_count = worker_count.clamp(2, 8);
+
+        let (sender, receiver) = crossbeam_channel::bounded::<Job>(queue_capacity);
+        let in_flight = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let mut workers = Vec::with_capacity(worker_count);
+
+        for _ in 0..worker_count {
+            let receiver: Receiver<Job> = receiver.clone();
+            let in_flight = Arc::clone(&in_flight);
+            workers.push(std::thread::spawn(move || {
+                while let Ok(job) = receiver.recv() {
+                    run_job(job);
+                    let (lock, cvar) = &*in_flight;
+                    let mut count = lock.lock();
+                    *count -= 1;
+                    if *count == 0 {
+                        cvar.notify_all();
+                    }
+                }
+            }));
+        }
+
+        Self {
+            sender,
+            workers,
+            in_flight,
+        }
     }
 
     pub fn worker_count(&self) -> usize {
@@ -141,7 +171,23 @@ impl IoPool {
     }
 
     fn submit(&self, job: Job) {
-        todo!()
+        {
+            let (lock, _cvar) = &*self.in_flight;
+            let mut count = lock.lock();
+            *count += 1;
+        }
+        if self.sender.send(job).is_err() {
+            // Every worker thread has exited (the pool is being torn down) -- undo the
+            // increment above so a subsequent `drain_barrier` on a still-live pool never
+            // hangs, and never silently pretend the job ran.
+            let (lock, cvar) = &*self.in_flight;
+            let mut count = lock.lock();
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                cvar.notify_all();
+            }
+            tracing::error!("IoPool: job submitted after every worker thread exited, dropped");
+        }
     }
 
     /// Submits an async load: probes `backend` (B03) for `key`, decodes via a
@@ -186,7 +232,11 @@ impl IoPool {
     /// currently in-flight on a worker -- has finished. Used by
     /// `ChunkLifecycleManager::shutdown` (WORLD-D25's flush-on-shutdown barrier).
     pub fn drain_barrier(&self) {
-        todo!()
+        let (lock, cvar) = &*self.in_flight;
+        let mut count = lock.lock();
+        while *count > 0 {
+            cvar.wait(&mut count);
+        }
     }
 }
 
@@ -214,7 +264,27 @@ impl Drop for IoPool {
 }
 
 fn run_job(job: Job) {
-    todo!()
+    match job {
+        Job::Load {
+            key,
+            backend,
+            filler,
+            resolvers,
+            reply,
+        } => {
+            let result = load_one(key, backend.as_ref(), &filler, &resolvers);
+            let _ = reply.send((key, result));
+        }
+        Job::Save {
+            snapshot,
+            backend,
+            resolvers,
+        } => {
+            if let Err(err) = save_one(&snapshot, backend.as_ref(), &resolvers) {
+                tracing::error!(key = ?snapshot.key, error = %err, "chunk save failed");
+            }
+        }
+    }
 }
 
 fn load_one(
@@ -223,7 +293,54 @@ fn load_one(
     filler: &SuperflatFiller,
     resolvers: &ChunkNbtResolvers,
 ) -> Result<LoadedChunk, LoadError> {
-    todo!()
+    let bytes = backend.read_chunk(key.dimension, RegionFileKind::Terrain, key.x, key.z, None)?;
+
+    match bytes {
+        Some(bytes) => {
+            let nbt = rc_nbt::read_borrowed(&bytes).map_err(ChunkNbtError::from)?;
+            let compound = match &nbt {
+                rc_nbt::borrow::Nbt::Some(base) => base.as_compound(),
+                rc_nbt::borrow::Nbt::None => {
+                    return Err(LoadError::Nbt(ChunkNbtError::MissingField("<root>")));
+                }
+            };
+            let block_names: &dyn BlockStateNames = resolvers.block_names.as_ref();
+            let biome_names: &dyn BiomeNames = resolvers.biome_names.as_ref();
+            let codec = ChunkNbtCodec {
+                block_names: &block_names,
+                biome_names: &biome_names,
+                block_thresholds: resolvers.block_thresholds,
+                biome_thresholds: resolvers.biome_thresholds,
+            };
+            let doc = codec.from_nbt(&compound, key.dimension)?;
+            Ok(LoadedChunk {
+                key,
+                block_states: doc.blocks,
+                biomes: doc.biomes,
+                light: doc.light,
+                heightmaps: doc.heightmaps,
+                status: doc.status,
+                persistence: doc.persistence,
+                freshly_generated: false,
+            })
+        }
+        None => {
+            let (block_states, biomes, heightmaps, light, status) = filler.fill();
+            Ok(LoadedChunk {
+                key,
+                block_states,
+                biomes,
+                light,
+                heightmaps,
+                status,
+                persistence: ChunkPersistenceState {
+                    dirty: true,
+                    last_saved_tick: 0,
+                },
+                freshly_generated: true,
+            })
+        }
+    }
 }
 
 /// The save-path error union -- internal to this module (never part of `submit_save`'s
@@ -242,5 +359,38 @@ fn save_one(
     backend: &dyn ChunkStorageBackend,
     resolvers: &ChunkNbtResolvers,
 ) -> Result<(), SaveError> {
-    todo!()
+    let block_names: &dyn BlockStateNames = resolvers.block_names.as_ref();
+    let biome_names: &dyn BiomeNames = resolvers.biome_names.as_ref();
+    let codec = ChunkNbtCodec {
+        block_names: &block_names,
+        biome_names: &biome_names,
+        block_thresholds: resolvers.block_thresholds,
+        biome_thresholds: resolvers.biome_thresholds,
+    };
+    let compound = codec.to_nbt(
+        snapshot.key,
+        &snapshot.block_states,
+        &snapshot.biomes,
+        &snapshot.light,
+        &snapshot.heightmaps,
+        &snapshot.block_entities,
+        snapshot.status,
+        ChunkPersistenceState {
+            dirty: false,
+            last_saved_tick: snapshot.last_saved_tick,
+        },
+        snapshot.is_light_on,
+        &[],
+    )?;
+    let base = rc_nbt::owned::BaseNbt::new("", compound);
+    let bytes = rc_nbt::write_owned(&base);
+    backend.write_chunk(
+        snapshot.key.dimension,
+        RegionFileKind::Terrain,
+        snapshot.key.x,
+        snapshot.key.z,
+        &bytes,
+        None,
+    )?;
+    Ok(())
 }

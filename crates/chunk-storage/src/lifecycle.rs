@@ -97,7 +97,35 @@ pub fn chunk_snapshot_system(
         &mut ChunkPersistenceState,
     )>,
 ) {
-    todo!()
+    *logical_tick += 1;
+    let tick = *logical_tick;
+
+    for (chunk_key, blocks, biomes, light, heightmaps, block_entities, status, mut persistence) in
+        &mut query
+    {
+        if !persistence.dirty {
+            continue;
+        }
+        let never_saved = persistence.last_saved_tick == 0;
+        let elapsed = tick.wrapping_sub(persistence.last_saved_tick);
+        if !never_saved && elapsed < interval.0 as u64 {
+            continue;
+        }
+
+        let snapshot = Arc::new(ChunkSaveSnapshot {
+            key: chunk_key.0,
+            block_states: blocks.clone(),
+            biomes: biomes.clone(),
+            light: light.clone(),
+            heightmaps: heightmaps.clone(),
+            block_entities: block_entities.clone(),
+            status: *status,
+            last_saved_tick: tick,
+            is_light_on: false,
+        });
+        let _ = outbox.0.send(snapshot);
+        persistence.mark_saved(tick);
+    }
 }
 
 /// The `M0-B05`-shaped `SystemFactory` value wrapping `chunk_snapshot_system`. The
@@ -120,7 +148,39 @@ pub fn snapshot_system_factory()
 /// `ChunkPersistenceState.last_saved_tick` (Context's "Unload" subsection explains why
 /// this call site cannot advance it to "now").
 pub fn capture_snapshot(world: &World, entity: Entity, key: ChunkKey) -> ChunkSaveSnapshot {
-    todo!()
+    let blocks = world
+        .get::<BlockStateColumn>(entity)
+        .expect("resident chunk entity missing BlockStateColumn");
+    let biomes = world
+        .get::<BiomeColumn>(entity)
+        .expect("resident chunk entity missing BiomeColumn");
+    let light = world
+        .get::<LightColumn>(entity)
+        .expect("resident chunk entity missing LightColumn");
+    let heightmaps = world
+        .get::<HeightmapSet>(entity)
+        .expect("resident chunk entity missing HeightmapSet");
+    let block_entities = world
+        .get::<BlockEntityIndex>(entity)
+        .expect("resident chunk entity missing BlockEntityIndex");
+    let status = world
+        .get::<ChunkStatus>(entity)
+        .expect("resident chunk entity missing ChunkStatus");
+    let persistence = world
+        .get::<ChunkPersistenceState>(entity)
+        .expect("resident chunk entity missing ChunkPersistenceState");
+
+    ChunkSaveSnapshot {
+        key,
+        block_states: blocks.clone(),
+        biomes: biomes.clone(),
+        light: light.clone(),
+        heightmaps: heightmaps.clone(),
+        block_entities: block_entities.clone(),
+        status: *status,
+        last_saved_tick: persistence.last_saved_tick,
+        is_light_on: false,
+    }
 }
 
 /// Owns the async load/save orchestration for one region's chunk set (Context). Bridges
@@ -156,7 +216,22 @@ impl ChunkLifecycleManager {
         interval_ticks: u32,
         io_queue_capacity: usize,
     ) -> Self {
-        todo!()
+        let (load_tx, load_rx) = crossbeam_channel::unbounded();
+        let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
+        Self {
+            backend,
+            dimension,
+            io_pool: IoPool::new(io_queue_capacity),
+            filler,
+            resolvers,
+            interval_ticks,
+            resident: HashMap::new(),
+            pending_load: HashSet::new(),
+            load_tx,
+            load_rx,
+            snapshot_tx,
+            snapshot_rx,
+        }
     }
 
     /// Call once, immediately after `RcExecutor::spawn_region` (`M0-B05`), before the
@@ -164,7 +239,8 @@ impl ChunkLifecycleManager {
     /// (mirroring `M0-B06`'s own post-`spawn_region` resource-insertion pattern for
     /// `SyntheticLoadProfile`).
     pub fn install_resources(&self, world: &mut World) {
-        todo!()
+        world.insert_resource(SaveIntervalTicks(self.interval_ticks));
+        world.insert_resource(SnapshotOutbox(self.snapshot_tx.clone()));
     }
 
     /// Stage-1-equivalent hook (Context -- "restate which stage and sync point"), called
@@ -178,21 +254,123 @@ impl ChunkLifecycleManager {
         needs_load: &[ChunkKey],
         needs_unload: &[ChunkKey],
     ) {
-        todo!()
+        for &key in needs_load {
+            debug_assert_eq!(
+                key.dimension, self.dimension,
+                "ChunkLifecycleManager received a load request for the wrong dimension"
+            );
+            if self.resident.contains_key(&key) || self.pending_load.contains(&key) {
+                continue;
+            }
+            self.pending_load.insert(key);
+            self.io_pool.submit_load(
+                key,
+                Arc::clone(&self.backend),
+                self.filler,
+                Arc::clone(&self.resolvers),
+                self.load_tx.clone(),
+            );
+        }
+
+        while let Ok((key, result)) = self.load_rx.try_recv() {
+            self.pending_load.remove(&key);
+            match result {
+                Ok(loaded) => {
+                    if self.resident.contains_key(&key) {
+                        // A duplicate load reply for an already-resident key (e.g. the
+                        // key was re-requested before the first reply arrived) -- the
+                        // entity already reflects the on-disk/generated state, nothing
+                        // further to do.
+                        continue;
+                    }
+                    let entity = world
+                        .spawn((
+                            ChunkKeyTag(key),
+                            loaded.block_states,
+                            loaded.biomes,
+                            loaded.light,
+                            loaded.heightmaps,
+                            BlockEntityIndex::new(),
+                            loaded.status,
+                            loaded.persistence,
+                        ))
+                        .id();
+                    self.resident.insert(key, entity);
+                }
+                Err(err) => {
+                    tracing::error!(?key, error = %err, "chunk load failed; chunk stays absent this run");
+                }
+            }
+        }
+
+        for &key in needs_unload {
+            debug_assert_eq!(
+                key.dimension, self.dimension,
+                "ChunkLifecycleManager received an unload request for the wrong dimension"
+            );
+            let Some(entity) = self.resident.remove(&key) else {
+                continue;
+            };
+            let dirty = world
+                .get::<ChunkPersistenceState>(entity)
+                .expect("resident chunk entity missing ChunkPersistenceState")
+                .dirty;
+            if dirty {
+                let snapshot = Arc::new(capture_snapshot(world, entity, key));
+                self.io_pool.submit_save(
+                    snapshot,
+                    Arc::clone(&self.backend),
+                    Arc::clone(&self.resolvers),
+                );
+            }
+            world.despawn(entity);
+        }
     }
 
     /// Post-tick hook, called once per tick immediately after `tick_region` returns
     /// (Context -- "handed off-tick to the writer"): drains this tick's Stage-9-captured
     /// snapshots and submits each to `RC-IoPool`.
     pub fn post_tick(&mut self) {
-        todo!()
+        while let Ok(snapshot) = self.snapshot_rx.try_recv() {
+            self.io_pool.submit_save(
+                snapshot,
+                Arc::clone(&self.backend),
+                Arc::clone(&self.resolvers),
+            );
+        }
     }
 
     /// Flush-on-shutdown (WORLD-D25, Context): force-saves every currently resident dirty
     /// chunk, then blocks on `IoPool::drain_barrier` until every queued and in-flight save
     /// has completed. A clean-restart guarantee only (Context) -- never called on a crash.
     pub fn shutdown(&mut self, world: &World) {
-        todo!()
+        // Any snapshot Stage 9 already captured but `post_tick` has not yet submitted
+        // (the tick loop's own final round) is flushed first, exactly as an ordinary
+        // `post_tick` would.
+        while let Ok(snapshot) = self.snapshot_rx.try_recv() {
+            self.io_pool.submit_save(
+                snapshot,
+                Arc::clone(&self.backend),
+                Arc::clone(&self.resolvers),
+            );
+        }
+
+        for (&key, &entity) in &self.resident {
+            let dirty = world
+                .get::<ChunkPersistenceState>(entity)
+                .expect("resident chunk entity missing ChunkPersistenceState")
+                .dirty;
+            if dirty {
+                let snapshot = Arc::new(capture_snapshot(world, entity, key));
+                self.io_pool.submit_save(
+                    snapshot,
+                    Arc::clone(&self.backend),
+                    Arc::clone(&self.resolvers),
+                );
+            }
+        }
+
+        self.io_pool.drain_barrier();
     }
 
     pub fn is_resident(&self, key: ChunkKey) -> bool {

@@ -38,6 +38,30 @@ impl SuperflatFiller {
         LightColumn,
         ChunkStatus,
     ) {
-        todo!()
+        let mut blocks = BlockStateColumn::new(self.air, self.block_thresholds);
+        for world_y in crate::WORLD_MIN_Y..crate::WORLD_MIN_Y + crate::WORLD_HEIGHT {
+            let block = match world_y {
+                -64 => Some(self.bedrock),
+                -63..=-61 => Some(self.dirt),
+                -60 => Some(self.grass),
+                _ => None,
+            };
+            let Some(block) = block else {
+                continue;
+            };
+            for z in 0u8..16 {
+                for x in 0u8..16 {
+                    blocks.set(x, world_y, z, block);
+                }
+            }
+        }
+
+        let biomes = BiomeColumn::new(self.biome, self.biome_thresholds);
+        // First air Y is one above the topmost real block (the grass layer at y == -60).
+        let heightmaps = HeightmapSet::new_uniform(-59);
+        let light = LightColumn::new_uninitialized();
+        let status = ChunkStatus(ChunkGenStatus::Full);
+
+        (blocks, biomes, heightmaps, light, status)
     }
 }

@@ -627,7 +627,22 @@ fn bootstrap_region(world: &mut World) {
 /// M2-B05's own restatement of `M1-B05`'s already-merged, byte-verified superflat layer
 /// table (M2-B05 blueprint Context: "Superflat filler").
 fn superflat_filler() -> SuperflatFiller {
-    todo!()
+    let block_direct_bits = rc_chunk_storage::ceil_log2(block_states::BLOCK_STATE_COUNT) as u16;
+    SuperflatFiller {
+        air: to_storage_id(AIR.0),
+        bedrock: to_storage_id(BEDROCK.0),
+        dirt: to_storage_id(DIRT.0),
+        grass: to_storage_id(GRASS_BLOCK.0),
+        biome: to_storage_biome_id(chunk::PLACEHOLDER_BIOME_ID),
+        block_thresholds: PaletteThresholds::blocks(block_direct_bits),
+        // No generated `worldgen_biome` registry table exists yet (`chunk.rs`'s own
+        // confirmed deviation, restated in `block_action.rs`'s and
+        // `registry_resolvers.rs`'s own module doc comments) -- mirrors `chunk.rs`'s own
+        // private `PLACEHOLDER_BIOME_REGISTRY_COUNT` (64) rather than importing it (not
+        // `pub`); inconsequential, since this filler's own biome column is always
+        // single-valued.
+        biome_thresholds: PaletteThresholds::biomes(rc_chunk_storage::ceil_log2(64) as u16),
+    }
 }
 
 /// Owns the one hardcoded region's tick loop (its own dedicated OS thread, ARCH-D21) and a
@@ -689,7 +704,209 @@ impl HardcodedWorld {
     /// Spawns the tick-loop thread and returns a handle; the thread runs until `shutdown`
     /// is called.
     pub fn with_config(config: WorldConfig) -> Self {
-        todo!()
+        let (join_tx, mut join_rx) = tokio::sync::mpsc::unbounded_channel::<PendingJoin>();
+        let (block_action_tx, mut block_action_rx) =
+            tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
+        let (query_tx, mut query_rx) = tokio::sync::mpsc::unbounded_channel::<(
+            BlockPos,
+            oneshot::Sender<Option<DebugBlockInfo>>,
+        )>();
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        let thread_shutdown_flag = Arc::clone(&shutdown_flag);
+        let handle = std::thread::spawn(move || {
+            let backend: Arc<dyn ChunkStorageBackend> = Arc::new(
+                AnvilDiskBackend::open(config.world_dir.clone(), CompressionScheme::Zlib).expect(
+                    "the world directory must be openable (M2-B05 Deliverables: a \
+                     real, checkable failure this composition root never silently \
+                     swallows)",
+                ),
+            );
+            let resolvers = Arc::new(ChunkNbtResolvers {
+                block_names: Box::new(McRegistryResolvers),
+                biome_names: Box::new(McRegistryResolvers),
+                block_thresholds: PaletteThresholds::blocks(rc_chunk_storage::ceil_log2(
+                    block_states::BLOCK_STATE_COUNT,
+                ) as u16),
+                biome_thresholds: PaletteThresholds::biomes(rc_chunk_storage::ceil_log2(64) as u16),
+            });
+            let mut ticket_manager = TicketManager::new();
+            let mut lifecycle = ChunkLifecycleManager::new(
+                Arc::clone(&backend),
+                DimensionId::OVERWORLD,
+                superflat_filler(),
+                resolvers,
+                config.save_interval_ticks(),
+                4096,
+            );
+
+            let mut builder = RcExecutorBuilder::new(bootstrap_region);
+            builder.register_system(
+                DomainGroup::ChunkSerialize,
+                rc_chunk_storage::lifecycle::snapshot_system_factory(),
+                vec![],
+            );
+            let executor = builder.build().expect(
+                "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
+            );
+            let mut region = executor.spawn_region(HARDCODED_REGION_ID);
+            lifecycle.install_resources(&mut region.world);
+
+            let transport = InProcessTransport::new(InProcessTransportConfig::default());
+            transport.register_region(HARDCODED_REGION_ID);
+            let pool = RcWorkerPool::new(4);
+            let mut clock = TickClock::<SystemTickWaiter>::new();
+            // M2-B05 implementation note (a forced, necessary addition, recorded here and
+            // in the implementation changeset's commit body): persists across loop
+            // iterations -- a `Break`/`Place` action whose target chunk has not yet
+            // finished its (now async, ticket-driven) load is carried over to a later
+            // tick instead of being dropped as a `ChunkIndex` miss. M2-B07's own static,
+            // build-time 121-chunk bootstrap (this blueprint's own Goal replaces it with
+            // real, ticket-driven streaming) made every reachable chunk resident from
+            // tick 0 onward, so an action processed on the very same tick as its actor's
+            // own join always found its target chunk already loaded; the real async load
+            // this blueprint introduces needs at least one further tick to complete, and
+            // under concurrent-test scheduling load a join and its very next action can
+            // legitimately land on the very same tick. `Ignored`-kind and out-of-reach
+            // actions never depend on chunk residency and are still always resolved (and
+            // acked) the same tick they arrive.
+            let mut carried_block_actions: Vec<PendingBlockAction> = Vec::new();
+
+            loop {
+                if thread_shutdown_flag.load(Ordering::Relaxed) {
+                    lifecycle.shutdown(&region.world);
+                    return;
+                }
+
+                while let Ok(join) = join_rx.try_recv() {
+                    region.world.spawn(PlayerMarker {
+                        network_entity_id: join.network_entity_id,
+                        username: join.username,
+                        connection: join.connection,
+                    });
+                    let spawn_chunk = SPAWN_POSITION.chunk_key(DimensionId::OVERWORLD);
+                    ticket_manager.register_player(
+                        PlayerTicketId(join.network_entity_id),
+                        spawn_chunk,
+                        config.simulation_distance_chunks,
+                    );
+                }
+
+                // M2-B05's own load/unload churn, immediately before `tick_region`
+                // (Context: "restate which stage and sync point", `M1-B05`'s own
+                // established Stage-1 pre-tick-sync-point precedent).
+                let churn = ticket_manager.step();
+                lifecycle.pre_tick(&mut region.world, &churn.needs_load, &churn.needs_unload);
+
+                // Refreshes M2-B07's own `ChunkIndex` directory from this tick's real,
+                // current chunk residency -- the composition-root bridge between
+                // `ChunkLifecycleManager` (which knows nothing of `ChunkIndex`, a
+                // `rusty-clanker-server`-only type) and `block_action.rs`'s own lookups
+                // (`bootstrap_region`'s own doc comment).
+                let mut chunk_index = ChunkIndex::default();
+                let mut chunk_query = region.world.query::<(&ChunkKeyTag, Entity)>();
+                for (tag, entity) in chunk_query.iter(&region.world) {
+                    chunk_index.0.insert(tag.0, entity);
+                }
+                region.world.insert_resource(chunk_index);
+
+                // M2-B07's own Stage-3-equivalent manual step (Context, "Which pipeline
+                // stage"): drain every block action queued since the previous tick,
+                // stable-sort by ascending `network_entity_id` (MECH-D4's "deterministic
+                // merge by ascending player id"), reach-validate (Context, "Where this
+                // check runs, precisely" -- deliberately not `apply_block_action`'s own
+                // concern), then apply/route and respond -- entirely before
+                // `executor.tick_region` runs this tick's own formally-numbered pipeline.
+                let mut pending: Vec<PendingBlockAction> =
+                    std::mem::take(&mut carried_block_actions);
+                while let Ok(action) = block_action_rx.try_recv() {
+                    pending.push(action);
+                }
+                pending.sort_by_key(|action| action.network_entity_id);
+
+                let mut bus = RegionMessageBus::new();
+                // M2 stays single-region (Context: "M2 stays inside M1-B05's single
+                // HARDCODED_REGION_ID" -- no per-chunk `ChunkKey -> RegionId` directory
+                // exists yet, ARCH-D24's own deferred item) -- every chunk key is
+                // trivially local by construction. M2-B05 implementation note (a forced,
+                // necessary deviation from M2-B07's own committed `local_chunk_keys`
+                // check, recorded here and in the implementation changeset's commit
+                // body): that check compared against the *static* 121-chunk bootstrap set
+                // this blueprint just removed (`bootstrap_region`'s own doc comment);
+                // dynamic, ticket-driven residency has no equivalent fixed set to check
+                // against, and a chunk that is local but merely not yet finished loading
+                // must not be misreported as belonging to a different (nonexistent)
+                // region -- unconditional locality is both simpler and more correct at
+                // M2's own single-region scope.
+                let resolve_owner = |_key: ChunkKey| Address::Region(HARDCODED_REGION_ID);
+
+                for action in pending {
+                    let target = target_position(&action.kind);
+                    let out_of_reach = target.is_some_and(|target| {
+                        !within_reach(
+                            eye_position(SPAWN_POSITION),
+                            target,
+                            BLOCK_INTERACTION_RANGE_CREATIVE,
+                        )
+                    });
+                    // Only a reach-validated `Break`/`Place` action needs its target
+                    // chunk resident before it can be applied -- an `Ignored` action
+                    // (`target` is `None`) or an out-of-reach one is fully resolved
+                    // without ever touching chunk data (`apply_block_action`'s own
+                    // Deliverables: reach is deliberately not its own concern).
+                    if let Some(target) = target
+                        && !out_of_reach
+                        && !lifecycle.is_resident(target.chunk_key(DimensionId::OVERWORLD))
+                    {
+                        carried_block_actions.push(action);
+                        continue;
+                    }
+
+                    let outcome = if out_of_reach {
+                        ApplyOutcome::Rejected {
+                            pos: target
+                                .expect("out_of_reach is only ever true when target is Some"),
+                            reason: RejectReason::OutOfReach,
+                            current_state: None,
+                        }
+                    } else if target.is_none() {
+                        ApplyOutcome::NoOp
+                    } else {
+                        apply_block_action(
+                            &mut region.world,
+                            DimensionId::OVERWORLD,
+                            &action,
+                            &resolve_owner,
+                            Address::Region(HARDCODED_REGION_ID),
+                            &mut bus,
+                        )
+                    };
+                    respond_to_action(&region.world, &action, outcome);
+                }
+                region.message_state.merge(bus);
+
+                while let Ok((pos, reply)) = query_rx.try_recv() {
+                    let _ = reply.send(debug_query_block(
+                        &region.world,
+                        DimensionId::OVERWORLD,
+                        pos,
+                    ));
+                }
+
+                executor.tick_region(&mut region, &pool, &transport);
+                lifecycle.post_tick();
+                clock.await_next_tick();
+            }
+        });
+
+        Self {
+            join_tx,
+            block_action_tx,
+            query_tx,
+            next_network_entity_id: Arc::new(AtomicI32::new(1)),
+            shutdown_flag,
+            thread_handle: Arc::new(Mutex::new(Some(handle))),
+        }
     }
 
     /// Allocates the next network-facing entity id (starts at `1`, monotonic, thread-safe).
@@ -711,7 +928,15 @@ impl HardcodedWorld {
     /// directly from an async context without `tokio::task::spawn_blocking` -- this call
     /// blocks synchronously.
     pub fn shutdown(&self) {
-        todo!()
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        if let Some(handle) = self
+            .thread_handle
+            .lock()
+            .expect("the region thread never panics while holding this lock")
+            .take()
+        {
+            let _ = handle.join();
+        }
     }
 
     /// New. Enqueues a decoded block action, applied at the start of this region's next
@@ -813,5 +1038,13 @@ impl PlayerSessionSink for HardcodedWorld {
 /// own backward-compatible zero-argument constructor's private world storage (that
 /// method's own doc comment has the full reasoning).
 fn unique_temp_world_dir() -> PathBuf {
-    todo!()
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "rc-hardcoded-world-{}-{nanos}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ))
 }

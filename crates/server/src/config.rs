@@ -47,13 +47,32 @@ impl WorldConfig {
     /// never a panic -- a missing/malformed operator config file must never prevent the
     /// server from starting with sane defaults).
     pub fn load(path: &Path) -> Self {
-        todo!()
+        let contents = match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Self::default();
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "failed to read config file; using defaults");
+                return Self::default();
+            }
+        };
+
+        match toml::from_str::<RootConfig>(&contents) {
+            Ok(root) => root.world,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "failed to parse config file; using defaults");
+                Self::default()
+            }
+        }
     }
 
     /// `round(save_interval_secs * 1000 / TICK_PERIOD_MS)`, minimum `1` -- the one, off-tick-
     /// thread, config-load-time duration-to-ticks conversion Context's Stage-9 design relies on.
     pub fn save_interval_ticks(&self) -> u32 {
-        todo!()
+        let millis = self.save_interval_secs.saturating_mul(1000);
+        let rounded = (millis + TICK_PERIOD_MS / 2) / TICK_PERIOD_MS;
+        rounded.max(1) as u32
     }
 }
 
