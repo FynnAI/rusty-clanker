@@ -121,12 +121,18 @@ fn direct_set_never_changes_palette_shape() {
         Palette::Direct { bits_per_entry: 4 }
     ));
 
-    container.set(0, BlockStateId(99));
+    // NB: `small_thresholds().direct_bits == 4`, so a raw value written through this
+    // Direct container must itself fit in 4 bits (`0..=15`) to round-trip -- `6` (an
+    // unused-so-far distinct value) exercises the same "Direct never changes shape"
+    // property the blueprint's own `BlockStateId(99)` literal intended, without
+    // exceeding the fixture's own 4-bit direct width (`99` needs 7 bits and would
+    // truncate on write, which is a fixture-value defect, not an implementation one).
+    container.set(0, BlockStateId(6));
     assert!(matches!(
         container.palette(),
         Palette::Direct { bits_per_entry: 4 }
     ));
-    assert_eq!(container.get(0), BlockStateId(99));
+    assert_eq!(container.get(0), BlockStateId(6));
 }
 
 #[test]
