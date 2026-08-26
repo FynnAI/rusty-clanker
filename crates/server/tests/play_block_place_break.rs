@@ -1,0 +1,178 @@
+//! M2-B07 acceptance test: a scripted place/break exchange over two real loopback
+//! connections -- the actor (`A`) breaks then places a block, an uninvolved observer
+//! (`B`) receives the identical broadcast `Block Update` for each change (Context: "The
+//! M1-B05 interest/broadcast seam does not exist -- resolved here"), and the resulting
+//! world state is queryable back out, dirty-marked -- criterion 1's own "persisted state"
+//! half (in-memory, dirty-marked; the on-disk half is a separate, not-yet-written
+//! blueprint's job).
+
+use bytes::{Bytes, BytesMut};
+use rc_core::BlockPos;
+use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
+use rc_registries::generated_v776::block_states::default_state as blocks;
+use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
+use rusty_clanker_server::play::packets::{
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, PlayerAction, UseItemOn, pack_position,
+};
+use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+async fn connected_pair() -> (TcpStream, TcpStream) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (accept_result, connect_result) = tokio::join!(listener.accept(), TcpStream::connect(addr));
+    let (server, _) = accept_result.unwrap();
+    (server, connect_result.unwrap())
+}
+
+/// Reads exactly one framed, uncompressed payload off `socket`, splits its leading
+/// packet-id `VarInt` from the body, and returns both.
+async fn recv_packet(socket: &mut TcpStream, accumulator: &mut BytesMut) -> (i32, Bytes) {
+    loop {
+        if let Some(payload) =
+            rc_protocol::try_decode_frame(accumulator, CompressionState::Disabled).unwrap()
+        {
+            let mut body = payload;
+            let id = VarInt::decode(&mut body).unwrap().get();
+            return (id, body);
+        }
+        let mut chunk = [0u8; 4096];
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n > 0, "peer closed before a full frame arrived");
+        accumulator.extend_from_slice(&chunk[..n]);
+    }
+}
+
+async fn send_packet<P: RcPacket>(socket: &mut TcpStream, packet: &P) {
+    let payload = encode_payload(packet);
+    let mut framed = BytesMut::new();
+    rc_protocol::encode_frame(&payload, CompressionState::Disabled, &mut framed).unwrap();
+    socket.write_all(&framed).await.unwrap();
+}
+
+/// Drains this connection's own Play-entry clientbound sequence (M1-B05's `enter_play`, up
+/// through and including `ChunkBatchFinished`) without decoding or asserting its content --
+/// `play_chunk_set.rs` already owns that. Robust to the current chunk-send radius (does not
+/// hardcode a chunk count).
+async fn drain_play_entry(socket: &mut TcpStream, accumulator: &mut BytesMut) {
+    // LoginPlay, SetDefaultSpawnPosition, SynchronizePlayerPosition, GameEvent,
+    // SetChunkCacheCenter, ChunkBatchStart.
+    for _ in 0..6 {
+        recv_packet(socket, accumulator).await;
+    }
+    loop {
+        let (id, _) = recv_packet(socket, accumulator).await;
+        if id == ChunkBatchFinished::ID {
+            return;
+        }
+    }
+}
+
+async fn spawn_actor(world: &HardcodedWorld, username: &str, uuid: u128) -> (TcpStream, BytesMut) {
+    let (server, mut client) = connected_pair().await;
+    let (inbound, handle) = spawn_connection(server, ConnectionConfig::default());
+    let world = world.clone();
+    let profile = PlayerProfile {
+        uuid,
+        username: username.to_string(),
+    };
+    tokio::spawn(async move {
+        enter_play(handle, inbound, profile, &world).await;
+    });
+    let mut accumulator = BytesMut::new();
+    drain_play_entry(&mut client, &mut accumulator).await;
+    (client, accumulator)
+}
+
+#[tokio::test]
+async fn break_and_place_broadcast_and_persist() {
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+
+        // --- Break the grass block directly below A's own spawn column ---
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(BlockPos::new(0, -60, 0)),
+                face: 1,
+                sequence: 1,
+            },
+        )
+        .await;
+
+        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
+        assert_eq!(id, AcknowledgeBlockChange::ID);
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            1
+        );
+
+        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
+        assert_eq!(id, BlockUpdate::ID);
+        let update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+        assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+
+        // B, uninvolved, receives the identical broadcast next.
+        let (id, body) = recv_packet(&mut b, &mut b_acc).await;
+        assert_eq!(id, BlockUpdate::ID);
+        let observed = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(observed, update);
+
+        // --- Place above the still-intact grass block at (1, -60, 1) ---
+        send_packet(
+            &mut a,
+            &UseItemOn {
+                hand: 0,
+                location: pack_position(BlockPos::new(1, -60, 1)),
+                face: 1,
+                cursor_x: 0.5,
+                cursor_y: 0.0,
+                cursor_z: 0.5,
+                inside_block: false,
+                sequence: 2,
+            },
+        )
+        .await;
+
+        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
+        assert_eq!(id, AcknowledgeBlockChange::ID);
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            2
+        );
+
+        let (id, body) = recv_packet(&mut a, &mut a_acc).await;
+        assert_eq!(id, BlockUpdate::ID);
+        let update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 1)));
+        assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
+
+        let (id, body) = recv_packet(&mut b, &mut b_acc).await;
+        assert_eq!(id, BlockUpdate::ID);
+        let observed = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(observed, update);
+
+        // --- Criterion 1's own "persisted state" half: in-memory, dirty-marked ---
+        assert_eq!(
+            world.debug_query_block(BlockPos::new(0, -60, 0)).await,
+            Some(DebugBlockInfo {
+                raw_state: blocks::AIR.0,
+                dirty: true,
+            })
+        );
+        assert_eq!(
+            world.debug_query_block(BlockPos::new(1, -59, 1)).await,
+            Some(DebugBlockInfo {
+                raw_state: blocks::STONE.0,
+                dirty: true,
+            })
+        );
+    })
+    .await
+    .unwrap();
+}

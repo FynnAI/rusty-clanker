@@ -6,6 +6,7 @@
 //! record).
 
 use bytes::Buf;
+use rc_core::BlockPos;
 use rc_protocol::{Bytes, BytesMut, RcPacket};
 
 /// M1 integration fix: `online_mode` (between the `CommonPlayerSpawnInfo`-equivalent
@@ -218,6 +219,69 @@ pub fn pack_position(pos: rc_core::BlockPos) -> i64 {
     (x << 38) | (z << 12) | y
 }
 
+/// M2-B07: one `PlayerAction`/`UseItemOn` (serverbound, block-modifying) — creative-style
+/// instant break only, per MECH-D61's restated minimal scope (this milestone). `status`'s
+/// enum values (`0`=StartDestroyBlock ... `6`=SwapItemInHand) and `face`'s wire type
+/// (`Byte`, not `VarInt` -- a real, historically-documented asymmetry against `UseItemOn`'s
+/// own `face`) are per this blueprint's own reconciliation caveat (Context).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "server", id = 0x29)]
+pub struct PlayerAction {
+    #[rc(varint)]
+    pub status: i32,
+    pub location: i64,
+    pub face: i8,
+    #[rc(varint)]
+    pub sequence: i32,
+}
+
+/// M2-B07: a single fixed placeholder block is placed on every successful `UseItemOn`
+/// (Context: "Placement content" -- no real item/inventory model exists yet). `face` is a
+/// `VarInt` here (unlike `PlayerAction.face`'s `Byte`) -- a real, long-standing asymmetry
+/// between these two packets, not a copy/paste inconsistency (Context).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "server", id = 0x2A)]
+pub struct UseItemOn {
+    #[rc(varint)]
+    pub hand: i32,
+    pub location: i64,
+    #[rc(varint)]
+    pub face: i32,
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+    pub cursor_z: f32,
+    pub inside_block: bool,
+    #[rc(varint)]
+    pub sequence: i32,
+}
+
+/// M2-B07: one block's new state, broadcast to every currently-connected player (Context:
+/// "The M1-B05 interest/broadcast seam does not exist -- resolved here").
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "client", id = 0x08)]
+pub struct BlockUpdate {
+    pub location: i64,
+    #[rc(varint)]
+    pub block_state_id: i32,
+}
+
+/// M2-B07: the vanilla per-action `sequence` acknowledgment (MECH-D63, restated) -- the
+/// client allocates and stamps `sequence`, the server only validates and echoes it back,
+/// unmodified, exactly once per received `PlayerAction`/`UseItemOn`, unconditionally
+/// (Context).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "client", id = 0x04)]
+pub struct AcknowledgeBlockChange {
+    #[rc(varint)]
+    pub sequence: i32,
+}
+
+/// Inverse of this file's already-existing `pack_position` (Context: exact bit layout
+/// restated). Sign-extends each two's-complement field back from its packed width.
+pub fn unpack_position(packed: i64) -> BlockPos {
+    todo!()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +291,23 @@ mod tests {
         let packed = pack_position(rc_core::BlockPos::new(0, -59, 0));
         // y is the low 12 bits, two's-complement: -59 as u12 == 4096 - 59 == 4037.
         assert_eq!(packed & 0xFFF, 4037);
+    }
+
+    #[test]
+    fn unpack_position_is_the_exact_inverse_of_pack_position() {
+        let samples = [
+            BlockPos::new(0, -59, 0),
+            BlockPos::new(-1, -64, -1),
+            BlockPos::new(20, 319, 20),
+            BlockPos::new(-33_554_432, -64, 33_554_431), // full 26-bit x/z range
+            BlockPos::new(2, -60, 2),
+        ];
+        for pos in samples {
+            assert_eq!(
+                unpack_position(pack_position(pos)),
+                pos,
+                "round trip of {pos:?}"
+            );
+        }
     }
 }

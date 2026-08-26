@@ -10,12 +10,14 @@ use rc_core::BlockPos;
 use rc_protocol::{ConnectionState, RawPacket, RcPacket, decode_one, encode_payload};
 use tokio::sync::mpsc;
 
+use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
-    KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay,
-    SetChunkCacheCenter, SetDefaultSpawnPosition, SynchronizePlayerPosition, pack_position,
+    KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
+    SetChunkCacheCenter, SetDefaultSpawnPosition, SynchronizePlayerPosition, UseItemOn,
+    pack_position, unpack_position,
 };
 use super::world::{HardcodedWorld, PendingJoin};
 use crate::net::ConnectionHandle;
@@ -205,6 +207,7 @@ pub async fn enter_play(
     world.queue_join(PendingJoin {
         network_entity_id,
         username: profile.username.clone(),
+        connection: handle.clone(),
     });
 
     let mut keepalive = KeepAliveDriver::new(Instant::now());
@@ -234,7 +237,7 @@ pub async fn enter_play(
                 let Some(raw) = maybe_raw else {
                     return;
                 };
-                dispatch_inbound(raw, &mut keepalive);
+                dispatch_inbound(raw, &mut keepalive, &handle, world, network_entity_id);
             }
         }
     }
@@ -244,7 +247,20 @@ pub async fn enter_play(
 /// provokes; every other well-framed serverbound Play packet id is silently dropped,
 /// unread (Context: "Inbound Play-state dispatch -- recognize a few, tolerate everything
 /// else").
-fn dispatch_inbound(raw: RawPacket, keepalive: &mut KeepAliveDriver) {
+///
+/// M2-B07: gains the two block-modifying arms (`PlayerAction`/`UseItemOn`) -- each decodes,
+/// builds a `BlockActionKind`, and enqueues a `PendingBlockAction` for the region's own
+/// manual Stage-3-equivalent drain step (Context, "Which pipeline stage"). Neither arm
+/// validates reach or touches `world`'s chunk state directly -- that happens once per tick,
+/// batched, in `HardcodedWorld`'s own tick loop (Context, "Where this check runs,
+/// precisely").
+fn dispatch_inbound(
+    raw: RawPacket,
+    keepalive: &mut KeepAliveDriver,
+    handle: &ConnectionHandle,
+    world: &HardcodedWorld,
+    network_entity_id: i32,
+) {
     match raw.id {
         ConfirmTeleportation::ID => {
             if let Ok(packet) = decode_one::<ConfirmTeleportation>(raw.body) {
@@ -262,6 +278,47 @@ fn dispatch_inbound(raw: RawPacket, keepalive: &mut KeepAliveDriver) {
                     chunks_per_tick = packet.chunks_per_tick,
                     "chunk batch received"
                 );
+            }
+        }
+        PlayerAction::ID => {
+            if let Ok(packet) = decode_one::<PlayerAction>(raw.body) {
+                // Only `status == 0` (StartDestroyBlock) ever turns into a break --
+                // creative-mode instant break fires on the start action alone (MECH-D61,
+                // Context); `1`/`2` (Abort/StopDestroyBlock) and every other status
+                // (`3..=6`) are `Ignored` -- still owed exactly one ack (MECH-D63), never a
+                // `Block Update`.
+                let kind = match packet.status {
+                    0 => BlockActionKind::Break {
+                        location: unpack_position(packet.location),
+                    },
+                    _ => BlockActionKind::Ignored,
+                };
+                world.queue_block_action(PendingBlockAction {
+                    network_entity_id,
+                    connection: handle.clone(),
+                    kind,
+                    sequence: packet.sequence,
+                });
+            }
+        }
+        UseItemOn::ID => {
+            if let Ok(packet) = decode_one::<UseItemOn>(raw.body) {
+                // An out-of-range `face` value is decodable-but-nonsensical input --
+                // clamped to a harmless default rather than disconnecting (this project's
+                // own established "tolerate everything not explicitly gated" dispatch
+                // philosophy, M1-B05's Context).
+                let face = Face::from_ordinal(packet.face).unwrap_or(Face::Up);
+                let kind = BlockActionKind::Place {
+                    location: unpack_position(packet.location),
+                    face,
+                    inside_block: packet.inside_block,
+                };
+                world.queue_block_action(PendingBlockAction {
+                    network_entity_id,
+                    connection: handle.clone(),
+                    kind,
+                    sequence: packet.sequence,
+                });
             }
         }
         other => {

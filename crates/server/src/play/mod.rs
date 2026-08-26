@@ -8,6 +8,7 @@
 //! first real `rc-scheduler` region ticking at 20 TPS. See `blueprints/M1/M1-B05-play-
 //! superflat.md` for the full design.
 
+mod block_action;
 mod chunk;
 mod connection;
 mod keepalive;
@@ -26,6 +27,13 @@ pub mod packets;
 mod persistence;
 mod world;
 
+pub use block_action::{
+    ApplyOutcome, BLOCK_INTERACTION_RANGE_CREATIVE, BLOCK_INTERACTION_RANGE_SURVIVAL,
+    BlockActionKind, ChunkIndex, DebugBlockInfo, ENTITY_INTERACTION_RANGE, EYE_HEIGHT, Face,
+    PendingBlockAction, RejectReason, apply_block_action, debug_query_block,
+    resolve_place_position, seed_chunk_column, target_position, to_storage_biome_id, to_storage_id,
+    within_reach,
+};
 pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
 pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
