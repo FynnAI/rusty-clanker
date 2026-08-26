@@ -23,8 +23,10 @@ mod keepalive;
 /// mirror instead (Acceptance tests' own explicit instruction, "not a production
 /// deliverable").
 pub mod packets;
+mod persistence;
 mod world;
 
 pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
+pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
 pub use world::{HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES};

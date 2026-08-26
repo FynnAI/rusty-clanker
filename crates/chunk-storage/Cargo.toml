@@ -12,7 +12,10 @@ bevy_ecs = { workspace = true }
 flate2 = { workspace = true }             # M2-B03 — WORLD-D13 Zlib
 lz4_flex = { workspace = true }           # M2-B03 — WORLD-D13 LZ4
 parking_lot = { workspace = true }        # M2-B03 — WORLD-D12 per-handle lock
-thiserror = { workspace = true }          # M2-B03 — StorageError
+thiserror = { workspace = true }          # M2-B03/M2-B04 — StorageError / ChunkNbtError / SnapshotError
+serde = { workspace = true }              # M2-B04 — ChunkSnapshot (WORLD-D20)
+postcard = { workspace = true }           # M2-B04 — ChunkSnapshot wire encoding (WORLD-D20)
+uuid = { workspace = true }               # M2-B06 — player-data file keys, already pinned since M1-B04
 
 # `io-uring` is a Linux io_uring syscall wrapper and does not compile at all
 # on non-Linux targets (it is not merely inert there). Scoping it to a
