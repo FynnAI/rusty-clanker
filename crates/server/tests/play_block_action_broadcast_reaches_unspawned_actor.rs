@@ -112,59 +112,92 @@ async fn recv_packet_of_type(
     }
 }
 
+/// Per-stage timeout wrapper: a hang names its exact stage instead of collapsing into
+/// one opaque whole-test deadline. Added after CI's `windows-2025` runner hit that
+/// opaque deadline twice (runs 33022662264 / 33023447974) while the same code stayed
+/// green on `ubuntu-24.04`, on a local run, and on one earlier `windows-2025` run —
+/// the next CI failure must say *which* wait hung, not just that one did.
+async fn staged<T>(
+    stage: &'static str,
+    limit: Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(value) => value,
+        Err(_) => panic!("stage {stage:?} timed out after {limit:?}"),
+    }
+}
+
 #[tokio::test]
 async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_spawned() {
-    tokio::time::timeout(Duration::from_secs(60), async {
-        let world = HardcodedWorld::new();
+    let world = HardcodedWorld::new();
 
-        // Bystander: a normal join, so chunk (0, 0) becomes resident (needed for the
-        // phantom action below to ever resolve) and so `respond_to_action`'s broadcast
-        // loop has at least one real `PlayerMarker` to iterate -- exactly the "at least one
-        // other already-connected player" shape of the real production race.
-        let (mut bystander, mut bystander_acc) = spawn_actor(&world, "bystander", 1).await;
+    // Bystander: a normal join, so chunk (0, 0) becomes resident (needed for the
+    // phantom action below to ever resolve) and so `respond_to_action`'s broadcast
+    // loop has at least one real `PlayerMarker` to iterate -- exactly the "at least one
+    // other already-connected player" shape of the real production race.
+    let (mut bystander, mut bystander_acc) = staged(
+        "bystander-join",
+        Duration::from_secs(30),
+        spawn_actor(&world, "bystander", 1),
+    )
+    .await;
 
-        // Phantom actor: a real connection and a fresh `network_entity_id`, deliberately
-        // never joined via `enter_play`/`queue_join` at all -- guarantees, permanently,
-        // that this id's own `PlayerMarker` is never spawned into `region.world`.
-        let (server, mut phantom) = connected_pair().await;
-        let (_inbound, handle) = spawn_connection(server, ConnectionConfig::default());
-        let phantom_id = world.alloc_network_entity_id();
-        let mut phantom_acc = BytesMut::new();
+    // Phantom actor: a real connection and a fresh `network_entity_id`, deliberately
+    // never joined via `enter_play`/`queue_join` at all -- guarantees, permanently,
+    // that this id's own `PlayerMarker` is never spawned into `region.world`.
+    let (server, mut phantom) = connected_pair().await;
+    let (_inbound, handle) = spawn_connection(server, ConnectionConfig::default());
+    let phantom_id = world.alloc_network_entity_id();
+    let mut phantom_acc = BytesMut::new();
 
-        world.queue_block_action(PendingBlockAction {
-            network_entity_id: phantom_id,
-            connection: handle.clone(),
-            kind: BlockActionKind::Break {
-                location: BlockPos::new(0, -60, 0),
-            },
-            sequence: 42,
-        });
+    world.queue_block_action(PendingBlockAction {
+        network_entity_id: phantom_id,
+        connection: handle.clone(),
+        kind: BlockActionKind::Break {
+            location: BlockPos::new(0, -60, 0),
+        },
+        sequence: 42,
+    });
 
-        let ack =
-            recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID).await;
-        assert_eq!(
-            decode_one::<AcknowledgeBlockChange>(ack).unwrap().sequence,
-            42
-        );
+    // A hang here means the action never resolved at all (e.g. chunk (0, 0) not
+    // resident, or lost residency, so the action is carried tick over tick forever).
+    let ack = staged(
+        "phantom-ack",
+        Duration::from_secs(15),
+        recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID),
+    )
+    .await;
+    assert_eq!(
+        decode_one::<AcknowledgeBlockChange>(ack).unwrap().sequence,
+        42
+    );
 
-        // The regression under test: before the fix, this would never arrive (the phantom
-        // actor's own `PlayerMarker` never existed for `respond_to_action`'s broadcast loop
-        // to find), and the test would hang until the outer 60s timeout.
-        let update = recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID).await;
-        let update = decode_one::<BlockUpdate>(update).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
-        assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+    // The regression under test: before the fix, this would never arrive (the phantom
+    // actor's own `PlayerMarker` never existed for `respond_to_action`'s broadcast loop
+    // to find), and the wait would hang. A hang here with the ack already received
+    // means the action resolved but its actor-directed broadcast was lost again.
+    let update = staged(
+        "phantom-block-update",
+        Duration::from_secs(15),
+        recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID),
+    )
+    .await;
+    let update = decode_one::<BlockUpdate>(update).unwrap();
+    assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+    assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
-        // The already-connected bystander is a normal broadcast recipient too.
-        let bystander_update =
-            recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID).await;
-        let bystander_update = decode_one::<BlockUpdate>(bystander_update).unwrap();
-        assert_eq!(
-            bystander_update.location,
-            pack_position(BlockPos::new(0, -60, 0))
-        );
-        assert_eq!(bystander_update.block_state_id, blocks::AIR.0 as i32);
-    })
-    .await
-    .unwrap();
+    // The already-connected bystander is a normal broadcast recipient too.
+    let bystander_update = staged(
+        "bystander-block-update",
+        Duration::from_secs(15),
+        recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID),
+    )
+    .await;
+    let bystander_update = decode_one::<BlockUpdate>(bystander_update).unwrap();
+    assert_eq!(
+        bystander_update.location,
+        pack_position(BlockPos::new(0, -60, 0))
+    );
+    assert_eq!(bystander_update.block_state_id, blocks::AIR.0 as i32);
 }
