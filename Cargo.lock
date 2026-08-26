@@ -3014,7 +3014,11 @@ dependencies = [
 name = "rc-nbt"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "proptest",
  "rc-core",
+ "simdnbt",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
