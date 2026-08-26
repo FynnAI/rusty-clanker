@@ -19,6 +19,7 @@ use rc_registries::generated_v776::block_states::default_state::{
     AIR, BEDROCK, DIRT, GRASS_BLOCK, STONE,
 };
 
+use super::chunk::PLACEHOLDER_BIOME_ID;
 use crate::net::ConnectionHandle;
 
 // `RegistryId::to_raw`/`from_raw` (imported above) are this file's own bridge —
@@ -57,12 +58,27 @@ pub enum Face {
 impl Face {
     /// `None` for any raw value outside `0..=5`.
     pub fn from_ordinal(raw: i32) -> Option<Face> {
-        todo!()
+        match raw {
+            0 => Some(Face::Down),
+            1 => Some(Face::Up),
+            2 => Some(Face::North),
+            3 => Some(Face::South),
+            4 => Some(Face::West),
+            5 => Some(Face::East),
+            _ => None,
+        }
     }
 
     /// `(dx, dy, dz)` unit offset in this face's direction.
     pub fn offset(self) -> (i32, i32, i32) {
-        todo!()
+        match self {
+            Face::Down => (0, -1, 0),
+            Face::Up => (0, 1, 0),
+            Face::North => (0, 0, -1),
+            Face::South => (0, 0, 1),
+            Face::West => (-1, 0, 0),
+            Face::East => (1, 0, 0),
+        }
     }
 }
 
@@ -142,14 +158,14 @@ pub struct ChunkIndex(pub std::collections::HashMap<ChunkKey, Entity>);
 /// `u32` ids to `rc-chunk-storage`'s own distinct `BlockStateId` newtype (Context:
 /// M2-B01's own reserved seam, exercised here for the first time).
 pub fn to_storage_id(raw: u32) -> StorageBlockStateId {
-    todo!()
+    StorageBlockStateId::from_raw(raw)
 }
 
 /// As `to_storage_id`, for the placeholder biome id -> `rc-chunk-storage`'s narrower
 /// `BiomeId(u16)` (M2-B01's own documented truncating-but-safe cast — no real biome
 /// registry remotely approaches 65536 entries).
 pub fn to_storage_biome_id(raw: u32) -> StorageBiomeId {
-    todo!()
+    StorageBiomeId::from_raw(raw)
 }
 
 /// Builds one fully-seeded chunk entity's seven `M2-B01` components, matching M1-B05's own
@@ -169,24 +185,65 @@ pub fn seed_chunk_column(
     ChunkStatus,
     ChunkPersistenceState,
 ) {
-    todo!()
+    let mut blocks = BlockStateColumn::new(to_storage_id(AIR.0), thresholds);
+    for x in 0u8..16 {
+        for z in 0u8..16 {
+            blocks.set(x, -64, z, to_storage_id(BEDROCK.0));
+            for y in -63..=-61i32 {
+                blocks.set(x, y, z, to_storage_id(DIRT.0));
+            }
+            blocks.set(x, -60, z, to_storage_id(GRASS_BLOCK.0));
+        }
+    }
+    let biomes = BiomeColumn::new(to_storage_biome_id(PLACEHOLDER_BIOME_ID), biome_thresholds);
+    let light = LightColumn::new_uninitialized();
+    let heightmaps = HeightmapSet::new_uniform(-59);
+    let block_entities = BlockEntityIndex::new();
+    let status = ChunkStatus(ChunkGenStatus::Full);
+    let persistence = ChunkPersistenceState::new();
+    (
+        blocks,
+        biomes,
+        light,
+        heightmaps,
+        block_entities,
+        status,
+        persistence,
+    )
 }
 
 /// The player's fixed eye position given a fixed feet position (Context: `EYE_HEIGHT`).
 pub fn eye_position(feet: BlockPos) -> (f64, f64, f64) {
-    todo!()
+    (
+        feet.x as f64 + 0.5,
+        feet.y as f64 + EYE_HEIGHT,
+        feet.z as f64 + 0.5,
+    )
 }
 
 /// Straight-line Euclidean distance from `eye` to `target`'s block-center, `<= range`
 /// (Context's simplified reach check — no voxel raycast).
 pub fn within_reach(eye: (f64, f64, f64), target: BlockPos, range: f64) -> bool {
-    todo!()
+    let center = (
+        target.x as f64 + 0.5,
+        target.y as f64 + 0.5,
+        target.z as f64 + 0.5,
+    );
+    let dx = eye.0 - center.0;
+    let dy = eye.1 - center.1;
+    let dz = eye.2 - center.2;
+    (dx * dx + dy * dy + dz * dz).sqrt() <= range
 }
 
 /// Vanilla's own inside-block-flag placement rule (Context): `inside_block` places at the
 /// clicked cell itself; otherwise the clicked cell offset one step along `face`.
 pub fn resolve_place_position(location: BlockPos, face: Face, inside_block: bool) -> BlockPos {
-    todo!()
+    if inside_block {
+        location
+    } else {
+        let (dx, dy, dz) = face.offset();
+        BlockPos::new(location.x + dx, location.y + dy, location.z + dz)
+    }
 }
 
 /// The absolute block position `kind` targets — `location` for `Break`, `resolve_place_position`'s
@@ -194,7 +251,15 @@ pub fn resolve_place_position(location: BlockPos, face: Face, inside_block: bool
 /// reach-validation gate (Context: "Where this check runs, precisely") and `apply_block_action`
 /// itself, so the two can never disagree about which cell an action targets.
 pub fn target_position(kind: &BlockActionKind) -> Option<BlockPos> {
-    todo!()
+    match kind {
+        BlockActionKind::Break { location } => Some(*location),
+        BlockActionKind::Place {
+            location,
+            face,
+            inside_block,
+        } => Some(resolve_place_position(*location, *face, *inside_block)),
+        BlockActionKind::Ignored => None,
+    }
 }
 
 /// Applies one **already reach-validated** action against `world`'s chunk entities, or
@@ -213,7 +278,100 @@ pub fn apply_block_action(
     local_identity: Address,
     bus: &mut RegionMessageBus,
 ) -> ApplyOutcome {
-    todo!()
+    let Some(target) = target_position(&action.kind) else {
+        return ApplyOutcome::NoOp;
+    };
+
+    let chunk_key = target.chunk_key(dimension);
+    let owner = resolve_owner(chunk_key);
+
+    if owner != local_identity {
+        // A cross-region action cannot be re-validated against the target chunk's real
+        // current content (this region does not own that chunk's data, ARCH-D5) --
+        // forwarded as the deterministic outcome the action *would* produce, unconditionally
+        // (Context: "No re-validation against the remote chunk's real content").
+        let new_state = match action.kind {
+            BlockActionKind::Break { .. } => AIR.0,
+            BlockActionKind::Place { .. } => STONE.0,
+            BlockActionKind::Ignored => unreachable!("target_position returns None for Ignored"),
+        };
+        bus.send(
+            owner,
+            RegionMessage::BorderUpdateEvent(BorderUpdateEvent {
+                chunk: chunk_key,
+                pos: target,
+                kind: BorderUpdateKind::BlockChanged { new_state },
+            }),
+        );
+        return ApplyOutcome::RoutedCrossRegion {
+            pos: target,
+            new_state,
+        };
+    }
+
+    let Some(&entity) = world.resource::<ChunkIndex>().0.get(&chunk_key) else {
+        // Unreachable in every shipped test/production path -- `ChunkIndex` always covers
+        // every chunk `resolve_owner` calls local. `NoOp` (not `Rejected`) since no
+        // `RejectReason` variant honestly describes "this region's own directory disagrees
+        // with itself," and `NoOp` already means "no further packet is sent," the only
+        // property this defensive fallback needs.
+        return ApplyOutcome::NoOp;
+    };
+
+    let (lx, lz) = (target.x.rem_euclid(16) as u8, target.z.rem_euclid(16) as u8);
+
+    let mut entity_mut = world.entity_mut(entity);
+    let current = entity_mut
+        .get::<BlockStateColumn>()
+        .expect("every chunk entity carries BlockStateColumn (M2-B01's fixed component set)")
+        .get(lx, target.y, lz)
+        .to_raw();
+
+    match action.kind {
+        BlockActionKind::Break { .. } => {
+            if current == AIR.0 {
+                return ApplyOutcome::Rejected {
+                    pos: target,
+                    reason: RejectReason::TargetAlreadyAir,
+                    current_state: Some(current),
+                };
+            }
+            entity_mut
+                .get_mut::<BlockStateColumn>()
+                .expect("every chunk entity carries BlockStateColumn")
+                .set(lx, target.y, lz, to_storage_id(AIR.0));
+            entity_mut
+                .get_mut::<ChunkPersistenceState>()
+                .expect("every chunk entity carries ChunkPersistenceState")
+                .mark_dirty();
+            ApplyOutcome::Applied {
+                pos: target,
+                new_state: AIR.0,
+            }
+        }
+        BlockActionKind::Place { .. } => {
+            if current != AIR.0 {
+                return ApplyOutcome::Rejected {
+                    pos: target,
+                    reason: RejectReason::TargetNotAir,
+                    current_state: Some(current),
+                };
+            }
+            entity_mut
+                .get_mut::<BlockStateColumn>()
+                .expect("every chunk entity carries BlockStateColumn")
+                .set(lx, target.y, lz, to_storage_id(STONE.0));
+            entity_mut
+                .get_mut::<ChunkPersistenceState>()
+                .expect("every chunk entity carries ChunkPersistenceState")
+                .mark_dirty();
+            ApplyOutcome::Applied {
+                pos: target,
+                new_state: STONE.0,
+            }
+        }
+        BlockActionKind::Ignored => unreachable!("target_position returns None for Ignored"),
+    }
 }
 
 /// Test/diagnostic introspection only (mirroring `rc-transport-inproc`'s own precedent for
@@ -231,5 +389,15 @@ pub fn debug_query_block(
     dimension: DimensionId,
     pos: BlockPos,
 ) -> Option<DebugBlockInfo> {
-    todo!()
+    let &entity = world
+        .resource::<ChunkIndex>()
+        .0
+        .get(&pos.chunk_key(dimension))?;
+    let column = world.get::<BlockStateColumn>(entity)?;
+    let persistence = world.get::<ChunkPersistenceState>(entity)?;
+    let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+    Some(DebugBlockInfo {
+        raw_state: column.get(lx, pos.y, lz).to_raw(),
+        dirty: persistence.dirty,
+    })
 }

@@ -279,7 +279,25 @@ pub struct AcknowledgeBlockChange {
 /// Inverse of this file's already-existing `pack_position` (Context: exact bit layout
 /// restated). Sign-extends each two's-complement field back from its packed width.
 pub fn unpack_position(packed: i64) -> BlockPos {
-    todo!()
+    let raw_x = (packed >> 38) & 0x3FF_FFFF;
+    let raw_z = (packed >> 12) & 0x3FF_FFFF;
+    let raw_y = packed & 0xFFF;
+    BlockPos::new(
+        sign_extend(raw_x, 26) as i32,
+        sign_extend(raw_y, 12) as i32,
+        sign_extend(raw_z, 26) as i32,
+    )
+}
+
+/// `value` is an unsigned `bits`-wide field already isolated by the caller (masked, no
+/// stray high bits). Returns its two's-complement signed interpretation.
+fn sign_extend(value: i64, bits: u32) -> i64 {
+    let sign_bit = 1i64 << (bits - 1);
+    if value >= sign_bit {
+        value - (1i64 << bits)
+    } else {
+        value
+    }
 }
 
 #[cfg(test)]
