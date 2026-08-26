@@ -9,13 +9,14 @@ pub struct ChunkPersistenceState {
 
 impl ChunkPersistenceState {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
     /// Clears `dirty` and records `tick` as the last-saved tick.
     pub fn mark_saved(&mut self, tick: u64) {
-        todo!()
+        self.dirty = false;
+        self.last_saved_tick = tick;
     }
     pub fn mark_dirty(&mut self) {
-        todo!()
+        self.dirty = true;
     }
 }

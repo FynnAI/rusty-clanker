@@ -10,20 +10,25 @@ pub struct BlockEntityIndex {
 
 impl BlockEntityIndex {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
     /// Appends `entity` at the end of the load order (the caller is responsible for
     /// vanilla-matching order at the point of insertion — this type only preserves
     /// whatever order it is given).
     pub fn push(&mut self, entity: Entity) {
-        todo!()
+        self.entities.push(entity);
     }
     /// Removes the first occurrence of `entity`, if present, preserving the relative
     /// order of every remaining entry. Returns `true` iff an entry was removed.
     pub fn remove(&mut self, entity: Entity) -> bool {
-        todo!()
+        if let Some(pos) = self.entities.iter().position(|&e| e == entity) {
+            self.entities.remove(pos);
+            true
+        } else {
+            false
+        }
     }
     pub fn entities(&self) -> &[Entity] {
-        todo!()
+        &self.entities
     }
 }

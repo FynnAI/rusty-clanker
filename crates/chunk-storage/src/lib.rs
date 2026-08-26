@@ -20,12 +20,12 @@ pub use bits::{ceil_log2, pack_bits, read_slot, unpack_bits, write_slot};
 pub use block_entity::BlockEntityIndex;
 pub use chunk_key::ChunkKeyTag;
 pub use column::{
-    biome_index, block_index, local_biome_quart_y, local_block_y, section_index_for_y,
     BiomeColumn, BlockStateColumn, SECTION_BIOME_CELLS, SECTION_BLOCKS, SECTION_COUNT,
-    WORLD_HEIGHT, WORLD_MIN_Y,
+    WORLD_HEIGHT, WORLD_MIN_Y, biome_index, block_index, local_biome_quart_y, local_block_y,
+    section_index_for_y,
 };
 pub use heightmap::{BlockOpacity, HeightmapKind, HeightmapSet};
-pub use light::{LightColumn, LightSection, LIGHT_SECTION_COUNT};
+pub use light::{LIGHT_SECTION_COUNT, LightColumn, LightSection};
 pub use palette::{Palette, PalettedContainer};
 pub use persistence::ChunkPersistenceState;
 pub use registry_id::{BiomeId, BlockStateId, PaletteThresholds, RegistryId};

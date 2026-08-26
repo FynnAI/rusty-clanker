@@ -215,7 +215,8 @@ fn compound_tag() {
         0x0A, 0x00, 0x00, 0x0A, 0x00, 0x01, 0x63, 0x01, 0x00, 0x01, 0x78, 0x09, 0x00, 0x00,
     ];
     let inner = owned::NbtCompound::from_values(vec![("x".into(), owned::NbtTag::Byte(9))]);
-    let compound = owned::NbtCompound::from_values(vec![("c".into(), owned::NbtTag::Compound(inner))]);
+    let compound =
+        owned::NbtCompound::from_values(vec![("c".into(), owned::NbtTag::Compound(inner))]);
     let root = owned::BaseNbt::new("", compound);
 
     assert_eq!(rc_nbt::write_owned(&root), bytes);

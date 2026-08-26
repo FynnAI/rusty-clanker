@@ -31,18 +31,18 @@ pub struct BiomeId(pub u16);
 
 impl RegistryId for BlockStateId {
     fn to_raw(self) -> u32 {
-        todo!()
+        self.0
     }
     fn from_raw(raw: u32) -> Self {
-        todo!()
+        Self(raw)
     }
 }
 impl RegistryId for BiomeId {
     fn to_raw(self) -> u32 {
-        todo!()
+        self.0 as u32
     }
     fn from_raw(raw: u32) -> Self {
-        todo!()
+        Self(raw as u16)
     }
 }
 
@@ -65,7 +65,11 @@ impl PaletteThresholds {
     /// bake that number in (it would silently go stale if the registry ever regenerates
     /// with a different count) — pass it explicitly, e.g. `PaletteThresholds::blocks(15)`.
     pub const fn blocks(direct_bits: u16) -> Self {
-        todo!()
+        Self {
+            indirect_floor_bits: 4,
+            max_indirect_bits: 8,
+            direct_bits,
+        }
     }
 
     /// `indirect_floor_bits = 1`, `max_indirect_bits = 3` (WORLD-D2). `direct_bits` is
@@ -74,6 +78,10 @@ impl PaletteThresholds {
     /// recorded anywhere in this project's research corpus at the time of writing);
     /// pass it explicitly once a real generated biome registry is available.
     pub const fn biomes(direct_bits: u16) -> Self {
-        todo!()
+        Self {
+            indirect_floor_bits: 1,
+            max_indirect_bits: 3,
+            direct_bits,
+        }
     }
 }

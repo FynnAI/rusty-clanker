@@ -24,19 +24,23 @@ impl LightColumn {
     /// `LIGHT_SECTION_COUNT` sections, every one `LightSection::default()`
     /// (uninitialized).
     pub fn new_uninitialized() -> Self {
-        todo!()
+        Self {
+            sections: (0..LIGHT_SECTION_COUNT)
+                .map(|_| LightSection::default())
+                .collect(),
+        }
     }
 
     pub fn sections(&self) -> &[LightSection] {
-        todo!()
+        &self.sections
     }
     pub fn sections_mut(&mut self) -> &mut [LightSection] {
-        todo!()
+        &mut self.sections
     }
     pub fn section(&self, index: usize) -> &LightSection {
-        todo!()
+        &self.sections[index]
     }
     pub fn section_mut(&mut self, index: usize) -> &mut LightSection {
-        todo!()
+        &mut self.sections[index]
     }
 }
