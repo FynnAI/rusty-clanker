@@ -235,12 +235,41 @@ pub struct PlayerAction {
     pub sequence: i32,
 }
 
-/// M2-B07: a single fixed placeholder block is placed on every successful `UseItemOn`
-/// (Context: "Placement content" -- no real item/inventory model exists yet). `face` is a
-/// `VarInt` here (unlike `PlayerAction.face`'s `Byte`) -- a real, long-standing asymmetry
-/// between these two packets, not a copy/paste inconsistency (Context).
+/// M2 integration fix: this struct restated TWO real wire properties incorrectly,
+/// both root-caused against a real `m2-report --mode smoke` run (a real azalea bot
+/// driving a real, freshly built `rusty-clanker-server` release binary) after every
+/// one of its three scripted placements landed as a silent no-op (target cell still
+/// `AIR` on disk and live, while the two scripted breaks -- a separate, unaffected
+/// packet -- persisted correctly):
+///
+/// 1. **Wrong packet id.** M2-B07's own report already flagged this exact struct's
+///    id as "restated from this project's own established understanding... not
+///    independently re-verified" -- verified now, empirically, against a real wire
+///    capture (a `TEMP-DIAG` trace of every `raw.id`/body length `dispatch_inbound`
+///    received during a real bot's scripted placement run): the three placements
+///    produced three real, 25-byte-body packets at id `0x42`, not `0x2A` -- this
+///    struct's `#[packet(id = 0x2A)]` simply never matched anything a real client
+///    sent, so every placement fell straight into `dispatch_inbound`'s `other =>`
+///    catch-all arm and was silently dropped before `decode_one::<UseItemOn>` was
+///    ever called.
+/// 2. **Missing wire field.** Independently confirmed against azalea's own pinned-
+///    rev packet definition (`azalea-protocol/src/packets/game/s_use_item_on.rs`'s
+///    `BlockHit::azalea_read`/`azalea_write`, the exact same source M2-B07's own
+///    `restart_persistence.rs` already cites for this packet's `face`/`inside_block`
+///    shape): the real wire layout carries one more `bool` ("world border hit")
+///    immediately after `inside` (`inside_block` here) and before the trailing `seq`
+///    (`sequence` here), which this struct never declared -- the observed 25-byte
+///    real body already matches this 9-field shape exactly (1+8+1+12+1+1+1); the old
+///    8-field shape would have left one byte permanently undecoded even once
+///    dispatched to the right id.
+///
+/// `PlayerAction` a single fixed placeholder block is placed on every successful
+/// `UseItemOn` (Context: "Placement content" -- no real item/inventory model exists
+/// yet). `face` is a `VarInt` here (unlike `PlayerAction.face`'s `Byte`) -- a real,
+/// long-standing asymmetry between these two packets, not a copy/paste
+/// inconsistency (Context).
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
-#[packet(state = "play", bound = "server", id = 0x2A)]
+#[packet(state = "play", bound = "server", id = 0x42)]
 pub struct UseItemOn {
     #[rc(varint)]
     pub hand: i32,
@@ -251,6 +280,9 @@ pub struct UseItemOn {
     pub cursor_y: f32,
     pub cursor_z: f32,
     pub inside_block: bool,
+    /// M2 integration fix (this struct's own doc comment): real wire field, absent
+    /// from every prior committed version of this struct.
+    pub hits_world_border: bool,
     #[rc(varint)]
     pub sequence: i32,
 }
