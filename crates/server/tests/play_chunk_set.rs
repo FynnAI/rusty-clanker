@@ -30,7 +30,7 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     ChunkBatchFinished, ChunkBatchStart, ConfirmTeleportation, GameEvent, LevelChunkWithLight,
-    LoginPlay, SetChunkCacheCenter, SetDefaultSpawnPosition, SynchronizePlayerPosition,
+    LoginPlay, SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SynchronizePlayerPosition,
 };
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -136,7 +136,14 @@ fn index_at(container: &DecodedContainer, index: usize) -> u32 {
 
 #[tokio::test]
 async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    // M2 integration test-authoring fix: raised from `10` -- `enter_play` now awaits a
+    // real, ticket-driven `RC-IoPool` load of the full 121-chunk grid before sending it
+    // (`connection.rs`'s own `request_chunk_grid` call), a genuinely asynchronous round
+    // trip absent when this budget was first tuned against the old, instantly-
+    // synthesized placeholder blob -- observed at ~6.3s under a real full-suite `cargo
+    // nextest run`'s own contention, comfortably inside the old `10`s but with little
+    // margin; `30` gives real headroom.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
         let (server, mut client) = connected_pair().await;
         let (inbound, handle) = spawn_connection(server, ConnectionConfig::default());
 
@@ -183,6 +190,20 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let game_event = decode_one::<GameEvent>(body).unwrap();
         assert_eq!(game_event.event, 13);
         assert_eq!(game_event.value, 0.0);
+
+        // M2 integration test-authoring fix: `SetHealth` is a new packet in this exact
+        // Play-entry position (`connection.rs`'s own `enter_play` doc comment on this
+        // call site has the full "why here, not after `ChunkBatchFinished`" writeup) --
+        // this test's own strict, packet-by-packet sequence assertion needed a matching
+        // decode step. A fresh player (this test's own `HardcodedWorld::new()`, never
+        // persisted before) gets `LoadedPlayerRecord::fresh_default`'s own values
+        // (`rc-chunk-storage`'s `player.rs`).
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, SetHealth::ID);
+        let set_health = decode_one::<SetHealth>(body).unwrap();
+        assert_eq!(set_health.health, 20.0);
+        assert_eq!(set_health.food, 20);
+        assert_eq!(set_health.saturation, 5.0);
 
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, SetChunkCacheCenter::ID);

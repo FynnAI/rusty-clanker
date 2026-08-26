@@ -87,9 +87,17 @@ async fn assert_silence(socket: &mut TcpStream, accumulator: &mut BytesMut) {
     );
 }
 
+// M2 integration test-authoring fix: every one of this file's four `timeout` budgets
+// below raised from `20`s to `60`s -- `enter_play` now awaits a real, ticket-driven
+// `RC-IoPool` chunk-grid load per join (`connection.rs`'s own `request_chunk_grid` call),
+// a genuinely asynchronous round trip absent when these budgets were first tuned against
+// the old, instantly-synthesized placeholder chunk blob. A real `cargo nextest run`'s own
+// default full-parallelism scheduling can push that latency well past `20`s under heavy
+// same-machine contention even though an isolated run of any one of these tests finishes
+// in ~1.5s -- `60` gives comfortable headroom without masking a genuine hang.
 #[tokio::test]
 async fn reach_rejects_out_of_range_target_with_ack_only() {
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -130,7 +138,7 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
 
 #[tokio::test]
 async fn reach_accepts_in_range_target() {
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -165,7 +173,7 @@ async fn reach_accepts_in_range_target() {
 
 #[tokio::test]
 async fn placement_into_non_air_target_is_rejected_with_correction() {
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
@@ -210,7 +218,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
 
 #[tokio::test]
 async fn breaking_air_is_rejected_with_correction() {
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 

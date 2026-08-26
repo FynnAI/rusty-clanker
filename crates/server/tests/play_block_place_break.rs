@@ -87,7 +87,17 @@ async fn spawn_actor(world: &HardcodedWorld, username: &str, uuid: u128) -> (Tcp
 
 #[tokio::test]
 async fn break_and_place_broadcast_and_persist() {
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+    // M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a
+    // real, ticket-driven `RC-IoPool` chunk-grid load per join (`connection.rs`'s own
+    // `request_chunk_grid` call), a genuinely asynchronous round trip absent when this
+    // budget was first tuned against the old, instantly-synthesized placeholder chunk
+    // blob. Two joins share one `IoPool` here; both real-server runs (isolated,
+    // uncontended) complete in ~2.4s, but a real `cargo nextest run`'s own default
+    // full-parallelism scheduling can multiply that well past `20`s under heavy
+    // same-machine contention (confirmed directly: this exact test alone finished in
+    // 2.379s, the same test inside a full-suite run exceeded 20s) -- `60` gives
+    // comfortable headroom without masking a genuine hang.
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;

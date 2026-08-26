@@ -59,9 +59,16 @@ async fn drain_play_entry(socket: &mut TcpStream, accumulator: &mut BytesMut) {
     }
 }
 
+// M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a real,
+// ticket-driven `RC-IoPool` chunk-grid load per join (`connection.rs`'s own
+// `request_chunk_grid` call), a genuinely asynchronous round trip absent when this budget
+// was first tuned against the old, instantly-synthesized placeholder chunk blob (matches
+// the identical fix and reasoning in `play_reach_validation.rs`/
+// `play_block_place_break.rs`, both hit the same real, `cargo nextest`-confirmed
+// full-suite contention).
 #[tokio::test]
 async fn sequence_acks_preserve_fifo_order_under_a_burst() {
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (server, mut client) = connected_pair().await;
         let (inbound, handle) = spawn_connection(server, ConnectionConfig::default());
