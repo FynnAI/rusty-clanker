@@ -1,8 +1,55 @@
 use xtask::forbidden_patterns::{
-    PatternViolation, check_empty_test_body, check_tautological_assertion,
-    check_undocumented_tier_cfg, check_unlinked_ignore, check_weakened_tests,
+    LintGate, PatternViolation, check_empty_test_body, check_tautological_assertion,
+    check_undocumented_tier_cfg, check_unlinked_ignore, check_weakened_tests, commit_lint_gate,
 };
 use xtask::path_guard::ChangesetType;
+
+// The per-commit gate (mirrors path_guard::evaluate_commit): a trailer-less docs-only
+// commit is skipped, not failed — the regression that turned CI red on a pure
+// completion-report push (run 33022662264) even though the path-guard passed it.
+#[test]
+fn gate_skips_a_trailerless_docs_only_commit() {
+    let gate = commit_lint_gate(
+        "Docs update, no trailer.\n",
+        &["blueprints/M2/M2-COMPLETION-REPORT.md".to_string()],
+    );
+    assert!(matches!(gate, LintGate::Skip(_)));
+}
+
+#[test]
+fn gate_fails_a_trailerless_code_commit() {
+    let gate = commit_lint_gate(
+        "Code change, no trailer.\n",
+        &["crates/core/src/lib.rs".to_string()],
+    );
+    assert!(matches!(gate, LintGate::Fail(_)));
+}
+
+#[test]
+fn gate_lints_under_the_commits_own_type() {
+    let gate = commit_lint_gate(
+        "Subject\n\nChangeset-Type: test-authoring\n",
+        &["crates/server/tests/foo.rs".to_string()],
+    );
+    assert_eq!(gate, LintGate::Lint(ChangesetType::TestAuthoring));
+}
+
+#[test]
+fn gate_skips_an_empty_commit() {
+    assert!(matches!(
+        commit_lint_gate("Subject only.\n", &[]),
+        LintGate::Skip(_)
+    ));
+}
+
+#[test]
+fn gate_fails_a_malformed_trailer() {
+    let gate = commit_lint_gate(
+        "Subject\n\nChangeset-Type: bogus\n",
+        &["crates/core/src/lib.rs".to_string()],
+    );
+    assert!(matches!(gate, LintGate::Fail(_)));
+}
 
 #[test]
 fn bare_ignore_is_flagged() {

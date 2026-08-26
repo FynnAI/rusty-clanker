@@ -367,11 +367,42 @@ pub fn check_weakened_tests(
     violations
 }
 
-fn added_lines_for(sh: &xshell::Shell, base: &str, file: &str) -> Result<Vec<String>, String> {
-    let range = format!("{base}...HEAD");
-    let output = xshell::cmd!(sh, "git diff {range} -- {file}")
+/// Per-commit gate mirroring `path_guard::evaluate_commit`'s decision shape (one
+/// commit is one changeset, TEST-D45): `Skip` for an empty or docs-only-exempt
+/// commit, `Lint(t)` to run every check under that commit's own declared type,
+/// `Fail` for a missing or malformed trailer on a non-exempt commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LintGate {
+    Skip(String),
+    Lint(ChangesetType),
+    Fail(Vec<String>),
+}
+
+pub fn commit_lint_gate(commit_message: &str, changed_files: &[String]) -> LintGate {
+    if changed_files.is_empty() {
+        return LintGate::Skip("no changed files".to_string());
+    }
+    match crate::path_guard::parse_changeset_type(commit_message) {
+        Ok(Some(t)) => LintGate::Lint(t),
+        Ok(None) if crate::path_guard::docs_only_exemption(changed_files) => {
+            LintGate::Skip(format!(
+                "docs-only exemption: {} Markdown file(s), none protected — trailer not required",
+                changed_files.len()
+            ))
+        }
+        Ok(None) => LintGate::Fail(vec![
+            "commit message is missing a required `Changeset-Type:` trailer".to_string(),
+        ]),
+        Err(msg) => LintGate::Fail(vec![msg]),
+    }
+}
+
+/// The `+`-lines one single commit adds to `file` (first-parent diff).
+fn added_lines_for(sh: &xshell::Shell, sha: &str, file: &str) -> Result<Vec<String>, String> {
+    let parent = format!("{sha}^");
+    let output = xshell::cmd!(sh, "git diff {parent} {sha} -- {file}")
         .read()
-        .map_err(|err| format!("`git diff {range} -- {file}` failed: {err}"))?;
+        .map_err(|err| format!("`git diff {parent} {sha} -- {file}` failed: {err}"))?;
     Ok(output
         .lines()
         .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
@@ -380,10 +411,12 @@ fn added_lines_for(sh: &xshell::Shell, base: &str, file: &str) -> Result<Vec<Str
 }
 
 /// `git show <rev>:<file>`, treating a failure (file absent at `rev` — newly added or
-/// since deleted) as empty content rather than a hard error.
+/// since deleted) as empty content rather than a hard error; git's own `fatal:` line
+/// for that expected case is suppressed.
 fn content_at(sh: &xshell::Shell, rev: &str, file: &str) -> String {
     let spec = format!("{rev}:{file}");
     xshell::cmd!(sh, "git show {spec}")
+        .ignore_stderr()
         .read()
         .unwrap_or_default()
 }
@@ -421,10 +454,14 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
 }
 
 /// CLI entry point (`xtask lint-tests [--base <ref>]`): same base-resolution rule as
-/// `path_guard::run`; for every changed file, shells out to `git diff`/`git show
-/// <ref>:<path>` to gather the inputs each `check_*` function above needs and unions
-/// their results. Writes `target/verify/lint-tests.json`, returns the matching
-/// `ExitCode`.
+/// `path_guard::run`, and the same **per-commit** walk (`path_guard::rev_list`) — one
+/// commit is one changeset, so each commit in `<base>..HEAD` is linted under its own
+/// `Changeset-Type:` trailer against its own first-parent diff (`commit_lint_gate`;
+/// docs-only all-Markdown commits are exempt from the trailer, exactly as in the
+/// path-guard). For every file one commit changes, shells out to `git diff <sha>^
+/// <sha>`/`git show <rev>:<path>` to gather the inputs each `check_*` function above
+/// needs and unions their results. Writes `target/verify/lint-tests.json`, returns
+/// the matching `ExitCode`.
 pub fn run(base: Option<&str>) -> std::process::ExitCode {
     let sh = match xshell::Shell::new() {
         Ok(sh) => sh,
@@ -435,14 +472,6 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
     };
 
     let mut result = crate::tier_result::TierResult::new("lint-tests");
-
-    let commit_message = match xshell::cmd!(sh, "git log -1 --format=%B HEAD").read() {
-        Ok(msg) => msg,
-        Err(err) => {
-            eprintln!("lint-tests: failed to read HEAD commit message: {err}");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
 
     let Some(resolved_base) = crate::path_guard::resolve_base(&sh, base) else {
         println!(
@@ -461,96 +490,115 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
         return crate::tier_result::exit_code_for(result.status);
     };
 
-    let changed_files = match crate::path_guard::diff_name_only(&sh, &resolved_base) {
-        Ok(files) => files,
+    let commits = match crate::path_guard::rev_list(&sh, &resolved_base) {
+        Ok(commits) => commits,
         Err(err) => {
             eprintln!("lint-tests: {err}");
             return std::process::ExitCode::FAILURE;
         }
     };
 
-    if changed_files.is_empty() {
+    if commits.is_empty() {
         result.push(
-            "changed-files",
+            "commits",
             crate::tier_result::Status::Pass,
-            Some("no changed files".to_string()),
+            Some(format!("no commits in {resolved_base}..HEAD")),
         );
-        let result = result.finalize();
-        let _ = crate::tier_result::write(&result);
-        return crate::tier_result::exit_code_for(result.status);
     }
 
-    let changeset_type = match crate::path_guard::parse_changeset_type(&commit_message) {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            eprintln!(
-                "lint-tests: HEAD commit message is missing a required `Changeset-Type:` trailer"
-            );
-            result.push(
-                "changeset-type",
-                crate::tier_result::Status::Fail,
-                Some("missing Changeset-Type trailer".to_string()),
-            );
-            let result = result.finalize();
-            let _ = crate::tier_result::write(&result);
-            return crate::tier_result::exit_code_for(result.status);
-        }
-        Err(msg) => {
-            eprintln!("lint-tests: {msg}");
-            result.push(
-                "changeset-type",
-                crate::tier_result::Status::Fail,
-                Some(msg),
-            );
-            let result = result.finalize();
-            let _ = crate::tier_result::write(&result);
-            return crate::tier_result::exit_code_for(result.status);
-        }
-    };
-
-    let mut all_violations: Vec<PatternViolation> = Vec::new();
-    for file in &changed_files {
-        let added_lines = match added_lines_for(&sh, &resolved_base, file) {
-            Ok(lines) => lines,
+    for sha in &commits {
+        let short = &sha[..sha.len().min(9)];
+        let commit_message = match xshell::cmd!(sh, "git log -1 --format=%B {sha}").read() {
+            Ok(msg) => msg,
             Err(err) => {
-                eprintln!("lint-tests: {err}");
+                eprintln!("lint-tests: failed to read commit message of {sha}: {err}");
                 return std::process::ExitCode::FAILURE;
             }
         };
-        all_violations.extend(check_unlinked_ignore(file, &added_lines));
-        all_violations.extend(check_tautological_assertion(file, &added_lines));
-        all_violations.extend(check_undocumented_tier_cfg(file, &added_lines));
+        let parent = format!("{sha}^");
+        let changed_files = match xshell::cmd!(sh, "git diff --name-only {parent} {sha}")
+            .read()
+            .map(|out| {
+                out.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            }) {
+            Ok(files) => files,
+            Err(err) => {
+                eprintln!("lint-tests: `git diff --name-only {parent} {sha}` failed: {err}");
+                return std::process::ExitCode::FAILURE;
+            }
+        };
 
-        let head_content = content_at(&sh, "HEAD", file);
-        all_violations.extend(check_empty_test_body(file, &head_content));
+        let changeset_type = match commit_lint_gate(&commit_message, &changed_files) {
+            LintGate::Skip(note) => {
+                result.push(
+                    format!("commit::{short}"),
+                    crate::tier_result::Status::Pass,
+                    Some(note),
+                );
+                continue;
+            }
+            LintGate::Fail(lines) => {
+                for line in &lines {
+                    eprintln!("lint-tests: commit {short}: {line}");
+                }
+                result.push(
+                    format!("commit::{short}"),
+                    crate::tier_result::Status::Fail,
+                    Some(lines.join("; ")),
+                );
+                continue;
+            }
+            LintGate::Lint(t) => t,
+        };
 
-        let base_content = content_at(&sh, &resolved_base, file);
-        all_violations.extend(check_weakened_tests(
-            file,
-            &base_content,
-            &head_content,
-            changeset_type,
-        ));
-    }
+        let mut commit_violations: Vec<PatternViolation> = Vec::new();
+        for file in &changed_files {
+            let added_lines = match added_lines_for(&sh, sha, file) {
+                Ok(lines) => lines,
+                Err(err) => {
+                    eprintln!("lint-tests: {err}");
+                    return std::process::ExitCode::FAILURE;
+                }
+            };
+            commit_violations.extend(check_unlinked_ignore(file, &added_lines));
+            commit_violations.extend(check_tautological_assertion(file, &added_lines));
+            commit_violations.extend(check_undocumented_tier_cfg(file, &added_lines));
 
-    if all_violations.is_empty() {
-        result.push(
-            "forbidden-patterns",
-            crate::tier_result::Status::Pass,
-            Some(format!(
-                "{} changed files, 0 violations",
-                changed_files.len()
-            )),
-        );
-    } else {
-        for (i, v) in all_violations.iter().enumerate() {
-            let (name, detail) = describe_violation(v);
-            eprintln!("lint-tests: {detail}");
+            let head_content = content_at(&sh, sha, file);
+            commit_violations.extend(check_empty_test_body(file, &head_content));
+
+            let base_content = content_at(&sh, &parent, file);
+            commit_violations.extend(check_weakened_tests(
+                file,
+                &base_content,
+                &head_content,
+                changeset_type,
+            ));
+        }
+
+        if commit_violations.is_empty() {
             result.push(
-                format!("forbidden-patterns::{i}::{name}"),
-                crate::tier_result::Status::Fail,
-                Some(detail),
+                format!("commit::{short}"),
+                crate::tier_result::Status::Pass,
+                Some(format!(
+                    "{} changed files, 0 violations",
+                    changed_files.len()
+                )),
             );
+        } else {
+            for (i, v) in commit_violations.iter().enumerate() {
+                let (name, detail) = describe_violation(v);
+                eprintln!("lint-tests: commit {short}: {detail}");
+                result.push(
+                    format!("commit::{short}::{i}::{name}"),
+                    crate::tier_result::Status::Fail,
+                    Some(detail),
+                );
+            }
         }
     }
 

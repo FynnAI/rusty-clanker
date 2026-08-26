@@ -369,7 +369,8 @@ pub(crate) fn resolve_base(sh: &xshell::Shell, base: Option<&str>) -> Option<Str
 }
 
 /// `git rev-list --reverse <base>..HEAD` — every commit the guard judges, oldest first.
-fn rev_list(sh: &xshell::Shell, base: &str) -> Result<Vec<String>, String> {
+/// `pub(crate)` — `forbidden_patterns::run` walks the identical commit list.
+pub(crate) fn rev_list(sh: &xshell::Shell, base: &str) -> Result<Vec<String>, String> {
     let range = format!("{base}..HEAD");
     xshell::cmd!(sh, "git rev-list --reverse {range}")
         .read()
@@ -385,7 +386,7 @@ fn rev_list(sh: &xshell::Shell, base: &str) -> Result<Vec<String>, String> {
 
 /// `git diff --name-only <base>...HEAD`, one path per returned entry (already
 /// `/`-separated, per git's own output convention). `pub(crate)` — shared with
-/// `forbidden_patterns::run`.
+/// `verifier_report`.
 pub(crate) fn diff_name_only(sh: &xshell::Shell, base: &str) -> Result<Vec<String>, String> {
     let range = format!("{base}...HEAD");
     xshell::cmd!(sh, "git diff --name-only {range}")
