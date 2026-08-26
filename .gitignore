@@ -5,6 +5,10 @@
 # Parity/differential test corpora, populated on demand (WS-D10)
 /corpus/
 
+# M2-B05: the default on-disk world save directory a locally-run `rusty-clanker-server`
+# creates (`WorldConfig::default().world_dir`) -- runtime data, never source.
+/world/
+
 # Mojang-derived material must never enter the repo (ASSET-D18/D19)
 *.jar
 /oracle/

@@ -25,6 +25,7 @@ mod keepalive;
 /// deliverable").
 pub mod packets;
 mod persistence;
+mod registry_resolvers;
 mod world;
 
 pub use block_action::{

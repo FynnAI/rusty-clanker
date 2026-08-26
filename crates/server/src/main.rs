@@ -85,7 +85,11 @@ async fn run(bind_addr: String, offline: bool) -> std::process::ExitCode {
         rc_auth::SessionServiceConfig::default(),
     ));
     let entity_ids = Arc::new(rc_core::RcEntityIdAllocator::default());
-    let world = Arc::new(rusty_clanker_server::play::HardcodedWorld::new());
+    let world_config =
+        rusty_clanker_server::config::WorldConfig::load(std::path::Path::new("rusty-clanker.toml"));
+    let world = Arc::new(rusty_clanker_server::play::HardcodedWorld::with_config(
+        world_config,
+    ));
 
     let login_config = rusty_clanker_server::net::ServerLoginConfig {
         online_mode: !offline,

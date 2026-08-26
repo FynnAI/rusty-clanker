@@ -12,7 +12,9 @@ mod chunk_key;
 mod chunk_nbt;
 mod column;
 mod heightmap;
+pub mod io_pool;
 mod level_dat;
+pub mod lifecycle;
 mod light;
 mod palette;
 mod persistence;
@@ -20,6 +22,7 @@ mod player;
 mod registry_id;
 mod snapshot;
 mod status;
+pub mod superflat;
 
 pub use anvil::{
     AnvilDiskBackend, ChunkStorageBackend, CompressionScheme, RegionFile, RegionFileKind,

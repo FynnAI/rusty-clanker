@@ -4,5 +4,6 @@
 //! TCP listener, `rc-scheduler`'s tick loop, and a packet catalog) is a later blueprint's
 //! scope, not implemented here.
 
+pub mod config;
 pub mod net;
 pub mod play;

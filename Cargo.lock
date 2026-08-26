@@ -2952,6 +2952,7 @@ name = "rc-chunk-storage"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "crossbeam-channel",
  "flate2",
  "io-uring",
  "lz4_flex",
@@ -2962,7 +2963,9 @@ dependencies = [
  "rc-nbt",
  "rc-registries",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
+ "tracing",
  "uuid",
 ]
 
@@ -3453,6 +3456,7 @@ dependencies = [
  "rc-mechanics",
  "rc-messaging",
  "rc-mod-host",
+ "rc-nbt",
  "rc-protocol",
  "rc-proxy",
  "rc-registries",

@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 rc-core = { path = "../core" }
+rc-nbt = { path = "../nbt" } # M2-B05 — Mutf8Str/Mutf8String for registry_resolvers.rs's BlockStateNames/BiomeNames impls
 rc-scheduler = { path = "../scheduler" }
 rc-mechanics = { path = "../mechanics" }
 rc-chunk-storage = { path = "../chunk-storage" }
@@ -32,12 +33,12 @@ parking_lot = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 bevy_ecs = { workspace = true }
+serde = { workspace = true } # M2-B05 — `WorldConfig: Deserialize` (promoted from dev-dependencies)
 rc-cluster = { path = "../cluster", optional = true }
 rc-transport-net = { path = "../transport-net", optional = true }
 rc-proxy = { path = "../proxy", optional = true }
 
 [dev-dependencies]
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]

@@ -3,7 +3,8 @@
 //! boundary types (ARCH-D1-D9, D12, D18-D23). Depends on `dyn Transport` only, never
 //! a concrete transport (`rc-messaging`'s `Transport` trait).
 
-pub mod pool; // M0-B04 — not modified by this blueprint
+pub mod chunk_ticket;
+pub mod pool; // M0-B04 — not modified by this blueprint // M2-B05 — WORLD-D24 ticket/level system
 
 mod access;
 mod conflict_graph;

@@ -11,11 +11,16 @@ rc-registries = { path = "../registries" }
 bevy_ecs = { workspace = true }
 flate2 = { workspace = true }             # M2-B03 — WORLD-D13 Zlib
 lz4_flex = { workspace = true }           # M2-B03 — WORLD-D13 LZ4
-parking_lot = { workspace = true }        # M2-B03 — WORLD-D12 per-handle lock
+parking_lot = { workspace = true }        # M2-B03 — WORLD-D12 per-handle lock; M2-B05 — RC-IoPool drain_barrier condvar
 thiserror = { workspace = true }          # M2-B03/M2-B04 — StorageError / ChunkNbtError / SnapshotError
 serde = { workspace = true }              # M2-B04 — ChunkSnapshot (WORLD-D20)
 postcard = { workspace = true, features = ["alloc"] } # M2-B04 — to_allocvec (WORLD-D20; forced deviation, report)
 uuid = { workspace = true }               # M2-B06 — player-data file keys, already pinned since M1-B04
+crossbeam-channel = { workspace = true }  # M2-B05 — RC-IoPool's bounded MPMC job queue (WORLD-D21)
+tracing = { workspace = true }            # M2-B05 — fire-and-forget save-failure logging (forced deviation, report:
+                                           # the M2-B05 blueprint's own io_pool.rs doc comments require
+                                           # `tracing::error!` but its own Cargo.toml deliverable omitted this
+                                           # already-workspace-pinned crate from the new-dependency list)
 
 # `io-uring` is a Linux io_uring syscall wrapper and does not compile at all
 # on non-Linux targets (it is not merely inert there). Scoping it to a
@@ -29,6 +34,8 @@ io-uring = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+serde_json = { workspace = true } # M2-B05 soak-tests-gated SoakReport JSON (M0-B06/M1-B05's own established convention)
 
 [features]
 io_uring = ["dep:io-uring"]
+soak-tests = []
