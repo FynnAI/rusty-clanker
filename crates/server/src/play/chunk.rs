@@ -11,6 +11,13 @@ use rc_registries::generated_v776::block_states::{self, default_state as blocks}
 
 use super::packets::LightArray;
 
+/// M2 integration note: `#[cfg(test)]` -- this constant's only remaining production-code
+/// consumer, `build_placeholder_chunk_data` (below), lost its own last production call
+/// site when `connection.rs`'s Play-entry sequence was rewired onto real, storage-backed
+/// content (`encode_live_chunk_data`'s own doc comment); both now live on purely as this
+/// file's own regression-test oracle (`encode_live_chunk_data_matches_the_placeholder_
+/// blob_for_a_freshly_filled_column`, this file's own test module).
+#[cfg(test)]
 pub const WORLD_MIN_Y: i32 = -64;
 pub const SECTION_COUNT: usize = 24;
 /// M1 integration fix, round 4: this blueprint's own first implementation attempt set
@@ -233,6 +240,13 @@ pub fn encode_section(block_state_ids: &[u32; 4096], biome_ids: &[u32; 64]) -> V
 /// This blueprint's fixed superflat content (Context's layer table) as one 24-section
 /// `data` blob, identical for every chunk. Section 0 (`y in [-64, -48)`) carries the real
 /// layer content; every other section is pure air.
+///
+/// M2 integration note: `#[cfg(test)]` -- `connection.rs` no longer calls this (real,
+/// storage-backed content now flows through `encode_live_chunk_data` instead,
+/// `M2-COMPLETION-REPORT.md`'s own diagnosed gap); kept as this file's own regression-test
+/// oracle, proving the two encoders agree byte-for-byte on a freshly filled column (this
+/// file's own test module).
+#[cfg(test)]
 pub fn build_placeholder_chunk_data() -> Vec<u8> {
     let mut data = Vec::new();
 
@@ -261,6 +275,49 @@ pub fn build_placeholder_chunk_data() -> Vec<u8> {
         data.extend(encode_section(&air_block_state_ids, &biome_ids));
     }
 
+    data
+}
+
+/// M2 integration addition: encodes one real, storage-backed chunk column's block/biome
+/// content into the exact same wire shape `build_placeholder_chunk_data` produces --
+/// closing `rc_chunk_storage::palette::PalettedContainer`'s own documented "wire-encoder
+/// reuse is a future blueprint's integration" gap (M2-B01's Resolved discrepancy). Reads
+/// the real M2-B01 `BlockStateColumn`/`BiomeColumn` components (`play::world`'s own
+/// resident chunk entities) instead of a fixed layer table; `encode_paletted_container`
+/// rebuilds its own first-encountered-order palette straight from these raw ids on every
+/// call, so the resulting bytes depend only on the per-index values below, never on
+/// whichever internal `Palette` representation the source `PalettedContainer` happens to
+/// carry -- `PalettedContainer::iter()`'s own index-ascending order already matches this
+/// file's own wire section layout exactly (both use `(local_y << 8) | (z << 4) | x` for
+/// blocks and the matching 4x4x4 order for biomes, `rc_chunk_storage::column`'s own
+/// `block_index`/`biome_index`), so no reshaping beyond the raw-id extraction
+/// `encode_section` already performs for the placeholder path is needed.
+pub fn encode_live_chunk_data(
+    blocks: &rc_chunk_storage::BlockStateColumn,
+    biomes: &rc_chunk_storage::BiomeColumn,
+) -> Vec<u8> {
+    use rc_chunk_storage::RegistryId;
+
+    let mut data = Vec::new();
+    for section_index in 0..SECTION_COUNT {
+        let block_ids: Vec<u32> = blocks
+            .section(section_index)
+            .iter()
+            .map(|id| id.to_raw())
+            .collect();
+        let biome_ids: Vec<u32> = biomes
+            .section(section_index)
+            .iter()
+            .map(|id| id.to_raw())
+            .collect();
+        let block_arr: [u32; 4096] = block_ids
+            .try_into()
+            .expect("BlockStateColumn's own section entry_count is always 4096 (M2-B01)");
+        let biome_arr: [u32; 64] = biome_ids
+            .try_into()
+            .expect("BiomeColumn's own section entry_count is always 64 (M2-B01)");
+        data.extend(encode_section(&block_arr, &biome_arr));
+    }
     data
 }
 
@@ -461,5 +518,33 @@ mod tests {
             .map(|&i| decoded.palette[i as usize])
             .collect();
         assert_eq!(resolved, entries);
+    }
+
+    /// M2 integration addition: proves `encode_live_chunk_data`'s claim (its own doc
+    /// comment) that reading real, storage-backed `BlockStateColumn`/`BiomeColumn`
+    /// content through `encode_section` produces byte-identical output to the fixed
+    /// placeholder table, for a freshly `SuperflatFiller`-seeded column -- the two
+    /// tables encode the exact same per-position values (`superflat.rs`'s own doc
+    /// comment: "Restated exactly from M1-B05's own already-merged, byte-verified layer
+    /// table"), so the two encoders must agree regardless of the source
+    /// `PalettedContainer`'s own internal palette representation.
+    #[test]
+    fn encode_live_chunk_data_matches_the_placeholder_blob_for_a_freshly_filled_column() {
+        use rc_chunk_storage::RegistryId;
+
+        let block_direct_bits = ceil_log2(block_states::BLOCK_STATE_COUNT) as u16;
+        let filler = rc_chunk_storage::superflat::SuperflatFiller {
+            air: rc_chunk_storage::BlockStateId::from_raw(blocks::AIR.0),
+            bedrock: rc_chunk_storage::BlockStateId::from_raw(blocks::BEDROCK.0),
+            dirt: rc_chunk_storage::BlockStateId::from_raw(blocks::DIRT.0),
+            grass: rc_chunk_storage::BlockStateId::from_raw(blocks::GRASS_BLOCK.0),
+            biome: rc_chunk_storage::BiomeId::from_raw(PLACEHOLDER_BIOME_ID),
+            block_thresholds: rc_chunk_storage::PaletteThresholds::blocks(block_direct_bits),
+            biome_thresholds: rc_chunk_storage::PaletteThresholds::biomes(ceil_log2(64) as u16),
+        };
+        let (blocks_col, biomes_col, _heightmaps, _light, _status) = filler.fill();
+
+        let live = encode_live_chunk_data(&blocks_col, &biomes_col);
+        assert_eq!(live, build_placeholder_chunk_data());
     }
 }

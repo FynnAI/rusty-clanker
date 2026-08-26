@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use rc_core::BlockPos;
+use rc_core::{BlockPos, DimensionId};
 use rc_protocol::{ConnectionState, RawPacket, RcPacket, decode_one, encode_payload};
 use tokio::sync::mpsc;
 
@@ -16,9 +16,10 @@ use super::keepalive::{KeepAliveAction, KeepAliveDriver};
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
     KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
-    SetChunkCacheCenter, SetDefaultSpawnPosition, SynchronizePlayerPosition, UseItemOn,
+    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SynchronizePlayerPosition, UseItemOn,
     pack_position, unpack_position,
 };
+use super::persistence::PlayerSessionStore;
 use super::world::{HardcodedWorld, PendingJoin};
 use crate::net::ConnectionHandle;
 
@@ -51,6 +52,63 @@ pub async fn enter_play(
     // `PlayerMarker` this connection queues below -- the two must agree so a future
     // mechanics blueprint can resolve "my own entity" consistently.
     let network_entity_id = world.alloc_network_entity_id();
+
+    // M2 integration addition: player persistence (M2-B06's own "Composition-root
+    // integration" recipe, restated here) -- load (or freshly default) this player's
+    // saved record before building any position/health-carrying Play-entry packet.
+    // `_save_guard`'s own doc comment (below) is what actually guarantees the record is
+    // saved back on every exit from this function from this point onward.
+    let uuid = uuid::Uuid::from_u128(profile.uuid);
+    let sessions = world.player_sessions();
+    let (pos, rotation) = match sessions.load_or_create(
+        uuid,
+        DimensionId::OVERWORLD,
+        [
+            SPAWN_POSITION.x as f64,
+            SPAWN_POSITION.y as f64,
+            SPAWN_POSITION.z as f64,
+        ],
+    ) {
+        Ok(pair) => pair,
+        Err(err) => {
+            tracing::error!(%uuid, error = %err, "failed to load player data; disconnecting");
+            return;
+        }
+    };
+    let (health, food_level, food_saturation_level) = sessions
+        .with_record_mut(uuid, |record| {
+            (
+                record.data.health,
+                record.data.food_level,
+                record.data.food_saturation_level,
+            )
+        })
+        .unwrap_or((20.0, 20, 5.0));
+    // Guarantees `sessions.save_and_remove(uuid)` runs on every exit from this function
+    // from this point onward -- every one of `enter_play`'s many early `return`s on send
+    // failure, the keep-alive-timeout `return`, and the loop's own natural `inbound.recv()
+    // == None` exit (M2-B06's own "at every exit path of the connection's own driving
+    // loop" requirement) -- without needing to edit every one of those existing return
+    // sites individually.
+    struct SaveOnDisconnect {
+        sessions: PlayerSessionStore,
+        uuid: uuid::Uuid,
+    }
+    impl Drop for SaveOnDisconnect {
+        fn drop(&mut self) {
+            if let Err(err) = self.sessions.save_and_remove(self.uuid) {
+                tracing::warn!(
+                    uuid = %self.uuid,
+                    error = %err,
+                    "failed to save player data on disconnect"
+                );
+            }
+        }
+    }
+    let _save_guard = SaveOnDisconnect {
+        sessions: sessions.clone(),
+        uuid,
+    };
 
     let login_play = LoginPlay {
         entity_id: network_entity_id,
@@ -106,16 +164,20 @@ pub async fn enter_play(
         return;
     }
 
+    // M2 integration addition: `pos`/`rotation` (above) are the just-loaded (or freshly
+    // defaulted) player's own persisted position/rotation, replacing the hardcoded
+    // `SPAWN_POSITION`/`0.0` literals -- AC1d's own "player rejoins at the position they
+    // left at" assertion.
     let sync_position = SynchronizePlayerPosition {
         teleport_id: 1,
-        x: SPAWN_POSITION.x as f64,
-        y: SPAWN_POSITION.y as f64,
-        z: SPAWN_POSITION.z as f64,
+        x: pos[0],
+        y: pos[1],
+        z: pos[2],
         delta_x: 0.0,
         delta_y: 0.0,
         delta_z: 0.0,
-        yaw: 0.0,
-        pitch: 0.0,
+        yaw: rotation[0],
+        pitch: rotation[1],
         relative_arguments: 0x00,
     };
     if handle
@@ -136,9 +198,37 @@ pub async fn enter_play(
         return;
     }
 
+    // M2 integration addition: sent here, immediately after `GameEvent` and before any
+    // chunk data -- deliberately NOT after `ChunkBatchFinished` (this project's own first
+    // attempt at this placement broke every `drain_play_entry`-style acceptance test
+    // that reads exactly through `ChunkBatchFinished` then asserts the very next packet
+    // is a specific response, e.g. `play_reach_validation.rs`'s own `assert_eq!(id,
+    // AcknowledgeBlockChange::ID)` immediately after `spawn_actor` returns -- a leftover
+    // `SetHealth` sitting unread past `ChunkBatchFinished` was consumed by that next
+    // `recv_packet` call instead, a real regression confirmed by a real `cargo nextest`
+    // run before this placement was corrected). `play_chunk_set.rs`'s own strict,
+    // packet-by-packet Play-entry assertion needed a matching test-authoring fix for
+    // this exact insertion point (see that commit).
+    let set_health = SetHealth {
+        health,
+        food: food_level,
+        saturation: food_saturation_level,
+    };
+    if handle
+        .try_send_payload(encode_payload(&set_health))
+        .is_err()
+    {
+        return;
+    }
+
+    // M2 integration addition: the joining player's own chunk, derived from their real
+    // loaded/defaulted `pos` (above) instead of a hardcoded `(0, 0)` literal.
+    let player_chunk = BlockPos::new(pos[0] as i32, pos[1] as i32, pos[2] as i32)
+        .chunk_key(DimensionId::OVERWORLD);
+
     let chunk_cache_center = SetChunkCacheCenter {
-        chunk_x: 0,
-        chunk_z: 0,
+        chunk_x: player_chunk.x,
+        chunk_z: player_chunk.z,
     };
     if handle
         .try_send_payload(encode_payload(&chunk_cache_center))
@@ -155,7 +245,6 @@ pub async fn enter_play(
     }
 
     let heightmaps = chunk::build_placeholder_heightmaps();
-    let data = chunk::build_placeholder_chunk_data();
     let (
         sky_light_mask,
         block_light_mask,
@@ -170,15 +259,41 @@ pub async fn enter_play(
     // fixes (round 4 alone needed 9 -> 25) -- computed directly from the coordinate list's
     // own real length instead, so it can never drift from what this loop actually sends
     // again, no matter how the radius changes in the future.
-    let coords = chunk::placeholder_chunk_coords();
+    //
+    // M2 integration addition: coordinates are now absolute, centered on the joining
+    // player's own chunk (`player_chunk`, above) rather than always on world origin --
+    // identical to the old behavior whenever `player_chunk == (0, 0)` (every case any
+    // currently-committed test exercises, M2's own no-movement-mechanics scope), but
+    // correct in general.
+    let coords: Vec<(i32, i32)> = chunk::placeholder_chunk_coords()
+        .into_iter()
+        .map(|(dx, dz)| (player_chunk.x + dx, player_chunk.z + dz))
+        .collect();
     let chunk_count = coords.len();
 
-    for (chunk_x, chunk_z) in coords {
+    // M2 integration addition: real, storage-backed chunk content (`M2-COMPLETION-
+    // REPORT.md`'s own diagnosed gap) -- registers a real ticket at this player's own
+    // chunk and waits for every one of `coords`' columns to actually become resident
+    // (superflat-filled or disk-restored, M2-B05's own async load path), returning each
+    // one's real, currently-live block/biome content already wire-encoded. Replaces
+    // `chunk::build_placeholder_chunk_data()`'s static, always-identical blob -- block
+    // changes M2-B07 already applies to live chunk storage are now visible in a freshly
+    // sent chunk (AC1b's own assertion).
+    let encoded_data = world
+        .request_chunk_grid(
+            network_entity_id,
+            player_chunk,
+            chunk::PLACEHOLDER_RADIUS_CHUNKS as u8,
+            coords.clone(),
+        )
+        .await;
+
+    for ((chunk_x, chunk_z), data) in coords.into_iter().zip(encoded_data) {
         let level_chunk = LevelChunkWithLight {
             chunk_x,
             chunk_z,
             heightmaps: heightmaps.clone(),
-            data: data.clone(),
+            data,
             block_entities: Vec::new(),
             sky_light_mask: sky_light_mask.clone(),
             block_light_mask: block_light_mask.clone(),

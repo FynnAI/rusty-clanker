@@ -287,6 +287,34 @@ pub struct UseItemOn {
     pub sequence: i32,
 }
 
+/// M2 integration addition: vanilla's own health/food/saturation sync packet -- the wire
+/// mechanism `AC1d`'s "player rejoins with byte-identical health" needs (M2-B06's own
+/// `PlayerSaveData.health`, `20.0` default for a new player). Id and field shapes cross-
+/// checked against the pinned azalea rev's own `azalea-protocol/src/packets/game/
+/// c_set_health.rs` (Constraints (d)) -- `health: f32, #[var] food: u32, saturation: f32`
+/// -- and against this project's own already-established "declaration-order id"
+/// convention (`SetChunkCacheCenter`'s doc comment): `set_health`'s own position in
+/// azalea's generated `Clientbound` packet list is index `104` = `0x68`, independently
+/// confirmed by direct inspection of that same generated `game/mod.rs` list, and
+/// cross-validated by every other packet already reconciled this same way (`LoginPlay`
+/// index `49` = `0x31`, `player_position` index `72` = `0x48`, `set_chunk_cache_center`
+/// index `94` = `0x5E`, ...) all matching this crate's own already-committed ids exactly.
+/// Sent once, right after `GameEvent` and before any chunk data, in
+/// `play::connection::enter_play` (`enter_play`'s own doc comment on this exact call site
+/// has the full "why not after `ChunkBatchFinished`" writeup -- a real, `cargo nextest`-
+/// confirmed regression against `play_reach_validation.rs`/`play_sequence_ack_ordering.rs`/
+/// `play_block_place_break.rs`'s own "read exactly through `ChunkBatchFinished`, then
+/// assert the very next packet" pattern). Nothing else in this crate ever sends this
+/// packet (M3/M4's own real damage/regen mechanics will).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x68)]
+pub struct SetHealth {
+    pub health: f32,
+    #[rc(varint)]
+    pub food: i32,
+    pub saturation: f32,
+}
+
 /// M2-B07: one block's new state, broadcast to every currently-connected player (Context:
 /// "The M1-B05 interest/broadcast seam does not exist -- resolved here").
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]

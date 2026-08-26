@@ -12,7 +12,8 @@ use rc_chunk_storage::io_pool::ChunkNbtResolvers;
 use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    AnvilDiskBackend, ChunkKeyTag, ChunkStorageBackend, CompressionScheme, PaletteThresholds,
+    AnvilDiskBackend, BiomeColumn, BlockStateColumn, ChunkKeyTag, ChunkStorageBackend,
+    CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds,
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionId, RegionMessageBus};
@@ -34,6 +35,7 @@ use super::block_action::{
 };
 use super::connection::SPAWN_POSITION;
 use super::packets::{AcknowledgeBlockChange, BlockUpdate, pack_position};
+use super::persistence::PlayerSessionStore;
 use super::registry_resolvers::McRegistryResolvers;
 use super::{PlayerProfile, chunk, enter_play};
 use crate::config::WorldConfig;
@@ -602,6 +604,35 @@ pub struct PendingJoin {
     pub connection: ConnectionHandle,
 }
 
+/// M2 integration addition: one connection's request for a batch of real, storage-backed
+/// chunk columns' wire-encoded content -- the bridge `connection.rs`'s `enter_play` needs
+/// between "register a real ticket so these chunks start loading" and "hand back their
+/// real, currently-resident content once loading (superflat-filled or disk-restored,
+/// M2-B05's own async load path) has actually finished," replacing `chunk::
+/// build_placeholder_chunk_data()`'s static blob (`M2-COMPLETION-REPORT.md`'s own
+/// diagnosed gap). Private -- `HardcodedWorld::request_chunk_grid` is the only public
+/// surface a caller ever needs.
+struct ChunkGridRequest {
+    network_entity_id: i32,
+    center: ChunkKey,
+    ticket_radius: u8,
+    /// Absolute `(chunk_x, chunk_z)` pairs to encode and return, in the exact order the
+    /// caller wants them sent back -- kept independent of `ticket_radius`/`center` so
+    /// this type never assumes the requested grid and the ticket's own load radius share
+    /// one shape.
+    coords: Vec<(i32, i32)>,
+    reply: oneshot::Sender<Vec<Vec<u8>>>,
+}
+
+/// The tick-loop-owned bookkeeping for one still-resolving `ChunkGridRequest` -- carried
+/// across tick iterations exactly like `carried_block_actions` below, since the requested
+/// chunks' async load may take several ticks to complete.
+struct PendingChunkGridRequest {
+    coords: Vec<(i32, i32)>,
+    resolved: Vec<Option<Vec<u8>>>,
+    reply: oneshot::Sender<Vec<Vec<u8>>>,
+}
+
 /// The region-build-time bootstrap `RcExecutorBuilder::new` requires (a plain `fn`
 /// pointer, not a closure -- M0-B05's own required shape). M2-B05 replaces M2-B07's own
 /// static, 121-chunk-at-build-time bootstrap with real, ticket-driven, storage-backed
@@ -665,6 +696,12 @@ pub struct HardcodedWorld {
     shutdown_flag: Arc<AtomicBool>,
     /// New (M2-B05): the region thread's own `JoinHandle`, taken and joined by `shutdown`.
     thread_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    /// New (M2 integration): `connection.rs`'s own entry point into `ChunkGridRequest`
+    /// (`request_chunk_grid`'s own doc comment).
+    chunk_grid_tx: tokio::sync::mpsc::UnboundedSender<ChunkGridRequest>,
+    /// New (M2 integration, M2-B06's own "Composition-root integration" recipe step 1):
+    /// this world's player-record working set -- `player_sessions()`'s own doc comment.
+    sessions: PlayerSessionStore,
 }
 
 impl HardcodedWorld {
@@ -711,7 +748,18 @@ impl HardcodedWorld {
             BlockPos,
             oneshot::Sender<Option<DebugBlockInfo>>,
         )>();
+        let (chunk_grid_tx, mut chunk_grid_rx) =
+            tokio::sync::mpsc::unbounded_channel::<ChunkGridRequest>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        // M2 integration addition (M2-B06's own "Composition-root integration" recipe
+        // step 1): built here, before `config` moves into the tick-loop closure below, so
+        // both the returned handle and the tick thread itself can each hold their own
+        // clone (`PlayerSessionStore` is `Clone`, cheap, `Arc`-backed).
+        let sessions = PlayerSessionStore::new(Arc::new(FilesystemPlayerDataStore::new(
+            config.world_dir.clone(),
+        )));
+        let sessions_for_thread = sessions.clone();
 
         let thread_shutdown_flag = Arc::clone(&shutdown_flag);
         let handle = std::thread::spawn(move || {
@@ -789,10 +837,27 @@ impl HardcodedWorld {
             // actions never depend on chunk residency and are still always resolved (and
             // acked) the same tick they arrive.
             let mut carried_block_actions: Vec<PendingBlockAction> = Vec::new();
+            // M2 integration addition: still-resolving `ChunkGridRequest`s, carried across
+            // tick iterations exactly like `carried_block_actions` above (`request_chunk_
+            // grid`'s own doc comment -- the requested chunks' async load may take several
+            // ticks to complete).
+            let mut chunk_grid_requests: Vec<PendingChunkGridRequest> = Vec::new();
+            // M2 integration addition (M2-B06's own "Composition-root integration" recipe
+            // step 4): a plain per-tick counter driving the periodic player-data save
+            // sweep, reusing the same configured interval `lifecycle`'s own Stage-9 chunk
+            // cadence already uses (`config.save_interval_ticks()`) rather than a second,
+            // independently-configured one.
+            let player_save_interval_ticks = config.save_interval_ticks() as u64;
+            let mut player_save_tick_counter: u64 = 0;
 
             loop {
                 if thread_shutdown_flag.load(Ordering::Relaxed) {
                     lifecycle.shutdown(&region.world);
+                    // M2 integration addition (M2-B06's own "Composition-root
+                    // integration" recipe step 5): gives every still-connected player's
+                    // data the same clean-restart guarantee WORLD-D25 already gives
+                    // chunk data.
+                    sessions_for_thread.save_all();
                     return;
                 }
 
@@ -808,6 +873,24 @@ impl HardcodedWorld {
                         spawn_chunk,
                         config.simulation_distance_chunks,
                     );
+                }
+
+                // M2 integration addition: registers (or replaces, harmlessly -- Context's
+                // own `register_player` doc comment) a real ticket for every newly arrived
+                // `ChunkGridRequest` immediately, so this same tick's `ticket_manager.step()`
+                // call below already starts loading the requested grid -- no need to wait
+                // for the (separate, later) `PendingJoin` drain above.
+                while let Ok(req) = chunk_grid_rx.try_recv() {
+                    ticket_manager.register_player(
+                        PlayerTicketId(req.network_entity_id),
+                        req.center,
+                        req.ticket_radius,
+                    );
+                    chunk_grid_requests.push(PendingChunkGridRequest {
+                        resolved: vec![None; req.coords.len()],
+                        coords: req.coords,
+                        reply: req.reply,
+                    });
                 }
 
                 // M2-B05's own load/unload churn, immediately before `tick_region`
@@ -827,6 +910,57 @@ impl HardcodedWorld {
                     chunk_index.0.insert(tag.0, entity);
                 }
                 region.world.insert_resource(chunk_index);
+
+                // M2 integration addition: resolves every still-pending `ChunkGridRequest`
+                // against this tick's own fresh `ChunkIndex` residency directory (just
+                // inserted above) -- encodes (`chunk::encode_live_chunk_data`) and records
+                // each requested coordinate's real content the first tick its chunk
+                // entity becomes resident, and replies once every coordinate in a request
+                // has resolved. A request whose grid has not fully loaded yet simply stays
+                // in `chunk_grid_requests` for a later tick (mirrors `carried_block_
+                // actions`' own carry-forward pattern above). Looks each needed key up
+                // directly off the resource (no whole-map clone) -- this block is a no-op,
+                // zero-cost past the empty check, once every request has resolved, so a
+                // long-running region never pays a per-tick tax for chunk-grid streaming
+                // it isn't currently doing.
+                if !chunk_grid_requests.is_empty() {
+                    let mut i = 0;
+                    while i < chunk_grid_requests.len() {
+                        {
+                            let req = &mut chunk_grid_requests[i];
+                            for slot in 0..req.coords.len() {
+                                if req.resolved[slot].is_some() {
+                                    continue;
+                                }
+                                let (cx, cz) = req.coords[slot];
+                                let key = ChunkKey::new(DimensionId::OVERWORLD, cx, cz);
+                                let entity =
+                                    region.world.resource::<ChunkIndex>().0.get(&key).copied();
+                                if let Some(entity) = entity {
+                                    let blocks = region.world.get::<BlockStateColumn>(entity).expect(
+                                        "every resident chunk entity carries BlockStateColumn (M2-B01's fixed component set)",
+                                    );
+                                    let biomes = region.world.get::<BiomeColumn>(entity).expect(
+                                        "every resident chunk entity carries BiomeColumn (M2-B01's fixed component set)",
+                                    );
+                                    req.resolved[slot] =
+                                        Some(chunk::encode_live_chunk_data(blocks, biomes));
+                                }
+                            }
+                        }
+                        if chunk_grid_requests[i].resolved.iter().all(Option::is_some) {
+                            let req = chunk_grid_requests.remove(i);
+                            let ordered: Vec<Vec<u8>> = req
+                                .resolved
+                                .into_iter()
+                                .map(|v| v.expect("just checked all Some"))
+                                .collect();
+                            let _ = req.reply.send(ordered);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                }
 
                 // M2-B07's own Stage-3-equivalent manual step (Context, "Which pipeline
                 // stage"): drain every block action queued since the previous tick,
@@ -913,6 +1047,19 @@ impl HardcodedWorld {
 
                 executor.tick_region(&mut region, &pool, &transport);
                 lifecycle.post_tick();
+
+                // M2 integration addition (M2-B06's own "Composition-root integration"
+                // recipe step 4): the periodic player-data save sweep -- a plain,
+                // uncoordinated background thread (Context's own "Documented, bounded
+                // simplification": `RC-IoPool` does not exist as a player-data-save target
+                // at M2's own scope), never blocking this tick loop itself.
+                player_save_tick_counter += 1;
+                if player_save_tick_counter >= player_save_interval_ticks {
+                    player_save_tick_counter = 0;
+                    let sessions_for_sweep = sessions_for_thread.clone();
+                    std::thread::spawn(move || sessions_for_sweep.save_all());
+                }
+
                 clock.await_next_tick();
             }
         });
@@ -924,6 +1071,8 @@ impl HardcodedWorld {
             next_network_entity_id: Arc::new(AtomicI32::new(1)),
             shutdown_flag,
             thread_handle: Arc::new(Mutex::new(Some(handle))),
+            chunk_grid_tx,
+            sessions,
         }
     }
 
@@ -976,6 +1125,44 @@ impl HardcodedWorld {
         reply_rx.await.expect(
             "the hardcoded region's tick-loop thread always replies before dropping the sender",
         )
+    }
+
+    /// New (M2 integration): registers a real ticket for `network_entity_id` centered on
+    /// `center` with `ticket_radius`, then waits -- across as many ticks as the async
+    /// load pipeline needs (M2-B05's own load path) -- for every one of `coords`' chunk
+    /// columns to actually become resident, and returns their real, currently-live
+    /// block/biome content already wire-encoded (`chunk::encode_live_chunk_data`), in the
+    /// same order as `coords`. Replaces `chunk::build_placeholder_chunk_data()`'s static,
+    /// always-identical blob (`M2-COMPLETION-REPORT.md`'s own diagnosed gap). Never
+    /// blocks the caller's own OS thread -- awaits a oneshot reply the tick thread
+    /// fulfils once every requested chunk is resident.
+    pub async fn request_chunk_grid(
+        &self,
+        network_entity_id: i32,
+        center: ChunkKey,
+        ticket_radius: u8,
+        coords: Vec<(i32, i32)>,
+    ) -> Vec<Vec<u8>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.chunk_grid_tx
+            .send(ChunkGridRequest {
+                network_entity_id,
+                center,
+                ticket_radius,
+                coords,
+                reply: reply_tx,
+            })
+            .expect("the hardcoded region's tick-loop thread outlives every connection");
+        reply_rx.await.expect(
+            "the hardcoded region's tick-loop thread always replies before dropping the sender",
+        )
+    }
+
+    /// New (M2 integration, M2-B06's own "Composition-root integration" recipe step 2/3):
+    /// exposes this world's player-record working set to `enter_play`. `Clone`, cheap
+    /// (`Arc`-backed), matching every other `HardcodedWorld` handle method's own shape.
+    pub fn player_sessions(&self) -> PlayerSessionStore {
+        self.sessions.clone()
     }
 }
 
