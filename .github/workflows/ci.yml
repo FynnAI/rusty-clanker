@@ -190,6 +190,28 @@ jobs:
       - name: soak_8_regions_stable_20tps_10min
         run: cargo nextest run -p rc-scheduler --features soak-tests -- soak_8_regions_stable_20tps_10min
 
+      # `RUSTC_BOOTSTRAP=1`: see the identical comment on the `gates` job above --
+      # `rc-test-harness` depends on `rc-nbt`/`rc-chunk-storage` (`simdnbt`'s
+      # unconditional `#![feature(portable_simd)]`, this workspace's pinned *stable*
+      # toolchain). `RC_SOAK_BUDGET_SECS=900`: this test's own default 180s wall-clock
+      # budget is a local, low-contention-runner figure (Context); the nightly runner's
+      # shared disk (this soak plus `anvil_soak_roundtrip` below, potentially
+      # concurrent) is realistically slower, so this job overrides it to a
+      # CI-runner-realistic budget rather than loosening the default every local run
+      # gets.
+      - name: chunk_soak_10000 (rc-test-harness)
+        env:
+          RUSTC_BOOTSTRAP: "1"
+          RC_SOAK_BUDGET_SECS: "900"
+        run: cargo nextest run -p rc-test-harness --features soak-tests -- soak_10000
+
+      # `RUSTC_BOOTSTRAP=1`: same rationale as the step above -- `rc-chunk-storage`
+      # itself depends on `rc-nbt`.
+      - name: anvil_soak_roundtrip (rc-chunk-storage)
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: cargo nextest run -p rc-chunk-storage --features soak-tests -- ten_thousand_chunk_write_read_round_trips_have_zero_checksum_mismatches
+
       - name: Upload soak report
         if: always()
         uses: actions/upload-artifact@v4
