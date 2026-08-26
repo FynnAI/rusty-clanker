@@ -24,7 +24,9 @@ pub struct PlayerPersistenceConfig {
 
 impl Default for PlayerPersistenceConfig {
     fn default() -> Self {
-        todo!()
+        Self {
+            save_interval_ticks: DEFAULT_SAVE_INTERVAL_TICKS,
+        }
     }
 }
 
@@ -37,7 +39,10 @@ pub struct PlayerSessionStore {
 
 impl PlayerSessionStore {
     pub fn new(store: Arc<dyn PlayerDataStore>) -> Self {
-        todo!()
+        Self {
+            store,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// Loads (or freshly defaults, via `LoadedPlayerRecord::fresh_default(dimension,
@@ -49,25 +54,44 @@ impl PlayerSessionStore {
         dimension: rc_core::DimensionId,
         default_pos: [f64; 3],
     ) -> Result<([f64; 3], [f32; 2]), PlayerPersistenceError> {
-        todo!()
+        let record = match load_player(self.store.as_ref(), uuid)? {
+            Some(record) => record,
+            None => LoadedPlayerRecord::fresh_default(dimension, default_pos),
+        };
+        let pos_rotation = (record.data.pos, record.data.rotation);
+        self.sessions.lock().unwrap().insert(uuid, record);
+        Ok(pos_rotation)
     }
 
     /// Synchronously saves `uuid`'s current record and removes it from the live set.
     /// A no-op (`Ok(())`) if `uuid` is not currently present.
     pub fn save_and_remove(&self, uuid: uuid::Uuid) -> Result<(), PlayerPersistenceError> {
-        todo!()
+        let record = self.sessions.lock().unwrap().remove(&uuid);
+        match record {
+            Some(record) => save_player(self.store.as_ref(), uuid, &record),
+            None => Ok(()),
+        }
     }
 
     /// Clones every currently-connected player's `(Uuid, LoadedPlayerRecord)` pair (a
     /// short-held lock) without removing anything from the live set.
     pub fn snapshot_all(&self) -> Vec<(uuid::Uuid, LoadedPlayerRecord)> {
-        todo!()
+        self.sessions
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(uuid, record)| (*uuid, record.clone()))
+            .collect()
     }
 
     /// Saves every entry `snapshot_all` would return, logging (`tracing::warn!`,
     /// never panicking) on any individual failure.
     pub fn save_all(&self) {
-        todo!()
+        for (uuid, record) in self.snapshot_all() {
+            if let Err(err) = save_player(self.store.as_ref(), uuid, &record) {
+                tracing::warn!(%uuid, error = %err, "failed to save player data");
+            }
+        }
     }
 
     /// Direct mutable access to one live record — this blueprint's own stand-in for
@@ -78,6 +102,7 @@ impl PlayerSessionStore {
         uuid: uuid::Uuid,
         f: impl FnOnce(&mut LoadedPlayerRecord) -> R,
     ) -> Option<R> {
-        todo!()
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.get_mut(&uuid).map(f)
     }
 }

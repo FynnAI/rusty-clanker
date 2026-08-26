@@ -3,8 +3,8 @@
 //! fully opaque through a real `LoadedPlayerRecord` cycle — this crate never needs to
 //! know these keys mean "damage" or "sharpness 2" for the test to be meaningful.
 
-use rc_core::DimensionId;
 use rc_chunk_storage::{InventorySlotEntry, ItemStackRecord, LoadedPlayerRecord};
+use rc_core::DimensionId;
 use rc_nbt::{borrow, owned};
 
 fn decode(bytes: &[u8]) -> LoadedPlayerRecord {
@@ -26,7 +26,10 @@ fn diamond_sword_with_enchantments_and_damage_round_trips() {
 
     let mut components = owned::NbtCompound::new();
     components.insert("minecraft:damage", 3i32);
-    components.insert("minecraft:enchantments", owned::NbtTag::Compound(enchantments));
+    components.insert(
+        "minecraft:enchantments",
+        owned::NbtTag::Compound(enchantments),
+    );
 
     let item = ItemStackRecord {
         id: "minecraft:diamond_sword".into(),
@@ -53,7 +56,8 @@ fn diamond_sword_with_enchantments_and_damage_round_trips() {
 fn decodes_real_vanilla_player_dat_without_error() {
     let path = std::path::Path::new("oracle/26.2/harness/samples/players/data/sample.dat");
     let bytes = std::fs::read(path).expect("sample not present — see #[ignore] reason");
-    let nbt = rc_nbt::read_gzip_owned(&bytes).expect("must decode a real vanilla player record cleanly");
+    let nbt =
+        rc_nbt::read_gzip_owned(&bytes).expect("must decode a real vanilla player record cleanly");
     let _ = nbt;
     // Further field-level assertions deferred to whichever future blueprint first
     // wires rc-test-harness — this test's own job, today, is to exist and be

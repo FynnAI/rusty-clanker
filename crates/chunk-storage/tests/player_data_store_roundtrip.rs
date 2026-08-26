@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use rc_core::DimensionId;
 use rc_chunk_storage::{
     FilesystemPlayerDataStore, LoadedPlayerRecord, PlayerDataStore, PlayerPersistenceError,
     load_player, save_player,
 };
+use rc_core::DimensionId;
 
 /// Test-local in-memory fake, mirroring the `FakeBackend`/`MockTransport` convention
 /// already established elsewhere in this workspace for test-local trait fakes.
@@ -74,7 +74,10 @@ fn filesystem_store_creates_the_players_data_directory_and_round_trips() {
 
     assert_eq!(loaded.data, record.data);
 
-    let expected_path = root.join("players").join("data").join(format!("{uuid}.dat"));
+    let expected_path = root
+        .join("players")
+        .join("data")
+        .join(format!("{uuid}.dat"));
     assert_eq!(store.player_data_path(uuid), expected_path);
     assert!(expected_path.is_file());
 }

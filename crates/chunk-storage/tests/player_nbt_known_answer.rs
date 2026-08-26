@@ -2,8 +2,8 @@
 //! `ItemStackRecord`'s own NBT encoding matches the exact wire shape byte-for-byte —
 //! in particular that `components: None` never emits an empty `Compound` tag.
 
-use rc_nbt::owned;
 use rc_chunk_storage::{ItemStackRecord, PlayerAbilities};
+use rc_nbt::owned;
 
 #[test]
 fn abilities_compound_known_bytes() {
@@ -32,8 +32,14 @@ fn abilities_compound_known_bytes() {
             "mayBuild".into(),
             owned::NbtTag::Byte(abilities.may_build as i8),
         ),
-        ("mayfly".into(), owned::NbtTag::Byte(abilities.may_fly as i8)),
-        ("walkSpeed".into(), owned::NbtTag::Float(abilities.walk_speed)),
+        (
+            "mayfly".into(),
+            owned::NbtTag::Byte(abilities.may_fly as i8),
+        ),
+        (
+            "walkSpeed".into(),
+            owned::NbtTag::Float(abilities.walk_speed),
+        ),
     ]);
     let root = owned::BaseNbt::new("", compound);
 

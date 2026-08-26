@@ -40,7 +40,10 @@ impl PlayerDataStore for FakeStore {
 }
 
 fn unique_temp_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("rc-play-persistence-store-{}", uuid::Uuid::new_v4()))
+    std::env::temp_dir().join(format!(
+        "rc-play-persistence-store-{}",
+        uuid::Uuid::new_v4()
+    ))
 }
 
 #[test]

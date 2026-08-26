@@ -4,10 +4,10 @@
 //! preservation across a load-then-save cycle, and byte-level idempotency on an
 //! untouched reload.
 
-use rc_core::DimensionId;
 use rc_chunk_storage::{
     InventorySlotEntry, ItemStackRecord, LoadedPlayerRecord, PlayerAbilities, PlayerSaveData,
 };
+use rc_core::DimensionId;
 use rc_nbt::{SchemaError, borrow, owned};
 
 fn decode(bytes: &[u8]) -> LoadedPlayerRecord {
@@ -145,7 +145,10 @@ fn unknown_field_preservation_survives_a_full_load_then_save_cycle() {
     let base_record = LoadedPlayerRecord::fresh_default(DimensionId::OVERWORLD, [0.0, 0.0, 0.0]);
     let mut nbt = base_record.to_nbt();
     nbt.insert("foodTickTimer", 12i32);
-    nbt.insert("recipeBook", owned::NbtTag::Compound(owned::NbtCompound::new()));
+    nbt.insert(
+        "recipeBook",
+        owned::NbtTag::Compound(owned::NbtCompound::new()),
+    );
     nbt.insert("Fire", owned::NbtTag::Short(-20));
 
     let bytes = rc_nbt::write_owned(&owned::BaseNbt::new("", nbt));
