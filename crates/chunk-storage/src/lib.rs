@@ -49,7 +49,7 @@ pub use player::{
 };
 pub use registry_id::{BiomeId, BlockStateId, PaletteThresholds, RegistryId};
 pub use snapshot::{
-    ChunkSnapshot, RC_CHUNK_SNAPSHOT_VERSION, SnapshotError, SnapshotLightSection,
-    decode_snapshot, encode_snapshot, peek_snapshot_version,
+    ChunkSnapshot, RC_CHUNK_SNAPSHOT_VERSION, SnapshotError, SnapshotLightSection, decode_snapshot,
+    encode_snapshot, peek_snapshot_version,
 };
 pub use status::{ChunkGenStatus, ChunkStatus};
