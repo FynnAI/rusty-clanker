@@ -1,3 +1,9 @@
+use std::io::{Read, Write};
+
+use flate2::Compression;
+use flate2::read::{GzDecoder, ZlibDecoder};
+use flate2::write::ZlibEncoder;
+
 use crate::anvil::error::StorageError;
 
 /// The three writer-selectable chunk-compression schemes (WORLD-D13) — one chosen per
@@ -25,7 +31,19 @@ impl CompressionScheme {
     /// Compresses `raw` per this scheme. `Lz4`'s exact on-disk sub-encoding is this
     /// crate's own choice (Context) — `lz4_flex::block::compress_prepend_size`.
     pub fn compress(self, raw: &[u8]) -> Vec<u8> {
-        todo!()
+        match self {
+            CompressionScheme::Zlib => {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+                encoder
+                    .write_all(raw)
+                    .expect("writing to an in-memory Vec<u8> encoder never fails");
+                encoder
+                    .finish()
+                    .expect("finishing an in-memory Vec<u8> encoder never fails")
+            }
+            CompressionScheme::Lz4 => lz4_flex::block::compress_prepend_size(raw),
+            CompressionScheme::Uncompressed => raw.to_vec(),
+        }
     }
 
     /// Decompresses `data`, dispatching on the raw on-disk `tag` byte's low 7 bits (the
@@ -33,6 +51,27 @@ impl CompressionScheme {
     /// `1` (GZip, read-only, Context) in addition to this enum's own three writable
     /// schemes; any other value is `StorageError::UnknownCompressionType`.
     pub fn decompress_tagged(tag: u8, data: &[u8]) -> Result<Vec<u8>, StorageError> {
-        todo!()
+        match tag {
+            1 => {
+                let mut decoder = GzDecoder::new(data);
+                let mut out = Vec::new();
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| StorageError::Decompress(e.to_string()))?;
+                Ok(out)
+            }
+            2 => {
+                let mut decoder = ZlibDecoder::new(data);
+                let mut out = Vec::new();
+                decoder
+                    .read_to_end(&mut out)
+                    .map_err(|e| StorageError::Decompress(e.to_string()))?;
+                Ok(out)
+            }
+            3 => Ok(data.to_vec()),
+            4 => lz4_flex::block::decompress_size_prepended(data)
+                .map_err(|e| StorageError::Decompress(e.to_string())),
+            other => Err(StorageError::UnknownCompressionType(other)),
+        }
     }
 }
