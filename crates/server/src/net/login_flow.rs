@@ -8,8 +8,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use rc_auth::{ServerKeyPair, SessionService};
 use rc_protocol::{
-    EncryptionRequest, EncryptionResponse, LoginAcknowledged, LoginDisconnect, LoginProfile,
-    LoginProfileProperty, LoginStart, LoginSuccess, NbtTextComponent, RawPacket, RcPacket,
+    EncryptionRequest, EncryptionResponse, JsonTextComponent, LoginAcknowledged, LoginDisconnect,
+    LoginProfile, LoginProfileProperty, LoginStart, LoginSuccess, RawPacket, RcPacket,
     SetCompression, decode_one, encode_payload,
 };
 use tokio::sync::mpsc;
@@ -95,14 +95,14 @@ pub fn is_valid_player_name(name: &str) -> bool {
 /// Best-effort: sends a `LoginDisconnect` (ignoring any send failure — the connection may
 /// already be unusable) then unconditionally closes the connection.
 ///
-/// M1 integration fix: the reason field is network-NBT (`NbtTextComponent`), not the raw
-/// JSON `String` this module originally built by hand (`wire::NbtTextComponent`'s own doc
-/// comment explains why a real client rejected that shape) — no escaping is needed for the
-/// NBT string encoding itself, only the fixed diagnostic strings and a validated
-/// (`[a-zA-Z0-9_]`-only) username this module ever actually sends here.
+/// M2 field-report fix: the reason field is a JSON string (`JsonTextComponent`) — protocol
+/// 776's Login phase speaks lenient-JSON for this one packet, and a real vanilla client
+/// rejects the network-NBT shape the Configuration/Play phases use
+/// (`wire::JsonTextComponent`'s own doc comment). Escaping is the type's own job; every
+/// reason this module sends is a fixed ASCII diagnostic anyway.
 async fn disconnect(handle: &ConnectionHandle, reason: &str) {
     let payload = encode_payload(&LoginDisconnect {
-        reason: NbtTextComponent(reason.to_string()),
+        reason: JsonTextComponent(reason.to_string()),
     });
     let _ = handle.try_send_payload(payload);
     // `try_send_payload` only enqueues onto the writer task's outbound channel; it does not

@@ -8,15 +8,16 @@ use uuid::Uuid;
 
 use crate::RcPacket;
 use crate::packet::PacketDecodeError;
-use crate::wire::{NbtTextComponent, WireRead, WireWrite};
+use crate::wire::{JsonTextComponent, WireRead, WireWrite};
 
-/// M1 integration fix: `reason` is network-NBT (`NbtTextComponent`), not a raw
-/// `WireWrite`-`String` — see `wire::NbtTextComponent`'s own doc comment for why a real
-/// client rejects the plain-`String` shape this field originally shipped with.
+/// M2 field-report fix: `reason` is a JSON string (`JsonTextComponent`) — the Login phase
+/// predates the registry/NBT context, so its disconnect reason stays lenient-JSON on the
+/// wire (`wire::JsonTextComponent`'s own doc comment; a real vanilla client rejects the
+/// network-NBT shape the Configuration/Play phases use).
 #[derive(Debug, Clone, PartialEq, Eq, RcPacket)]
 #[packet(state = "login", bound = "client", id = 0x00)]
 pub struct LoginDisconnect {
-    pub reason: NbtTextComponent,
+    pub reason: JsonTextComponent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, RcPacket)]

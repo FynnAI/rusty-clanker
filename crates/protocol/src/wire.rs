@@ -180,12 +180,111 @@ impl WireRead for String {
     }
 }
 
+/// A plain-text chat/text-component field encoded as a **JSON string** on the wire: one
+/// VarInt-length-prefixed UTF-8 `String` holding `{"text": "..."}` — protocol 776's real
+/// shape for the Login-phase `LoginDisconnect` reason (`ClientboundLoginDisconnectPacket`'s
+/// stream codec is a lenient-JSON string codec, ASSET-D18(f) reference). M2 field-report
+/// fix, discovered by a real vanilla client rejecting the network-NBT shape
+/// (`NbtTextComponent`) during a rejoin: NBT text components are correct only from the
+/// Configuration phase onward — the Login phase predates the registry/NBT context and still
+/// speaks JSON. azalea tolerated the NBT shape; the real client is the oracle.
+///
+/// Writes escape quotes, backslashes, and control characters (`\u00XX`); the reader accepts
+/// exactly the `{"text": "..."}` shape this type writes (mirroring `NbtTextComponent`'s
+/// single-shape minimalism — not a general JSON parser). Vanilla's codec caps this field at
+/// 262144 bytes; every reason this codebase sends is a short fixed diagnostic, far below
+/// both that cap and the wire `String` limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonTextComponent(pub String);
+
+impl JsonTextComponent {
+    fn escape_into(text: &str, out: &mut String) {
+        for c in text.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                c if (c as u32) < 0x20 => {
+                    use std::fmt::Write;
+                    let _ = write!(out, "\\u{:04x}", c as u32);
+                }
+                c => out.push(c),
+            }
+        }
+    }
+}
+
+impl WireWrite for JsonTextComponent {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        let mut json = String::with_capacity(self.0.len() + 11);
+        json.push_str("{\"text\":\"");
+        Self::escape_into(&self.0, &mut json);
+        json.push_str("\"}");
+        json.write_wire(buf);
+    }
+}
+
+impl WireRead for JsonTextComponent {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
+        let json = String::read_wire(buf)?;
+        let inner = json
+            .strip_prefix("{\"text\":\"")
+            .and_then(|rest| rest.strip_suffix("\"}"))
+            .ok_or_else(|| {
+                PacketDecodeError::MalformedJsonTextComponent(format!(
+                    "expected {{\"text\":\"...\"}}, got {json:?}"
+                ))
+            })?;
+        let mut text = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                if c == '"' {
+                    return Err(PacketDecodeError::MalformedJsonTextComponent(
+                        "unescaped quote inside the text value".to_string(),
+                    ));
+                }
+                text.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('"') => text.push('"'),
+                Some('\\') => text.push('\\'),
+                Some('/') => text.push('/'),
+                Some('n') => text.push('\n'),
+                Some('t') => text.push('\t'),
+                Some('r') => text.push('\r'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    let code = (hex.len() == 4)
+                        .then(|| u32::from_str_radix(&hex, 16).ok())
+                        .flatten()
+                        .and_then(char::from_u32)
+                        .ok_or_else(|| {
+                            PacketDecodeError::MalformedJsonTextComponent(format!(
+                                "bad \\u escape: {hex:?}"
+                            ))
+                        })?;
+                    text.push(code);
+                }
+                other => {
+                    return Err(PacketDecodeError::MalformedJsonTextComponent(format!(
+                        "unsupported escape: \\{other:?}"
+                    )));
+                }
+            }
+        }
+        Ok(JsonTextComponent(text))
+    }
+}
+
 /// A plain-text chat/text-component field encoded as network NBT (`{"text": "..."}`'s NBT
 /// equivalent: an unnamed root `TAG_Compound` holding one `TAG_String` field named `text`),
-/// per protocol 776's real wire shape for `Disconnect` (Login/Configuration) reason fields —
-/// M1 integration fix, discovered by driving a real client (azalea) against
-/// `rusty-clanker-server`: a raw `WireWrite`-`String` (VarInt-length-prefixed UTF-8) reason
-/// is what M1-B04 originally shipped, but a real client's NBT decoder chokes on it (a short
+/// per protocol 776's real wire shape for text components from the **Configuration phase
+/// onward** (the Configuration-phase `Disconnect` reason today) — the Login phase instead
+/// speaks JSON (`JsonTextComponent`, above). M1 integration fix, discovered by driving a
+/// real client (azalea) against `rusty-clanker-server`: a raw `WireWrite`-`String`
+/// (VarInt-length-prefixed UTF-8) reason is what M1-B04 originally shipped for the
+/// Configuration disconnect, but a real client's NBT decoder chokes on it (a short
 /// JSON reason's own VarInt length byte gets misread as an invalid raw NBT tag id). No real
 /// `rc-nbt` integration exists yet (`configuration.rs`'s own `#[rc(nbt)]` deferral, M1-B04)
 /// — this is a minimal, purpose-built stand-in for exactly this one field shape, not a

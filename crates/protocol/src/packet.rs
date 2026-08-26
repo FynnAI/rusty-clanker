@@ -43,6 +43,8 @@ pub enum PacketDecodeError {
     },
     #[error("malformed NBT text component: {0}")]
     MalformedNbtTextComponent(String),
+    #[error("malformed JSON text component: {0}")]
+    MalformedJsonTextComponent(String),
     #[error("malformed registry-entry NBT payload: {0}")]
     MalformedRegistryEntryNbt(String),
 }
