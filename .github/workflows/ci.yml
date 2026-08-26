@@ -30,6 +30,19 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: workspace-wide, since M2-B01. `simdnbt` 0.10.0 (rc-nbt's
+    # real NBT backend, WORLD-D11) carries unconditional `#![feature(portable_simd)]`
+    # with no `#[cfg]` guard in every published version (0.10.0 is latest, checked
+    # 2026-08-26) -- every command touching rc-nbt or its dependents (rc-chunk-storage,
+    # rc-protocol, rc-test-harness, xtask itself) fails E0554 on this workspace's
+    # pinned *stable* toolchain otherwise. crates/nbt/Cargo.toml's own "KNOWN BLOCKER"
+    # comment and every M2 blueprint report from M2-B02 onward already flag this as an
+    # open, project-wide gap; the `m2-acceptance` job below already carries this same
+    # env var locally per-step. Setting it once, job-wide, here is the M2 integration
+    # pass's deliberate resolution so the actual required Tier-1 gates below can build
+    # at all -- see M2-COMPLETION-REPORT.md for the full rationale.
+    env:
+      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,6 +99,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: see the identical comment on the `gates` job above --
+    # `verify-fixtures` and `lint-tests` both build against rc-chunk-storage/rc-nbt.
+    env:
+      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -193,6 +210,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: see the identical comment on the `gates` job above --
+    # `rusty-clanker-server` now depends on rc-chunk-storage/rc-nbt (M2-B05/M2-B07).
+    env:
+      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -219,6 +240,8 @@ jobs:
       # `rust-toolchain.toml` override supplies the nightly channel automatically for
       # any `cargo` invocation whose working directory is at or below that path
       # (every step below that touches `rc-paritybot` explicitly `cd`s there first).
+      # That nested toolchain is real nightly already, so it does not need (and is
+      # unaffected by) the job-level RUSTC_BOOTSTRAP=1 above.
       - name: rc-paritybot lint (nightly override)
         working-directory: crates/testing/paritybot
         run: cargo clippy --all-targets -- -D warnings
