@@ -18,7 +18,7 @@ pub fn find_free_port() -> io::Result<u16> {
     Ok(port)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ManagedServerConfig {
     pub binary_path: PathBuf,
     /// Passed as `--offline` when true. Every caller in this blueprint's own
@@ -26,16 +26,34 @@ pub struct ManagedServerConfig {
     pub offline: bool,
     pub startup_timeout: Duration, // default helper: Duration::from_secs(30)
     pub extra_args: Vec<String>,
+    /// New (M2-B08): passed as `--world-dir <path>` when `Some`. `None` is a
+    /// programmer error for every M2-B08 call site (Context: required for every
+    /// M2-B08 invocation) — `spawn_server` returns `SpawnError::MissingWorldDir`
+    /// immediately, before ever spawning a process, when the call site opts into that
+    /// check (`spawn_server` itself never rejects `None` unconditionally, since every
+    /// pre-existing M1-B06 call site never sets this field at all and must keep
+    /// working exactly as before — Deliverables' own "existing M1-B06 call sites...
+    /// get `None`'s prior behavior unchanged").
+    pub world_dir: Option<PathBuf>,
+    /// New (M2-B08): passed as `--save-interval-ticks <n>` when `Some`.
+    pub save_interval_ticks: Option<u64>,
+    /// New (M2-B08): passed as `--save-event-log <path>` when `Some`.
+    pub save_event_log: Option<PathBuf>,
 }
 
 impl ManagedServerConfig {
-    /// `startup_timeout: Duration::from_secs(30)`, `offline: true`, no `extra_args`.
+    /// `startup_timeout: Duration::from_secs(30)`, `offline: true`, no `extra_args`,
+    /// every M2-B08 field `None` (an M1-B06-shaped config — `require_world_dir` stays
+    /// `false`, matching this constructor's own pre-M2-B08 behavior unchanged).
     pub fn new(binary_path: PathBuf) -> Self {
         Self {
             binary_path,
             offline: true,
             startup_timeout: Duration::from_secs(30),
             extra_args: Vec::new(),
+            world_dir: None,
+            save_interval_ticks: None,
+            save_event_log: None,
         }
     }
 }
@@ -63,6 +81,18 @@ pub enum SpawnError {
     Spawn { path: String, source: io::Error },
     #[error("server did not accept a connection on {addr} within {elapsed:?}")]
     StartupTimeout { addr: SocketAddr, elapsed: Duration },
+    /// New (M2-B08): returned by `spawn_server_with_world_dir` when
+    /// `ManagedServerConfig::world_dir == None` reaches a call site that requires it
+    /// — every M2-B08 call site (`restart_persistence`/`m2_report`) uses that
+    /// function rather than plain `spawn_server`, so it fails fast and clearly
+    /// rather than silently exercising the binary's untested default world path.
+    /// Plain `spawn_server` itself never returns this variant (Context's own "existing
+    /// M1-B06 call sites... get `None`'s prior behavior unchanged" — resolved here by
+    /// splitting the check into its own opt-in entry point rather than making
+    /// `spawn_server` itself guess which milestone's call site it is being invoked
+    /// from).
+    #[error("ManagedServerConfig::world_dir is required by this call site but was None")]
+    MissingWorldDir,
 }
 
 /// Reserves a free port (`find_free_port`), spawns `binary_path --bind
@@ -78,6 +108,17 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
     command.arg("--bind").arg(addr.to_string());
     if config.offline {
         command.arg("--offline");
+    }
+    if let Some(world_dir) = &config.world_dir {
+        command.arg("--world-dir").arg(world_dir);
+    }
+    if let Some(save_interval_ticks) = config.save_interval_ticks {
+        command
+            .arg("--save-interval-ticks")
+            .arg(save_interval_ticks.to_string());
+    }
+    if let Some(save_event_log) = &config.save_event_log {
+        command.arg("--save-event-log").arg(save_event_log);
     }
     command.args(&config.extra_args);
 
@@ -105,4 +146,19 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// As `spawn_server`, but first requires `config.world_dir.is_some()` — every
+/// M2-B08 call site (`rc_paritybot::restart_persistence`, `xtask::m2_report`) uses
+/// this entry point rather than plain `spawn_server` (Context: "required for every
+/// M2-B08 invocation"). `spawn_server` itself is left unconditional so every
+/// pre-existing M1-B06 call site (which never sets `world_dir` at all) keeps
+/// working exactly as before.
+pub fn spawn_server_with_world_dir(
+    config: ManagedServerConfig,
+) -> Result<ManagedServer, SpawnError> {
+    if config.world_dir.is_none() {
+        return Err(SpawnError::MissingWorldDir);
+    }
+    spawn_server(config)
 }

@@ -100,6 +100,10 @@ pub fn run(server_bin: PathBuf, mode: Mode) -> std::process::ExitCode {
         offline: true,
         startup_timeout: Duration::from_secs(30),
         extra_args: Vec::new(),
+        // M2-B08: three new, purely additive `ManagedServerConfig` fields
+        // (Deliverables) -- `None` on every one reproduces this pre-existing call
+        // site's own exact prior behavior.
+        ..Default::default()
     }) {
         Ok(managed) => managed,
         Err(err) => {

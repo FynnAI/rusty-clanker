@@ -27,6 +27,13 @@ fn spawn_server_reports_startup_timeout_for_a_binary_that_never_listens() {
         offline: true,
         startup_timeout: Duration::from_millis(500),
         extra_args: Vec::new(),
+        // M2-B08: three new, purely additive `ManagedServerConfig` fields (Deliverables)
+        // -- `None` on every one reproduces this pre-existing test's own exact prior
+        // behavior (no `--world-dir`/`--save-interval-ticks`/`--save-event-log` flag
+        // emitted), never altering what this test itself asserts.
+        world_dir: None,
+        save_interval_ticks: None,
+        save_event_log: None,
     };
 
     let started = Instant::now();

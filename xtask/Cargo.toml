@@ -21,3 +21,18 @@ sha2 = { workspace = true }
 # `rc-paritybot` (Context, "azalea's own upstream nightly-toolchain requirement"; this
 # crate's own binary must never link `azalea`/`simdnbt`).
 rc-test-harness = { path = "../crates/testing/test-harness" }
+# M2-B08: `m2_report`'s own direct on-disk comparison leg (Context's "Direct on-disk
+# comparison") -- opens a fresh `AnvilDiskBackend`/`FilesystemPlayerDataStore` and
+# decodes chunk/player NBT in-process. None of these four pull in `azalea`/nightly-only
+# code (unlike `rc-paritybot`), so linking them into `xtask.exe` is safe under this
+# project's pinned stable toolchain (WS-D4).
+rc-chunk-storage = { path = "../crates/chunk-storage" }
+rc-nbt = { path = "../crates/nbt" }
+rc-core = { path = "../crates/core" }
+rc-registries = { path = "../crates/registries" }
+# M2-B08: `restart_persistence_runner`'s own offline username maps to the same
+# on-disk player-data UUID the server itself derives (NET-D6's offline-mode scheme) --
+# reused directly rather than re-implemented, so a drift in that derivation can never
+# silently desync the disk-comparison leg from the real file the server actually wrote.
+rc-auth = { path = "../crates/auth" }
+uuid = { workspace = true }

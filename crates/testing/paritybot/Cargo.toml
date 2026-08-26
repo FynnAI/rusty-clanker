@@ -15,6 +15,14 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 azalea = { workspace = true } # TEST-D8 — git dependency, see 12-workspace-structure.md
 thiserror = { workspace = true }
+# M2-B08: `restart_persistence::ExpectedState`'s own `BlockPos`/`DimensionId` fields
+# (in-workspace only, mirrors `rc-protocol`'s own identical justification above).
+rc-core = { path = "../../core" }
+# M2-B08: `expected_state()`'s fixed script targets vanilla's real `minecraft:stone`/
+# `minecraft:air` block-state ids (Context's "Defined block pattern") — read directly
+# off the generated registry table (`M0-B07`'s own output) rather than duplicating
+# their numeric value by hand.
+rc-registries = { path = "../../registries" }
 
 [dev-dependencies]
 # none beyond the above — this crate's own self-tests use rc-test-harness's
@@ -33,3 +41,14 @@ thiserror = { workspace = true }
 [[bin]]
 name = "idle_stability_runner"
 path = "src/bin/idle_stability_runner.rs"
+
+# M2-B08's own necessary addition, following the exact same forced-deviation
+# precedent as `idle_stability_runner` above (this blueprint's own `m2_report.rs`
+# Deliverables sketch — an in-process `tokio::runtime::Runtime`/`block_on` call into
+# `rc_paritybot::restart_persistence` directly from `xtask` — is impossible for the
+# identical reason: `xtask.exe` must never link `azalea`). `xtask m2-report` drives
+# the restart-round-trip leg's `apply_actions`/`observe_state` calls by spawning this
+# binary as a real OS subprocess instead.
+[[bin]]
+name = "restart_persistence_runner"
+path = "src/bin/restart_persistence_runner.rs"

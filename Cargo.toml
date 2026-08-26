@@ -60,6 +60,7 @@ zip               = "8.6.0"
 lz4_flex          = "0.14.0"
 object_store      = "0.14.1"
 rand_xoshiro      = "0.8.1"
+rand_chacha       = "0.3.1"   # M2-B08: deterministic PRNG for the chunk-soak payload generator (Constraint (c))
 wasmtime          = "36.0.13"
 wasmtime-wasi     = "36.0.13"
 wit-bindgen       = "0.60.0"

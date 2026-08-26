@@ -10,6 +10,11 @@ on:
         type: choice
         options: [smoke, full]
         default: smoke
+      m2_report_mode:
+        description: "m2-acceptance report mode when manually triggered"
+        type: choice
+        options: [smoke, full]
+        default: smoke
   schedule:
     # TEST-D37 Tier 2, nightly: M0's own headline acceptance criterion 1 (M0-B06's
     # soak-tests-gated soak_8_regions_stable_20tps_10min), the only real Tier-2-shaped
@@ -237,4 +242,73 @@ jobs:
         with:
           name: m1-acceptance-${{ matrix.os }}
           path: target/verify/m1-acceptance.json
+          if-no-files-found: warn
+
+  m2-acceptance:
+    name: m2-acceptance (${{ matrix.os }})
+    # Nightly cron: always `smoke`. Manual dispatch: whatever `m2_report_mode` was
+    # chosen (default `smoke`) — mirrors `m1-acceptance`'s own identical split.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      # `rc-paritybot`'s own transitive `azalea` dependency requires a nightly Rust
+      # toolchain -- identical precedent to `m1-acceptance`'s own steps above.
+      - name: rc-paritybot lint (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
+
+      - name: Build rusty-clanker-server (monolithic)
+        # `RUSTC_BOOTSTRAP=1`: `crates/nbt/Cargo.toml`'s own "KNOWN BLOCKER" note --
+        # `simdnbt` 0.10.0 carries an unconditional `#![feature(portable_simd)]`, so
+        # every command that builds `rc-nbt`/`rc-chunk-storage` (transitively, here:
+        # `rusty-clanker-server` itself, and below, `xtask.exe` now that `m2_report.rs`
+        # depends on both directly for its own disk-comparison leg) needs this on the
+        # pinned *stable* toolchain -- a pre-existing, cross-cutting condition this
+        # blueprint's own implementer does not fix workspace-wide (`gates`/`guardrails`
+        # stay byte-for-byte unchanged, Deliverables), only sets locally, in this one
+        # new job, for the steps that actually need it.
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: m2-report
+        shell: bash
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: |
+          MODE="${{ github.event_name == 'workflow_dispatch' && inputs.m2_report_mode || 'smoke' }}"
+          cargo run -p xtask -- m2-report --server-bin target/release/rusty-clanker-server --mode "$MODE"
+
+      - name: Upload m2-acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m2-acceptance-${{ matrix.os }}
+          path: target/verify/m2-acceptance.json
           if-no-files-found: warn

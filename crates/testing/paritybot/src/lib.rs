@@ -5,4 +5,5 @@
 
 pub mod chunk_decode_check;
 pub mod idle_stability;
+pub mod restart_persistence;
 pub mod vanilla_registry_defaults;

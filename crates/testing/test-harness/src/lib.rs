@@ -7,6 +7,9 @@
 //! responsibilities for this crate) are reserved, unimplemented, for the milestone
 //! that first needs real comparable world content (M2+) — not part of this blueprint.
 
+pub mod chunk_soak;
 pub mod fake_server;
+pub mod fixtures;
 pub mod probe;
 pub mod process;
+pub mod save_cadence;

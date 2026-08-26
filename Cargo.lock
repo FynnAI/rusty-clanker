@@ -3046,7 +3046,9 @@ version = "0.1.0"
 dependencies = [
  "azalea",
  "bytes",
+ "rc-core",
  "rc-protocol",
+ "rc-registries",
  "rc-test-harness",
  "thiserror 2.0.20",
  "tokio",
@@ -3137,7 +3139,12 @@ dependencies = [
 name = "rc-test-harness"
 version = "0.1.0"
 dependencies = [
+ "rand_chacha 0.3.1",
+ "rc-chunk-storage",
+ "rc-core",
+ "rc-nbt",
  "rc-protocol",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
 ]
@@ -4785,6 +4792,11 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "rc-auth",
+ "rc-chunk-storage",
+ "rc-core",
+ "rc-nbt",
+ "rc-registries",
  "rc-test-harness",
  "reqwest",
  "serde",
@@ -4792,6 +4804,7 @@ dependencies = [
  "sha1",
  "sha2",
  "thiserror 2.0.20",
+ "uuid",
  "xshell",
 ]
 

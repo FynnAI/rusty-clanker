@@ -13,6 +13,7 @@ pub mod forbidden_patterns;
 pub mod lint;
 pub mod lint_deps;
 pub mod m1_report;
+pub mod m2_report;
 pub mod metadata;
 pub mod path_guard;
 pub mod quarantine;
@@ -136,5 +137,14 @@ pub enum Command {
         server_bin: std::path::PathBuf,
         #[arg(long, value_enum, default_value_t = m1_report::Mode::Smoke)]
         mode: m1_report::Mode,
+    },
+    /// M2-B08: drives the M2 acceptance harness (restart round-trip + save-cadence
+    /// legs) against a real, freshly-spawned `rusty-clanker-server` and writes
+    /// `target/verify/m2-acceptance.json`.
+    M2Report {
+        #[arg(long)]
+        server_bin: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = m2_report::Mode::Smoke)]
+        mode: m2_report::Mode,
     },
 }

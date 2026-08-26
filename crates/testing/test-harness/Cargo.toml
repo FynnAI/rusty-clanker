@@ -13,6 +13,22 @@ publish = false
 rc-protocol = { path = "../../protocol" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# M2-B08: `chunk_soak.rs`/`fixtures/corrupting_backend.rs` drive `rc_chunk_storage`'s
+# real `ChunkStorageBackend`/`AnvilDiskBackend`/palette types directly (in-process,
+# synchronous -- no new async-runtime dependency, Constraint (f)).
+rc-chunk-storage = { path = "../../chunk-storage" }
+rc-nbt = { path = "../../nbt" }
+rc-core = { path = "../../core" }
+# M2-B08's own one permitted new external dependency (Constraint (c)): deterministic
+# PRNG for `chunk_soak::generate_chunk_payload`. Only `rand_chacha` itself is added --
+# its own re-exported `rand_chacha::rand_core` (the crate it already depends on) is
+# used for the `RngCore`/`SeedableRng` traits, avoiding a second new dependency on
+# `rand_core` directly.
+rand_chacha = { workspace = true }
+# M2-B08: `save_cadence::SaveEvent` derives `serde::Deserialize` (Deliverables) --
+# `serde_json` alone (already a dependency, used only for its `from_str`/`to_string`
+# free functions) does not itself provide the `Deserialize` derive macro.
+serde = { workspace = true }
 
 [[bin]]
 name = "status_probe"
