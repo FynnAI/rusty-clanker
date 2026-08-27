@@ -46,6 +46,28 @@
 //! failing loudly and by name (`ActionError::ActionRejected`) the instant one doesn't match —
 //! a fire-and-forget harness that cannot distinguish "the server rejected me" from "the server
 //! has a persistence bug" is how this defect stayed invisible in the first place.
+//!
+//! M3 field-report governance note (a second, later field-report fix, MECH-D62
+//! re-supersession — corrects the paragraph above): the server-side voxel raycast that
+//! motivated DEFECT 3's own aiming fix is now ITSELF retired. A live-vanilla-client field
+//! report found it rejects a legitimate edge-of-block aim; the designated research role's own
+//! authoritative verdict (against the ASSET-D18(f) reference) is that vanilla's real server
+//! performs no raycast at all for block-interaction reach — only a box-distance-from-eye
+//! predicate against the claimed block's own full unit cell, with a fixed `1.0` buffer on top
+//! of the raw range and no line-of-sight/directional component whatsoever (`crates/server/
+//! src/play/mining.rs::is_within_block_interaction_range`, the real production successor to
+//! `raycast_reach`). Concretely: this bot's own careful `look_at_click`/`click_aim_point`
+//! aiming is no longer *required* for any of the 5 scripted actions below to be accepted — any
+//! look direction, or none in particular, would pass the server's own real reach check now,
+//! since distance from eye to the claimed block's box is the only thing that predicate checks.
+//! The aiming stays anyway (deliberately NOT removed): it is harmless, more realistic (a real
+//! player does look at what they interact with), and its own `cast_ray`-based self-test
+//! coverage (`tests/restart_persistence_self_tests.rs`'s own `aim_geometry` module) remains a
+//! genuinely valuable regression guard for THIS BOT'S OWN aim logic landing where intended —
+//! independent of whether the server's own validation still depends on it. `verify_effect`
+//! stays exactly as valuable as ever: a scripted action's own effect can still legitimately
+//! fail to land (an out-of-reach rejection under the new predicate, or a real persistence
+//! bug), and this harness must still be able to tell those apart from a silent no-op.
 
 use std::time::Duration;
 
@@ -101,9 +123,10 @@ pub enum ActionError {
     /// The harness's own effect check (this module's own top-of-file doc comment,
     /// "close that hole") — a scripted action's block state did not change to the value the
     /// action itself implies, meaning either the server rejected the action (most likely: an
-    /// out-of-reach raycast miss, MECH-D62) or a real persistence bug swallowed it silently.
-    /// Either way this must fail loudly and by name, never be mistaken for a later stage's own
-    /// AC1a/AC1b disk/observed mismatch.
+    /// out-of-reach rejection, MECH-D62's own box-distance predicate — see this module's own
+    /// governance-note addendum above; not a raycast miss any more) or a real persistence bug
+    /// swallowed it silently. Either way this must fail loudly and by name, never be mistaken
+    /// for a later stage's own AC1a/AC1b disk/observed mismatch.
     #[error(
         "scripted action {action} at {pos:?} did not take effect: expected raw block-state id \
          {expected}, observed {observed} immediately after the action's own settle wait — the \
@@ -283,8 +306,11 @@ pub fn click_aim_point(pos: azalea::BlockPos) -> azalea::Vec3 {
 /// Turns the bot's head to face one of the 5 scripted clicked positions and waits
 /// `AIM_SETTLE_TICKS` for the resulting rotation to actually reach the server — every scripted
 /// `block_interact`/`mine` call below is preceded by this, closing DEFECT 3's own root cause
-/// (a level yaw/pitch never resolves MECH-D62's real per-player raycast against any of this
-/// world's content, which sits entirely below spawn height).
+/// (a level yaw/pitch never resolved MECH-D62's real per-player raycast, as it existed at
+/// DEFECT 3's own time, against any of this world's content, which sits entirely below spawn
+/// height). The server's own reach model has since moved on (this module's own governance-
+/// note addendum, top of file) to a direction-independent box-distance predicate — aiming is
+/// no longer *required* for the server to accept these actions, only kept for realism.
 async fn look_at_click(client: &Client, pos: azalea::BlockPos) {
     client.look_at(click_aim_point(pos));
     client.wait_ticks(AIM_SETTLE_TICKS).await;
@@ -304,7 +330,9 @@ async fn look_at_click(client: &Client, pos: azalea::BlockPos) {
 /// `SPEED_CHECK_THRESHOLD`, and no collision replay mismatch is possible on flat ground — so
 /// it is not itself one of the 5 scripted actions DEFECT 3's own effect-verification
 /// requirement applies to; `apply_actions_inner` still waits `AIM_SETTLE_TICKS` afterward so
-/// every subsequent raycast the server performs already sees the moved position.
+/// every subsequent reach check the server performs (a box-distance predicate as of this
+/// module's own governance-note addendum, top of file — no longer a raycast) already sees
+/// the moved position.
 fn recenter_in_spawn_block(client: &Client) -> Result<(), ActionError> {
     client.query_self::<&mut azalea::entity::Position, _>(|mut pos| {
         pos.x = pos.x.floor() + 0.5;
@@ -325,7 +353,9 @@ fn read_raw_block_state(client: &Client, pos: azalea::BlockPos) -> Result<u32, A
 /// DEFECT 3's own second half, "close that hole": after a scripted action's own settle wait,
 /// confirms the position it targeted actually holds the state the action implies (`STONE` for
 /// a place, `AIR` for a break) instead of silently trusting the fire-and-forget
-/// `block_interact`/`mine` call. A mismatch — most likely an out-of-reach raycast rejection,
+/// `block_interact`/`mine` call. A mismatch — most likely an out-of-reach rejection (this
+/// module's own governance-note addendum above: the server's real reach predicate is box-
+/// distance, not a raycast, but still capable of rejecting a genuinely out-of-range action),
 /// but possibly a real persistence bug — fails loudly, naming the action and position, rather
 /// than letting a later, much harder-to-diagnose AC1a/AC1b disk/observed mismatch be the first
 /// sign anything went wrong.
@@ -386,10 +416,16 @@ async fn apply_actions_inner(
     // ahead of Context's own table order: from the recentered bot position, a straight line
     // to `(3,-60,0)`'s own aim point passes directly through `(2,-59,0)`'s column once that
     // column holds a solid block — placing `(2,-59,0)` first would self-occlude the very next
-    // action's own raycast (verified by hand-deriving `cast_ray`'s DDA stepping with that
-    // block already solid). Placing the occluding column last avoids it entirely; the final
-    // block *state* comparisons (`expected_state`, `xtask::m2_report::EXPECTED_BLOCKS`) never
-    // depend on the order these three were written in.
+    // action's own simulated aim (verified by hand-deriving `cast_ray`'s DDA stepping with
+    // that block already solid). This ordering is no longer needed for the SERVER's own
+    // sake (this module's own governance-note addendum, top of file: its real reach
+    // predicate has no occlusion component at all any more, and the final block *state*
+    // comparisons -- `expected_state`, `xtask::m2_report::EXPECTED_BLOCKS` -- never depended
+    // on write order to begin with) -- kept because `tests/restart_persistence_self_tests.
+    // rs`'s own `aim_geometry` module still re-derives this exact `click_aim_point`/`cast_ray`
+    // chain, in this exact script order, to verify the BOT's own simulated aim lands where
+    // intended; an occluded aim there would still be a real (if now purely cosmetic) hit-
+    // resolution ambiguity for that self-test to trip over.
     for (below, write) in [
         ((3, -60, 0), rc_core::BlockPos::new(3, -59, 0)),
         ((2, -60, 0), rc_core::BlockPos::new(2, -59, 0)),

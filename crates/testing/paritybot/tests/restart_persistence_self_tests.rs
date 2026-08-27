@@ -3,9 +3,20 @@
 //! real `m2-report` run (Context).
 //!
 //! M3 field-report fix (DEFECT 3): `aim_geometry` below hand-verifies `click_aim_point`'s own
-//! aim-point geometry against a real `rc_physics::cast_ray` — the exact algorithm the server's
-//! own MECH-D62 raycast (`crates/server/src/play/mining.rs::raycast_reach`) runs — instead of
-//! trusting the module's own doc-comment derivation alone.
+//! aim-point geometry against a real `rc_physics::cast_ray`, instead of trusting the module's
+//! own doc-comment derivation alone.
+//!
+//! M3 field-report governance note (a second, later field-report fix, MECH-D62
+//! re-supersession — corrects the paragraph above): at DEFECT 3's own time, `cast_ray` (via
+//! `mining::raycast_reach`) was the exact algorithm the server's own reach check ran, so this
+//! module doubled as an indirect regression guard for server-side reach too. That is no
+//! longer true — the server's real reach predicate is a direction-independent box-distance
+//! check with no raycast at all (`crates/server/src/play/mining.rs::
+//! is_within_block_interaction_range`, `restart_persistence.rs`'s own governance-note
+//! addendum has the full writeup). `aim_geometry` below is kept and still runs every test
+//! below unmodified — it remains a genuinely valuable regression guard for THIS BOT'S OWN
+//! `click_aim_point` aim logic landing on the intended block, independent of what the server
+//! does with that aim.
 
 use rc_paritybot::restart_persistence::{ActionError, compare_state, expected_state};
 
@@ -60,9 +71,11 @@ fn action_rejected_error_names_the_action_position_and_ids() {
 }
 
 /// Hand-verifies `click_aim_point`'s own aim-point geometry (DEFECT 3) against a *real*
-/// `rc_physics::cast_ray` — `crates/physics/src/raycast.rs`'s own DDA implementation, the
-/// exact algorithm `crates/server/src/play/mining.rs::raycast_reach` runs server-side — rather
+/// `rc_physics::cast_ray` — `crates/physics/src/raycast.rs`'s own DDA implementation — rather
 /// than trusting the hand derivation in `restart_persistence.rs`'s own doc comments alone.
+/// `cast_ray` is no longer the algorithm the server's own reach check runs (this file's own
+/// top-of-file governance-note addendum) — this module verifies the BOT's own aim now,
+/// nothing about the server.
 mod aim_geometry {
     use std::collections::HashMap;
 
