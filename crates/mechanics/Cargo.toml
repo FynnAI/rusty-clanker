@@ -6,15 +6,23 @@ publish = false
 
 [dependencies]
 rc-core = { path = "../core" }
-rc-registries = { path = "../registries" }
-rc-mod-api = { path = "../mod-api" }
+rc-messaging = { path = "../messaging" }
+rc-chunk-storage = { path = "../chunk-storage" }
+# WS-D3 rule 1: `rc-physics` must stay reachable from *both* `rusty-clanker-server` and
+# `rusty-clanker-client`'s transitive dependency closures. `rusty-clanker-client` depends on it
+# directly; `rusty-clanker-server` does not (Deviations) -- this crate is its only other path,
+# so this edge is kept even though M3-B01's own Cargo.toml sample omits it.
 rc-physics = { path = "../physics" }
-rc-entity-macros = { path = "../entity-macros" }
-rc-scheduler = { path = "../scheduler", optional = true }
-rc-chunk-storage = { path = "../chunk-storage", optional = true }
-rc-brigadier = { path = "../brigadier", optional = true }
+bevy_ecs = { workspace = true }
+
+[dependencies.rc-scheduler]
+path = "../scheduler"
+optional = true
+
+[dev-dependencies]
+proptest = { workspace = true }
 
 [features]
 default = ["server-systems"]
-server-systems = ["dep:rc-scheduler", "dep:rc-chunk-storage", "dep:rc-brigadier"]
+server-systems = ["dep:rc-scheduler"]
 client-predict = []

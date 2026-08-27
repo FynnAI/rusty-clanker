@@ -2992,13 +2992,12 @@ version = "0.1.0"
 name = "rc-mechanics"
 version = "0.1.0"
 dependencies = [
- "rc-brigadier",
+ "bevy_ecs",
+ "proptest",
  "rc-chunk-storage",
  "rc-core",
- "rc-entity-macros",
- "rc-mod-api",
+ "rc-messaging",
  "rc-physics",
- "rc-registries",
  "rc-scheduler",
 ]
 

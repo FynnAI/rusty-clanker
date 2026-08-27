@@ -1,0 +1,138 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+use bevy_ecs::prelude::Resource;
+use rc_core::BlockPos;
+
+/// Vanilla's 7-level ordered priority (`08-redstone-ticking.md` §3.4), restated exactly.
+/// Declared in ascending-priority order so `#[derive(PartialOrd, Ord)]`'s declaration-order
+/// semantics already match vanilla's numeric ordinal order — do not reorder these variants.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TickPriority {
+    ExtremelyHigh,
+    VeryHigh,
+    High,
+    Normal,
+    Low,
+    VeryLow,
+    ExtremelyLow,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledTickEntry {
+    pub pos: BlockPos,
+    pub trigger_tick: u64,
+    pub priority: TickPriority,
+    pub sub_tick_order: u64,
+}
+
+/// Ordering key for the internal min-heaps: `(trigger_tick, priority, sub_tick_order)`
+/// ascending — kept as a private wrapper (rather than deriving `Ord` on the public
+/// `ScheduledTickEntry` itself, which this blueprint's own Deliverables deliberately do not
+/// list) so this queue's internal representation stays free to change without touching
+/// `ScheduledTickEntry`'s public trait surface.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct HeapEntry(ScheduledTickEntry);
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        todo!()
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        todo!()
+    }
+}
+
+/// Two independent priority queues (block, fluid — Context: never a combined key across the
+/// two), one shared, per-region, ever-increasing `sub_tick_order` counter (matches vanilla's
+/// own single per-level counter). `#[derive(Resource)]` is a zero-cost marker (`bevy_ecs` is
+/// already an unconditional `rc-mechanics` dependency, Deliverables' `Cargo.toml`) — it adds no
+/// `Query`/`System` coupling to this type's own logic, which remains plain Rust throughout.
+#[derive(Debug, Default, Resource)]
+pub struct ScheduledTickQueue {
+    block_heap: BinaryHeap<Reverse<HeapEntry>>,
+    fluid_heap: BinaryHeap<Reverse<HeapEntry>>,
+    next_sub_tick_order: u64,
+}
+
+impl ScheduledTickQueue {
+    /// `ServerLevel.MAX_SCHEDULED_TICKS_PER_TICK` (Context), applied independently per queue.
+    pub const MAX_PER_TICK: usize = 65_536;
+
+    pub fn new() -> Self {
+        todo!()
+    }
+
+    /// Schedules a block tick `delay_ticks` ticks after `current_tick`. Assigns and consumes
+    /// the next `sub_tick_order` value.
+    pub fn schedule_block_tick(
+        &mut self,
+        pos: BlockPos,
+        delay_ticks: u64,
+        priority: TickPriority,
+        current_tick: u64,
+    ) {
+        todo!()
+    }
+
+    pub fn schedule_fluid_tick(
+        &mut self,
+        pos: BlockPos,
+        delay_ticks: u64,
+        priority: TickPriority,
+        current_tick: u64,
+    ) {
+        todo!()
+    }
+
+    fn make_entry(
+        &mut self,
+        pos: BlockPos,
+        delay_ticks: u64,
+        priority: TickPriority,
+        current_tick: u64,
+    ) -> ScheduledTickEntry {
+        todo!()
+    }
+
+    /// Drains every entry with `trigger_tick <= current_tick`, ascending `(trigger_tick,
+    /// priority, sub_tick_order)`, up to `MAX_PER_TICK` entries; anything left over stays
+    /// queued for a later tick (Context: vanilla's own overflow behavior).
+    pub fn drain_due_block_ticks(&mut self, current_tick: u64) -> Vec<ScheduledTickEntry> {
+        todo!()
+    }
+
+    pub fn drain_due_fluid_ticks(&mut self, current_tick: u64) -> Vec<ScheduledTickEntry> {
+        todo!()
+    }
+
+    fn drain_due(
+        heap: &mut BinaryHeap<Reverse<HeapEntry>>,
+        current_tick: u64,
+    ) -> Vec<ScheduledTickEntry> {
+        todo!()
+    }
+
+    /// `true` iff any block tick is currently queued (due or not) at `pos` — a coarser
+    /// stand-in for vanilla's own per-tick `willTickThisTick` dedup guard (Context: exact
+    /// same-tick-only guard is deferred to whichever future blueprint needs a diode/torch's
+    /// precise dedup semantics; this method is sufficient for this blueprint's own tests).
+    pub fn is_block_tick_pending(&self, pos: BlockPos) -> bool {
+        todo!()
+    }
+
+    pub fn is_fluid_tick_pending(&self, pos: BlockPos) -> bool {
+        todo!()
+    }
+
+    pub fn block_len(&self) -> usize {
+        todo!()
+    }
+
+    pub fn fluid_len(&self) -> usize {
+        todo!()
+    }
+}
