@@ -45,8 +45,8 @@ pub use mining::{
     ToolKind, ToolMaterial, abort_destroy, apply_placement, begin_destroy, destroy_speed,
     dig_properties, dig_properties_for_raw_state, finalize_break, has_correct_tool_for_drops,
     is_within_block_interaction_range, look_vector, nearest_direction6,
-    nearest_horizontal_direction4, raycast_reach, resolve_orientation, settle_neighbor_updates,
-    stop_destroy, tick_destroy_state, ticks_to_break, tier1_oriented_state_table,
+    nearest_horizontal_direction4, resolve_orientation, settle_neighbor_updates, stop_destroy,
+    tick_destroy_state, ticks_to_break, tier1_oriented_state_table,
 };
 pub use movement::{
     ChunkBlockShapeSource, MISMATCH_TOLERANCE_SQ, MovementOutcome, POSITION_CLAMP_HORIZONTAL,

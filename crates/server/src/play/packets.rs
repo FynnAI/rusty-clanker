@@ -284,49 +284,34 @@ pub const PLAYER_INPUT_JUMP: u8 = 0x10;
 pub const PLAYER_INPUT_SHIFT: u8 = 0x20;
 pub const PLAYER_INPUT_SPRINT: u8 = 0x40;
 
-/// Per-bit accessors (Context, test-authoring stub): every body is `todo!()` here -- the
-/// matching implementation changeset fills in the real bitmask logic (TEST-D45/D46). This
-/// milestone only ever consumes `shift()` (`connection.rs`'s dispatch threads it into
-/// `movement::PlayerInputState.sneaking`, `movement::eye_position`'s own pose-aware height
-/// selection); the other six are decoded for completeness/future use but not yet threaded
-/// into any gameplay effect -- server-authoritative movement already derives its own
-/// velocity/direction from the position packets, never from this intent bitfield.
+/// Per-bit accessors (Context). This milestone only ever consumes `shift()`
+/// (`connection.rs`'s dispatch threads it into `movement::PlayerInputState.sneaking`,
+/// `movement::eye_position`'s own pose-aware height selection); the other six are decoded
+/// for completeness/future use but not yet threaded into any gameplay effect --
+/// server-authoritative movement already derives its own velocity/direction from the
+/// position packets, never from this intent bitfield.
 impl PlayerInput {
     pub fn forward(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_FORWARD != 0
     }
     pub fn backward(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_BACKWARD != 0
     }
     pub fn left(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_LEFT != 0
     }
     pub fn right(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_RIGHT != 0
     }
     pub fn jump(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_JUMP != 0
     }
     /// The one bit this milestone actually consumes.
     pub fn shift(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_SHIFT != 0
     }
     pub fn sprint(self) -> bool {
-        todo!(
-            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
-        )
+        self.flags & PLAYER_INPUT_SPRINT != 0
     }
 }
 

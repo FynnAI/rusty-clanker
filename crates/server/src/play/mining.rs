@@ -2,11 +2,28 @@
 //! (MECH-D61), the server-side dig-packet state machine (`START`/`STOP`/
 //! `ABORT_DESTROY_BLOCK`, delayed destroy, the 0.7 stop threshold, per-tick crack-stage
 //! broadcast), placement-context-driven block-state selection/orientation for the tier-1
-//! placeable set via a held-item stub, and the real per-player voxel-raycast reach check
-//! (MECH-D62, superseding `block_action.rs`'s own former fixed-position Euclidean check).
+//! placeable set via a held-item stub, and per-player reach validation (MECH-D62, superseding
+//! `block_action.rs`'s own former fixed-position Euclidean check).
 //! See `blueprints/M3/M3-B03-breaking-placing.md` for the full design; every algorithm below
 //! is this blueprint's own restatement, not a copy of any Mojang or third-party source
 //! (Constraints (c)).
+//!
+//! M3 field-report fix (MECH-D62 re-supersession): the real per-player voxel raycast this
+//! module shipped with (`raycast_reach`, cast from the player's own eye along their real look
+//! direction, cell-hit-equality accept rule) is ITSELF now retired -- a live-vanilla-client
+//! field report found it rejects a legitimate edge-of-block aim (the server's own DDA and the
+//! client's own picking algorithm resolve a grazing ray to different neighboring cells) and,
+//! independently, never modeled the crouching pose at all. The designated research role's own
+//! authoritative verdict against the ASSET-D18(f) reference (recorded in full in the matching
+//! field-report changeset): vanilla's real server performs **no raycast whatsoever** for
+//! block-interaction reach -- only a box-distance-from-eye predicate
+//! (`is_within_block_interaction_range` below) against the claimed block's own full unit cell,
+//! with a fixed `1.0` buffer on top of the raw range and no line-of-sight/directional
+//! component at all. `raycast_reach` itself is deleted from this file -- `world.rs`'s reach
+//! call site was its only caller, and that call site now uses the predicate above instead;
+//! `rc_physics::cast_ray` -- the DDA function `raycast_reach` used to drive -- is NOT deleted:
+//! it stays correct and general-purpose, still used by `crates/testing/paritybot`'s own bot-aim
+//! self-tests (`restart_persistence.rs`'s own doc comments now describe this, corrected).
 //!
 //! Two resolved ambiguities in the blueprint's own prose, settled against its own golden
 //! test data and worked examples (recorded here, restated in the completion report):
@@ -33,14 +50,13 @@ use rc_mechanics::{
     PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
-use rc_physics::{BlockShapeSource, Vec3, cast_ray};
+use rc_physics::Vec3;
 use rc_registries::generated_v776::block_states::default_state::{
     AIR, BEDROCK, BLAST_FURNACE, CHEST, COMPARATOR, DIRT, FURNACE, GRASS_BLOCK, HOPPER, PISTON,
     REDSTONE_TORCH, REDSTONE_WALL_TORCH, REDSTONE_WIRE, REPEATER, SMOKER, STICKY_PISTON, STONE,
 };
 
 use super::block_action::{Face, resolve_place_position, to_storage_id};
-use super::movement::{PlayerMotion, eye_position};
 
 // --- Held-item / gamemode stubs (Context: "Held-item stub -- the pre-inventory
 // placement/tool source") ---
@@ -457,8 +473,10 @@ pub fn tick_destroy_state(
     TickOutcome::Idle
 }
 
-// --- Reach (Context: "Reach validation -- superseded to a real per-player-position voxel
-// raycast") ---
+// --- Reach (Context: "Reach validation" -- M3 field-report fix, MECH-D62 re-supersession: a
+// pure box-distance-from-eye predicate, no raycast, no line-of-sight -- this file's own
+// top-of-file doc comment has the full retirement note for the per-player voxel raycast this
+// section used to specify) ---
 
 pub const BLOCK_INTERACTION_RANGE_SURVIVAL: f64 = 4.5;
 pub const BLOCK_INTERACTION_RANGE_CREATIVE: f64 = 5.0;
@@ -474,11 +492,13 @@ pub const BLOCK_INTERACTION_RANGE_CREATIVE: f64 = 5.0;
 pub const BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER: f64 = 1.0;
 
 /// Context's own shared look-vector construction ("Orientation from placement context"),
-/// reused by both the raycast direction and every orientation rule below. Only the
-/// yaw-driven horizontal component reuses `rc_physics`'s `Mth` sin/cos table (matching
-/// `rc_physics::motion::get_input_vector`'s own precedent); the pitch term uses ordinary
-/// `f64::sin`/`cos` (Context: this is a server-authoritative validation aid, not a
-/// rendered/predicted quantity `18-float-determinism.md`'s trig-table rule binds).
+/// reused by every orientation rule below -- no longer a reach-check input at all (M3
+/// field-report fix, MECH-D62 re-supersession: `is_within_block_interaction_range` has no
+/// direction input whatsoever). Only the yaw-driven horizontal component reuses `rc_physics`'s
+/// `Mth` sin/cos table (matching `rc_physics::motion::get_input_vector`'s own precedent); the
+/// pitch term uses ordinary `f64::sin`/`cos` (Context: this is a server-authoritative
+/// placement-orientation input, not a rendered/predicted quantity `18-float-determinism.md`'s
+/// trig-table rule binds).
 pub fn look_vector(yaw_degrees: f32, pitch_degrees: f32) -> Vec3 {
     let yaw_rad = yaw_degrees as f64 * std::f64::consts::PI / 180.0;
     let pitch_rad = pitch_degrees as f64 * std::f64::consts::PI / 180.0;
@@ -532,51 +552,67 @@ pub fn nearest_direction6(yaw_degrees: f32, pitch_degrees: f32) -> Direction {
     }
 }
 
-/// Context's own full algorithm: casts from `eye_position(motion.position)` toward
-/// `look_vector(motion.yaw, motion.pitch)`, `max_distance = range`; accepts iff a hit exists
-/// AND `hit.block_pos == claimed_target`. `claimed_target` is the caller's own choice of
-/// which position must be hit — the world-tick-loop caller always passes the packet's own
-/// raw, unresolved clicked position (identical to `target_position`'s own output for every
-/// `Break`-shaped action, and — deliberately, see `world.rs`'s own call-site doc comment —
-/// distinct from it for a `Place` action, whose *resolved* placement cell is frequently
-/// still air and therefore never itself hittable by a raycast).
-pub fn raycast_reach(
-    motion: &PlayerMotion,
-    claimed_target: BlockPos,
-    range: f64,
-    shapes: &dyn BlockShapeSource,
-) -> bool {
-    // `crouching: false` -- this retired design never modeled pose at all (M3 field-report
-    // Symptom 2's own root cause); kept exactly as before for the duration of this function's
-    // own retirement window (Context, "AUTHORITATIVE RESEARCH VERDICT" -- this whole function
-    // is replaced by `is_within_block_interaction_range` below in the matching implementation
-    // changeset, not merely adjusted here).
-    let origin = eye_position(motion.position, false);
-    let direction = look_vector(motion.yaw, motion.pitch);
-    match cast_ray(origin, direction, range, shapes) {
-        Some(hit) => hit.block_pos == claimed_target,
-        None => false,
-    }
+/// M3 field-report fix (MECH-D62 re-supersession -- Context, "AUTHORITATIVE RESEARCH
+/// VERDICT", the designated research role's own verdict against the ASSET-D18(f) reference,
+/// authoritative and implemented verbatim): vanilla's own server performs no raycast at all
+/// when validating block break/place reach. Builds the full `1x1x1` axis-aligned box of
+/// `claimed_target`'s own block cell -- ALWAYS the full unit cell, never the block's real
+/// collision/visual shape, so a slab/stair/fence is validated exactly like stone -- and
+/// accepts iff the squared distance from `eye` to the NEAREST POINT on that box is less than
+/// `(range + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER)^2`. Per axis, the nearest-point
+/// contribution is `max(box_min - coord, coord - box_max, 0.0)` (zero when `coord` already
+/// lies within `[box_min, box_max]` on that axis) -- nearest-point-of-box distance, never
+/// centre distance, and never the client's own reported cursor hit location. No line-of-
+/// sight/occlusion/directional component whatsoever: a claimed target behind another solid
+/// block, or approached from any angle at all, is accepted purely on this distance (this
+/// function retires `raycast_reach`, this module's own former per-player voxel-raycast
+/// design -- this file's own top-of-file doc comment has the full retirement note).
+pub fn is_within_block_interaction_range(eye: Vec3, claimed_target: BlockPos, range: f64) -> bool {
+    let box_min = (
+        claimed_target.x as f64,
+        claimed_target.y as f64,
+        claimed_target.z as f64,
+    );
+    let box_max = (box_min.0 + 1.0, box_min.1 + 1.0, box_min.2 + 1.0);
+
+    let dx = axis_distance_to_box(eye.x, box_min.0, box_max.0);
+    let dy = axis_distance_to_box(eye.y, box_min.1, box_max.1);
+    let dz = axis_distance_to_box(eye.z, box_min.2, box_max.2);
+    let distance_sq = dx * dx + dy * dy + dz * dz;
+
+    let allowed = range + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER;
+    distance_sq < allowed * allowed
 }
 
-/// M3 field-report fix (MECH-D62 re-supersession, test-authoring stub -- Context,
-/// "AUTHORITATIVE RESEARCH VERDICT"): replaces `raycast_reach` above (retired by the matching
-/// implementation changeset, kept for now so every currently-passing test stays green through
-/// this checkpoint). Builds the full `1x1x1` axis-aligned box of `claimed_target`'s own block
-/// cell -- ALWAYS the full unit cell, never the block's real collision/visual shape, so a
-/// slab/stair/fence is validated exactly like stone -- and accepts iff the squared distance
-/// from `eye` to the NEAREST POINT on that box (per axis: `max(box_min - coord, coord -
-/// box_max, 0.0)`, summed as squares -- nearest-point-of-box distance, never centre distance)
-/// is less than `(range + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER)^2`. No line-of-
-/// sight/occlusion/directional component whatsoever -- a claimed target behind another solid
-/// block is accepted exactly like one in the open. Body left `todo!()` here; the matching
-/// implementation changeset fills it in (TEST-D45/D46).
-pub fn is_within_block_interaction_range(eye: Vec3, claimed_target: BlockPos, range: f64) -> bool {
-    let _ = (eye, claimed_target, range);
-    todo!(
-        "M3 field-report fix (MECH-D62 re-supersession): box-distance reach predicate -- \
-         filled in by the matching implementation changeset"
-    )
+/// One axis' own nearest-point-of-box distance (Context, `is_within_block_interaction_range`'s
+/// own doc comment) -- `0.0` iff `coord` already lies within `[box_min, box_max]` on this
+/// axis.
+fn axis_distance_to_box(coord: f64, box_min: f64, box_max: f64) -> f64 {
+    (box_min - coord).max(coord - box_max).max(0.0)
+}
+
+/// Placement's own loose sanity bound on the client-sent cursor hit location (Context,
+/// AUTHORITATIVE RESEARCH VERDICT): reconstructs the world-space point the cursor offset
+/// claims to have struck (`claimed_block_pos + cursor`) and requires each axis of that point's
+/// own offset from the block's own centre to stay under `1.0000001` in absolute value -- a
+/// legitimate surface hit can only ever be `0.5` off-centre, so this is a generous anti-
+/// garbage-payload guard, never a precision or reach limiter (never rejects a legitimate
+/// off-centre aim). Applies to placement only -- breaking has no cursor concept at all.
+fn cursor_within_sanity_bound(claimed_block_pos: BlockPos, cursor: (f32, f32, f32)) -> bool {
+    const SANITY_BOUND: f64 = 1.0000001;
+    let center = (
+        claimed_block_pos.x as f64 + 0.5,
+        claimed_block_pos.y as f64 + 0.5,
+        claimed_block_pos.z as f64 + 0.5,
+    );
+    let location = (
+        claimed_block_pos.x as f64 + cursor.0 as f64,
+        claimed_block_pos.y as f64 + cursor.1 as f64,
+        claimed_block_pos.z as f64 + cursor.2 as f64,
+    );
+    (location.0 - center.0).abs() < SANITY_BOUND
+        && (location.1 - center.1).abs() < SANITY_BOUND
+        && (location.2 - center.2).abs() < SANITY_BOUND
 }
 
 // --- Placement orientation (Context: "Orientation from placement context") ---
@@ -906,6 +942,11 @@ pub enum RejectReason {
     /// placeable block at all; the blueprint's own enum has no variant that honestly
     /// describes this, and Constraints (e) forbids a silent no-op shortcut instead.
     NothingToPlace,
+    /// M3 field-report fix (MECH-D62 re-supersession): the client-sent cursor hit location
+    /// failed `cursor_within_sanity_bound`'s own loose anti-garbage-payload check -- never
+    /// legitimately reachable by a real client's own local raycast, only by a malformed or
+    /// malicious packet.
+    CursorOutOfBounds,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1057,11 +1098,14 @@ pub fn finalize_break(
 }
 
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
-/// unchanged), checks `TargetNotAir`, resolves orientation (`resolve_orientation`), resolves
-/// the raw state via `tier1_oriented_state_table()`, calls `ctx.set_block` +
+/// unchanged), checks the cursor sanity bound (`cursor_within_sanity_bound`, M3 field-report
+/// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`), resolves the
+/// raw state via `tier1_oriented_state_table()`, calls `ctx.set_block` +
 /// `settle_neighbor_updates`. Wire-connection blocks (`RedstoneWire`) additionally check
 /// `NoSolidSupportBelow` (Context's own simplified "block below is the `FULL_CUBE` default
-/// shape-table row" rule) before calling `set_block`.
+/// shape-table row" rule) before calling `set_block`. `cursor` is the client-sent `Use Item
+/// On` cursor hit location (`cursor_x`/`_y`/`_z`, `connection.rs`'s own decode), validated
+/// against `location` (the raw clicked cell), never against `target`.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_placement(
     ctx_world: &mut dyn BlockWorldAccess,
@@ -1075,11 +1119,24 @@ pub fn apply_placement(
     location: BlockPos,
     face: Face,
     inside_block: bool,
+    cursor: (f32, f32, f32),
     held: HeldItemStub,
     yaw_degrees: f32,
     pitch_degrees: f32,
 ) -> PlaceOutcome {
     let target = resolve_place_position(location, face, inside_block);
+
+    let current = ctx_world
+        .get_block(target)
+        .unwrap_or_else(|| to_storage_id(AIR.0));
+
+    if !cursor_within_sanity_bound(location, cursor) {
+        return PlaceOutcome::Rejected {
+            pos: target,
+            reason: RejectReason::CursorOutOfBounds,
+            current_state: Some(current.to_raw()),
+        };
+    }
 
     let kind = match held {
         HeldItemStub::Block(kind) => kind,
@@ -1092,9 +1149,6 @@ pub fn apply_placement(
         }
     };
 
-    let current = ctx_world
-        .get_block(target)
-        .unwrap_or_else(|| to_storage_id(AIR.0));
     if current.to_raw() != AIR.0 {
         return PlaceOutcome::Rejected {
             pos: target,

@@ -41,8 +41,9 @@ use super::mining::{
     PlaceableBlockKind, StopOutcome, TickOutcome, ToolKind, ToolMaterial,
 };
 use super::movement::{
-    ChunkBlockShapeSource, MovementOutcome, PendingMoveReport, PendingMovementPacket, PlayerMotion,
-    TeleportState, evaluate_movement, feet_block_pos, merge_move_report,
+    ChunkBlockShapeSource, MovementOutcome, PendingMoveReport, PendingMovementPacket,
+    PendingPlayerInput, PlayerInputState, PlayerMotion, TeleportState, evaluate_movement,
+    eye_position, feet_block_pos, merge_move_report,
 };
 use super::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
@@ -837,6 +838,11 @@ pub struct HardcodedWorld {
     /// above, after this same tick's own block-action drain-and-apply step (Context,
     /// "Which pipeline stage").
     movement_tx: tokio::sync::mpsc::UnboundedSender<PendingMovementPacket>,
+    /// M3 field-report fix (Symptom 2): enqueued by `connection.rs`'s inbound dispatch on
+    /// every decoded `player_input` packet, drained once per tick -- ahead of the block-action
+    /// drain-and-apply step (unlike `movement_tx`), so this tick's own reach checks already
+    /// see the latest sneak state (`queue_player_input`'s own doc comment).
+    player_input_tx: tokio::sync::mpsc::UnboundedSender<PendingPlayerInput>,
     /// New (M2-B07), test/diagnostic only -- `debug_query_block`'s own doc comment.
     query_tx:
         tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<DebugBlockInfo>>)>,
@@ -903,6 +909,8 @@ impl HardcodedWorld {
             tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
         let (movement_tx, mut movement_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingMovementPacket>();
+        let (player_input_tx, mut player_input_rx) =
+            tokio::sync::mpsc::unbounded_channel::<PendingPlayerInput>();
         let (query_tx, mut query_rx) = tokio::sync::mpsc::unbounded_channel::<(
             BlockPos,
             oneshot::Sender<Option<DebugBlockInfo>>,
@@ -1144,6 +1152,10 @@ impl HardcodedWorld {
                             last_sent_stage: -1,
                             ..Default::default()
                         },
+                        // M3 field-report fix (Symptom 2): `sneaking: false` at join
+                        // (`PlayerInputState`'s own doc comment) -- a real client sends its
+                        // own current `player_input` state again soon after joining anyway.
+                        PlayerInputState::default(),
                     ));
                 }
 
@@ -1186,6 +1198,24 @@ impl HardcodedWorld {
                         pending_moves.entry(packet.network_entity_id).or_default(),
                         &packet.report,
                     );
+                }
+
+                // M3 field-report fix (Symptom 2): drained here, ahead of the block-action
+                // drain-and-apply step below (unlike `pending_moves`, resolved later) --
+                // that same step's own reach check reads `PlayerInputState` directly off each
+                // acting player's own entity, so this tick's freshest sneak state must already
+                // be applied before it runs. A not-yet-spawned target (the same join/action
+                // mpsc-ordering race every other per-tick queue in this loop already
+                // tolerates) is best-effort dropped, not carried forward -- functionally
+                // harmless, since a real client resends `player_input` on every intent change
+                // (and the client's own game loop keeps sending it while a movement key stays
+                // held), self-correcting within the next packet or two.
+                while let Ok(input) = player_input_rx.try_recv() {
+                    if let Some(entity) = find_player_entity(&region.world, input.network_entity_id)
+                        && let Some(mut state) = region.world.get_mut::<PlayerInputState>(entity)
+                    {
+                        state.sneaking = input.sneaking;
+                    }
                 }
 
                 // M2 field-report chunk-streaming fix, M3 field-report re-placement (Defect
@@ -1362,12 +1392,14 @@ impl HardcodedWorld {
                 // M3-B03's own Stage-3-equivalent manual step (Context, "Which pipeline
                 // stage", step 1): drain every block action queued since the previous tick,
                 // stable-sort by ascending `network_entity_id` (MECH-D4's "deterministic
-                // merge by ascending player id"), reach-validate via a real voxel raycast
-                // (`mining::raycast_reach`, MECH-D62), then dispatch into `mining`'s own
-                // dig-lifecycle/placement functions -- each mutation immediately followed by
-                // `mining::settle_neighbor_updates` (Context above) -- entirely before
-                // `executor.tick_region` runs this tick's own formally-numbered pipeline
-                // (which is what actually drives Stage 4 for real, now that it is wired in).
+                // merge by ascending player id"), reach-validate (`mining::is_within_block_
+                // interaction_range`, MECH-D62 -- M3 field-report fix: a box-distance-from-eye
+                // predicate, not a raycast; `mining.rs`'s own top-of-file doc comment has the
+                // full retirement note), then dispatch into `mining`'s own dig-lifecycle/
+                // placement functions -- each mutation immediately followed by `mining::
+                // settle_neighbor_updates` (Context above) -- entirely before `executor.
+                // tick_region` runs this tick's own formally-numbered pipeline (which is what
+                // actually drives Stage 4 for real, now that it is wired in).
                 let mut pending: Vec<PendingBlockAction> =
                     std::mem::take(&mut carried_block_actions);
                 while let Ok(action) = block_action_rx.try_recv() {
@@ -1411,12 +1443,12 @@ impl HardcodedWorld {
                     // residency pre-check and, inside `mining::finalize_break`/
                     // `apply_placement` themselves, for the actual mutation.
                     let write_target = target_position(&action.kind);
-                    // The raw *clicked* position -- what `mining::raycast_reach` validates
-                    // against. Deliberately **not** `write_target` for a `Place` action: a
-                    // `Place`'s resolved write cell is frequently still air (nothing to hit
-                    // there by construction), while the clicked cell a real client's own
-                    // local raycast actually landed on is always the same value regardless
-                    // of `inside_block` -- `location` itself.
+                    // The raw *clicked* position -- what `mining::is_within_block_interaction_
+                    // range` validates against. Deliberately **not** `write_target` for a
+                    // `Place` action: a `Place`'s resolved write cell is frequently still air
+                    // (nothing there to have clicked in the first place), while the clicked
+                    // cell a real client's own local aim actually landed on is always the same
+                    // value regardless of `inside_block` -- `location` itself.
                     let reach_click = match &action.kind {
                         BlockActionKind::StartDestroy { location }
                         | BlockActionKind::StopDestroy { location }
@@ -1429,11 +1461,12 @@ impl HardcodedWorld {
                     // M2 field-report fix, restated for the raycast era: falls back to a
                     // synthetic motion at `SPAWN_POSITION` for the same join/action mpsc-
                     // ordering race the original fix handled -- never panics on a
-                    // not-yet-spawned actor. `pitch: 90.0` (straight down), not `0.0`: this
-                    // hardcoded world's own content is entirely *below* spawn height (the
-                    // superflat layer table), so a level look direction would never hit
-                    // anything at all; straight down is the only fallback orientation that
-                    // can honestly resolve a reach check for this world's own real content.
+                    // not-yet-spawned actor. `pitch: 90.0` (straight down), not `0.0`: reach
+                    // itself no longer depends on look direction at all (M3 field-report fix,
+                    // `mining::is_within_block_interaction_range`), but `motion.yaw`/`pitch`
+                    // still feed `mining::apply_placement`'s own orientation resolution
+                    // (`resolve_orientation`) for this same not-yet-spawned-actor fallback --
+                    // straight down is kept as the least-arbitrary default for that purpose.
                     let motion = entity
                         .and_then(|e| region.world.get::<PlayerMotion>(e))
                         .cloned()
@@ -1461,6 +1494,15 @@ impl HardcodedWorld {
                         .and_then(|e| region.world.get::<DestroyState>(e))
                         .copied()
                         .unwrap_or_default();
+                    // M3 field-report fix (Symptom 2): pose for this action's own eye height
+                    // -- `PlayerInputState`'s own doc comment has the full "no flying state
+                    // tracked" caveat this crouching-iff-shift reduction relies on. A
+                    // not-yet-spawned actor (no `PlayerInputState` component yet) falls back
+                    // to standing, matching every other per-player fallback in this block.
+                    let crouching = entity
+                        .and_then(|e| region.world.get::<PlayerInputState>(e))
+                        .map(|s| s.sneaking)
+                        .unwrap_or(false);
 
                     let range = if instabuild {
                         BLOCK_INTERACTION_RANGE_CREATIVE
@@ -1469,12 +1511,8 @@ impl HardcodedWorld {
                     };
                     let in_reach = match reach_click {
                         Some(claimed) => {
-                            let shapes = ChunkBlockShapeSource {
-                                world: &region.world,
-                                index: region.world.resource::<ChunkIndex>(),
-                                dimension: DimensionId::OVERWORLD,
-                            };
-                            mining::raycast_reach(&motion, claimed, range, &shapes)
+                            let eye = eye_position(motion.position, crouching);
+                            mining::is_within_block_interaction_range(eye, claimed, range)
                         }
                         None => true,
                     };
@@ -1642,6 +1680,7 @@ impl HardcodedWorld {
                             location,
                             face,
                             inside_block,
+                            cursor,
                         } => {
                             send_ack(&action);
                             let outcome = mining::apply_placement(
@@ -1660,6 +1699,7 @@ impl HardcodedWorld {
                                 location,
                                 face,
                                 inside_block,
+                                cursor,
                                 held,
                                 motion.yaw,
                                 motion.pitch,
@@ -2096,6 +2136,7 @@ impl HardcodedWorld {
             join_tx,
             block_action_tx,
             movement_tx,
+            player_input_tx,
             query_tx,
             next_network_entity_id: Arc::new(AtomicI32::new(1)),
             shutdown_flag,
@@ -2152,6 +2193,16 @@ impl HardcodedWorld {
     pub fn queue_movement_packet(&self, packet: PendingMovementPacket) {
         self.movement_tx
             .send(packet)
+            .expect("the hardcoded region's tick-loop thread outlives every connection");
+    }
+
+    /// M3 field-report fix (Symptom 2). Enqueues a decoded `player_input` packet, applied
+    /// early in this region's next tick -- ahead of that same tick's own block-action
+    /// drain-and-apply step, so a reach check later in the same tick already sees the latest
+    /// sneak state (Context). Never blocks.
+    pub fn queue_player_input(&self, input: PendingPlayerInput) {
+        self.player_input_tx
+            .send(input)
             .expect("the hardcoded region's tick-loop thread outlives every connection");
     }
 

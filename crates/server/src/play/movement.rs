@@ -145,8 +145,10 @@ pub fn evaluate_movement(
         // skipped, and validated BEFORE either field is written into `motion`. Writing first
         // and validating after (this file's own former gap, M3 field-report Defect A) would
         // hand a NaN rotation straight to `motion.yaw`/`motion.pitch` for every later reader
-        // this tick -- `raycast_reach`'s own `look_vector` call (`mining.rs`) chief among
-        // them, whose `cast_ray` has no NaN guard of its own downstream -- and would also
+        // this tick -- `mining::apply_placement`'s own `resolve_orientation` call (`mining.rs`,
+        // itself a `look_vector` consumer) chief among them; reach validation itself no
+        // longer reads rotation at all (M3 field-report fix, MECH-D62 re-supersession:
+        // `is_within_block_interaction_range` is direction-independent) -- and would also
         // leak into a same-tick `RejectSpeed`/`RejectMismatch` correction's own "last-known-
         // good rotation" (`respond_to_movement`, `world.rs`), putting NaN on the wire to a
         // real client.
@@ -249,23 +251,45 @@ impl BlockShapeSource for ChunkBlockShapeSource<'_> {
     }
 }
 
-/// M3 field-report fix (Symptom 2, MECH-D62 pose-aware eye height -- test-authoring stub):
-/// `crouching` selects `PLAYER_EYE_HEIGHT`/`PLAYER_EYE_HEIGHT_CROUCHING` (`rc_physics`,
-/// AUTHORITATIVE RESEARCH VERDICT). The pose rule itself (`shift_key_down && !flying`) is
-/// the caller's own responsibility (`world.rs`'s tick loop, from `PlayerInputState`) -- this
-/// function only ever needs the already-resolved boolean. The `crouching == false` branch is
-/// the exact, unmodified pre-fix formula (every existing caller of the old one-argument
-/// `eye_position` keeps its exact prior behavior); the `crouching == true` branch is left
-/// `todo!()` here -- the matching implementation changeset fills it in (TEST-D45/D46).
+/// M3 field-report fix (Symptom 2, MECH-D62 pose-aware eye height): `crouching` selects
+/// `PLAYER_EYE_HEIGHT`/`PLAYER_EYE_HEIGHT_CROUCHING` (`rc_physics`, AUTHORITATIVE RESEARCH
+/// VERDICT). The pose rule itself (`shift_key_down && !flying`) is the caller's own
+/// responsibility (`world.rs`'s tick loop, from `PlayerInputState`) -- this function only
+/// ever needs the already-resolved boolean.
 pub fn eye_position(position: Vec3, crouching: bool) -> Vec3 {
-    if crouching {
-        todo!(
-            "M3 field-report fix (Symptom 2): crouching eye height -- filled in by the \
-             matching implementation changeset"
-        )
+    let height = if crouching {
+        PLAYER_EYE_HEIGHT_CROUCHING
     } else {
-        position + Vec3::new(0.0, PLAYER_EYE_HEIGHT, 0.0)
-    }
+        PLAYER_EYE_HEIGHT
+    };
+    position + Vec3::new(0.0, height, 0.0)
+}
+
+/// Per-player crouch/sneak state (Component), decoded from the serverbound `player_input`
+/// bitfield (`packets::PlayerInput`, id `0x2B` -- the only wire source protocol 776 carries
+/// it on, this packet's own doc comment). Spawned `false` at join (M1-B05's own brand-new-
+/// player default; a rejoin gets a fresh `PlayerInput` from the client soon after anyway, so
+/// no persistence is needed for this transient input-intent flag, unlike `PlayerMotion`'s own
+/// position/rotation).
+///
+/// `crouching = sneaking && !flying` is vanilla's own real pose rule (Context, AUTHORITATIVE
+/// RESEARCH VERDICT); this milestone tracks no flying/abilities-fly state at all (no such
+/// component exists anywhere in this crate yet), so `!flying` is vacuously true always here --
+/// pose reduces to `sneaking` alone at this milestone's own scope (`world.rs`'s tick loop is
+/// the one place that actually performs this reduction, reading this field directly). Vanilla's
+/// own additional headroom fit-check (whether the entity's own bounding box actually fits the
+/// crouching height at its current position) is intentionally skipped -- not load-bearing for
+/// reach validation, the only consumer of pose at this milestone's own scope.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerInputState {
+    pub sneaking: bool,
+}
+
+/// One decoded `player_input` packet -- queued by `enter_play`'s dispatch loop, consumed by
+/// `HardcodedWorld`'s own manual per-tick drain step (mirrors `PendingMovementPacket`).
+pub struct PendingPlayerInput {
+    pub network_entity_id: i32,
+    pub sneaking: bool,
 }
 
 /// A live fractional world position's containing block coordinate -- floor (not

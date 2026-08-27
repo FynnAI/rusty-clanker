@@ -36,10 +36,13 @@ pub fn cast_ray(
     shapes: &dyn BlockShapeSource,
 ) -> Option<RayHit> {
     // Defense in depth (M3 field-report Defect A), independent of every caller's own
-    // upstream validation (`play::mining::raycast_reach`'s own `look_vector` output is
-    // never itself NaN once `play::movement::evaluate_movement` rejects a non-finite
-    // rotation before it ever reaches `motion.yaw`/`motion.pitch` -- but this function must
-    // stay safe on its own terms for any future caller too): a non-finite direction makes
+    // upstream validation (block/place reach validation no longer calls this function at all
+    // -- a later M3 field-report fix, MECH-D62 re-supersession, replaced it with a pure
+    // box-distance predicate; `crates/testing/paritybot`'s own bot-aim self-tests are this
+    // function's remaining real caller today, feeding it a `look_vector`-derived direction
+    // that `play::movement::evaluate_movement` already rejects non-finite before it ever
+    // reaches `motion.yaw`/`motion.pitch` -- but this function must stay safe on its own
+    // terms for any caller, present or future): a non-finite direction makes
     // every `signum()`/`axis_t_delta`/`initial_t_max` value below either `NaN` or a
     // never-advancing `0` step, and a zero-length direction (every component `0.0`) makes
     // every `t_max_*` axis permanently `INFINITY` (`axis_t_delta`'s own "never advances"

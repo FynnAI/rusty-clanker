@@ -89,8 +89,10 @@ pub struct PendingBlockAction {
 
 /// M3-B03 (supersedes M2-B07's own `Break`/`Place`/`Ignored` shape — Context, "The M2-B07
 /// supersession"): `PlayerAction.status` `0`/`2`/`1` map to `StartDestroy`/`StopDestroy`/
-/// `AbortDestroy` respectively (Deliverables); `3..=6` remain `Ignored`, unchanged.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// `AbortDestroy` respectively (Deliverables); `3..=6` remain `Ignored`, unchanged. `Eq` is
+/// not derived (M3 field-report fix: `Place`'s own `cursor` field is `f32`-valued, which has
+/// no `Eq` impl) — nothing in this crate ever needed it, only `PartialEq`/`==`.
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BlockActionKind {
     StartDestroy {
         location: BlockPos,
@@ -102,11 +104,15 @@ pub enum BlockActionKind {
         location: BlockPos,
     },
     /// A validated `Use Item On`. `location`/`face`/`inside_block` are the raw decoded
-    /// fields; `resolve_place_position` (below) derives the actual target cell.
+    /// fields; `resolve_place_position` (below) derives the actual target cell. `cursor`
+    /// (M3 field-report fix, MECH-D62 re-supersession) is the raw decoded `cursor_x`/`_y`/
+    /// `_z` triple -- `mining::apply_placement`'s own cursor-sanity-bound check validates it
+    /// against `location`, never against the resolved target.
     Place {
         location: BlockPos,
         face: Face,
         inside_block: bool,
+        cursor: (f32, f32, f32),
     },
     /// Any `Player Action`/`Use Item On` this blueprint does not act on (status `3..=6`,
     /// Context) — still owed exactly one ack (MECH-D63), never a `Block Update`.
@@ -193,9 +199,10 @@ pub fn resolve_place_position(location: BlockPos, face: Face, inside_block: bool
 /// destroy-lifecycle variant, `resolve_place_position`'s result for `Place`, `None` for
 /// `Ignored` (nothing to target). Used by the tick loop's own chunk-residency pre-check and
 /// by `mining::finalize_break`/`apply_placement`'s own final write position; **not** the
-/// position `mining::raycast_reach` validates against for a `Place` action (`world.rs`'s own
-/// call-site doc comment — the raycast validates the raw *clicked* cell, which for a
-/// `Place`'s `inside_block: false` case differs from this function's own offset result).
+/// position `mining::is_within_block_interaction_range` validates against for a `Place`
+/// action (`world.rs`'s own call-site doc comment — reach validates the raw *clicked* cell,
+/// which for a `Place`'s `inside_block: false` case differs from this function's own offset
+/// result).
 pub fn target_position(kind: &BlockActionKind) -> Option<BlockPos> {
     match kind {
         BlockActionKind::StartDestroy { location }
@@ -205,6 +212,7 @@ pub fn target_position(kind: &BlockActionKind) -> Option<BlockPos> {
             location,
             face,
             inside_block,
+            ..
         } => Some(resolve_place_position(*location, *face, *inside_block)),
         BlockActionKind::Ignored => None,
     }

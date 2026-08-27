@@ -14,11 +14,13 @@ use tokio::sync::mpsc;
 use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
-use super::movement::{PendingMoveReport, PendingMovementPacket, feet_block_pos};
+use super::movement::{
+    PendingMoveReport, PendingMovementPacket, PendingPlayerInput, feet_block_pos,
+};
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
     KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
-    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerMovementFlags,
+    PlayerInput, SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerMovementFlags,
     SetPlayerPosition, SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition,
     UseItemOn, pack_position, unpack_position,
 };
@@ -514,12 +516,27 @@ fn dispatch_inbound(
                     location: unpack_position(packet.location),
                     face,
                     inside_block: packet.inside_block,
+                    cursor: (packet.cursor_x, packet.cursor_y, packet.cursor_z),
                 };
                 world.queue_block_action(PendingBlockAction {
                     network_entity_id,
                     connection: handle.clone(),
                     kind,
                     sequence: packet.sequence,
+                });
+            }
+        }
+        // M3 field-report fix (Symptom 2): the only wire source for sneak/crouch state at
+        // protocol 776 (this packet's own doc comment, `packets.rs`) -- decoded and queued
+        // exactly like every movement packet above (never applied here directly), consumed
+        // by the region's own per-tick drain step (`world.rs`'s tick loop) into `PlayerInput
+        // State.sneaking`, which `mining::is_within_block_interaction_range`'s own pose-aware
+        // eye height (`movement::eye_position`) reads.
+        PlayerInput::ID => {
+            if let Ok(packet) = decode_one::<PlayerInput>(raw.body) {
+                world.queue_player_input(PendingPlayerInput {
+                    network_entity_id,
+                    sneaking: packet.shift(),
                 });
             }
         }
