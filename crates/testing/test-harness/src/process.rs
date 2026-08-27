@@ -39,12 +39,22 @@ pub struct ManagedServerConfig {
     pub save_interval_ticks: Option<u64>,
     /// New (M2-B08): passed as `--save-event-log <path>` when `Some`.
     pub save_event_log: Option<PathBuf>,
+    /// New (M3-B08): passed as `--tick-log <path>` when `Some`.
+    pub tick_log: Option<PathBuf>,
+    /// New (M3-B08): passed as `--region-lifecycle <mode>` when `Some`.
+    pub region_lifecycle: Option<String>,
+    /// New (M3-B08): when `true`, the child's stdout is piped and continuously
+    /// captured into `ManagedServer`'s own buffer (`stdout_snapshot`) instead of
+    /// inherited — every prior call site (M1-B06, M2-B08), which never sets this,
+    /// keeps stdout inherited, unchanged.
+    pub capture_stdout: bool,
 }
 
 impl ManagedServerConfig {
     /// `startup_timeout: Duration::from_secs(30)`, `offline: true`, no `extra_args`,
-    /// every M2-B08 field `None` (an M1-B06-shaped config — `require_world_dir` stays
-    /// `false`, matching this constructor's own pre-M2-B08 behavior unchanged).
+    /// every M2-B08/M3-B08 field `None`/`false` (an M1-B06-shaped config —
+    /// `require_world_dir` stays `false`, matching this constructor's own pre-M2-B08
+    /// behavior unchanged).
     pub fn new(binary_path: PathBuf) -> Self {
         Self {
             binary_path,
@@ -54,6 +64,9 @@ impl ManagedServerConfig {
             world_dir: None,
             save_interval_ticks: None,
             save_event_log: None,
+            tick_log: None,
+            region_lifecycle: None,
+            capture_stdout: false,
         }
     }
 }
@@ -71,6 +84,13 @@ pub struct ManagedServer {
     /// `graceful_shutdown` degrades to an immediate `false` in that case, exactly the
     /// same outward behavior as a graceful-shutdown attempt that timed out.
     stdin: Option<std::process::ChildStdin>,
+    /// New (M3-B08): every stdout line captured so far, in receipt order — populated
+    /// by a background reader thread only when `ManagedServerConfig::capture_stdout`
+    /// was `true` at spawn time (`None` otherwise, so `stdout_snapshot` always returns
+    /// an empty, never-growing vec for every pre-existing M1-B06/M2-B08 call site,
+    /// which never sets that field). Test-authoring changeset: `spawn_server`'s own
+    /// body does not populate this field yet (governance commit).
+    stdout_lines: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 impl ManagedServer {
@@ -121,6 +141,14 @@ impl ManagedServer {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// New (M3-B08): a snapshot of every stdout line captured so far, in receipt
+    /// order. Always empty if `ManagedServerConfig::capture_stdout` was `false` at
+    /// spawn time — this method never panics or blocks waiting for output that will
+    /// never arrive. Test-authoring changeset: stubbed (governance commit).
+    pub fn stdout_snapshot(&self) -> Vec<String> {
+        todo!()
     }
 }
 
@@ -196,7 +224,12 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
     let deadline = Instant::now() + config.startup_timeout;
     loop {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-            return Ok(ManagedServer { child, addr, stdin });
+            return Ok(ManagedServer {
+                child,
+                addr,
+                stdin,
+                stdout_lines: None,
+            });
         }
         // A child that exited before ever binding is also a startup failure, not
         // worth waiting out the full timeout for -- but we still let the connect

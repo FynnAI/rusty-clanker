@@ -34,6 +34,12 @@ fn spawn_server_reports_startup_timeout_for_a_binary_that_never_listens() {
         world_dir: None,
         save_interval_ticks: None,
         save_event_log: None,
+        // M3-B08: three more new, purely additive fields (Deliverables) -- `None`/
+        // `false` again reproduces this pre-existing test's own exact prior behavior
+        // (no `--tick-log`/`--region-lifecycle` flag emitted, stdout left inherited).
+        tick_log: None,
+        region_lifecycle: None,
+        capture_stdout: false,
     };
 
     let started = Instant::now();

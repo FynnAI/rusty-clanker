@@ -15,6 +15,7 @@ pub mod lint;
 pub mod lint_deps;
 pub mod m1_report;
 pub mod m2_report;
+pub mod m3_report;
 pub mod metadata;
 pub mod path_guard;
 pub mod quarantine;

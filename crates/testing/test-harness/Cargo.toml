@@ -34,6 +34,14 @@ serde = { workspace = true }
 name = "status_probe"
 path = "src/bin/status_probe.rs"
 
+# M3-B08: a tiny, real, standalone subprocess (`tick_cadence.rs`'s own doc comment
+# has the full usage contract) used only by this blueprint's own Tier-1 self tests to
+# prove the tick-log analysis pipeline against an actual foreign process before it is
+# ever trusted against a real `rusty-clanker-server`.
+[[bin]]
+name = "fixture_tick_writer"
+path = "src/bin/fixture_tick_writer.rs"
+
 [features]
 # M0-B06/M1-B05's own established convention (`rc-scheduler`, `rusty-clanker-server`,
 # `rc-chunk-storage`): Tier-2-only (nightly), real-wall-clock soak tests are gated
