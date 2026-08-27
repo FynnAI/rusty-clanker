@@ -2,6 +2,7 @@
 //! power-query substrate (`signal`) every one of them — and piston, M3-B05 — builds on.
 
 pub mod comparator;
+pub mod piston;
 pub mod registration;
 pub mod repeater;
 pub mod signal;
@@ -9,6 +10,7 @@ pub mod torch;
 pub mod wire;
 
 pub use comparator::{ComparatorBehavior, ComparatorMode, ContainerSignalSource};
+pub use piston::{PistonBehavior, register_piston};
 pub use registration::{Tier1RedstoneHandles, Tier1RedstoneStateIds, register_tier1_redstone};
 pub use repeater::RepeaterBehavior;
 pub use signal::{

@@ -63,4 +63,11 @@ impl Direction {
         let (dx, dy, dz) = self.offset();
         BlockPos::new(origin.x + dx, origin.y + dy, origin.z + dz)
     }
+
+    /// Vanilla's own real wire `Direction` ordinal (M3-B05 Context §E), restated exactly from
+    /// M2-B07's own already-established table: `Down=0, Up=1, North=2, South=3, West=4,
+    /// East=5` — **not** this enum's own declaration order.
+    pub const fn vanilla_ordinal(self) -> u8 {
+        todo!()
+    }
 }
