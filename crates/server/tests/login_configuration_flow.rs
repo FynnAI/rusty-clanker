@@ -270,7 +270,10 @@ async fn full_login_configuration_play_handoff_offline_mode() {
 
 #[tokio::test]
 async fn login_rejects_invalid_username() {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // Hang guard only — sized for a starved shared CI runner (RSA keygen inside
+    // spawn_full_drive alone can take seconds there), same reasoning as
+    // login_watchdog_times_out's own outer budget.
+    tokio::time::timeout(Duration::from_secs(30), async {
         let sink = Arc::new(TestSink::default());
         let (mut client, task) = spawn_full_drive(sink).await;
         let mut codec = ClientCodec::new();
@@ -311,13 +314,19 @@ async fn login_rejects_invalid_username() {
 #[tokio::test]
 async fn login_watchdog_times_out() {
     let short_watchdog = Duration::from_millis(300);
-    tokio::time::timeout(short_watchdog * 10, async {
+    // RSA keypair generation happens OUTSIDE the timed window: on a starved shared CI
+    // runner it alone can take seconds (observed: CI run 33057733285's windows-2025 leg
+    // blew the previous 10x-watchdog outer budget through exactly this), and it has
+    // nothing to do with what this test pins. The outer timeout is purely a hang guard,
+    // sized generously — the real assertion is the exact Err(Timeout(short_watchdog))
+    // below, which is load-independent.
+    let key_pair = rc_auth::ServerKeyPair::generate().unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
         let (server, mut client) = connected_pair().await;
         let (mut inbound, handle) = spawn_connection(server, ConnectionConfig::default());
         handle.set_inbound_state(ConnectionState::Login);
         handle.set_outbound_state(ConnectionState::Login);
 
-        let key_pair = rc_auth::ServerKeyPair::generate().unwrap();
         let sessions = rc_auth::MojangSessionService::new(rc_auth::SessionServiceConfig::default());
         let login_config = ServerLoginConfig {
             online_mode: false,
