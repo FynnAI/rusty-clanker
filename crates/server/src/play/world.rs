@@ -2350,6 +2350,9 @@ fn broadcast_break(world: &World, pos: BlockPos, new_state: u32, pre_break_state
         event_id: LEVEL_EVENT_BLOCK_BREAK,
         location: pack_position(pos),
         data: pre_break_state as i32,
+        // Block-break is never one of vanilla's global-broadcast events (`LevelEvent`'s own
+        // doc comment) -- always distance-limited, per `packets.rs`.
+        global_event: false,
     });
     for entity_ref in world.iter_entities() {
         if let Some(marker) = entity_ref.get::<PlayerMarker>() {
@@ -2380,6 +2383,9 @@ fn respond_break(
                 event_id: LEVEL_EVENT_BLOCK_BREAK,
                 location: pack_position(pos),
                 data: pre_break_state as i32,
+                // Block-break is never one of vanilla's global-broadcast events (`LevelEvent`'s
+                // own doc comment) -- always distance-limited, per `packets.rs`.
+                global_event: false,
             });
             broadcast_to_all(
                 world,

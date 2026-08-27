@@ -103,24 +103,32 @@ pub fn cast_ray(
             return Some(hit);
         }
 
+        // M3 field-report fix (Defect B): the exit test must fire on the ENTRY distance into
+        // the next cell (this axis's own `t_max_*` value BEFORE it advances), never on the
+        // FAR/exit boundary of that not-yet-tested cell -- checking post-advance silently
+        // discarded every cell whose own near face sat within `max_distance` but whose far
+        // face did not, costing up to one full cell of reach per axis (compounding across
+        // axes for an oblique ray, since each axis's own check fires independently as it
+        // comes due). Checking here, before `cell`/`t_max_*` are touched, guarantees the next
+        // cell is only skipped when the ray genuinely cannot reach it within `max_distance`.
         if t_max_x <= t_max_y && t_max_x <= t_max_z {
-            cell.x += step_x;
-            t_max_x += t_delta_x;
             if t_max_x > max_distance {
                 return None;
             }
+            cell.x += step_x;
+            t_max_x += t_delta_x;
         } else if t_max_y <= t_max_z {
-            cell.y += step_y;
-            t_max_y += t_delta_y;
             if t_max_y > max_distance {
                 return None;
             }
+            cell.y += step_y;
+            t_max_y += t_delta_y;
         } else {
-            cell.z += step_z;
-            t_max_z += t_delta_z;
             if t_max_z > max_distance {
                 return None;
             }
+            cell.z += step_z;
+            t_max_z += t_delta_z;
         }
     }
     // The hard iteration cap above is a defensive backstop, never expected to bind for any

@@ -409,12 +409,22 @@ pub struct SetBlockDestroyStage {
 /// corrected and new"). `event_id`/`data` are both plain `Int`, **not** `VarInt` — restated
 /// exactly, distinct from every `VarInt` field above. This blueprint's only consumed event is
 /// `LEVEL_EVENT_BLOCK_BREAK` (block-break sound + particles).
+///
+/// M3 field-report fix: the real wire layout carries one more trailing `bool` after `data` --
+/// vanilla's own "disable relative volume" / global-broadcast flag (`true` only for the small
+/// set of events meant to be heard everywhere regardless of distance to the player, e.g. the
+/// wither-spawn and end-portal-open events; restated from a real 26.2 client's own decode --
+/// `ClientboundLevelEventPacket`'s constructor reads exactly one more `boolean` after `data`,
+/// confirmed by a real client's `IndexOutOfBoundsException` disconnecting on every block break
+/// against this struct's former 16-byte body). `LEVEL_EVENT_BLOCK_BREAK` is not one of those
+/// events, so every construction site in this crate always sends `false` here.
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
 #[packet(state = "play", bound = "client", id = 0x2E)]
 pub struct LevelEvent {
     pub event_id: i32,
     pub location: i64,
     pub data: i32,
+    pub global_event: bool,
 }
 
 /// Vanilla's own long-stable event id: "block break with sound + particles," `data` = the
