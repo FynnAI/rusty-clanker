@@ -216,9 +216,15 @@ async fn break_and_place_broadcast_and_persist() {
         let observed = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(observed, update);
 
-        // --- Place above the still-intact grass block at (2, -60, 2) -- A moves there
-        // first (still looking straight down), so the raycast lands on that column's own
-        // grass block instead of the now-empty hole at (0, -60, 0). ---
+        // --- Place above the still-intact grass block at (3, -60, 2) -- A moves to (2, -59,
+        // 2) first (still looking straight down; reach is a box-distance check with no
+        // line-of-sight/aim component, `mining_reach_validation.rs`'s own doc comment), then
+        // clicks the NEIGHBOURING column at x=3, not the one A is standing in: A's own body
+        // occupies the (2, -59, 2) cell right underfoot, and `mining::apply_placement`'s own
+        // obstruction gate (M3 field-report fix, Defect 1) now correctly rejects a placement
+        // into a cell a player's own body overlaps, the placer's own body included -- clicking
+        // one column over keeps this test's own "place above an intact grass block" intent
+        // without tripping that same gate on the actor's own feet. ---
         send_packet(
             &mut a,
             &SetPlayerPositionAndRotation {
@@ -238,7 +244,7 @@ async fn break_and_place_broadcast_and_persist() {
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(2, -60, 2)),
+                location: pack_position(BlockPos::new(3, -60, 2)),
                 direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 1.0,
@@ -258,7 +264,7 @@ async fn break_and_place_broadcast_and_persist() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(2, -59, 2)));
+        assert_eq!(update.location, pack_position(BlockPos::new(3, -59, 2)));
         assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
 
         let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
@@ -274,7 +280,7 @@ async fn break_and_place_broadcast_and_persist() {
             })
         );
         assert_eq!(
-            world.debug_query_block(BlockPos::new(2, -59, 2)).await,
+            world.debug_query_block(BlockPos::new(3, -59, 2)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::STONE.0,
                 dirty: true,

@@ -153,7 +153,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 }
 
 #[tokio::test]
-async fn creative_break_is_still_instant_and_broadcasts_level_event() {
+async fn creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
@@ -197,7 +197,23 @@ async fn creative_break_is_still_instant_and_broadcasts_level_event() {
         assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
-        let body = recv_packet_of_type(&mut a, &mut a_acc, LevelEvent::ID).await;
+        // M3 field-report fix (Defect 2, "the breaking player hears the block-break effect
+        // twice"): A, the breaker, never receives the Level Event at all -- their own client
+        // already plays the break effect locally as prediction (Context, AUTHORITATIVE
+        // RESEARCH VERDICT). Checked before draining B's own traffic below, so a wrongly-sent
+        // packet to A cannot be masked by B's own scan racing ahead of it.
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            LevelEvent::ID,
+            Duration::from_millis(400),
+        )
+        .await;
+
+        // B, the bystander, still receives both the Block Update and the Level Event.
+        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
+        assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
+        let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
         let level_event = decode_one::<LevelEvent>(body).unwrap();
         assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
         assert_eq!(
@@ -205,11 +221,6 @@ async fn creative_break_is_still_instant_and_broadcasts_level_event() {
             pack_position(BlockPos::new(0, -60, 0))
         );
         assert_eq!(level_event.data, blocks::GRASS_BLOCK.0 as i32);
-
-        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
-        assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
-        let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
-        assert_eq!(decode_one::<LevelEvent>(body).unwrap(), level_event);
     })
     .await
     .unwrap();
@@ -224,9 +235,13 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
         let sessions = world.player_sessions();
 
-        // A moves to (1, -59, 1), looking straight down, then places a Stone block there
-        // (still Creative -- the default held item is already `Block(Stone)`) so this test
-        // has a known-Stone target independent of the fixed superflat layer table.
+        // A moves to (1, -59, 1), looking straight down, then places a Stone block in the
+        // NEIGHBOURING column at x=2 (still Creative -- the default held item is already
+        // `Block(Stone)`) so this test has a known-Stone target independent of the fixed
+        // superflat layer table. Not the column A is standing in: `mining::apply_placement`'s
+        // own obstruction gate (M3 field-report fix, Defect 1) now correctly rejects a
+        // placement into a cell A's own body occupies, A's own body included -- one column
+        // over keeps this test's own "known-Stone target" intent without tripping that gate.
         send_packet(
             &mut a,
             &SetPlayerPositionAndRotation {
@@ -246,7 +261,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(1, -60, 1)),
+                location: pack_position(BlockPos::new(2, -60, 1)),
                 direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 1.0,
@@ -264,7 +279,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
         );
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let placed = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(placed.location, pack_position(BlockPos::new(1, -59, 1)));
+        assert_eq!(placed.location, pack_position(BlockPos::new(2, -59, 1)));
         assert_eq!(placed.block_state_id, blocks::STONE.0 as i32);
         // B also observes the placement broadcast -- drained so it does not interfere with
         // this test's own later `BlockUpdate` scan.
@@ -286,7 +301,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(1, -59, 1)),
+                location: pack_position(BlockPos::new(2, -59, 1)),
                 direction: 1,
                 sequence: 2,
             },
@@ -307,7 +322,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
                 continue;
             }
             let packet = decode_one::<SetBlockDestroyStage>(body).unwrap();
-            assert_eq!(packet.location, pack_position(BlockPos::new(1, -59, 1)));
+            assert_eq!(packet.location, pack_position(BlockPos::new(2, -59, 1)));
             assert!(
                 packet.destroy_stage >= last_stage,
                 "stage must never decrease"
@@ -329,7 +344,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
             &mut a,
             &PlayerAction {
                 status: 2,
-                location: pack_position(BlockPos::new(1, -59, 1)),
+                location: pack_position(BlockPos::new(2, -59, 1)),
                 direction: 1,
                 sequence: 3,
             },
@@ -343,16 +358,122 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
         );
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 1)));
+        assert_eq!(update.location, pack_position(BlockPos::new(2, -59, 1)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
-        let body = recv_packet_of_type(&mut a, &mut a_acc, LevelEvent::ID).await;
-        let level_event = decode_one::<LevelEvent>(body).unwrap();
-        assert_eq!(level_event.data, blocks::STONE.0 as i32);
+        // M3 field-report fix (Defect 2): A, the breaker, never receives the Level Event.
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            LevelEvent::ID,
+            Duration::from_millis(400),
+        )
+        .await;
 
         let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
         assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
         let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
-        assert_eq!(decode_one::<LevelEvent>(body).unwrap(), level_event);
+        assert_eq!(
+            decode_one::<LevelEvent>(body).unwrap().data,
+            blocks::STONE.0 as i32
+        );
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report test-authoring (Defect 2, `world.rs`'s own `broadcast_break` call site --
+/// the delayed-destroy tick-driven finalize, distinct from `respond_break`'s own immediate-
+/// finalize path the two tests above already cover): A stops digging well short of the 0.7
+/// progress threshold (`stop_destroy`'s own `DelayedQueued` outcome), sends no further packet,
+/// and the resulting delayed destroy auto-finalizes several ticks later entirely on its own
+/// (`mining::tick_destroy_state`'s own per-tick drain) -- proving the exclusion holds on THIS
+/// call site too, not only `respond_break`'s.
+#[tokio::test]
+async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let sessions = world.player_sessions();
+
+        send_packet(
+            &mut a,
+            &SetPlayerPositionAndRotation {
+                x: 3.0,
+                y: -59.0,
+                z: 3.0,
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([3.0, -59.0, 3.0]))
+            .await;
+
+        // Survival + Wood pickaxe on Stone: golden-table row 2 -> 23 ticks total, so stopping
+        // after the very first tick (progress ~= 1/23 ~= 0.043) sits well under the 0.7
+        // finalize-now threshold and queues a delayed destroy instead.
+        world.debug_set_survival(1, true).await;
+        world
+            .debug_set_held_item(1, HeldItemStub::Tool(ToolMaterial::Wood, ToolKind::Pickaxe))
+            .await;
+
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(BlockPos::new(3, -60, 3)),
+                direction: 1,
+                sequence: 1,
+            },
+        )
+        .await;
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            1
+        );
+
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 2,
+                location: pack_position(BlockPos::new(3, -60, 3)),
+                direction: 1,
+                sequence: 2,
+            },
+        )
+        .await;
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            2
+        );
+
+        // No further packet from A -- the delayed destroy finalizes on its own, ~23 ticks
+        // (~1.15s at 20 TPS) after the original `START_DESTROY_BLOCK`.
+        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
+        let update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(update.location, pack_position(BlockPos::new(3, -60, 3)));
+        assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+        let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
+        let level_event = decode_one::<LevelEvent>(body).unwrap();
+        assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
+        assert_eq!(level_event.data, blocks::GRASS_BLOCK.0 as i32);
+
+        // A receives the identical Block Update (unconditional resync) but never a Level
+        // Event -- M3 field-report fix, Defect 2, this call site.
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            LevelEvent::ID,
+            Duration::from_millis(500),
+        )
+        .await;
     })
     .await
     .unwrap();
@@ -364,6 +485,13 @@ async fn distance_based_reach_ignores_occlusion_and_accepts_a_block_behind_anoth
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        // M3 field-report test-authoring fix (Defect 2): A never receives its own break's own
+        // Level Event any more (`broadcast_to_others` excludes the breaker) -- this file's
+        // own former single-actor version of this test waited on `recv_packet_of_type(&mut
+        // a, ..., LevelEvent::ID)`, which now blocks forever with no bystander to ever
+        // deliver one, hanging until this test's own outer 60s timeout. B, added here purely
+        // as that bystander, is this test's own only change beyond that.
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
 
         send_packet(
             &mut a,
@@ -405,7 +533,18 @@ async fn distance_based_reach_ignores_occlusion_and_accepts_a_block_behind_anoth
         assert_eq!(update.location, pack_position(BlockPos::new(0, -61, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
-        let body = recv_packet_of_type(&mut a, &mut a_acc, LevelEvent::ID).await;
+        // M3 field-report fix (Defect 2): A, the breaker, never receives the Level Event; B,
+        // the bystander, still does.
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            LevelEvent::ID,
+            Duration::from_millis(400),
+        )
+        .await;
+        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
+        assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
+        let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
         let level_event = decode_one::<LevelEvent>(body).unwrap();
         assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
         assert_eq!(level_event.data, blocks::DIRT.0 as i32);
@@ -433,7 +572,12 @@ async fn placement_selects_the_held_items_own_block_and_orientation() {
             .await;
 
         // yaw = 0.0 -> looking South (`look_vector`'s own convention); a repeater faces
-        // *away* from the player -- North.
+        // *away* from the player -- North. A never moves off spawn (0, -59, 0) in this test,
+        // so the click below targets the NEIGHBOURING column at x=1, not spawn's own column
+        // directly underfoot -- `mining::apply_placement`'s own obstruction gate (M3
+        // field-report fix, Defect 1) would otherwise reject a repeater placed into the cell
+        // A's own body occupies (orientation depends only on yaw/pitch, never position, so
+        // this has no effect on the North-facing assertion below).
         send_packet(
             &mut a,
             &SetPlayerRotation {
@@ -449,7 +593,7 @@ async fn placement_selects_the_held_items_own_block_and_orientation() {
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(0, -60, 0)),
+                location: pack_position(BlockPos::new(1, -60, 0)),
                 direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 1.0,
@@ -469,7 +613,7 @@ async fn placement_selects_the_held_items_own_block_and_orientation() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(0, -59, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 0)));
         let expected_raw = tier1_oriented_state_table().lookup(
             PlaceableBlockKind::Repeater,
             Orientation::Horizontal(Direction::North),
