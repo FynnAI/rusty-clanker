@@ -68,6 +68,13 @@ impl Direction {
     /// M2-B07's own already-established table: `Down=0, Up=1, North=2, South=3, West=4,
     /// East=5` — **not** this enum's own declaration order.
     pub const fn vanilla_ordinal(self) -> u8 {
-        todo!()
+        match self {
+            Direction::Down => 0,
+            Direction::Up => 1,
+            Direction::North => 2,
+            Direction::South => 3,
+            Direction::West => 4,
+            Direction::East => 5,
+        }
     }
 }

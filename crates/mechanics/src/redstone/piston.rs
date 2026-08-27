@@ -26,11 +26,23 @@
 //!   hand with `crates/physics/src/shapes.rs`'s own six new `tier1_shape_table()` entries
 //!   (Context §D) and with `piston_shape_table.rs`'s own local copy — a cross-file consistency
 //!   note in all three places.
+//!
+//! A further deviation, forced by this project's own "no generated block-state-property
+//! registry" gap (Context §I) applied honestly to the commit step itself: real vanilla's
+//! `EXTENDED` block-state property genuinely flips a piston base's own stored `BlockStateId`.
+//! `PistonStateIds`' own doc comment already establishes that this project's dispatch never
+//! needs that distinction (one registered range covers both retracted and extended states) —
+//! this blueprint extends that same stance to the world's own stored representation: the base's
+//! raw `BlockStateId` is simply re-affirmed (written back unchanged) at commit time, and
+//! `EXTENDED`'s only observable representation anywhere in this project is `PistonState.
+//! extended`'s own runtime value, read back via `PistonBehavior::is_extended`. A future
+//! blueprint that migrates a real generated per-property `BlockStateId` transition into this
+//! commit step changes only that one write, not this function's own structure.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use rc_chunk_storage::BlockStateId;
+use rc_chunk_storage::{BlockStateId, RegistryId};
 use rc_core::BlockPos;
 
 use crate::behavior::{BlockBehavior, BlockBehaviorRegistry, UpdateContext};
@@ -54,6 +66,85 @@ pub const COMMIT_DELAY_TICKS: u64 = 2;
 /// `PistonStructureResolver.MAX_PUSH_DEPTH` (Context §C).
 pub const MAX_PUSH_DEPTH: usize = 12;
 
+/// `air`'s own raw id (Context §E) — stable by protocol convention (`rc_physics::shapes`'s
+/// identical documented assumption), hardcoded directly since this crate has no
+/// `rc-registries` dependency (WS-D3 rule 1).
+const AIR_ID: BlockStateId = BlockStateId(0);
+
+/// Bedrock — the one hardcoded `Immovable` literal beyond piston/piston_head/block-entity ids
+/// (Context §C's own table); `rc_registries::generated_v776::block_states::default_state::
+/// BEDROCK`'s real value (85), reused directly (no `rc-registries` dependency, Constraints (b)).
+const BEDROCK_ID: u32 = 85;
+
+/// The tier-1 `Destroy`-class ids (Context §C): redstone wire/torch/wall-torch/repeater/
+/// comparator — the same literals `rc_physics::tier1_shape_table()` already hardcodes for
+/// these same five blocks.
+const DESTROY_IDS: [u32; 5] = [5171, 6885, 6887, 7037, 11264];
+
+/// The tier-1 block-entity `Immovable` ids (Context §C): chest/furnace/blast_furnace/smoker/
+/// hopper — identical literals to `rc_physics::tier1_shape_table()`'s own entries for these
+/// blocks.
+const BLOCK_ENTITY_IMMOVABLE_IDS: [u32; 5] = [3988, 5328, 20763, 20755, 11313];
+
+/// Placeholder literals for an *extended* piston/sticky-piston base (Context §C's own
+/// "Immovable, deliberate bounded M3 deviation" row) — this project has no generated per-
+/// property-combination registry (Context §I), so there is no real distinct id to read here;
+/// `PistonBehavior`'s own `BlockBehaviorRegistry` range covers both retracted and extended
+/// states without ever needing this distinction (`PistonStateIds`' own doc comment), so these
+/// two constants exist solely for `classify`'s own literal-id table and this blueprint's own
+/// `classify_matches_tier1_table` acceptance test — flagged for reconciliation once a real
+/// per-state-id registry exists.
+const PISTON_EXTENDED_PLACEHOLDER: u32 = 900_101;
+const STICKY_PISTON_EXTENDED_PLACEHOLDER: u32 = 900_102;
+
+/// The six `piston_head` placeholder literals (Context §D), one per facing, indexed by
+/// `direction_index` below (`West, East, North, South, Down, Up`) — the exact same six ids
+/// `rc_physics::shapes::tier1_shape_table()`'s own six new entries key their shape rows by
+/// (cross-file consistency note, this module's own top-of-file doc comment); `classify`
+/// (Context §C) treats every one of them as `Immovable`.
+const PISTON_HEAD_IDS: [u32; 6] = [900_001, 900_002, 900_003, 900_004, 900_005, 900_006];
+
+fn direction_index(d: Direction) -> usize {
+    match d {
+        Direction::West => 0,
+        Direction::East => 1,
+        Direction::North => 2,
+        Direction::South => 3,
+        Direction::Down => 4,
+        Direction::Up => 5,
+    }
+}
+
+/// The settled `piston_head` block for `facing` (Context §D/§E) — the literal id a commit
+/// writes at the head's landing position.
+fn piston_head_id(facing: Direction) -> BlockStateId {
+    BlockStateId(PISTON_HEAD_IDS[direction_index(facing)])
+}
+
+/// `true` iff `pos` holds no block at all (unloaded) or the literal `air` id (Context §C: "Air
+/// | Unloaded — terminator, not classified" — folded into one check since both produce the
+/// identical "empty landing space" outcome).
+fn is_air_or_unloaded(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
+    match world.get_block(pos) {
+        None => true,
+        Some(state) => state == AIR_ID,
+    }
+}
+
+/// `true` iff `pos`'s current live state matches whatever `snapshot` recorded for it at
+/// resolution time (Context §G) — `false` for a position `snapshot` never recorded (defensive;
+/// every position either caller actually re-validates is always present in its own snapshot).
+fn state_matches_snapshot(
+    world: &dyn BlockWorldAccess,
+    snapshot: &[(BlockPos, Option<BlockStateId>)],
+    pos: BlockPos,
+) -> bool {
+    snapshot
+        .iter()
+        .find(|(p, _)| *p == pos)
+        .is_some_and(|(_, s)| *s == world.get_block(pos))
+}
+
 /// One block's role in a resolved push/pull (Context §C).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PushClass {
@@ -66,7 +157,31 @@ pub enum PushClass {
 /// this blueprint's own acceptance tests can exercise it directly against a `FakeWorld`
 /// without needing a full `PistonBehavior` instance.
 pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bool) -> PushClass {
-    todo!()
+    // MECH-D14 (Context §C): a non-local position is Immovable unconditionally, regardless of
+    // whatever block actually occupies it — checked first, before any other classification.
+    if !ownership_local {
+        return PushClass::Immovable;
+    }
+    let Some(state) = world.get_block(pos) else {
+        // Defensive only — both call sites (`resolve_extend`/`resolve_retract`) filter an
+        // absent block out via `is_air_or_unloaded` before ever reaching this branch. Immovable
+        // is the safe default: refusing to push into genuinely unknown territory rather than
+        // optimistically treating it as ordinary terrain.
+        return PushClass::Immovable;
+    };
+    let raw = state.to_raw();
+    if raw == BEDROCK_ID
+        || raw == PISTON_EXTENDED_PLACEHOLDER
+        || raw == STICKY_PISTON_EXTENDED_PLACEHOLDER
+        || PISTON_HEAD_IDS.contains(&raw)
+        || BLOCK_ENTITY_IMMOVABLE_IDS.contains(&raw)
+    {
+        return PushClass::Immovable;
+    }
+    if DESTROY_IDS.contains(&raw) {
+        return PushClass::Destroy;
+    }
+    PushClass::Normal
 }
 
 /// Resolution failure reasons (Context §C) — both are a plain "the whole push fails" outcome;
@@ -91,7 +206,35 @@ pub fn resolve_extend(
     piston_pos: BlockPos,
     push_direction: Direction,
 ) -> Result<PushPlan, ExtendAbort> {
-    todo!()
+    let dimension = world.dimension();
+    let mut to_push = Vec::new();
+    let mut to_destroy = None;
+    let mut pos = push_direction.apply(piston_pos);
+    loop {
+        let local = (ownership.resolve)(pos.chunk_key(dimension)) == ownership.local;
+        if local && is_air_or_unloaded(world, pos) {
+            break;
+        }
+        match classify(world, pos, local) {
+            PushClass::Immovable => return Err(ExtendAbort::Blocked),
+            PushClass::Destroy => {
+                to_destroy = Some(pos);
+                break;
+            }
+            PushClass::Normal => {
+                to_push.push(pos);
+                if to_push.len() > MAX_PUSH_DEPTH {
+                    return Err(ExtendAbort::TooManyBlocks);
+                }
+                pos = push_direction.apply(pos);
+            }
+        }
+    }
+    Ok(PushPlan {
+        to_push,
+        to_destroy,
+        head_pos: pos,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +251,23 @@ pub fn resolve_retract(
     push_direction: Direction,
     sticky: bool,
 ) -> PullPlan {
-    todo!()
+    if !sticky {
+        return PullPlan { pulled: None };
+    }
+    let old_head = push_direction.apply(piston_pos);
+    let candidate = push_direction.apply(old_head);
+    let dimension = world.dimension();
+    let local = (ownership.resolve)(candidate.chunk_key(dimension)) == ownership.local;
+    if local && is_air_or_unloaded(world, candidate) {
+        return PullPlan { pulled: None };
+    }
+    if classify(world, candidate, local) == PushClass::Normal {
+        PullPlan {
+            pulled: Some(candidate),
+        }
+    } else {
+        PullPlan { pulled: None }
+    }
 }
 
 /// Context §A's exact quasi-connectivity activation check.
@@ -118,7 +277,33 @@ pub fn piston_neighbor_signal(
     piston_pos: BlockPos,
     push_direction: Direction,
 ) -> bool {
-    todo!()
+    const CANDIDATES: [Direction; 5] = [
+        Direction::West,
+        Direction::East,
+        Direction::North,
+        Direction::South,
+        Direction::Up,
+    ];
+    for d in CANDIDATES {
+        if d != push_direction && signal::has_signal(world, registry, piston_pos, d) {
+            return true;
+        }
+    }
+    if signal::has_signal(world, registry, piston_pos, Direction::Down) {
+        return true;
+    }
+    let above = Direction::Up.apply(piston_pos);
+    for d in [
+        Direction::West,
+        Direction::East,
+        Direction::North,
+        Direction::South,
+    ] {
+        if signal::has_signal(world, registry, above, d) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Per-position steady-state (Context §B). `extended`/`should_be_extended` both start `false`
@@ -150,6 +335,30 @@ struct MovingPistonState {
     snapshot: Vec<(BlockPos, Option<BlockStateId>)>,
 }
 
+fn extend_snapshot(
+    world: &dyn BlockWorldAccess,
+    piston_pos: BlockPos,
+    plan: &PushPlan,
+) -> Vec<(BlockPos, Option<BlockStateId>)> {
+    let mut out = vec![(piston_pos, world.get_block(piston_pos))];
+    for &p in &plan.to_push {
+        out.push((p, world.get_block(p)));
+    }
+    out
+}
+
+fn retract_snapshot(
+    world: &dyn BlockWorldAccess,
+    piston_pos: BlockPos,
+    plan: &PullPlan,
+) -> Vec<(BlockPos, Option<BlockStateId>)> {
+    let mut out = vec![(piston_pos, world.get_block(piston_pos))];
+    if let Some(p) = plan.pulled {
+        out.push((p, world.get_block(p)));
+    }
+    out
+}
+
 /// Piston / sticky piston (Context, whole document). One instance per region (Context §B) —
 /// never share across regions. Implements `BlockBehavior` only — a piston emits no redstone
 /// signal of its own, so it is never registered into `SignalSourceRegistry` (Context §B).
@@ -163,36 +372,84 @@ impl PistonBehavior {
     /// `registry` must already be fully populated (Context §B — construct after
     /// `register_tier1_redstone` completes).
     pub fn new(registry: Arc<SignalSourceRegistry>) -> Self {
-        todo!()
+        Self {
+            registry,
+            state: Mutex::new(HashMap::new()),
+            moving: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Test/composition-root-only placement setter (Context §B) — mirrors B04's
     /// `RepeaterBehavior::place`/`ComparatorBehavior::place` precedent exactly. Real
     /// placement-pipeline integration is future work, not this blueprint's.
     pub fn place(&self, pos: BlockPos, facing: Direction, sticky: bool) {
-        todo!()
+        self.state.lock().unwrap().insert(
+            pos,
+            PistonState {
+                facing,
+                sticky,
+                extended: false,
+                should_be_extended: false,
+            },
+        );
     }
 
     pub fn facing(&self, pos: BlockPos) -> Direction {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .unwrap_or_else(|| panic!("PistonBehavior::facing: {pos:?} was never placed"))
+            .facing
     }
+
     pub fn is_sticky(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .unwrap_or_else(|| panic!("PistonBehavior::is_sticky: {pos:?} was never placed"))
+            .sticky
     }
+
     pub fn is_extended(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.extended)
+            .unwrap_or(false)
     }
+
     /// The piston's own cached activation target (Context §A) — exposed for acceptance tests
     /// exercising the "does not re-check until notified" staleness property directly.
     pub fn should_be_extended(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.should_be_extended)
+            .unwrap_or(false)
     }
+
     /// `true` iff a `MovingPistonState` entry currently exists for `pos` (a commit has been
     /// scheduled but has not yet fired or been superseded).
     pub fn has_pending_move(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.moving.lock().unwrap().contains_key(&pos)
     }
 
+    /// Context §E's own atomic commit for an extend. Every write goes through the raw
+    /// `ctx.world.set_block` (no fan-out of its own); `border::fan_out_from_changed_block` is
+    /// called once per actually-written position, in write order, only after every write has
+    /// landed (Context §E's own "all real neighbor notifications fire only after every block
+    /// in the batch has already been converted" ordering guarantee).
+    ///
+    /// Context §G case 2's per-position re-validation: a write landing at a `to_push[i]`
+    /// position is performed only if that position's own live state still matches what
+    /// `resolve_extend` observed there at resolution time — this governs both the piston_head
+    /// write (which lands at `to_push[0]`'s own position when the chain is non-empty) and every
+    /// shifted-forward write sourced from `to_push[i]`'s own content, so a distrusted position's
+    /// "live, changed content is left alone" in every role it would otherwise have played.
     fn commit_extend(
         &self,
         ctx: &mut UpdateContext,
@@ -201,9 +458,67 @@ impl PistonBehavior {
         plan: PushPlan,
         snapshot: &[(BlockPos, Option<BlockStateId>)],
     ) {
-        todo!()
+        let n = plan.to_push.len();
+        let consistent: Vec<bool> = plan
+            .to_push
+            .iter()
+            .map(|&p| state_matches_snapshot(&*ctx.world, snapshot, p))
+            .collect();
+
+        let mut written: Vec<BlockPos> = Vec::new();
+
+        // The base itself: always re-affirmed (Context §G already validated it above, in
+        // `on_scheduled_tick`) — see this module's own top-of-file note on why its raw id
+        // never actually changes at M3.
+        let Some(base_state) = ctx.world.get_block(piston_pos) else {
+            return;
+        };
+        ctx.world.set_block(piston_pos, base_state);
+        written.push(piston_pos);
+
+        // One write per chain element (index 0 = piston_pos itself, producing piston_head;
+        // index i in 1..=n sources its content from `to_push[i - 1]`), landing at
+        // `push_direction.apply(chain[i])`.
+        for i in 0..=n {
+            let target = if i == 0 {
+                push_direction.apply(piston_pos)
+            } else {
+                push_direction.apply(plan.to_push[i - 1])
+            };
+            // The target is itself a `to_push` entry exactly when `i < n` (chain[i] ==
+            // to_push[i] in that case) -- gate on its own consistency then.
+            let target_ok = if i < n { consistent[i] } else { true };
+            // The content, for i > 0, is sourced from `to_push[i - 1]`'s own live state --
+            // gate on that source's consistency too.
+            let source_ok = if i == 0 { true } else { consistent[i - 1] };
+            if !target_ok || !source_ok {
+                continue;
+            }
+            let content = if i == 0 {
+                piston_head_id(push_direction)
+            } else {
+                match ctx.world.get_block(plan.to_push[i - 1]) {
+                    Some(c) => c,
+                    None => continue,
+                }
+            };
+            ctx.world.set_block(target, content);
+            written.push(target);
+        }
+
+        for pos in written {
+            let state = ctx
+                .world
+                .get_block(pos)
+                .expect("just written above, must be present");
+            border::fan_out_from_changed_block(ctx, pos, state);
+        }
     }
 
+    /// Context §E's own atomic commit for a retraction — mirrors `commit_extend`'s own
+    /// structure. The pulled block (if any and still consistent, Context §G case 2) moves into
+    /// the old head position; its own vacated position becomes `AIR_ID`; a bare retraction (no
+    /// pull, or a since-changed pull candidate) simply leaves the old head as `AIR_ID`.
     fn commit_retract(
         &self,
         ctx: &mut UpdateContext,
@@ -212,39 +527,160 @@ impl PistonBehavior {
         plan: PullPlan,
         snapshot: &[(BlockPos, Option<BlockStateId>)],
     ) {
-        todo!()
+        let old_head = push_direction.apply(piston_pos);
+        let mut written: Vec<BlockPos> = Vec::new();
+
+        let pulled_content = match plan.pulled {
+            Some(p) if state_matches_snapshot(&*ctx.world, snapshot, p) => ctx.world.get_block(p),
+            _ => None,
+        };
+
+        ctx.world
+            .set_block(old_head, pulled_content.unwrap_or(AIR_ID));
+        written.push(old_head);
+
+        if let (Some(p), Some(_)) = (plan.pulled, pulled_content) {
+            ctx.world.set_block(p, AIR_ID);
+            written.push(p);
+        }
+
+        let Some(base_state) = ctx.world.get_block(piston_pos) else {
+            return;
+        };
+        ctx.world.set_block(piston_pos, base_state);
+        written.push(piston_pos);
+
+        for pos in written {
+            let state = ctx
+                .world
+                .get_block(pos)
+                .expect("just written above, must be present");
+            border::fan_out_from_changed_block(ctx, pos, state);
+        }
     }
 }
 
 impl BlockBehavior for PistonBehavior {
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        /* Context §A/§E/§F: recompute piston_neighbor_signal fresh; if it differs from the
-        cached should_be_extended, update should_be_extended eagerly and emit exactly one
-        block event (TRIGGER_EXTEND, or TRIGGER_CONTRACT/TRIGGER_DROP per resolve_retract's
-        own outcome — Context §E) via ctx.emit_block_event. May fire more than once per tick
-        at the same position (Context §F) — no dedup beyond the should_be_extended
-        mismatch check itself. */
-        todo!()
+        let (facing, sticky) = {
+            let state = self.state.lock().unwrap();
+            let Some(st) = state.get(&pos) else {
+                return;
+            };
+            (st.facing, st.sticky)
+        };
+
+        let new_should = piston_neighbor_signal(ctx.world, &self.registry, pos, facing);
+        let changed = {
+            let mut state = self.state.lock().unwrap();
+            let st = state
+                .get_mut(&pos)
+                .expect("checked present immediately above");
+            if st.should_be_extended == new_should {
+                false
+            } else {
+                st.should_be_extended = new_should;
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+
+        let Some(block_state) = ctx.get_block(pos) else {
+            return;
+        };
+        let param = facing.vanilla_ordinal();
+
+        if new_should {
+            ctx.emit_block_event(pos, TRIGGER_EXTEND, param, block_state);
+        } else {
+            // Called only to select the event code (Context §E) — `on_block_event` re-resolves
+            // fresh against live state when the event actually fires; a non-sticky piston's own
+            // `resolve_retract` always returns `pulled: None` without reading any world state
+            // (its own early return), so this call is free in that common case.
+            let pull = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
+            let action = if sticky && pull.pulled.is_none() {
+                TRIGGER_DROP
+            } else {
+                TRIGGER_CONTRACT
+            };
+            ctx.emit_block_event(pos, action, param, block_state);
+        }
     }
 
     fn on_block_event(&self, ctx: &mut UpdateContext, pos: BlockPos, event: &BlockEvent) {
-        /* Context §E: re-resolve resolve_extend/resolve_retract fresh against live world
-        state; on success, insert/overwrite this position's MovingPistonState (Context §F's
-        own overwrite-supersedes rule) and ctx.schedule_block_tick(pos, COMMIT_DELAY_TICKS,
-        TickPriority::Normal); on failure (extend only), do nothing further this cycle. */
-        todo!()
+        let (facing, sticky) = {
+            let state = self.state.lock().unwrap();
+            let Some(st) = state.get(&pos) else {
+                return;
+            };
+            (st.facing, st.sticky)
+        };
+
+        match event.event_id {
+            TRIGGER_EXTEND => {
+                if let Ok(plan) = resolve_extend(ctx.world, ctx.ownership, pos, facing) {
+                    let snapshot = extend_snapshot(ctx.world, pos, &plan);
+                    self.moving.lock().unwrap().insert(
+                        pos,
+                        MovingPistonState {
+                            plan: MovingPlan::Extending(plan),
+                            direction: facing,
+                            snapshot,
+                        },
+                    );
+                    ctx.schedule_block_tick(pos, COMMIT_DELAY_TICKS, TickPriority::Normal);
+                }
+                // Resolution failure (Blocked/TooManyBlocks): nothing further this cycle
+                // (Context §E) -- `should_be_extended` is left exactly as `on_neighbor_changed`
+                // set it, so a signal that stays "on" does not re-trigger a fresh event on
+                // every subsequent unrelated neighbor-changed call.
+            }
+            TRIGGER_CONTRACT | TRIGGER_DROP => {
+                let plan = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
+                let snapshot = retract_snapshot(ctx.world, pos, &plan);
+                self.moving.lock().unwrap().insert(
+                    pos,
+                    MovingPistonState {
+                        plan: MovingPlan::Retracting(plan),
+                        direction: facing,
+                        snapshot,
+                    },
+                );
+                ctx.schedule_block_tick(pos, COMMIT_DELAY_TICKS, TickPriority::Normal);
+            }
+            _ => {}
+        }
     }
 
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        /* Context §E's own atomic commit: re-validate (Context §G case 1); compute every
-        affected position's final state; write each via the raw ctx.world.set_block (no
-        fan-out); then call crate::border::fan_out_from_changed_block(ctx, p, state) once
-        per affected position in this blueprint's own defined order; update PistonState;
-        clear the MovingPistonState entry. Per-position re-validation for case (2) of
-        Context §G is applied during the "compute every affected position's final state"
-        step — a position whose live state no longer matches what resolution originally
-        observed there is skipped, not overwritten. */
-        todo!()
+        let Some(moving) = self.moving.lock().unwrap().remove(&pos) else {
+            // No pending move -- either already consumed by an earlier fire this same tick
+            // (Context §F's own double-fire consequence) or never existed. A silent no-op.
+            return;
+        };
+
+        // Context §G case 1: re-validate the base itself before touching anything.
+        if !state_matches_snapshot(ctx.world, &moving.snapshot, pos) {
+            return; // whole-abort: nothing written, no fan-out, moving entry already cleared.
+        }
+
+        let extended_after = match moving.plan {
+            MovingPlan::Extending(plan) => {
+                self.commit_extend(ctx, pos, moving.direction, plan, &moving.snapshot);
+                true
+            }
+            MovingPlan::Retracting(plan) => {
+                self.commit_retract(ctx, pos, moving.direction, plan, &moving.snapshot);
+                false
+            }
+        };
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(st) = state.get_mut(&pos) {
+            st.extended = extended_after;
+        }
     }
 }
 
@@ -271,5 +707,16 @@ pub fn register_piston(
     registry: Arc<SignalSourceRegistry>,
     ids: &PistonStateIds,
 ) -> Arc<PistonBehavior> {
-    todo!()
+    let piston = Arc::new(PistonBehavior::new(registry));
+    behaviors.register_range(
+        ids.piston.0,
+        ids.piston.1,
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
+    behaviors.register_range(
+        ids.sticky_piston.0,
+        ids.sticky_piston.1,
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
+    piston
 }

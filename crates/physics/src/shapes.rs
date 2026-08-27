@@ -219,8 +219,69 @@ fn build_tier1_table() -> ShapeTable {
         (2241, full.clone()),        // sticky_piston (extended = false)
         (3988, flat(chest_shape)),   // chest
         (11313, flat(hopper_shape)), // hopper
-        (5328, full.clone()),        // furnace
-        (20763, full.clone()),       // blast_furnace
-        (20755, full),               // smoker
+        // piston_head (M3-B05 Context §D) -- six placeholder ids, one per facing (no real
+        // per-property-combination registry exists yet, Context §I; kept in sync by hand with
+        // `crates/mechanics/src/redstone/piston.rs`'s own identical `PISTON_HEAD_IDS` table and
+        // with `piston_shape_table.rs`'s own local copy). An *extended* piston/sticky_piston
+        // base needs no entry of its own here (Context §D) -- it is an unchanged full cube,
+        // already correctly produced by `lookup`'s own default-full-cube fallback.
+        (900_001, flat(piston_head_shape(0, false))), // piston_head, facing = West
+        (900_002, flat(piston_head_shape(0, true))),  // piston_head, facing = East
+        (900_003, flat(piston_head_shape(2, false))), // piston_head, facing = North
+        (900_004, flat(piston_head_shape(2, true))),  // piston_head, facing = South
+        (900_005, flat(piston_head_shape(1, false))), // piston_head, facing = Down
+        (900_006, flat(piston_head_shape(1, true))),  // piston_head, facing = Up
+        (5328, full.clone()),                         // furnace
+        (20763, full.clone()),                        // blast_furnace
+        (20755, full),                                // smoker
     ])
+}
+
+/// `piston_head`'s own two-box shape (M3-B05 Context §D): a face plate (`PLATFORM_THICKNESS =
+/// 4/16` thick, full footprint on the other two axes) at the *far* end of the block along
+/// `axis` (the end `positive` points toward), plus a centered arm (`4/16 x 4/16` cross-section)
+/// spanning the *near* `12/16`, connecting the face plate back toward the base. `axis`: `0` =
+/// X, `1` = Y, `2` = Z. Worked reference case (`axis = 1, positive = true`, i.e. `facing = Up`):
+/// face plate `[0,1]x[0.75,1]x[0,1]`; arm `[0.375,0.625]x[0,0.75]x[0.375,0.625]` -- matches
+/// Context §D's own literal boxes exactly.
+fn piston_head_shape(axis: usize, positive: bool) -> VoxelShape {
+    const PLATFORM_THICKNESS: f64 = 0.25;
+    const ARM_LO: f64 = 0.375;
+    const ARM_HI: f64 = 0.625;
+
+    let (plate_lo, plate_hi) = if positive {
+        (1.0 - PLATFORM_THICKNESS, 1.0)
+    } else {
+        (0.0, PLATFORM_THICKNESS)
+    };
+    let (arm_lo, arm_hi) = if positive {
+        (0.0, 1.0 - PLATFORM_THICKNESS)
+    } else {
+        (PLATFORM_THICKNESS, 1.0)
+    };
+    let other_axes: [usize; 2] = match axis {
+        0 => [1, 2],
+        1 => [0, 2],
+        2 => [0, 1],
+        _ => unreachable!("piston_head_shape: axis must be 0, 1, or 2"),
+    };
+
+    let make_box = |along: (f64, f64), a: (f64, f64), b: (f64, f64)| -> Aabb {
+        let mut min = [0.0f64; 3];
+        let mut max = [0.0f64; 3];
+        min[axis] = along.0;
+        max[axis] = along.1;
+        min[other_axes[0]] = a.0;
+        max[other_axes[0]] = a.1;
+        min[other_axes[1]] = b.0;
+        max[other_axes[1]] = b.1;
+        Aabb {
+            min: Vec3::new(min[0], min[1], min[2]),
+            max: Vec3::new(max[0], max[1], max[2]),
+        }
+    };
+
+    let plate = make_box((plate_lo, plate_hi), (0.0, 1.0), (0.0, 1.0));
+    let arm = make_box((arm_lo, arm_hi), (ARM_LO, ARM_HI), (ARM_LO, ARM_HI));
+    VoxelShape::from_boxes(vec![plate, arm])
 }
