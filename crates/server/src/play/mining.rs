@@ -463,6 +463,16 @@ pub fn tick_destroy_state(
 pub const BLOCK_INTERACTION_RANGE_SURVIVAL: f64 = 4.5;
 pub const BLOCK_INTERACTION_RANGE_CREATIVE: f64 = 5.0;
 
+/// M3 field-report fix (MECH-D62 re-supersession -- Context, "AUTHORITATIVE RESEARCH
+/// VERDICT" -- the designated research role's verdict against the ASSET-D18(f) reference,
+/// authoritative and implemented verbatim): vanilla's own server performs no raycast at all
+/// when validating block break/place reach -- both paths add this same fixed slack on top of
+/// the raw `block_interaction_range` attribute before validating a box-distance predicate
+/// (`is_within_block_interaction_range` below), so the server is never *stricter* than the
+/// client's own local reach check, absorbing latency, tick-boundary look/position staleness,
+/// and float drift.
+pub const BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER: f64 = 1.0;
+
 /// Context's own shared look-vector construction ("Orientation from placement context"),
 /// reused by both the raycast direction and every orientation rule below. Only the
 /// yaw-driven horizontal component reuses `rc_physics`'s `Mth` sin/cos table (matching
@@ -536,12 +546,37 @@ pub fn raycast_reach(
     range: f64,
     shapes: &dyn BlockShapeSource,
 ) -> bool {
-    let origin = eye_position(motion.position);
+    // `crouching: false` -- this retired design never modeled pose at all (M3 field-report
+    // Symptom 2's own root cause); kept exactly as before for the duration of this function's
+    // own retirement window (Context, "AUTHORITATIVE RESEARCH VERDICT" -- this whole function
+    // is replaced by `is_within_block_interaction_range` below in the matching implementation
+    // changeset, not merely adjusted here).
+    let origin = eye_position(motion.position, false);
     let direction = look_vector(motion.yaw, motion.pitch);
     match cast_ray(origin, direction, range, shapes) {
         Some(hit) => hit.block_pos == claimed_target,
         None => false,
     }
+}
+
+/// M3 field-report fix (MECH-D62 re-supersession, test-authoring stub -- Context,
+/// "AUTHORITATIVE RESEARCH VERDICT"): replaces `raycast_reach` above (retired by the matching
+/// implementation changeset, kept for now so every currently-passing test stays green through
+/// this checkpoint). Builds the full `1x1x1` axis-aligned box of `claimed_target`'s own block
+/// cell -- ALWAYS the full unit cell, never the block's real collision/visual shape, so a
+/// slab/stair/fence is validated exactly like stone -- and accepts iff the squared distance
+/// from `eye` to the NEAREST POINT on that box (per axis: `max(box_min - coord, coord -
+/// box_max, 0.0)`, summed as squares -- nearest-point-of-box distance, never centre distance)
+/// is less than `(range + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER)^2`. No line-of-
+/// sight/occlusion/directional component whatsoever -- a claimed target behind another solid
+/// block is accepted exactly like one in the open. Body left `todo!()` here; the matching
+/// implementation changeset fills it in (TEST-D45/D46).
+pub fn is_within_block_interaction_range(eye: Vec3, claimed_target: BlockPos, range: f64) -> bool {
+    let _ = (eye, claimed_target, range);
+    todo!(
+        "M3 field-report fix (MECH-D62 re-supersession): box-distance reach predicate -- \
+         filled in by the matching implementation changeset"
+    )
 }
 
 // --- Placement orientation (Context: "Orientation from placement context") ---

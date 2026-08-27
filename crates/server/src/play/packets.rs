@@ -262,6 +262,74 @@ pub struct SetPlayerMovementFlags {
     pub on_ground: bool,
 }
 
+/// M3 field-report fix (Symptom 2): protocol 776's own serverbound sneak/movement-intent
+/// channel. Neither `PlayerAction` nor any legacy player-command packet carries a shift/sneak
+/// action in this version (Context, AUTHORITATIVE RESEARCH VERDICT) -- `player_input` is the
+/// only wire source. Id `0x2B`, verified against the local datagen report
+/// (`mc-research/26.2/datagen/generated/reports/packets.json`, Context) alongside every other
+/// already-known id in this file (`move_player_pos`/`_rot`/`use_item_on`), independently
+/// cross-confirming those. A single raw byte -- `flags` -- wrapping seven boolean movement-
+/// intent bits (`shift`'s own doc comment below has the exact bit-to-meaning table).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "server", id = 0x2B)]
+pub struct PlayerInput {
+    pub flags: u8,
+}
+
+pub const PLAYER_INPUT_FORWARD: u8 = 0x01;
+pub const PLAYER_INPUT_BACKWARD: u8 = 0x02;
+pub const PLAYER_INPUT_LEFT: u8 = 0x04;
+pub const PLAYER_INPUT_RIGHT: u8 = 0x08;
+pub const PLAYER_INPUT_JUMP: u8 = 0x10;
+pub const PLAYER_INPUT_SHIFT: u8 = 0x20;
+pub const PLAYER_INPUT_SPRINT: u8 = 0x40;
+
+/// Per-bit accessors (Context, test-authoring stub): every body is `todo!()` here -- the
+/// matching implementation changeset fills in the real bitmask logic (TEST-D45/D46). This
+/// milestone only ever consumes `shift()` (`connection.rs`'s dispatch threads it into
+/// `movement::PlayerInputState.sneaking`, `movement::eye_position`'s own pose-aware height
+/// selection); the other six are decoded for completeness/future use but not yet threaded
+/// into any gameplay effect -- server-authoritative movement already derives its own
+/// velocity/direction from the position packets, never from this intent bitfield.
+impl PlayerInput {
+    pub fn forward(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    pub fn backward(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    pub fn left(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    pub fn right(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    pub fn jump(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    /// The one bit this milestone actually consumes.
+    pub fn shift(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+    pub fn sprint(self) -> bool {
+        todo!(
+            "M3 field-report fix: player_input bitfield decode -- filled in by the matching implementation changeset"
+        )
+    }
+}
+
 /// Packs a "Position" wire value (Context: 26-bit X, 26-bit Z, 12-bit Y, two's complement),
 /// written as one plain big-endian 8-byte `Long` by the caller (`WireWrite for i64`).
 pub fn pack_position(pos: rc_core::BlockPos) -> i64 {

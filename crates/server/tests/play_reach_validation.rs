@@ -3,6 +3,14 @@
 //! rejections, each with its own owed `Acknowledge Block Change` and, where applicable
 //! (Context: never for `OutOfReach`), a corrective `Block Update`. Every test constructs
 //! its own `HardcodedWorld::new()` -- no test shares state with any other.
+//!
+//! M3 field-report test-authoring update (MECH-D62 re-supersession): reach is no longer a
+//! voxel raycast at all -- vanilla's own real predicate (Context, AUTHORITATIVE RESEARCH
+//! VERDICT) is a pure box-distance-from-eye check with a fixed `1.0` buffer on top of the raw
+//! range (effective thresholds `5.5` survival / `6.0` creative) and no line-of-sight or
+//! look-direction component whatsoever. Every test below that still sets a rotation before
+//! acting does so only to exercise the real `PlayerMotion`/packet-application path, never
+//! because reach itself depends on it any more.
 
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
@@ -183,9 +191,9 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
         // (20, -60, 20) sits in chunk (1, 1) -- one of the nine... locally-seeded chunks,
-        // grass at y=-60 -- but well outside the 5.0 creative reach bound (distance ~28.4,
-        // and outside `cast_ray`'s own `max_distance` budget regardless of look direction --
-        // no rotation setup needed here, unlike every other test below).
+        // grass at y=-60 -- but well outside the 6.0 creative-plus-buffer reach threshold
+        // (nearest-point distance ~28.3). No rotation setup needed: reach has no directional
+        // component at all (this file's own top-of-file doc comment).
         send_packet(
             &mut a,
             &PlayerAction {
@@ -341,47 +349,31 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
     .unwrap();
 }
 
-/// M3-B03 test-authoring update (renamed and re-derived from M2-B07's own `breaking_air_
-/// is_rejected_with_correction`): a real voxel raycast can never *hit* an air cell (`cast_
-/// ray`'s own contract -- it only reports a hit against a non-empty shape), so a `Player
-/// Action` naming an already-air `location` no longer reaches `mining::finalize_break`'s own
-/// `TargetAlreadyAir` rejection path at all -- it fails the reach check first, exactly as a
-/// real vanilla client's own local raycast would never let it send such a packet in the
-/// first place (there is nothing under the crosshair to interact with). This is a genuine
-/// parity improvement over M2-B07's own Euclidean-only check (which could not tell "no
-/// target under the crosshair" from "a valid, if already-air, target"), not a weakened test
-/// -- `mining::finalize_break`'s own `TargetAlreadyAir` arm is exercised directly, holding
-/// its own hand-constructed pre-air `BlockWorldAccess`, by `mining_destroy_state_machine.rs`
-/// sibling coverage is not needed here since that path is no longer reachable end-to-end
-/// through this crate's own packet layer.
+/// M3 field-report test-authoring update (MECH-D62 re-supersession, renamed and re-derived
+/// yet again from `breaking_air_is_rejected_out_of_reach_not_with_a_correction`): the box-
+/// distance predicate this file's own top-of-file doc comment describes has no concept of
+/// "hitting" a cell at all, so it can no longer distinguish "an air target near the player"
+/// from "a solid one" the way the retired voxel raycast did -- a NEAR air target is now
+/// genuinely in reach and reaches `mining::finalize_break`'s own `TargetAlreadyAir` rejection
+/// path instead (which owes its own corrective `Block Update`, unlike `OutOfReach`; not
+/// exercised by this test file -- `mining_destroy_state_machine.rs` covers `TargetAlreadyAir`
+/// directly). This test keeps demonstrating `OutOfReach`'s own "ack only, no correction" rule
+/// specifically, using a target far enough away that no reach model (old or new) would ever
+/// accept it, air or not.
 #[tokio::test]
-async fn breaking_air_is_rejected_out_of_reach_not_with_a_correction() {
+async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_correction() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
-        let uuid = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
-        let sessions = world.player_sessions();
 
-        // Looks straight down from spawn -- the nearest solid block on that ray is the
-        // grass at (0, -60, 0), not the air cell at (0, -59, 0) itself, so a claimed target
-        // of (0, -59, 0) can never be the raycast's own hit position.
-        send_packet(
-            &mut a,
-            &SetPlayerRotation {
-                yaw: 0.0,
-                pitch: 90.0,
-                on_ground: true,
-            },
-        )
-        .await;
-        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.rotation) == Some([0.0, 90.0]))
-            .await;
-
+        // (20, -59, 20) is air (this world's own content sits entirely at y <= -60) and
+        // nearest-point distance ~28.3 from A's own spawn eye -- far outside even the 6.0
+        // creative-plus-buffer threshold.
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -59, 0)),
+                location: pack_position(BlockPos::new(20, -59, 20)),
                 direction: 1,
                 sequence: 8,
             },
@@ -394,8 +386,7 @@ async fn breaking_air_is_rejected_out_of_reach_not_with_a_correction() {
             8
         );
 
-        // `OutOfReach` owes no corrective `Block Update` at all (Context) -- unlike M2-B07's
-        // own `TargetAlreadyAir`, which did.
+        // `OutOfReach` owes no corrective `Block Update` at all (Context).
         assert_no_packet_of_type(
             &mut a,
             &mut a_acc,

@@ -1,9 +1,18 @@
 //! M3-B03 acceptance test: the full survival dig-timing state machine, creative instant
-//! break, occluded-target reach rejection, and held-item-driven placement orientation, all
-//! exercised end-to-end over real loopback connections. Mirrors `M2-B07`'s own
-//! `play_block_place_break.rs` shape, extended. See
-//! `blueprints/M3/M3-B03-breaking-placing.md`, Acceptance tests,
+//! break, and held-item-driven placement orientation, all exercised end-to-end over real
+//! loopback connections. Mirrors `M2-B07`'s own `play_block_place_break.rs` shape, extended.
+//! See `blueprints/M3/M3-B03-breaking-placing.md`, Acceptance tests,
 //! "`crates/server/tests/play_block_break_place_full.rs`".
+//!
+//! M3 field-report test-authoring update (MECH-D62 re-supersession, Symptom 1): this file's
+//! own former `raycast_reach_rejects_an_occluded_target_even_within_euclidean_range` test
+//! pinned the now-retired voxel raycast's own occlusion behavior, which vanilla's real reach
+//! predicate never had (Context, AUTHORITATIVE RESEARCH VERDICT: no line-of-sight component
+//! whatsoever) -- rewritten below as `distance_based_reach_ignores_occlusion_and_accepts_a_
+//! block_behind_another`, asserting the corrected acceptance instead. Fails today: the old
+//! raycast's own closest-hit-only DDA still resolves this exact scenario to the nearer,
+//! occluding block, never reaching the claimed (farther, occluded) one, so the pre-fix server
+//! still rejects it.
 
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
@@ -350,7 +359,7 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
 }
 
 #[tokio::test]
-async fn raycast_reach_rejects_an_occluded_target_even_within_euclidean_range() {
+async fn distance_based_reach_ignores_occlusion_and_accepts_a_block_behind_another() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
@@ -368,9 +377,11 @@ async fn raycast_reach_rejects_an_occluded_target_even_within_euclidean_range() 
         wait_until(|| sessions_rotation_ready(&world, uuid_a)).await;
 
         // (0, -61, 0) (dirt) sits directly behind (0, -60, 0) (grass) along A's own
-        // straight-down look line -- both within 5.0 Euclidean range of A's own spawn eye
-        // position (~1.62 and ~2.62 respectively), but the grass block fully occludes the
-        // dirt one: the raycast's own closest hit is the grass, never the dirt.
+        // straight-down look line -- vanilla's real reach predicate has no line-of-sight
+        // component at all (Context, AUTHORITATIVE RESEARCH VERDICT): only the box-distance
+        // from A's own standing eye to (0, -61, 0)'s own nearest point (~2.62 blocks, well
+        // inside the 6.0 creative threshold) decides this, regardless of the solid grass
+        // block in between.
         send_packet(
             &mut a,
             &PlayerAction {
@@ -388,13 +399,16 @@ async fn raycast_reach_rejects_an_occluded_target_even_within_euclidean_range() 
             1
         );
 
-        assert_no_packet_of_type(
-            &mut a,
-            &mut a_acc,
-            BlockUpdate::ID,
-            Duration::from_millis(400),
-        )
-        .await;
+        // Every M3 player is Creative by default -- this succeeds as an instant break.
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        let update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(update.location, pack_position(BlockPos::new(0, -61, 0)));
+        assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+
+        let body = recv_packet_of_type(&mut a, &mut a_acc, LevelEvent::ID).await;
+        let level_event = decode_one::<LevelEvent>(body).unwrap();
+        assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
+        assert_eq!(level_event.data, blocks::DIRT.0 as i32);
     })
     .await
     .unwrap();

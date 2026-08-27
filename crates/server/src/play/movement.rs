@@ -14,8 +14,8 @@ use rc_chunk_storage::{BlockStateColumn, RegistryId, WORLD_HEIGHT, WORLD_MIN_Y};
 use rc_core::{BlockPos, DimensionId};
 use rc_physics::collide::{collide_and_slide, has_new_collision, overlaps_any_solid};
 use rc_physics::{
-    BlockPhysicsProperties, BlockShapeSource, PLAYER_EYE_HEIGHT, PLAYER_HALF_WIDTH, PLAYER_HEIGHT,
-    STEP_HEIGHT, Vec3, tier1_shape_table,
+    BlockPhysicsProperties, BlockShapeSource, PLAYER_EYE_HEIGHT, PLAYER_EYE_HEIGHT_CROUCHING,
+    PLAYER_HALF_WIDTH, PLAYER_HEIGHT, STEP_HEIGHT, Vec3, tier1_shape_table,
 };
 
 use super::block_action::ChunkIndex;
@@ -249,10 +249,23 @@ impl BlockShapeSource for ChunkBlockShapeSource<'_> {
     }
 }
 
-/// `eye_position(motion.position)` -- the player's real eye position (Context, MECH-D62
-/// supersession note; Interfaces). `PLAYER_EYE_HEIGHT` reused unmodified from `M2-B07`.
-pub fn eye_position(position: Vec3) -> Vec3 {
-    position + Vec3::new(0.0, PLAYER_EYE_HEIGHT, 0.0)
+/// M3 field-report fix (Symptom 2, MECH-D62 pose-aware eye height -- test-authoring stub):
+/// `crouching` selects `PLAYER_EYE_HEIGHT`/`PLAYER_EYE_HEIGHT_CROUCHING` (`rc_physics`,
+/// AUTHORITATIVE RESEARCH VERDICT). The pose rule itself (`shift_key_down && !flying`) is
+/// the caller's own responsibility (`world.rs`'s tick loop, from `PlayerInputState`) -- this
+/// function only ever needs the already-resolved boolean. The `crouching == false` branch is
+/// the exact, unmodified pre-fix formula (every existing caller of the old one-argument
+/// `eye_position` keeps its exact prior behavior); the `crouching == true` branch is left
+/// `todo!()` here -- the matching implementation changeset fills it in (TEST-D45/D46).
+pub fn eye_position(position: Vec3, crouching: bool) -> Vec3 {
+    if crouching {
+        todo!(
+            "M3 field-report fix (Symptom 2): crouching eye height -- filled in by the \
+             matching implementation changeset"
+        )
+    } else {
+        position + Vec3::new(0.0, PLAYER_EYE_HEIGHT, 0.0)
+    }
 }
 
 /// A live fractional world position's containing block coordinate -- floor (not
@@ -495,8 +508,21 @@ mod tests {
     }
 
     #[test]
-    fn eye_position_adds_player_eye_height() {
-        let eye = eye_position(Vec3::new(1.0, -59.0, 2.0));
+    fn eye_position_adds_the_standing_player_eye_height() {
+        let eye = eye_position(Vec3::new(1.0, -59.0, 2.0), false);
         assert_eq!(eye, Vec3::new(1.0, -59.0 + PLAYER_EYE_HEIGHT, 2.0));
+    }
+
+    /// M3 field-report regression (Symptom 2): a crouching player's own eye position must
+    /// use `PLAYER_EYE_HEIGHT_CROUCHING` (`1.27`), not the standing `PLAYER_EYE_HEIGHT`
+    /// (`1.62`) -- fails today (`todo!()` panic): the crouching branch is not implemented
+    /// yet.
+    #[test]
+    fn eye_position_uses_the_crouching_height_when_crouching() {
+        let eye = eye_position(Vec3::new(1.0, -59.0, 2.0), true);
+        assert_eq!(
+            eye,
+            Vec3::new(1.0, -59.0 + PLAYER_EYE_HEIGHT_CROUCHING, 2.0)
+        );
     }
 }

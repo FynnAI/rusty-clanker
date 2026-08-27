@@ -39,3 +39,8 @@ pub const PLAYER_HALF_WIDTH: f64 = 0.3;
 pub const PLAYER_HEIGHT: f64 = 1.8;
 pub const PLAYER_HEIGHT_SNEAKING: f64 = 1.5;
 pub const PLAYER_EYE_HEIGHT: f64 = 1.62;
+/// M3 field-report fix (Symptom 2, MECH-D62 pose-aware eye height): vanilla's own literal
+/// crouching-pose eye-height constant, paired with `PLAYER_EYE_HEIGHT` above for the
+/// standing pose -- both are the two values `play::movement::eye_position` selects between
+/// (`play::mining`'s own reach predicate is this constant's first real consumer).
+pub const PLAYER_EYE_HEIGHT_CROUCHING: f64 = 1.27;

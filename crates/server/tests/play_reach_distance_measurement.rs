@@ -173,8 +173,11 @@ fn horizontal_axis_aligned_reach_matches_the_creative_range() {
         "a block {JUST_UNDER} away (just under the 5.0 creative range) must be hittable"
     );
     // Also exercised through the real `PlayerMotion`/`eye_position` seam, not only raw Vec3s.
+    // `crouching: false` -- this whole file measures the standing pose only (M3 field-report
+    // fix, Symptom 2: `eye_position` gained a pose parameter; every case here keeps the exact
+    // pre-fix standing behavior).
     let feet = feet_for_eye(eye_hit);
-    assert_eq!(eye_position(feet), eye_hit);
+    assert_eq!(eye_position(feet, false), eye_hit);
 
     let eye_miss = eye_at_distance(direction, 2, target.z, JUST_BEYOND);
     assert!(
