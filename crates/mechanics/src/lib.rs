@@ -9,6 +9,7 @@ pub mod border;
 pub mod direction;
 pub mod neighbor_update;
 pub mod random;
+pub mod redstone;
 pub mod scheduled_tick;
 #[cfg(feature = "server-systems")]
 pub mod stage4;

@@ -1,0 +1,316 @@
+//! M3-B04 — comparator acceptance tests (Context §G).
+
+mod support;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use rc_chunk_storage::BlockStateId;
+use rc_core::BlockPos;
+use rc_mechanics::direction::Direction;
+use rc_mechanics::redstone::{
+    ComparatorBehavior, ComparatorMode, ContainerSignalSource, RedstoneSignalSource,
+    SignalSourceRegistry,
+};
+use rc_mechanics::{
+    BlockBehavior, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine, PendingUpdate,
+    RegionOwnership, ScheduledTickQueue, UpdateContext,
+};
+use rc_messaging::{Address, RegionMessage};
+
+use support::{FakeWorld, TestSignalSource};
+
+const FRONT_ID: BlockStateId = BlockStateId(1);
+const SIDE_ID: BlockStateId = BlockStateId(2);
+
+struct Harness {
+    world: FakeWorld,
+    engine: NeighborUpdateEngine,
+    scheduled: ScheduledTickQueue,
+    events: BlockEventQueue,
+    outbound: Vec<(Address, RegionMessage)>,
+    ownership: RegionOwnership,
+}
+
+impl Harness {
+    fn new() -> Self {
+        let world = FakeWorld::new();
+        let local = world.local;
+        Self {
+            world,
+            engine: NeighborUpdateEngine::new(),
+            scheduled: ScheduledTickQueue::new(),
+            events: BlockEventQueue::new(),
+            outbound: Vec::new(),
+            ownership: RegionOwnership::always_local(local),
+        }
+    }
+
+    fn ctx_at(&mut self, current_tick: u64) -> UpdateContext<'_> {
+        UpdateContext {
+            world: &mut self.world,
+            engine: &mut self.engine,
+            scheduled: &mut self.scheduled,
+            events: &mut self.events,
+            outbound: &mut self.outbound,
+            ownership: &self.ownership,
+            current_tick,
+        }
+    }
+}
+
+struct FakeContainerSignalSource(Mutex<HashMap<BlockPos, u8>>);
+
+impl ContainerSignalSource for FakeContainerSignalSource {
+    fn container_signal(&self, pos: BlockPos) -> Option<u8> {
+        self.0.lock().unwrap().get(&pos).copied()
+    }
+}
+
+#[test]
+fn comparator_calculate_output_signal_table() {
+    use ComparatorMode::{Compare, Subtract};
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(10, 4, Subtract),
+        6
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(10, 10, Subtract),
+        0
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(4, 10, Subtract),
+        0
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(10, 4, Compare),
+        10
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(10, 10, Compare),
+        10
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(0, 0, Subtract),
+        0
+    );
+    assert_eq!(
+        ComparatorBehavior::calculate_output_signal(0, 5, Compare),
+        0
+    );
+}
+
+#[test]
+fn comparator_should_turn_on_table() {
+    use ComparatorMode::{Compare, Subtract};
+    assert!(ComparatorBehavior::should_turn_on(10, 4, Compare));
+    assert!(ComparatorBehavior::should_turn_on(10, 10, Compare));
+    assert!(!ComparatorBehavior::should_turn_on(10, 10, Subtract));
+    assert!(!ComparatorBehavior::should_turn_on(4, 10, Compare));
+    assert!(!ComparatorBehavior::should_turn_on(4, 10, Subtract));
+}
+
+#[test]
+fn comparator_reads_container_directly_in_front() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+
+    let mut map = HashMap::new();
+    map.insert(front, 8u8); // 1 slot, 32/64 -> floor(0.5*14)+1 = 8 (Context §G worked example).
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(map)));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+
+    // A plain signal at `front` too, with a *different* value -- proves the container reading
+    // replaces it entirely rather than being maxed with it (Context §G).
+    let plain = Arc::new(TestSignalSource::fixed(3));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        plain as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(comparator.output(pos), 8);
+}
+
+#[test]
+fn comparator_falls_back_to_plain_signal_when_no_container() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new()))); // always None
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+
+    let plain = Arc::new(TestSignalSource::fixed(3));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        plain as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(comparator.output(pos), 3);
+}
+
+#[test]
+fn comparator_subtract_mode_analog_only_change_still_notifies() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let side_pos = Direction::North.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Subtract);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let side_source = Arc::new(TestSignalSource::fixed(2));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(
+        SIDE_ID,
+        BlockStateId(SIDE_ID.0 + 1),
+        Arc::clone(&side_source) as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+    h.world.set_block(side_pos, SIDE_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(comparator.output(pos), 8); // 10 - 2
+    h.engine.drain(&mut |_eng, _item| {}); // discard the first (expected) notify
+
+    side_source.set_power(5); // should_turn_on(10,5,Subtract) is still true -- only the analog
+    // output value (10-5=5) changes, not the boolean.
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(comparator.output(pos), 5);
+    let mut notified = false;
+    h.engine.drain(&mut |_eng, item| {
+        if let PendingUpdate::NeighborChanged { .. } = item {
+            notified = true;
+        }
+    });
+    assert!(
+        notified,
+        "an analog-only output change in Subtract mode must still notify"
+    );
+}
+
+#[test]
+fn comparator_compare_mode_always_notifies() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+
+    for _ in 0..2 {
+        {
+            let mut ctx = h.ctx_at(0);
+            comparator.on_scheduled_tick(&mut ctx, pos);
+        }
+        let mut notified = false;
+        h.engine.drain(&mut |_eng, item| {
+            if let PendingUpdate::NeighborChanged { .. } = item {
+                notified = true;
+            }
+        });
+        assert!(
+            notified,
+            "Compare mode must notify even with an unchanged input/side pair"
+        );
+    }
+}
+
+#[test]
+fn comparator_checktick_compares_stored_output_not_just_powered() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let side_pos = Direction::North.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Subtract);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let side_source = Arc::new(TestSignalSource::fixed(2));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(
+        SIDE_ID,
+        BlockStateId(SIDE_ID.0 + 1),
+        Arc::clone(&side_source) as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+    h.world.set_block(side_pos, SIDE_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(comparator.powered(pos)); // should_turn_on(10, 2, Subtract) == true
+    assert_eq!(comparator.output(pos), 8);
+
+    // `should_turn_on(10, 5, Subtract)` is still true (10 > 5) -- `powered` would stay the
+    // same -- but the analog output would change (10-5=5 != 8).
+    side_source.set_power(5);
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_neighbor_changed(&mut ctx, pos, Direction::North);
+    }
+    assert!(h.scheduled.is_block_tick_pending(pos));
+}
