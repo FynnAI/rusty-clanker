@@ -36,7 +36,11 @@ fn corpus_trace_dir(repo_root: &std::path::Path) -> PathBuf {
     repo_root.join("corpus/redstone")
 }
 
-fn sorted_ron_paths(dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
+/// `pub` (rather than the crate-private visibility this file's own other helpers use) so
+/// `fetch_corpus.rs::run` can list the identical committed `.ron` corpus directory the same
+/// way, for its own `--only` pre-check (DEFECT 4(b)) — one directory-listing definition, not
+/// two that could silently drift apart on which files count as "committed contraption specs."
+pub fn sorted_ron_paths(dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -44,6 +48,18 @@ fn sorted_ron_paths(dir: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
         .collect();
     paths.sort();
     Ok(paths)
+}
+
+/// `true` iff `only` matches none of `ron_paths`'s own successfully-parsed spec ids — DEFECT
+/// 4(a)'s own gate, factored out as a small pure(-ish, disk-reading) function so this crate's
+/// own integration tests can exercise it directly against a fixture corpus directory rather
+/// than trusting `run`'s own inline logic alone. Ignores individual load failures (a malformed
+/// spec is `run`'s own `load::` case's concern, not this check's).
+pub fn only_filter_matches_nothing(ron_paths: &[PathBuf], only: &str) -> bool {
+    !ron_paths
+        .iter()
+        .filter_map(|path| load_spec(path).ok())
+        .any(|spec| spec.id == only)
 }
 
 /// I/O wrapper (`xtask parity-check redstone [--only <id>]`).
@@ -86,8 +102,41 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
         }
     };
 
+    // DEFECT 4(a) fix: an `--only` value matching no committed contraption spec used to fall
+    // through the loop below pushing zero cases, so `TierResult::overall` (no case failed)
+    // reported a vacuous `Pass` — this project's own single most dangerous verification-stack
+    // defect class (Context). Resolved against every spec's own `id` up front, before any
+    // replay work runs, so a typo'd or stale `--only` value fails loudly and immediately
+    // rather than silently verifying nothing — the same fix `fetch_corpus.rs::run` applies to
+    // its own identical `--only` filter, ahead of that verb's real oracle launch.
+    if let Some(only) = &args.only
+        && only_filter_matches_nothing(&ron_paths, only)
+    {
+        let known_ids: Vec<String> = ron_paths
+            .iter()
+            .filter_map(|path| load_spec(path).ok())
+            .map(|spec| spec.id)
+            .collect();
+        result.push(
+            "only-filter",
+            Status::Fail,
+            Some(format!(
+                "--only {only:?} matches no committed contraption spec under {} (known ids: \
+                 {known_ids:?}) — refusing to report a vacuous pass",
+                corpus_dir.display()
+            )),
+        );
+        let result = result.finalize();
+        let _ = crate::tier_result::write(&result);
+        return crate::tier_result::exit_code_for(result.status);
+    }
+
     let trace_dir = corpus_trace_dir(&repo_root);
     let diff_dump_dir = repo_root.join("target/verify/parity-check-redstone-diffs");
+    // DEFECT 4, general case: incremented only for a spec this loop actually replayed and
+    // diffed — checked against zero once the loop finishes, below, so a corpus directory that
+    // is (or becomes) empty can never report a vacuous `Pass` either, `--only` or not.
+    let mut verified_count = 0usize;
 
     for path in &ron_paths {
         let spec = match load_spec(path) {
@@ -107,6 +156,7 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
         {
             continue;
         }
+        verified_count += 1;
 
         let trace_path = trace_dir.join(&spec.id).join("trace.postcard");
         let expected = match read_trace_if_current(&trace_path) {
@@ -164,6 +214,19 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
                 result.push(spec.id.clone(), Status::Fail, Some(err.to_string()));
             }
         }
+    }
+
+    if verified_count == 0 {
+        result.push(
+            "no-contraptions-verified",
+            Status::Fail,
+            Some(format!(
+                "0 contraption(s) were actually replayed and diffed against a cached trace \
+                 under {} — a harness that reports success while having verified nothing is \
+                 not a pass",
+                corpus_dir.display()
+            )),
+        );
     }
 
     let result = result.finalize();

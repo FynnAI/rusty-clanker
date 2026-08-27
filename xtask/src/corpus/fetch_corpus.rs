@@ -14,12 +14,17 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use rc_gametest::spec::load_spec;
+
+use crate::corpus::parity_check;
 use crate::tier_result::{Status, TierResult};
 
 pub struct FetchCorpusArgs {
     pub version: String,
     pub server_jar: Option<PathBuf>,
     pub only: Option<String>,
+    /// TEST-D41 legal consent, same flag shape as `xtask setup-oracle --accept-eula`.
+    pub accept_eula: bool,
 }
 
 fn repo_root() -> PathBuf {
@@ -170,11 +175,92 @@ fn parse_runner_output(stdout: &str, stderr: &str) -> RunnerOutcome {
     }
 }
 
+/// DEFECT 5 fix (TEST-D41): this verb ultimately launches the same real, legally-gated
+/// vanilla oracle jar `xtask setup-oracle` does
+/// (`crates/testing/gametest/src/capture.rs::launch_oracle_server`, which unconditionally
+/// writes `eula=true`) but never itself checked the project's own consent gate — an
+/// implementation slip against `blueprints/M3/M3-B07-redstone-corpus.md`'s own explicit claim
+/// that this path is already covered by it. `rc-paritybot` (which actually spawns the jar,
+/// several process-hops downstream) cannot depend on `xtask` (WS-D4's own crate-graph
+/// direction), so the gate lives here, at the one call site that can enforce it before any
+/// subprocess is spawned — reusing `setup_oracle::consent_already_given`/`record_consent`
+/// verbatim, never a second, independent consent primitive. Factored out as its own function,
+/// parameterized on `repo_root` (rather than inlined in `run` using this file's own
+/// hardcoded `repo_root()`), so this crate's own integration tests can exercise every branch
+/// against a disposable temp directory instead of the real project's own `oracle/.eula-
+/// accepted` marker.
+pub fn eula_gate(repo_root: &std::path::Path, accept_eula: bool) -> Result<(), String> {
+    if crate::setup_oracle::consent_already_given(repo_root) {
+        return Ok(());
+    }
+    if !accept_eula {
+        return Err(
+            "legal consent required — re-run with --accept-eula, or set \
+                     RC_ORACLE_EULA_ACCEPTED=1 (same gate as `xtask setup-oracle`, TEST-D41) \
+                     — this verb launches the same real vanilla oracle jar"
+                .to_string(),
+        );
+    }
+    crate::setup_oracle::record_consent(repo_root)
+        .map_err(|err| format!("failed to record consent: {err}"))
+}
+
 /// I/O wrapper (`xtask fetch-corpus [--version 26.2] [--server-jar <path>] [--only
-/// <id>]`).
+/// <id>] [--accept-eula]`).
 pub fn run(args: &FetchCorpusArgs) -> std::process::ExitCode {
     let repo_root = repo_root();
     let mut result = TierResult::new("fetch-corpus");
+
+    if let Err(message) = eula_gate(&repo_root, args.accept_eula) {
+        eprintln!("fetch-corpus: {message}");
+        result.push("consent", Status::Fail, Some(message));
+        let result = result.finalize();
+        let _ = crate::tier_result::write(&result);
+        return crate::tier_result::exit_code_for(result.status);
+    }
+    result.push("consent", Status::Pass, None);
+
+    // DEFECT 4(b) fix: an `--only` value matching no committed contraption spec used to leave
+    // the spec list `fetch_corpus_runner` builds empty while `run_full_corpus_capture` still
+    // launched the real oracle and connected a bot — real wall-clock cost — captured nothing,
+    // and printed `RESULT=OK` with zero `CASE=` lines, which this function's own aggregation
+    // (below) then read as a vacuous `Pass`. Resolved here, before the jar is even resolved,
+    // let alone the oracle launched — reusing `parity_check.rs`'s own identical `--only` check
+    // (`only_filter_matches_nothing`) against the same committed corpus directory, not a
+    // second, independently-drifting copy of the same logic.
+    let corpus_ron_dir = repo_root.join("crates/testing/gametest/corpus/redstone");
+    let ron_paths = match parity_check::sorted_ron_paths(&corpus_ron_dir) {
+        Ok(paths) => paths,
+        Err(err) => {
+            eprintln!(
+                "fetch-corpus: failed to read {}: {err}",
+                corpus_ron_dir.display()
+            );
+            result.push("only-filter", Status::Fail, Some(err.to_string()));
+            let result = result.finalize();
+            let _ = crate::tier_result::write(&result);
+            return crate::tier_result::exit_code_for(result.status);
+        }
+    };
+    if let Some(only) = &args.only
+        && parity_check::only_filter_matches_nothing(&ron_paths, only)
+    {
+        let known_ids: Vec<String> = ron_paths
+            .iter()
+            .filter_map(|path| load_spec(path).ok())
+            .map(|spec| spec.id)
+            .collect();
+        let message = format!(
+            "--only {only:?} matches no committed contraption spec under {} (known ids: \
+             {known_ids:?}) — refusing to launch the oracle to verify nothing",
+            corpus_ron_dir.display()
+        );
+        eprintln!("fetch-corpus: {message}");
+        result.push("only-filter", Status::Fail, Some(message));
+        let result = result.finalize();
+        let _ = crate::tier_result::write(&result);
+        return crate::tier_result::exit_code_for(result.status);
+    }
 
     let jar = if let Some(server_jar) = &args.server_jar {
         crate::fetch_data::FetchedJar {
@@ -213,7 +299,6 @@ pub fn run(args: &FetchCorpusArgs) -> std::process::ExitCode {
         Some(format!("sha1 {}", jar.sha1)),
     );
 
-    let corpus_ron_dir = repo_root.join("crates/testing/gametest/corpus/redstone");
     let corpus_out_dir = repo_root.join("corpus/redstone");
     let work_dir = repo_root
         .join("target/fetch-corpus-oracle")

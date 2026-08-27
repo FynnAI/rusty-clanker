@@ -160,6 +160,11 @@ pub enum Command {
         /// Restrict to one contraption id, for local iteration.
         #[arg(long)]
         only: Option<String>,
+        /// TEST-D41 legal consent, same flag shape as `setup-oracle --accept-eula` — this
+        /// verb launches the same real vanilla oracle jar and is bound by the identical
+        /// consent gate (`setup_oracle::consent_already_given`).
+        #[arg(long)]
+        accept_eula: bool,
     },
     /// M3-B07: `xtask parity-check <corpus>` — this blueprint wires exactly the
     /// `"redstone"` corpus (WS-D9 already reserves the verb shape for a future

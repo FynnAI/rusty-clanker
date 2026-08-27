@@ -180,11 +180,13 @@ fn main() -> ExitCode {
             version,
             server_jar,
             only,
+            accept_eula,
         } => {
             let args = xtask::corpus::fetch_corpus::FetchCorpusArgs {
                 version,
                 server_jar,
                 only,
+                accept_eula,
             };
             xtask::corpus::fetch_corpus::run(&args)
         }
