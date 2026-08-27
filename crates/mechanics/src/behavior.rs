@@ -8,6 +8,7 @@ use crate::block_event::{BlockEvent, BlockEventQueue};
 use crate::border::{self, RegionOwnership};
 use crate::direction::Direction;
 use crate::neighbor_update::NeighborUpdateEngine;
+use crate::random::RcRandom;
 use crate::scheduled_tick::{ScheduledTickQueue, TickPriority};
 use crate::world_access::BlockWorldAccess;
 
@@ -71,6 +72,46 @@ impl<'a> UpdateContext<'a> {
     }
 }
 
+/// New (M3-B06): a random-tick handler's own context — `UpdateContext`'s full mutation
+/// surface (via `base`) plus a further-draws handle (`rng`, `pub` so a handler may call any
+/// `RcRandom` method directly — e.g. `ctx.rng.next_int_bounded(..)` — with no forwarding
+/// wrapper needed) into the *same* per-chunk-per-tick `RcRandom` stream the Stage-5 driver's
+/// own position-selection loop already consumes (Context: "vanilla's own single-shared-
+/// stream-per-tick behavior"). The four delegating methods below cover every mutation
+/// `UpdateContext` itself exposes except `schedule_fluid_tick` — reachable unchanged via
+/// `ctx.base.schedule_fluid_tick(..)` since `base` is `pub`; omitted here only because no
+/// tier-1 random-tick receiver in this blueprint's own scope needs a dedicated forwarder for
+/// it (Constraints: zero real receivers ship).
+pub struct RandomTickContext<'a, 'b> {
+    pub base: UpdateContext<'a>,
+    pub rng: &'b mut RcRandom,
+}
+
+impl<'a, 'b> RandomTickContext<'a, 'b> {
+    pub fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
+        self.base.get_block(pos)
+    }
+
+    pub fn set_block(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        self.base.set_block(pos, new_state)
+    }
+
+    pub fn schedule_block_tick(&mut self, pos: BlockPos, delay_ticks: u64, priority: TickPriority) {
+        self.base.schedule_block_tick(pos, delay_ticks, priority)
+    }
+
+    pub fn emit_block_event(
+        &mut self,
+        pos: BlockPos,
+        event_id: u8,
+        event_param: u8,
+        block_state: BlockStateId,
+    ) {
+        self.base
+            .emit_block_event(pos, event_id, event_param, block_state)
+    }
+}
+
 /// The dispatch target for one block-state range (Context: "tier-1 registry"). Every method
 /// has a no-op default — a behavior overrides only what it needs.
 pub trait BlockBehavior: Send + Sync {
@@ -88,6 +129,10 @@ pub trait BlockBehavior: Send + Sync {
     }
     fn on_scheduled_tick(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     fn on_block_event(&self, _ctx: &mut UpdateContext, _pos: BlockPos, _event: &BlockEvent) {}
+    /// New (M3-B06): called once per drawn random-tick candidate position (Context:
+    /// "Random-tick position selection"). Default no-op — `NoOpBehavior` and every
+    /// already-shipped M3-B01 implementor need zero changes (additive, backward-compatible).
+    fn on_random_tick(&self, _ctx: &mut RandomTickContext, _pos: BlockPos) {}
 }
 
 /// The tier-1 default: every method's default no-op body, shared by every unregistered

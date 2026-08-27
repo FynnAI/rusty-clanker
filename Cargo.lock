@@ -3012,6 +3012,7 @@ dependencies = [
  "rc-chunk-storage",
  "rc-core",
  "rc-messaging",
+ "rc-nbt",
  "rc-physics",
  "rc-scheduler",
  "tracing",

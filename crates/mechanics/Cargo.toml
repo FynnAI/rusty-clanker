@@ -8,6 +8,10 @@ publish = false
 rc-core = { path = "../core" }
 rc-messaging = { path = "../messaging" }
 rc-chunk-storage = { path = "../chunk-storage" }
+# M3-B06: block-entity NBT codecs (chest/furnace/hopper). Already workspace-pinned (M2-B02)
+# and already reachable via `rc-chunk-storage` -- crosses no `SIM`/`NETRENDER` boundary
+# (`xtask lint-deps` Rule 2).
+rc-nbt = { path = "../nbt" }
 # WS-D3 rule 1: `rc-physics` must stay reachable from *both* `rusty-clanker-server` and
 # `rusty-clanker-client`'s transitive dependency closures. `rusty-clanker-client` depends on it
 # directly; `rusty-clanker-server` does not (Deviations) -- this crate is its only other path,
