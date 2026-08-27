@@ -86,12 +86,30 @@ pub enum MovementOutcome {
 /// for each `Option` field on `incoming`, if `Some`, overwrites that same field on `report`
 /// -- never touches a field `incoming` leaves `None`.
 pub fn merge_move_report(report: &mut PendingMoveReport, incoming: &PendingMoveReport) {
-    todo!()
+    if incoming.position.is_some() {
+        report.position = incoming.position;
+    }
+    if incoming.rotation.is_some() {
+        report.rotation = incoming.rotation;
+    }
+    if incoming.on_ground.is_some() {
+        report.on_ground = incoming.on_ground;
+    }
+    if incoming.confirm_teleport_id.is_some() {
+        report.confirm_teleport_id = incoming.confirm_teleport_id;
+    }
 }
 
 /// `POSITION_CLAMP_HORIZONTAL`/`_VERTICAL` (Context: "Server-side movement validation").
 pub fn clamp_position(pos: Vec3) -> Vec3 {
-    todo!()
+    Vec3::new(
+        pos.x
+            .clamp(-POSITION_CLAMP_HORIZONTAL, POSITION_CLAMP_HORIZONTAL),
+        pos.y
+            .clamp(-POSITION_CLAMP_VERTICAL, POSITION_CLAMP_VERTICAL),
+        pos.z
+            .clamp(-POSITION_CLAMP_HORIZONTAL, POSITION_CLAMP_HORIZONTAL),
+    )
 }
 
 /// Allocates the next teleport id and marks it awaited (Context: "Issuing a correction").
@@ -99,7 +117,9 @@ pub fn clamp_position(pos: Vec3) -> Vec3 {
 /// stay put until the ack arrives; the caller (`respond_to_movement`, `world.rs`) sends the
 /// matching `SynchronizePlayerPosition` using that still-unchanged `motion`.
 fn issue_correction(teleport: &mut TeleportState) {
-    todo!()
+    let id = teleport.next_teleport_id;
+    teleport.next_teleport_id += 1;
+    teleport.awaiting_teleport_id = Some(id);
 }
 
 /// Context: "Server-side movement processing" -- the full algorithm. `motion`/`teleport` are
@@ -110,7 +130,78 @@ pub fn evaluate_movement(
     report: &PendingMoveReport,
     shapes: &dyn BlockShapeSource,
 ) -> MovementOutcome {
-    todo!()
+    if let Some(id) = report.confirm_teleport_id
+        && Some(id) == teleport.awaiting_teleport_id
+    {
+        teleport.awaiting_teleport_id = None;
+    }
+    if let Some(on_ground) = report.on_ground {
+        motion.on_ground = on_ground;
+    }
+    if let Some((yaw, pitch)) = report.rotation {
+        motion.yaw = yaw;
+        motion.pitch = pitch;
+    }
+
+    let Some(reported_pos) = report.position else {
+        return MovementOutcome::NoPositionClaim;
+    };
+    if !reported_pos.is_finite() {
+        return MovementOutcome::Disconnect;
+    }
+    let reported_pos = clamp_position(reported_pos);
+
+    if teleport.awaiting_teleport_id.is_some() {
+        return MovementOutcome::IgnoredAwaitingTeleport;
+    }
+
+    let requested_delta = reported_pos - motion.position;
+    let moved_sq = requested_delta.length_squared();
+    let expected_sq = motion.velocity.length_squared();
+    if moved_sq - expected_sq > SPEED_CHECK_THRESHOLD {
+        issue_correction(teleport);
+        return MovementOutcome::RejectSpeed;
+    }
+
+    let (resolved_delta, replay_on_ground) = collide_and_slide(
+        motion.position,
+        PLAYER_HALF_WIDTH,
+        PLAYER_HEIGHT,
+        requested_delta,
+        shapes,
+        STEP_HEIGHT,
+    );
+    let resolved_pos = motion.position + resolved_delta;
+    let mismatch_sq = (resolved_pos - reported_pos).length_squared();
+
+    let collided_at_old =
+        overlaps_any_solid(motion.position, PLAYER_HALF_WIDTH, PLAYER_HEIGHT, shapes);
+    let new_collision_not_in_old = has_new_collision(
+        motion.position,
+        reported_pos,
+        PLAYER_HALF_WIDTH,
+        PLAYER_HEIGHT,
+        shapes,
+    );
+    if mismatch_sq > MISMATCH_TOLERANCE_SQ && (collided_at_old || new_collision_not_in_old) {
+        issue_correction(teleport);
+        return MovementOutcome::RejectMismatch;
+    }
+
+    motion.velocity = reported_pos - motion.position; // observed delta -> next tick's "expected"
+    motion.position = reported_pos;
+    if let Some(on_ground) = report.on_ground {
+        motion.on_ground = on_ground;
+    } else {
+        motion.on_ground = replay_on_ground;
+    }
+    if motion.velocity.y < 0.0 {
+        motion.fall_distance -= motion.velocity.y;
+    }
+    if motion.on_ground {
+        motion.fall_distance = 0.0;
+    }
+    MovementOutcome::Accepted
 }
 
 /// Bridges `rc_chunk_storage::BlockStateColumn` + `rc_physics::tier1_shape_table()` into a
@@ -128,14 +219,26 @@ pub struct ChunkBlockShapeSource<'w> {
 
 impl BlockShapeSource for ChunkBlockShapeSource<'_> {
     fn properties_at(&self, pos: BlockPos) -> BlockPhysicsProperties {
-        todo!()
+        if pos.y < WORLD_MIN_Y || pos.y >= WORLD_MIN_Y + WORLD_HEIGHT {
+            return BlockPhysicsProperties::air();
+        }
+        let key = pos.chunk_key(self.dimension);
+        let Some(&entity) = self.index.0.get(&key) else {
+            return BlockPhysicsProperties::air();
+        };
+        let Some(column) = self.world.get::<BlockStateColumn>(entity) else {
+            return BlockPhysicsProperties::air();
+        };
+        let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+        let raw = column.get(lx, pos.y, lz).to_raw();
+        tier1_shape_table().lookup(raw)
     }
 }
 
 /// `eye_position(motion.position)` -- the player's real eye position (Context, MECH-D62
 /// supersession note; Interfaces). `PLAYER_EYE_HEIGHT` reused unmodified from `M2-B07`.
 pub fn eye_position(position: Vec3) -> Vec3 {
-    todo!()
+    position + Vec3::new(0.0, PLAYER_EYE_HEIGHT, 0.0)
 }
 
 /// A live fractional world position's containing block coordinate -- floor (not

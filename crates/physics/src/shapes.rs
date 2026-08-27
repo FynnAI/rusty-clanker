@@ -18,24 +18,29 @@ pub struct VoxelShape {
 
 impl VoxelShape {
     pub const fn empty() -> Self {
-        todo!()
+        VoxelShape { boxes: Vec::new() }
     }
 
     /// The single-box full unit cube.
     pub fn full_cube() -> Self {
-        todo!()
+        VoxelShape {
+            boxes: vec![Aabb {
+                min: Vec3::new(0.0, 0.0, 0.0),
+                max: Vec3::new(1.0, 1.0, 1.0),
+            }],
+        }
     }
 
     pub fn from_boxes(boxes: Vec<Aabb>) -> Self {
-        todo!()
+        VoxelShape { boxes }
     }
 
     pub fn boxes(&self) -> &[Aabb] {
-        todo!()
+        &self.boxes
     }
 
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.boxes.is_empty()
     }
 }
 
@@ -52,13 +57,23 @@ impl BlockPhysicsProperties {
     /// `VoxelShape::empty()`, friction/speed/jump irrelevant (never read when the shape is
     /// empty) -- used both for `air` and for `BlockShapeSource`'s own out-of-bounds default.
     pub fn air() -> Self {
-        todo!()
+        BlockPhysicsProperties {
+            shape: VoxelShape::empty(),
+            friction: 0.6,
+            speed_factor: 1.0,
+            jump_factor: 1.0,
+        }
     }
 
     /// `VoxelShape::full_cube()`, `friction: 0.6, speed_factor: 1.0, jump_factor: 1.0` -- the
     /// registry's own default fallback row.
     pub fn default_full_cube() -> Self {
-        todo!()
+        BlockPhysicsProperties {
+            shape: VoxelShape::full_cube(),
+            friction: 0.6,
+            speed_factor: 1.0,
+            jump_factor: 1.0,
+        }
     }
 }
 
@@ -84,12 +99,17 @@ impl ShapeTable {
     /// raw ids directly into this crate proves awkward; `tier1_shape_table()` below uses it
     /// with this crate's own hardcoded tier-1 literals.
     pub fn from_entries(entries: Vec<(u32, BlockPhysicsProperties)>) -> Self {
-        todo!()
+        ShapeTable {
+            entries: entries.into_iter().collect(),
+        }
     }
 
     /// `BlockPhysicsProperties::default_full_cube()` for any id with no explicit entry.
     pub fn lookup(&self, block_state_id: u32) -> BlockPhysicsProperties {
-        todo!()
+        self.entries
+            .get(&block_state_id)
+            .cloned()
+            .unwrap_or_else(BlockPhysicsProperties::default_full_cube)
     }
 }
 
@@ -124,13 +144,63 @@ static TIER1_TABLE: OnceLock<ShapeTable> = OnceLock::new();
 /// produces (`block_action.rs`'s own placement content is always plain `STONE`/`AIR`; none
 /// of these tier-1 special-shaped blocks are ever placed anywhere in M3's world yet).
 pub fn tier1_shape_table() -> &'static ShapeTable {
-    todo!()
+    TIER1_TABLE.get_or_init(build_tier1_table)
 }
 
 fn flat(shape: VoxelShape) -> BlockPhysicsProperties {
-    todo!()
+    BlockPhysicsProperties {
+        shape,
+        friction: 0.6,
+        speed_factor: 1.0,
+        jump_factor: 1.0,
+    }
 }
 
 fn build_tier1_table() -> ShapeTable {
-    todo!()
+    // Repeater/comparator: box [0,1]x[0,0.125]x[0,1] (Context table -- repeater height
+    // wiki-confirmed; comparator shares a repeater-shaped body).
+    let low_slab = || {
+        VoxelShape::from_boxes(vec![Aabb {
+            min: Vec3::new(0.0, 0.0, 0.0),
+            max: Vec3::new(1.0, 0.125, 1.0),
+        }])
+    };
+    // Chest: box [0.0625,0.9375]x[0,0.875]x[0.0625,0.9375] (Context table).
+    let chest_shape = VoxelShape::from_boxes(vec![Aabb {
+        min: Vec3::new(0.0625, 0.0, 0.0625),
+        max: Vec3::new(0.9375, 0.875, 0.9375),
+    }]);
+    // Hopper: union of a top rim box and a simplified single funnel box (Context table).
+    let hopper_shape = VoxelShape::from_boxes(vec![
+        Aabb {
+            min: Vec3::new(0.0, 0.625, 0.0),
+            max: Vec3::new(1.0, 1.0, 1.0),
+        },
+        Aabb {
+            min: Vec3::new(0.25, 0.25, 0.25),
+            max: Vec3::new(0.75, 0.625, 0.75),
+        },
+    ]);
+    let empty = BlockPhysicsProperties::air();
+    let full = BlockPhysicsProperties::default_full_cube();
+
+    ShapeTable::from_entries(vec![
+        // `air`'s own raw id (0) -- an explicit entry, not left to the registry's own
+        // default-full-cube fallback (which is for "any *other* unlisted block," implicitly
+        // assumed ordinary terrain, never air itself; without this row every `air` lookup
+        // would wrongly resolve as a solid full cube).
+        (0, empty.clone()),          // air
+        (5171, empty.clone()),       // redstone_wire
+        (6885, empty.clone()),       // redstone_torch
+        (6887, empty),               // redstone_wall_torch
+        (7037, flat(low_slab())),    // repeater
+        (11264, flat(low_slab())),   // comparator
+        (2263, full.clone()),        // piston (extended = false)
+        (2241, full.clone()),        // sticky_piston (extended = false)
+        (3988, flat(chest_shape)),   // chest
+        (11313, flat(hopper_shape)), // hopper
+        (5328, full.clone()),        // furnace
+        (20763, full.clone()),       // blast_furnace
+        (20755, full),               // smoker
+    ])
 }

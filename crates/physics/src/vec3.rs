@@ -20,35 +20,35 @@ impl Vec3 {
     };
 
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
-        todo!()
+        Self { x, y, z }
     }
 
     pub fn length_squared(self) -> f64 {
-        todo!()
+        self.x * self.x + self.y * self.y + self.z * self.z
     }
 
     pub fn is_finite(self) -> bool {
-        todo!()
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
 }
 
 impl std::ops::Add for Vec3 {
     type Output = Vec3;
     fn add(self, rhs: Vec3) -> Vec3 {
-        todo!()
+        Vec3::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
     }
 }
 
 impl std::ops::Sub for Vec3 {
     type Output = Vec3;
     fn sub(self, rhs: Vec3) -> Vec3 {
-        todo!()
+        Vec3::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
     }
 }
 
 impl std::ops::Mul<f64> for Vec3 {
     type Output = Vec3;
     fn mul(self, rhs: f64) -> Vec3 {
-        todo!()
+        Vec3::new(self.x * rhs, self.y * rhs, self.z * rhs)
     }
 }
