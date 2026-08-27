@@ -489,6 +489,13 @@ pub fn run(server_bin: PathBuf, mode: Mode) -> std::process::ExitCode {
         version: "26.2".to_string(),
         server_jar: None,
         only: None,
+        // Never `true`: TEST-D41 makes EULA acceptance the one step no automated
+        // agent may take on a human's behalf, and an aggregating report verb is
+        // exactly such an agent. `false` means "rely on consent already given"
+        // (`RC_ORACLE_EULA_ACCEPTED` or the `oracle/.eula-accepted` marker), so
+        // `fetch_corpus::eula_gate` fails loudly here when it is absent rather
+        // than silently writing `eula=true` and launching the oracle.
+        accept_eula: false,
     });
     let fetch_corpus_result = read_tier_result(
         &repo_root.join("target/verify/fetch-corpus.json"),
