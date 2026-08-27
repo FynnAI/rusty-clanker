@@ -15,15 +15,15 @@ pub struct BorderHalo(HashMap<BlockPos, BlockStateId>);
 
 impl BorderHalo {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     pub fn get(&self, pos: BlockPos) -> Option<BlockStateId> {
-        todo!()
+        self.0.get(&pos).copied()
     }
 
     pub(crate) fn record(&mut self, pos: BlockPos, state: BlockStateId) {
-        todo!()
+        self.0.insert(pos, state);
     }
 }
 
@@ -42,7 +42,10 @@ impl RegionOwnership {
     /// considered local (this blueprint's own single-region test convenience; not a
     /// production default).
     pub fn always_local(local: Address) -> Self {
-        todo!()
+        Self {
+            local,
+            resolve: Box::new(move |_| local),
+        }
     }
 }
 
@@ -59,7 +62,14 @@ const ALL_DIRECTIONS: [Direction; 6] = [
 ];
 
 fn direction_ordinal(d: Direction) -> usize {
-    todo!()
+    match d {
+        Direction::West => 0,
+        Direction::East => 1,
+        Direction::North => 2,
+        Direction::South => 3,
+        Direction::Down => 4,
+        Direction::Up => 5,
+    }
 }
 
 /// Fans both signals out from a block at `pos` that just changed to `new_state` (called only
@@ -82,7 +92,50 @@ fn direction_ordinal(d: Direction) -> usize {
 ///    (Context: "`MECH-D15`'s... distinction is not preserved across a region border" — one
 ///    message already covers it).
 pub fn fan_out_from_changed_block(ctx: &mut UpdateContext, pos: BlockPos, new_state: BlockStateId) {
-    todo!()
+    let dimension = ctx.world.dimension();
+
+    let mut owners: [Option<Address>; 6] = [None; 6];
+    for dir in ALL_DIRECTIONS {
+        let npos = dir.apply(pos);
+        let owner = (ctx.ownership.resolve)(npos.chunk_key(dimension));
+        owners[direction_ordinal(dir)] = Some(owner);
+    }
+    let owner_of = |dir: Direction| {
+        owners[direction_ordinal(dir)].expect("populated above for all 6 directions")
+    };
+
+    for dir in NEIGHBOR_CHANGED_ORDER {
+        let npos = dir.apply(pos);
+        if owner_of(dir) == ctx.ownership.local {
+            ctx.engine.emit_single(PendingUpdate::NeighborChanged {
+                pos: npos,
+                from: dir.opposite(),
+            });
+        } else {
+            let chunk = npos.chunk_key(dimension);
+            ctx.outbound.push((
+                Address::Chunk(chunk),
+                RegionMessage::BorderUpdateEvent(BorderUpdateEvent {
+                    chunk,
+                    pos,
+                    kind: BorderUpdateKind::BlockChanged {
+                        new_state: new_state.to_raw(),
+                    },
+                }),
+            ));
+        }
+    }
+
+    for dir in SHAPE_UPDATE_ORDER {
+        let npos = dir.apply(pos);
+        if owner_of(dir) == ctx.ownership.local {
+            ctx.engine.emit_single(PendingUpdate::ShapeUpdate {
+                pos: npos,
+                from: dir.opposite(),
+                remaining_depth: NeighborUpdateEngine::SHAPE_DEPTH,
+            });
+        }
+    }
 }
 
 /// Applies one inbound `BorderUpdateEvent` (Context: "applying an inbound event does the
@@ -92,6 +145,27 @@ pub fn fan_out_from_changed_block(ctx: &mut UpdateContext, pos: BlockPos, new_st
 /// if `ctx.ownership.resolve(chunk_of(dir.apply(ev.pos)))` is local, `ctx.engine.emit_single`; if
 /// non-local, dispatch nothing and push **no** message (never re-forward — this is what
 /// prevents an infinite cross-border ping-pong).
-pub fn apply_inbound_border_event(ctx: &mut UpdateContext, halo: &mut BorderHalo, ev: &BorderUpdateEvent) {
-    todo!()
+pub fn apply_inbound_border_event(
+    ctx: &mut UpdateContext,
+    halo: &mut BorderHalo,
+    ev: &BorderUpdateEvent,
+) {
+    match ev.kind {
+        BorderUpdateKind::BlockChanged { new_state } => {
+            halo.record(ev.pos, BlockStateId::from_raw(new_state));
+        }
+        BorderUpdateKind::NeighborChanged => {}
+    }
+
+    let dimension = ctx.world.dimension();
+    for dir in NEIGHBOR_CHANGED_ORDER {
+        let npos = dir.apply(ev.pos);
+        let owner = (ctx.ownership.resolve)(npos.chunk_key(dimension));
+        if owner == ctx.ownership.local {
+            ctx.engine.emit_single(PendingUpdate::NeighborChanged {
+                pos: npos,
+                from: dir.opposite(),
+            });
+        }
+    }
 }

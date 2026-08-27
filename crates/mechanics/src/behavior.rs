@@ -32,7 +32,7 @@ pub struct UpdateContext<'a> {
 
 impl<'a> UpdateContext<'a> {
     pub fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
-        todo!()
+        self.world.get_block(pos)
     }
 
     /// Writes `new_state` at `pos` (must be local — Context), then fans out both signals from
@@ -40,19 +40,34 @@ impl<'a> UpdateContext<'a> {
     /// actually changed (a no-op write still fans out — matches vanilla's own unconditional
     /// `updateNeighborsAt` behavior after any `setBlock` call with `UPDATE_NEIGHBORS` set).
     pub fn set_block(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
-        todo!()
+        let changed = self.world.set_block(pos, new_state);
+        border::fan_out_from_changed_block(self, pos, new_state);
+        changed
     }
 
     pub fn schedule_block_tick(&mut self, pos: BlockPos, delay_ticks: u64, priority: TickPriority) {
-        todo!()
+        self.scheduled
+            .schedule_block_tick(pos, delay_ticks, priority, self.current_tick);
     }
 
     pub fn schedule_fluid_tick(&mut self, pos: BlockPos, delay_ticks: u64, priority: TickPriority) {
-        todo!()
+        self.scheduled
+            .schedule_fluid_tick(pos, delay_ticks, priority, self.current_tick);
     }
 
-    pub fn emit_block_event(&mut self, pos: BlockPos, event_id: u8, event_param: u8, block_state: BlockStateId) {
-        todo!()
+    pub fn emit_block_event(
+        &mut self,
+        pos: BlockPos,
+        event_id: u8,
+        event_param: u8,
+        block_state: BlockStateId,
+    ) {
+        self.events.emit(BlockEvent {
+            pos,
+            event_id,
+            event_param,
+            block_state,
+        });
     }
 }
 
@@ -90,25 +105,47 @@ pub struct BlockBehaviorRegistry {
 
 impl BlockBehaviorRegistry {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            ranges: Vec::new(),
+            default: Arc::new(NoOpBehavior),
+        }
     }
 
-    pub fn register_range(&mut self, start: BlockStateId, end_exclusive: BlockStateId, behavior: Arc<dyn BlockBehavior>) {
-        todo!()
+    pub fn register_range(
+        &mut self,
+        start: BlockStateId,
+        end_exclusive: BlockStateId,
+        behavior: Arc<dyn BlockBehavior>,
+    ) {
+        let overlaps = self
+            .ranges
+            .iter()
+            .any(|(s, e, _)| start < *e && *s < end_exclusive);
+        assert!(
+            !overlaps,
+            "BlockBehaviorRegistry::register_range: [{start:?}, {end_exclusive:?}) overlaps an already-registered range"
+        );
+        self.ranges.push((start, end_exclusive, behavior));
+        self.ranges.sort_by_key(|(start, _, _)| *start);
     }
 
     pub fn register_one(&mut self, state: BlockStateId, behavior: Arc<dyn BlockBehavior>) {
-        todo!()
+        self.register_range(state, BlockStateId(state.0 + 1), behavior);
     }
 
     /// Returns the matching range's behavior, or the shared `NoOpBehavior` default.
     pub fn resolve(&self, state: BlockStateId) -> &Arc<dyn BlockBehavior> {
-        todo!()
+        for (start, end_exclusive, behavior) in &self.ranges {
+            if state >= *start && state < *end_exclusive {
+                return behavior;
+            }
+        }
+        &self.default
     }
 }
 
 impl Default for BlockBehaviorRegistry {
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }

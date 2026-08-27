@@ -21,22 +21,22 @@ pub struct BlockEventQueue {
 
 impl BlockEventQueue {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     pub fn emit(&mut self, event: BlockEvent) {
-        todo!()
+        self.next.push(event);
     }
 
     /// Stage 4's own final sub-phase entry point: takes and returns everything accumulated
     /// since the last call to this method, leaving a fresh empty buffer for anything emitted
     /// during the caller's own processing of the returned batch.
     pub fn begin_subphase(&mut self) -> Vec<BlockEvent> {
-        todo!()
+        std::mem::take(&mut self.next)
     }
 
     /// `true` iff anything is queued for the *next* tick's sub-phase — diagnostic only.
     pub fn pending_next_tick(&self) -> usize {
-        todo!()
+        self.next.len()
     }
 }

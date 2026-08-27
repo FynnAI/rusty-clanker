@@ -7,11 +7,12 @@ use bevy_ecs::system::System;
 use bevy_ecs::world::World;
 
 use crate::access::ComponentAccessSummary;
+use crate::messaging_bridge::{BorderUpdateInbox, CurrentTick, RegionMessageOutbox};
 use crate::pipeline::DomainGroup;
 use crate::pool::RcWorkerPool;
 use crate::region::RegionState;
 use crate::registry::SystemFactory;
-use rc_messaging::{RegionId, Transport};
+use rc_messaging::{RegionId, RegionMessage, Transport};
 
 pub(crate) struct CompiledSystem {
     pub(crate) factory: SystemFactory,
@@ -86,6 +87,15 @@ impl RcExecutor {
             system_instances[group.index()] = instances;
         }
 
+        // M3-B01's `RegionMessageBus`-in-a-system bridge (Context: "Cross-region border
+        // updates"): every region gets these three resources, unconditionally, at zero
+        // cost to a region that registers nothing into Stage 4 — order relative to the
+        // `.initialize` calls above does not matter (resources and components live in
+        // disjoint id spaces).
+        world.insert_resource(BorderUpdateInbox::default());
+        world.insert_resource(RegionMessageOutbox::default());
+        world.insert_resource(CurrentTick::default());
+
         RegionState {
             id,
             world,
@@ -114,6 +124,22 @@ impl RcExecutor {
         while let Some(msg) = transport.try_recv(region.id) {
             inbound.push(msg.payload);
         }
+
+        // M3-B01's bridge (Context): mirror `tick_counter`'s pre-increment value and
+        // filter this same drained batch's `BorderUpdateEvent` payloads into the
+        // `World`-reachable resources a Stage-4 system reads — computed from `inbound`
+        // by reference before `set_inbox` below takes ownership of it (same batch, same
+        // observable effect as computing this after that call; reordered only because
+        // `set_inbox` consumes its argument by value).
+        region.world.resource_mut::<CurrentTick>().0 = region.tick_counter;
+        region.world.resource_mut::<BorderUpdateInbox>().0 = inbound
+            .iter()
+            .filter_map(|m| match m {
+                RegionMessage::BorderUpdateEvent(ev) => Some(*ev),
+                _ => None,
+            })
+            .collect();
+
         region.message_state.set_inbox(inbound);
 
         // Stages 2, 3, 5, 7: content-less no-ops at M0 (no `DomainGroup` maps to
@@ -169,6 +195,14 @@ impl RcExecutor {
         for (_, _, group_index, system_index) in deferred_targets {
             system_instances[group_index][system_index].apply_deferred(world);
         }
+
+        // M3-B01's bridge (Context): fold this tick's `RegionMessageOutbox` resource
+        // (any registered system's `.send` calls) into `message_state`'s own outbox
+        // before it is drained below, so a send from any system this tick is flushed
+        // to `dyn Transport` within the same tick it was emitted (`world` here is the
+        // same `&mut World` as `region.world` — bound via the destructure above).
+        let bridged = world.resource_mut::<RegionMessageOutbox>().take();
+        region.message_state.merge(bridged);
 
         let outgoing = region
             .message_state

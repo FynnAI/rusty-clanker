@@ -1,15 +1,22 @@
 use bevy_ecs::prelude::Resource;
 use rc_core::BlockPos;
 
-use crate::direction::Direction;
+use crate::direction::{Direction, NEIGHBOR_CHANGED_ORDER, SHAPE_UPDATE_ORDER};
 
 /// One deferred update-propagation work item (Context: the `CollectingNeighborUpdater`
 /// restatement). `ShapeUpdate.remaining_depth` starts at `NeighborUpdateEngine::SHAPE_DEPTH`
 /// (512) at the top of a chain and decrements by one per recursive hop.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PendingUpdate {
-    NeighborChanged { pos: BlockPos, from: Direction },
-    ShapeUpdate { pos: BlockPos, from: Direction, remaining_depth: u32 },
+    NeighborChanged {
+        pos: BlockPos,
+        from: Direction,
+    },
+    ShapeUpdate {
+        pos: BlockPos,
+        from: Direction,
+        remaining_depth: u32,
+    },
 }
 
 /// The explicit LIFO stack plus reentrant-buffer-then-reverse-push discipline (Context).
@@ -38,11 +45,11 @@ impl NeighborUpdateEngine {
     pub const DEFAULT_CHAIN_LIMIT: u64 = 1_000_000;
 
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     fn chain_limit(&self) -> u64 {
-        todo!()
+        self.chain_limit.unwrap_or(Self::DEFAULT_CHAIN_LIMIT)
     }
 
     /// Appends the 6 `NeighborChanged` items for `origin`, **in `direction::
@@ -56,13 +63,18 @@ impl NeighborUpdateEngine {
     /// only mutation this method performs; the reversal that turns "generation order" into
     /// "correct pop order" happens exactly once, uniformly, inside `drain`.
     pub fn emit_neighbor_changed_fanout(&mut self, origin: BlockPos) {
-        todo!()
+        for dir in NEIGHBOR_CHANGED_ORDER {
+            self.emit_single(PendingUpdate::NeighborChanged {
+                pos: dir.apply(origin),
+                from: dir.opposite(),
+            });
+        }
     }
 
     /// As above, for `direction::SHAPE_UPDATE_ORDER`, seeding each appended item's
     /// `remaining_depth` at `SHAPE_DEPTH`.
     pub fn emit_shape_update_fanout(&mut self, origin: BlockPos) {
-        todo!()
+        self.emit_shape_update_fanout_at_depth(origin, Self::SHAPE_DEPTH);
     }
 
     /// A shape-update *handler* that itself emits further shape updates calls this instead of
@@ -70,7 +82,13 @@ impl NeighborUpdateEngine {
     /// processing. Not subject to `chain_limit` (shape-update depth has its own, independent
     /// bound, enforced per item by `emit_single`).
     pub fn emit_shape_update_fanout_at_depth(&mut self, origin: BlockPos, remaining_depth: u32) {
-        todo!()
+        for dir in SHAPE_UPDATE_ORDER {
+            self.emit_single(PendingUpdate::ShapeUpdate {
+                pos: dir.apply(origin),
+                from: dir.opposite(),
+                remaining_depth,
+            });
+        }
     }
 
     /// Appends exactly one already-constructed item (`border.rs`'s own per-direction-filtered
@@ -81,20 +99,38 @@ impl NeighborUpdateEngine {
     /// `remaining_depth == 0` is dropped without being appended (Context: "dropping (not
     /// processing) any update at depth 0").
     pub fn emit_single(&mut self, item: PendingUpdate) {
-        todo!()
+        match item {
+            PendingUpdate::NeighborChanged { .. } => {
+                if self.chained_count >= self.chain_limit() {
+                    self.chain_limit_hit = true;
+                    return;
+                }
+                self.chained_count += 1;
+                self.layer_buffer.push(item);
+            }
+            PendingUpdate::ShapeUpdate {
+                remaining_depth, ..
+            } => {
+                if remaining_depth == 0 {
+                    return;
+                }
+                self.layer_buffer.push(item);
+            }
+        }
     }
 
     pub fn with_chain_limit(mut self, limit: u64) -> Self {
-        todo!()
+        self.chain_limit = Some(limit);
+        self
     }
 
     pub fn chain_limit_hit(&self) -> bool {
-        todo!()
+        self.chain_limit_hit
     }
 
     /// `true` once `drain` has fully emptied the stack.
     pub fn is_idle(&self) -> bool {
-        todo!()
+        self.stack.is_empty() && self.layer_buffer.is_empty()
     }
 
     /// Reverses `layer_buffer` and pushes each element onto `stack` in that reversed order,
@@ -104,7 +140,9 @@ impl NeighborUpdateEngine {
     /// generation order, so pushing each directly onto `stack` as it comes off needs no
     /// separate `.reverse()` call.
     fn flush_layer_buffer_to_stack(&mut self) {
-        todo!()
+        while let Some(item) = self.layer_buffer.pop() {
+            self.stack.push(item);
+        }
     }
 
     /// Drives the whole fixed-point computation (Context/Deliverables' own precise
@@ -113,6 +151,11 @@ impl NeighborUpdateEngine {
     /// method on `self`, appending to `layer_buffer`), then flush whatever `handler` just
     /// accumulated. Terminates once `stack` and `layer_buffer` are both empty.
     pub fn drain(&mut self, handler: &mut dyn FnMut(&mut Self, PendingUpdate)) {
-        todo!()
+        self.flush_layer_buffer_to_stack();
+        while let Some(item) = self.stack.pop() {
+            debug_assert!(self.layer_buffer.is_empty());
+            handler(self, item);
+            self.flush_layer_buffer_to_stack();
+        }
     }
 }

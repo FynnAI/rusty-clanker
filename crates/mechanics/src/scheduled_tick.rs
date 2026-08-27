@@ -36,13 +36,17 @@ struct HeapEntry(ScheduledTickEntry);
 
 impl PartialOrd for HeapEntry {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        todo!()
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        todo!()
+        (self.0.trigger_tick, self.0.priority, self.0.sub_tick_order).cmp(&(
+            other.0.trigger_tick,
+            other.0.priority,
+            other.0.sub_tick_order,
+        ))
     }
 }
 
@@ -63,7 +67,7 @@ impl ScheduledTickQueue {
     pub const MAX_PER_TICK: usize = 65_536;
 
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Schedules a block tick `delay_ticks` ticks after `current_tick`. Assigns and consumes
@@ -75,7 +79,8 @@ impl ScheduledTickQueue {
         priority: TickPriority,
         current_tick: u64,
     ) {
-        todo!()
+        let entry = self.make_entry(pos, delay_ticks, priority, current_tick);
+        self.block_heap.push(Reverse(HeapEntry(entry)));
     }
 
     pub fn schedule_fluid_tick(
@@ -85,7 +90,8 @@ impl ScheduledTickQueue {
         priority: TickPriority,
         current_tick: u64,
     ) {
-        todo!()
+        let entry = self.make_entry(pos, delay_ticks, priority, current_tick);
+        self.fluid_heap.push(Reverse(HeapEntry(entry)));
     }
 
     fn make_entry(
@@ -95,25 +101,43 @@ impl ScheduledTickQueue {
         priority: TickPriority,
         current_tick: u64,
     ) -> ScheduledTickEntry {
-        todo!()
+        let sub_tick_order = self.next_sub_tick_order;
+        self.next_sub_tick_order += 1;
+        ScheduledTickEntry {
+            pos,
+            trigger_tick: current_tick + delay_ticks,
+            priority,
+            sub_tick_order,
+        }
     }
 
     /// Drains every entry with `trigger_tick <= current_tick`, ascending `(trigger_tick,
     /// priority, sub_tick_order)`, up to `MAX_PER_TICK` entries; anything left over stays
     /// queued for a later tick (Context: vanilla's own overflow behavior).
     pub fn drain_due_block_ticks(&mut self, current_tick: u64) -> Vec<ScheduledTickEntry> {
-        todo!()
+        Self::drain_due(&mut self.block_heap, current_tick)
     }
 
     pub fn drain_due_fluid_ticks(&mut self, current_tick: u64) -> Vec<ScheduledTickEntry> {
-        todo!()
+        Self::drain_due(&mut self.fluid_heap, current_tick)
     }
 
     fn drain_due(
         heap: &mut BinaryHeap<Reverse<HeapEntry>>,
         current_tick: u64,
     ) -> Vec<ScheduledTickEntry> {
-        todo!()
+        let mut out = Vec::new();
+        while out.len() < Self::MAX_PER_TICK {
+            match heap.peek() {
+                Some(Reverse(HeapEntry(entry))) if entry.trigger_tick <= current_tick => {
+                    let Reverse(HeapEntry(entry)) =
+                        heap.pop().expect("peek just confirmed an element exists");
+                    out.push(entry);
+                }
+                _ => break,
+            }
+        }
+        out
     }
 
     /// `true` iff any block tick is currently queued (due or not) at `pos` — a coarser
@@ -121,18 +145,22 @@ impl ScheduledTickQueue {
     /// same-tick-only guard is deferred to whichever future blueprint needs a diode/torch's
     /// precise dedup semantics; this method is sufficient for this blueprint's own tests).
     pub fn is_block_tick_pending(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.block_heap
+            .iter()
+            .any(|Reverse(HeapEntry(e))| e.pos == pos)
     }
 
     pub fn is_fluid_tick_pending(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.fluid_heap
+            .iter()
+            .any(|Reverse(HeapEntry(e))| e.pos == pos)
     }
 
     pub fn block_len(&self) -> usize {
-        todo!()
+        self.block_heap.len()
     }
 
     pub fn fluid_len(&self) -> usize {
-        todo!()
+        self.fluid_heap.len()
     }
 }

@@ -16,11 +16,13 @@ pub struct RcRandom {
 
 impl RcRandom {
     pub fn new(seed: i64) -> Self {
-        todo!()
+        let mut r = Self { seed: 0 };
+        r.set_seed(seed);
+        r
     }
 
     pub fn set_seed(&mut self, seed: i64) {
-        todo!()
+        self.seed = (seed ^ MULTIPLIER) & MASK;
     }
 
     /// The LCG's own single step, returning the top `bits` bits of the newly-advanced
@@ -28,32 +30,53 @@ impl RcRandom {
     /// other `next_*` method is built from this one primitive, exactly as
     /// `java.util.Random` itself is.
     fn next(&mut self, bits: u32) -> i32 {
-        todo!()
+        self.seed = self.seed.wrapping_mul(MULTIPLIER).wrapping_add(ADDEND) & MASK;
+        ((self.seed as u64) >> (48 - bits)) as i32
     }
 
     pub fn next_int(&mut self) -> i32 {
-        todo!()
+        self.next(32)
     }
 
     /// Power-of-two fast path + rejection sampling (Context §1.5). Panics if `bound <= 0`.
     pub fn next_int_bounded(&mut self, bound: i32) -> i32 {
-        todo!()
+        assert!(
+            bound > 0,
+            "RcRandom::next_int_bounded: bound must be positive"
+        );
+
+        if (bound & bound.wrapping_neg()) == bound {
+            // Power-of-two fast path.
+            return (((bound as i64).wrapping_mul(self.next(31) as i64)) >> 31) as i32;
+        }
+
+        loop {
+            let bits = self.next(31);
+            let val = bits % bound;
+            // Rejection test, wrapping 32-bit signed arithmetic (Context, restated
+            // exactly): reject (loop again) while `bits - val + (bound - 1) < 0`.
+            if bits.wrapping_sub(val).wrapping_add(bound - 1) >= 0 {
+                return val;
+            }
+        }
     }
 
     pub fn next_long(&mut self) -> i64 {
-        todo!()
+        ((self.next(32) as i64) << 32).wrapping_add(self.next(32) as i64)
     }
 
     pub fn next_float(&mut self) -> f32 {
-        todo!()
+        (self.next(24) as f32) * (1.0f32 / (1u32 << 24) as f32)
     }
 
     pub fn next_double(&mut self) -> f64 {
-        todo!()
+        let high = (self.next(26) as i64) << 27;
+        let low = self.next(27) as i64;
+        (high.wrapping_add(low)) as f64 * (1.0f64 / (1u64 << 53) as f64)
     }
 
     pub fn next_bool(&mut self) -> bool {
-        todo!()
+        self.next(1) != 0
     }
 }
 
@@ -61,12 +84,19 @@ const GOLDEN_RATIO_64: i64 = -7046029254386353131; // 0x9E3779B97F4A7C15, rng-pa
 
 /// `rng-parity-notes.md` §3.1, restated verbatim.
 fn stafford_mix13(z_in: i64) -> i64 {
-    todo!()
+    let mut z = z_in;
+    z = (z ^ ((z as u64) >> 30) as i64).wrapping_mul(-4658895280553007687);
+    z = (z ^ ((z as u64) >> 27) as i64).wrapping_mul(-7723592293110705685);
+    z ^ ((z as u64) >> 31) as i64
 }
 
 /// ARCH-D14's per-chunk-per-tick seed (Context: this blueprint's own, non-vanilla,
 /// documented derivation — algorithm shape, not any specific LCG output, is the parity
 /// requirement here).
 pub fn chunk_random_seed(world_seed: i64, chunk_x: i32, chunk_z: i32, tick_counter: u64) -> i64 {
-    todo!()
+    let mut h = world_seed;
+    h ^= (chunk_x as i64).wrapping_mul(341873128712);
+    h ^= (chunk_z as i64).wrapping_mul(132897987541);
+    h ^= (tick_counter as i64).wrapping_mul(GOLDEN_RATIO_64);
+    stafford_mix13(h)
 }

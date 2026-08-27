@@ -36,16 +36,31 @@ impl Direction {
     /// `(dx, dy, dz)` unit offset in this direction (Context: the project's standard axis
     /// convention).
     pub const fn offset(self) -> (i32, i32, i32) {
-        todo!()
+        match self {
+            Direction::West => (-1, 0, 0),
+            Direction::East => (1, 0, 0),
+            Direction::North => (0, 0, -1),
+            Direction::South => (0, 0, 1),
+            Direction::Down => (0, -1, 0),
+            Direction::Up => (0, 1, 0),
+        }
     }
 
     /// The direction pointing back the way this one came from.
     pub const fn opposite(self) -> Direction {
-        todo!()
+        match self {
+            Direction::West => Direction::East,
+            Direction::East => Direction::West,
+            Direction::North => Direction::South,
+            Direction::South => Direction::North,
+            Direction::Down => Direction::Up,
+            Direction::Up => Direction::Down,
+        }
     }
 
     /// `origin` shifted one block along this direction.
     pub const fn apply(self, origin: BlockPos) -> BlockPos {
-        todo!()
+        let (dx, dy, dz) = self.offset();
+        BlockPos::new(origin.x + dx, origin.y + dy, origin.z + dz)
     }
 }

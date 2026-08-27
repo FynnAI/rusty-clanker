@@ -10,7 +10,7 @@ use rc_messaging::{Address, BorderUpdateEvent, RegionMessage};
 
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEventQueue;
-use crate::border::{apply_inbound_border_event, BorderHalo, RegionOwnership};
+use crate::border::{BorderHalo, RegionOwnership, apply_inbound_border_event};
 use crate::neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 use crate::scheduled_tick::ScheduledTickQueue;
 use crate::world_access::BlockWorldAccess;
@@ -31,7 +31,15 @@ fn make_ctx<'a>(
     ownership: &'a RegionOwnership,
     current_tick: u64,
 ) -> UpdateContext<'a> {
-    todo!()
+    UpdateContext {
+        world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        current_tick,
+    }
 }
 
 /// Drains `engine` to a fixed point (Context: one `NeighborUpdateEngine::drain` call already
@@ -48,7 +56,18 @@ fn drain_engine(
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
 ) {
-    todo!()
+    engine.drain(&mut |eng, item| {
+        let mut ctx = make_ctx(
+            world,
+            eng,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        );
+        dispatch_pending_update(&mut ctx, behaviors, item);
+    });
 }
 
 /// One popped `PendingUpdate`'s complete dispatch: resolves the target position's own
@@ -63,8 +82,39 @@ fn drain_engine(
 /// requiring every future concrete `BlockBehavior` implementation to reimplement that
 /// bookkeeping itself (`PendingUpdate::ShapeUpdate.remaining_depth` is not part of
 /// `BlockBehavior::on_shape_update`'s own signature — only this dispatch glue sees it).
-fn dispatch_pending_update(ctx: &mut UpdateContext, behaviors: &BlockBehaviorRegistry, item: PendingUpdate) {
-    todo!()
+fn dispatch_pending_update(
+    ctx: &mut UpdateContext,
+    behaviors: &BlockBehaviorRegistry,
+    item: PendingUpdate,
+) {
+    match item {
+        PendingUpdate::NeighborChanged { pos, from } => {
+            if let Some(state) = ctx.get_block(pos) {
+                let behavior = behaviors.resolve(state);
+                behavior.on_neighbor_changed(ctx, pos, from);
+            }
+        }
+        PendingUpdate::ShapeUpdate {
+            pos,
+            from,
+            remaining_depth,
+        } => {
+            let Some(state) = ctx.get_block(pos) else {
+                return;
+            };
+            let Some(neighbor_state) = ctx.get_block(from.apply(pos)) else {
+                return;
+            };
+            let behavior = behaviors.resolve(state);
+            if let Some(new_state) = behavior.on_shape_update(ctx, pos, from, neighbor_state) {
+                ctx.world.set_block(pos, new_state);
+                if remaining_depth > 0 {
+                    ctx.engine
+                        .emit_shape_update_fanout_at_depth(pos, remaining_depth - 1);
+                }
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -79,7 +129,20 @@ fn dispatch_scheduled_tick(
     behaviors: &BlockBehaviorRegistry,
     pos: rc_core::BlockPos,
 ) {
-    todo!()
+    let Some(state) = world.get_block(pos) else {
+        return;
+    };
+    let behavior = behaviors.resolve(state);
+    let mut ctx = make_ctx(
+        world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        current_tick,
+    );
+    behavior.on_scheduled_tick(&mut ctx, pos);
 }
 
 /// `system_scheduled_phase`'s ECS-agnostic core: applies every inbound border event (ARCH-D11's
@@ -100,7 +163,78 @@ pub fn run_scheduled_phase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     current_tick: u64,
 ) {
-    todo!()
+    for ev in inbound {
+        let mut ctx = make_ctx(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        );
+        apply_inbound_border_event(&mut ctx, halo, ev);
+        drain_engine(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+        );
+    }
+
+    let due_block = scheduled.drain_due_block_ticks(current_tick);
+    for entry in due_block {
+        dispatch_scheduled_tick(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+            entry.pos,
+        );
+        drain_engine(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+        );
+    }
+
+    let due_fluid = scheduled.drain_due_fluid_ticks(current_tick);
+    for entry in due_fluid {
+        dispatch_scheduled_tick(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+            entry.pos,
+        );
+        drain_engine(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+        );
+    }
 }
 
 /// `system_block_event_subphase`'s ECS-agnostic core: `events.begin_subphase()`, dispatch each
@@ -119,5 +253,30 @@ pub fn run_block_event_subphase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     current_tick: u64,
 ) {
-    todo!()
+    let batch = events.begin_subphase();
+    for event in batch {
+        {
+            let behavior = behaviors.resolve(event.block_state);
+            let mut ctx = make_ctx(
+                world,
+                engine,
+                scheduled,
+                events,
+                outbound,
+                ownership,
+                current_tick,
+            );
+            behavior.on_block_event(&mut ctx, event.pos, &event);
+        }
+        drain_engine(
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+            behaviors,
+        );
+    }
 }

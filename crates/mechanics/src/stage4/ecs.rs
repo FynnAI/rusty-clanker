@@ -10,7 +10,9 @@ use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag};
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionMessage};
 use rc_scheduler::DomainGroup;
-use rc_scheduler::{BorderUpdateInbox, CurrentTick, RcExecutorBuilder, RegionMessageOutbox, SystemFactory};
+use rc_scheduler::{
+    BorderUpdateInbox, CurrentTick, RcExecutorBuilder, RegionMessageOutbox, SystemFactory,
+};
 
 use crate::behavior::BlockBehaviorRegistry;
 use crate::block_event::BlockEventQueue;
@@ -34,17 +36,29 @@ pub struct EcsBlockWorld<'w, 's> {
 
 impl<'w, 's> EcsBlockWorld<'w, 's> {
     fn local_pos(pos: BlockPos) -> (u8, u8) {
-        todo!()
+        (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8)
     }
 }
 
 impl<'w, 's> BlockWorldAccess for EcsBlockWorld<'w, 's> {
     fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
-        todo!()
+        let chunk_key = pos.chunk_key(self.dimension());
+        let entity = *self.chunk_index.0.get(&chunk_key)?;
+        let (_, column) = self.query.get(entity).ok()?;
+        let (lx, lz) = Self::local_pos(pos);
+        Some(column.get(lx, pos.y, lz))
     }
 
     fn set_block(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
-        todo!()
+        let chunk_key = pos.chunk_key(self.dimension());
+        let Some(&entity) = self.chunk_index.0.get(&chunk_key) else {
+            return false;
+        };
+        let Ok((_, mut column)) = self.query.get_mut(entity) else {
+            return false;
+        };
+        let (lx, lz) = Self::local_pos(pos);
+        column.set(lx, pos.y, lz, state)
     }
 
     /// Derived from any one currently-indexed chunk's own `ChunkKey.dimension` (Context: "the
@@ -53,15 +67,20 @@ impl<'w, 's> BlockWorldAccess for EcsBlockWorld<'w, 's> {
     /// invariant, so any indexed chunk's dimension is authoritative). Falls back to the
     /// overworld when no chunk is indexed yet.
     fn dimension(&self) -> DimensionId {
-        todo!()
+        self.chunk_index
+            .0
+            .keys()
+            .next()
+            .map(|k| k.dimension)
+            .unwrap_or(DimensionId::OVERWORLD)
     }
 
     fn owner_of(&self, chunk: ChunkKey) -> Address {
-        todo!()
+        (self.ownership.resolve)(chunk)
     }
 
     fn local_identity(&self) -> Address {
-        todo!()
+        self.ownership.local
     }
 }
 
@@ -79,7 +98,29 @@ fn system_scheduled_phase(
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
 ) {
-    todo!()
+    let mut world = EcsBlockWorld {
+        query,
+        chunk_index: &chunk_index,
+        ownership: &ownership,
+    };
+    let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+
+    crate::stage4::run_scheduled_phase(
+        &mut world,
+        &inbound.0,
+        &mut halo,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &behaviors,
+        &mut outbound,
+        current_tick.0,
+    );
+
+    for (to, msg) in outbound {
+        region_outbox.send(to, msg);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -94,15 +135,41 @@ fn system_block_event_subphase(
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
 ) {
-    todo!()
+    let mut world = EcsBlockWorld {
+        query,
+        chunk_index: &chunk_index,
+        ownership: &ownership,
+    };
+    let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+
+    crate::stage4::run_block_event_subphase(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &behaviors,
+        &mut outbound,
+        current_tick.0,
+    );
+
+    for (to, msg) in outbound {
+        region_outbox.send(to, msg);
+    }
 }
 
 fn scheduled_phase_factory() -> SystemFactory {
-    todo!()
+    Box::new(|| {
+        Box::new(IntoSystem::into_system(system_scheduled_phase))
+            as Box<dyn System<In = (), Out = ()>>
+    })
 }
 
 fn block_event_subphase_factory() -> SystemFactory {
-    todo!()
+    Box::new(|| {
+        Box::new(IntoSystem::into_system(system_block_event_subphase))
+            as Box<dyn System<In = (), Out = ()>>
+    })
 }
 
 /// Registers this blueprint's two Stage-4 systems (`order_tag` 0 then 1, Context: "Sequential
@@ -119,7 +186,16 @@ fn block_event_subphase_factory() -> SystemFactory {
 /// per-region-tunable data (`SyntheticLoadProfile`, overridden the same way, for the same
 /// reason: uniform `bootstrap` cannot vary data per spawned region).
 pub fn register_stage4(builder: &mut RcExecutorBuilder) {
-    todo!()
+    builder.register_system(
+        DomainGroup::BlockRedstone,
+        scheduled_phase_factory(),
+        vec![],
+    );
+    builder.register_system(
+        DomainGroup::BlockRedstone,
+        block_event_subphase_factory(),
+        vec![],
+    );
 }
 
 /// Inserts `ChunkIndex::default()`, `NeighborUpdateEngine::default()`,
@@ -130,5 +206,10 @@ pub fn register_stage4(builder: &mut RcExecutorBuilder) {
 /// `RegionOwnership` is deliberately **not** inserted here (see `register_stage4`'s own doc
 /// comment) — every caller must insert it separately, per region, after `spawn_region`.
 pub fn bootstrap_default_stage4_resources(world: &mut World) {
-    todo!()
+    world.insert_resource(ChunkIndex::default());
+    world.insert_resource(NeighborUpdateEngine::default());
+    world.insert_resource(ScheduledTickQueue::default());
+    world.insert_resource(BlockEventQueue::default());
+    world.insert_resource(BlockBehaviorRegistry::new());
+    world.insert_resource(BorderHalo::default());
 }
