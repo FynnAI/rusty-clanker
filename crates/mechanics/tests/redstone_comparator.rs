@@ -110,6 +110,57 @@ fn comparator_should_turn_on_table() {
     assert!(!ComparatorBehavior::should_turn_on(4, 10, Subtract));
 }
 
+/// Defect-1 regression, direct formula-level check (Context/ASSET-D18(f) research verdict):
+/// `FACING` points toward the comparator's own INPUT side; output flows out the *opposite*
+/// side, matching repeater's own symmetric behavior (`weak_signal_toward(pos, towards) =
+/// stored_output(pos)` iff `towards == facing(pos).opposite()`, never `towards == facing(pos)`).
+/// Before this fix, `weak_signal_toward` used `towards == facing(pos)` -- the assertions below
+/// would find `West` answering `0` and `East` (wrongly) answering the stored output.
+#[test]
+fn comparator_output_flows_out_the_side_opposite_facing() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(comparator.output(pos), 10);
+
+    assert_eq!(
+        comparator.weak_signal_toward(&h.world, pos, Direction::West),
+        10,
+        "output must flow out facing.opposite() (West)"
+    );
+    assert_eq!(
+        comparator.weak_signal_toward(&h.world, pos, Direction::East),
+        0,
+        "the input side (facing, East) must never re-see the comparator's own output"
+    );
+    assert_eq!(
+        comparator.direct_signal_toward(&h.world, pos, Direction::West),
+        10,
+        "direct_signal_toward delegates to weak_signal_toward and must agree"
+    );
+}
+
 #[test]
 fn comparator_reads_container_directly_in_front() {
     let pos = BlockPos::new(0, 0, 0);

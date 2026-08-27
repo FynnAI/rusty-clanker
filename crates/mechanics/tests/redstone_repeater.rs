@@ -8,11 +8,11 @@ use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::{
-    RedstoneSignalSource, RepeaterBehavior, SignalSourceRegistry, WireBehavior,
+    RedstoneSignalSource, RepeaterBehavior, SignalSourceRegistry, WireBehavior, emitted_toward,
 };
 use rc_mechanics::{
-    BlockBehavior, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine, RegionOwnership,
-    ScheduledTickQueue, TickPriority, UpdateContext,
+    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 
@@ -24,6 +24,14 @@ const SIDE_ID: BlockStateId = BlockStateId(3);
 const WIRE_ID: BlockStateId = BlockStateId(4);
 const SOURCE_ID: BlockStateId = BlockStateId(5);
 const BEHIND_ID: BlockStateId = BlockStateId(6);
+/// `crates/physics/src/shapes.rs`'s own real "repeater" row (`low_slab`, non-full) --
+/// `repeater_chain_relays_signal_end_to_end` uses this real id (rather than one of the
+/// arbitrary small ids above) specifically so `signal::is_conductor` correctly reports `false`
+/// for every chain position. An arbitrary unregistered id defaults to `default_full_cube` (a
+/// conductor), which would let quasi-connectivity (`direct_signal_to`) leak the adjacent
+/// source's own power straight through a repeater regardless of whether that repeater's own
+/// `weak_signal_toward` is even correct -- silently defeating that regression's whole purpose.
+const CHAIN_REPEATER_ID: BlockStateId = BlockStateId(7037);
 
 struct Harness {
     world: FakeWorld,
@@ -202,6 +210,59 @@ fn repeater_catches_a_short_pulse() {
     assert!(!repeater.powered(pos));
 }
 
+/// Defect-1 regression, direct formula-level check (Context/ASSET-D18(f) research verdict):
+/// `FACING` points toward the repeater's own INPUT side; output flows out the *opposite* side
+/// ("a repeater fires away from you" -- placement sets `FACING = playerLookDirection.opposite()`).
+/// `weak_signal_toward`/`direct_signal_toward` must therefore answer nonzero only for
+/// `towards == facing(pos).opposite()`, never `towards == facing(pos)`. Before this fix,
+/// `weak_signal_toward` used `towards == facing(pos)` -- the assertions below would find `West`
+/// answering `0` and `East` (wrongly) answering `15`.
+#[test]
+fn repeater_output_flows_out_the_side_opposite_facing() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let input = Arc::new(TestSignalSource::fixed(15));
+    let repeater = setup_repeater(
+        pos,
+        Direction::East,
+        1,
+        vec![(
+            INPUT_ID,
+            BlockStateId(INPUT_ID.0 + 1),
+            Arc::clone(&input) as Arc<dyn RedstoneSignalSource>,
+        )],
+    );
+    let mut h = Harness::new();
+    h.world.set_block(pos, REPEATER_ID);
+    h.world.set_block(front, INPUT_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        repeater.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(repeater.powered(pos));
+
+    assert_eq!(
+        repeater.weak_signal_toward(&h.world, pos, Direction::West),
+        15,
+        "output must flow out facing.opposite() (West) once powered"
+    );
+    assert_eq!(
+        repeater.weak_signal_toward(&h.world, pos, Direction::East),
+        0,
+        "the input side (facing, East) must never re-see the repeater's own output"
+    );
+    assert_eq!(
+        repeater.direct_signal_toward(&h.world, pos, Direction::West),
+        15,
+        "direct_signal_toward delegates to weak_signal_toward and must agree"
+    );
+}
+
 #[test]
 fn repeater_lock_is_boolean_not_magnitude() {
     let pos = BlockPos::new(0, 0, 0);
@@ -312,6 +373,9 @@ fn setup_chain(
     (repeater, behind_repeater, input, h)
 }
 
+/// Unaffected by the defect-1 output-direction fix: `North` is neither `facing` (`East`) nor
+/// `facing.opposite()` (`West`), so both the pre-fix `behind_facing != facing` and the
+/// corrected `behind_facing != facing.opposite()` agree this perpendicular case is prioritized.
 #[test]
 fn repeater_should_prioritize_perpendicular_chain() {
     let (repeater, _behind, input, mut h) = setup_chain(Direction::North);
@@ -327,8 +391,15 @@ fn repeater_should_prioritize_perpendicular_chain() {
     assert_eq!(due[0].priority, TickPriority::ExtremelyHigh);
 }
 
+/// Corrected from the original (inverted-convention) `repeater_straight_through_chain_is_not_
+/// prioritized`: `behind`'s own `FACING` matches `pos`'s facing (`East`) -- the ordinary
+/// same-direction daisy chain, where `behind`'s own input reads straight from `pos`'s output.
+/// Per the ASSET-D18(f) research verdict (Context, defect-1 fix), `should_prioritize(pos) =
+/// behind_facing != facing.opposite()`; `East != West` is `true`, so this case IS prioritized
+/// (`ExtremelyHigh`) -- not the non-prioritized case the original, bug-matching test asserted.
+/// The genuine non-prioritized case is the head-to-head one, tested below.
 #[test]
-fn repeater_straight_through_chain_is_not_prioritized() {
+fn repeater_same_facing_chain_is_prioritized() {
     let (repeater, _behind, input, mut h) = setup_chain(Direction::East);
 
     input.set_power(15);
@@ -339,7 +410,121 @@ fn repeater_straight_through_chain_is_not_prioritized() {
     }
     let due = h.scheduled.drain_due_block_ticks(2);
     assert_eq!(due.len(), 1);
+    assert_eq!(due[0].priority, TickPriority::ExtremelyHigh);
+}
+
+/// The genuine non-prioritized case (Context, defect-1 fix), new coverage: `behind`'s own
+/// `FACING` is `facing.opposite()` (`West`) -- `behind`'s own output flows straight back into
+/// `pos`, the two diodes facing directly at each other head-to-head, rather than `behind`
+/// feeding forward away from `pos`. `should_prioritize(pos) = West != West = false`.
+#[test]
+fn repeater_head_to_head_chain_is_not_prioritized() {
+    let (repeater, _behind, input, mut h) = setup_chain(Direction::West);
+
+    input.set_power(15);
+    let pos = BlockPos::new(0, 0, 0);
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+    let due = h.scheduled.drain_due_block_ticks(2);
+    assert_eq!(due.len(), 1);
     assert_eq!(due[0].priority, TickPriority::High);
+}
+
+/// Defect-1 regression, genuine multi-hop propagation (Context/task): a straight 3-repeater
+/// daisy chain, all facing East, fed by a fixed source touching only the FIRST repeater's own
+/// input face. Drives real scheduled-tick delays through the actual per-tick driver
+/// (`stage4::run_scheduled_phase`) rather than hand-poking `powered` -- the only way to
+/// genuinely exercise `weak_signal_toward`'s real query path end to end, the way `on_neighbor_
+/// changed`/`on_scheduled_tick` actually consume it in production.
+///
+/// MUST FAIL against the pre-fix `weak_signal_toward` (`towards == facing(pos)`): R1 turns on
+/// at tick 2 exactly as before (unaffected -- that half of the state machine is untouched by
+/// the defect), but its `weak_signal_toward(r1_pos, West)` then wrongly answers `0` (`West ==
+/// East` is false) instead of `15`, so R2 never sees a nonzero input and the chain never
+/// reaches R2, let alone R3.
+#[test]
+fn repeater_chain_relays_signal_end_to_end() {
+    let r1_pos = BlockPos::new(0, 0, 0);
+    let r2_pos = Direction::West.apply(r1_pos);
+    let r3_pos = Direction::West.apply(r2_pos);
+    let source_pos = Direction::East.apply(r1_pos);
+
+    let mut repeater = RepeaterBehavior::new();
+    repeater.place(r1_pos, Direction::East, 1);
+    repeater.place(r2_pos, Direction::East, 1);
+    repeater.place(r3_pos, Direction::East, 1);
+    let repeater = Arc::new(repeater);
+
+    let source = Arc::new(TestSignalSource::fixed(15));
+
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        CHAIN_REPEATER_ID,
+        BlockStateId(CHAIN_REPEATER_ID.0 + 1),
+        Arc::clone(&repeater) as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(
+        INPUT_ID,
+        BlockStateId(INPUT_ID.0 + 1),
+        source as Arc<dyn RedstoneSignalSource>,
+    );
+    let signals = Arc::new(signals);
+    repeater.bind_registry(Arc::clone(&signals));
+
+    let mut behaviors = BlockBehaviorRegistry::new();
+    behaviors.register_range(
+        CHAIN_REPEATER_ID,
+        BlockStateId(CHAIN_REPEATER_ID.0 + 1),
+        Arc::clone(&repeater) as Arc<dyn BlockBehavior>,
+    );
+
+    let mut h = Harness::new();
+    h.world.set_block(r1_pos, CHAIN_REPEATER_ID);
+    h.world.set_block(r2_pos, CHAIN_REPEATER_ID);
+    h.world.set_block(r3_pos, CHAIN_REPEATER_ID);
+    h.world.set_block(source_pos, INPUT_ID);
+
+    // The initial trigger: the source becoming live notifies R1, exactly as `on_neighbor_
+    // changed` would fire from a real placement/power-on event -- every other hop propagates
+    // through the real per-tick driver below, never a second hand call like this one.
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, r1_pos, Direction::East);
+    }
+    assert!(h.scheduled.is_block_tick_pending(r1_pos));
+
+    let mut halo = BorderHalo::new();
+    for tick in 0..=8u64 {
+        rc_mechanics::stage4::run_scheduled_phase(
+            &mut h.world,
+            &[],
+            &mut halo,
+            &h.ownership,
+            &mut h.engine,
+            &mut h.scheduled,
+            &mut h.events,
+            &behaviors,
+            &mut h.outbound,
+            tick,
+        );
+    }
+
+    assert!(repeater.powered(r1_pos), "R1 never turned on");
+    assert!(
+        repeater.powered(r2_pos),
+        "signal did not reach R2 -- repeater output-direction defect"
+    );
+    assert!(
+        repeater.powered(r3_pos),
+        "signal did not reach the far end of the chain (R3) -- repeater output-direction defect"
+    );
+    assert_eq!(
+        emitted_toward(&h.world, &signals, r3_pos, Direction::West),
+        15,
+        "R3's own output face reads 0 -- weak_signal_toward still points the wrong way"
+    );
 }
 
 #[test]

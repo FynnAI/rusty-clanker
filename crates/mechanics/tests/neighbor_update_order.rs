@@ -184,3 +184,40 @@ fn chain_limit_drops_excess_neighbor_changed_items() {
     assert_eq!(log.len(), 3);
     assert!(engine.is_idle());
 }
+
+#[test]
+fn chain_limit_is_scoped_to_one_drain_not_the_engine_lifetime() {
+    // Defect-2 regression: `chained_count`/`chain_limit_hit` must reset once per `drain()`
+    // call, matching the blueprint's own "a total counter across the whole drain" framing (one
+    // `drain()` call settles one whole triggering cascade, Context) -- never accumulate across
+    // separate cascades over the engine's whole per-region lifetime. The production bug this
+    // guards: the engine is one long-lived per-region resource, removed and re-inserted (never
+    // reconstructed) every tick, so an ever-accumulating counter eventually makes `chain_limit_
+    // hit` permanently `true` and silently drops every future `NeighborChanged` item for the
+    // rest of the region's life -- with no diagnostic anywhere.
+    let mut engine = NeighborUpdateEngine::new().with_chain_limit(2);
+    let origin = BlockPos::new(0, 0, 0);
+
+    // Each iteration is its own independent triggering cascade (its own `drain()` call) that
+    // emits exactly one `NeighborChanged` item -- well under the limit of 2 *within* any single
+    // cascade. A counter that leaks across `drain()` calls exhausts the limit by the 3rd
+    // iteration (1 -> 2 -> would-be 3, dropped) even though no single cascade ever approaches
+    // it; a correctly per-cascade-scoped counter lets every iteration succeed identically.
+    for i in 0..5 {
+        engine.emit_single(PendingUpdate::NeighborChanged {
+            pos: origin,
+            from: Direction::West,
+        });
+        let mut log: Vec<PendingUpdate> = Vec::new();
+        engine.drain(&mut |_engine, item| log.push(item));
+        assert_eq!(
+            log.len(),
+            1,
+            "cascade {i} lost its only item -- chain_limit leaked across drain() calls"
+        );
+        assert!(
+            !engine.chain_limit_hit(),
+            "cascade {i} spuriously reports the chain limit as hit"
+        );
+    }
+}
