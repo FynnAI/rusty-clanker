@@ -19,7 +19,7 @@ use rc_chunk_storage::{
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
-use rc_physics::Vec3;
+use rc_physics::{Aabb, PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HEIGHT_SNEAKING, Vec3};
 use rc_protocol::encode_payload;
 use rc_registries::generated_v776::block_states::{
     self,
@@ -1734,6 +1734,36 @@ impl HardcodedWorld {
                             cursor,
                         } => {
                             send_ack(&action);
+                            // M3 field-report fix (Defect 1, "a player can place a block
+                            // inside their own body"): every currently-connected player's own
+                            // AABB, crouch-aware height -- `mining::apply_placement`'s own
+                            // `is_placement_obstructed` gate tests the placement's resolved
+                            // collision shape against every one of these, the acting player's
+                            // own body included (that function's own doc comment: never
+                            // excluded by identity). This is this world's only entity kind
+                            // (`is_placement_obstructed`'s own doc comment has the full
+                            // "matches vanilla's blocks-building-is-false-by-default for
+                            // everything else" boundary note), so a query over `PlayerMotion`/
+                            // `PlayerInputState` is already the complete collection.
+                            let player_boxes: Vec<Aabb> = {
+                                let mut query =
+                                    region.world.query::<(&PlayerMotion, &PlayerInputState)>();
+                                query
+                                    .iter(&region.world)
+                                    .map(|(player_motion, input)| {
+                                        let height = if input.sneaking {
+                                            PLAYER_HEIGHT_SNEAKING
+                                        } else {
+                                            PLAYER_HEIGHT
+                                        };
+                                        Aabb::from_position(
+                                            player_motion.position,
+                                            PLAYER_HALF_WIDTH,
+                                            height,
+                                        )
+                                    })
+                                    .collect()
+                            };
                             let outcome = mining::apply_placement(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
@@ -1754,6 +1784,7 @@ impl HardcodedWorld {
                                 held,
                                 motion.yaw,
                                 motion.pitch,
+                                &player_boxes,
                             );
                             respond_place(&region.world, &action, outcome);
                         }
@@ -1881,7 +1912,13 @@ impl HardcodedWorld {
                                 tool,
                             );
                             if let BreakOutcome::Applied { .. } = outcome {
-                                broadcast_break(&region.world, pos, AIR.0, pre_break);
+                                broadcast_break(
+                                    &region.world,
+                                    pos,
+                                    AIR.0,
+                                    pre_break,
+                                    network_entity_id,
+                                );
                             }
                         }
                         TickOutcome::Idle
@@ -2449,15 +2486,33 @@ fn broadcast_to_others(world: &World, exclude_network_id: i32, payload: bytes::B
     }
 }
 
-/// A finalized break's own broadcast: `Block Update` (new state, always `AIR`) then `Level
-/// Event` (the break sound/particle effect, `data` = the block's own raw *pre*-break state
-/// id) -- both to every connected player (Context: "the broadcast to every connected player
-/// interest-set simplification... still valid").
-fn broadcast_break(world: &World, pos: BlockPos, new_state: u32, pre_break_state: u32) {
+/// A finalized break's own broadcast: `Block Update` (new state, always `AIR`) to every
+/// connected player, unconditionally -- the block-state resync itself is never subject to any
+/// exclusion (Context: "the broadcast to every connected player interest-set simplification...
+/// still valid", also this milestone's own explicitly-out-of-scope "resend to both cells" item,
+/// unrelated but reaffirming the same "resync is unconditional" rule). `Level Event` (the break
+/// sound/particle effect, `data` = the block's own raw *pre*-break state id) goes to every
+/// OTHER connected player, excluding `exclude_network_id` -- M3 field-report fix (Defect 2,
+/// "the breaking player hears the block-break effect twice"): the breaking player's own client
+/// already plays the effect locally as prediction, so the server's own copy would double it
+/// (Context, AUTHORITATIVE RESEARCH VERDICT); `broadcast_to_others`'s own doc comment already
+/// cites this identical pattern for the digging player's own crack-overlay broadcast.
+fn broadcast_break(
+    world: &World,
+    pos: BlockPos,
+    new_state: u32,
+    pre_break_state: u32,
+    exclude_network_id: i32,
+) {
     let update = encode_payload(&BlockUpdate {
         location: pack_position(pos),
         block_state_id: new_state as i32,
     });
+    for entity_ref in world.iter_entities() {
+        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
+            let _ = marker.connection.try_send_payload(update.clone());
+        }
+    }
     let level_event = encode_payload(&LevelEvent {
         event_id: LEVEL_EVENT_BLOCK_BREAK,
         location: pack_position(pos),
@@ -2466,18 +2521,16 @@ fn broadcast_break(world: &World, pos: BlockPos, new_state: u32, pre_break_state
         // doc comment) -- always distance-limited, per `packets.rs`.
         global_event: false,
     });
-    for entity_ref in world.iter_entities() {
-        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
-            let _ = marker.connection.try_send_payload(update.clone());
-            let _ = marker.connection.try_send_payload(level_event.clone());
-        }
-    }
+    broadcast_to_others(world, exclude_network_id, level_event);
 }
 
-/// `mining::finalize_break`'s own response side: `Applied` broadcasts `Block Update` + `Level
-/// Event` to every connected player, guaranteeing the actor is reached even if not yet
-/// spawned (`broadcast_to_all`); `Rejected` (only ever `TargetAlreadyAir`, `finalize_break`'s
-/// own only rejection) sends a corrective `Block Update` to the actor alone.
+/// `mining::finalize_break`'s own response side: `Applied` broadcasts `Block Update` to every
+/// connected player, guaranteeing the actor is reached even if not yet spawned
+/// (`broadcast_to_all`), and `Level Event` to every OTHER connected player, excluding the
+/// breaker (`broadcast_to_others` -- M3 field-report fix, Defect 2; see `broadcast_break`'s own
+/// doc comment for the full reasoning, identical here); `Rejected` (only ever
+/// `TargetAlreadyAir`, `finalize_break`'s own only rejection) sends a corrective `Block Update`
+/// to the actor alone.
 fn respond_break(
     world: &World,
     action: &PendingBlockAction,
@@ -2499,12 +2552,7 @@ fn respond_break(
                 // own doc comment) -- always distance-limited, per `packets.rs`.
                 global_event: false,
             });
-            broadcast_to_all(
-                world,
-                &action.connection,
-                action.network_entity_id,
-                level_event,
-            );
+            broadcast_to_others(world, action.network_entity_id, level_event);
         }
         BreakOutcome::Rejected {
             pos, current_state, ..
@@ -2741,6 +2789,9 @@ mod direct_block_world_bounds {
             HeldItemStub::Block(PlaceableBlockKind::Stone),
             0.0,
             0.0,
+            // No player entities in this fixture (Defect 1's own gate is exercised by its
+            // dedicated regression suite instead) -- an empty slice can never obstruct.
+            &[],
         );
         assert!(
             matches!(outcome, PlaceOutcome::Applied { .. }),

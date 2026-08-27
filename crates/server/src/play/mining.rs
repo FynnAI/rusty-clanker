@@ -947,6 +947,13 @@ pub enum RejectReason {
     /// legitimately reachable by a real client's own local raycast, only by a malformed or
     /// malicious packet.
     CursorOutOfBounds,
+    /// M3 field-report fix (Defect 1, "a player can place a block inside their own body" --
+    /// Context, AUTHORITATIVE RESEARCH VERDICT): vanilla's own `isUnobstructed` gate --
+    /// `is_placement_obstructed` returned `true` for the resolved placement state's own
+    /// collision shape at the target cell against at least one currently-connected player's
+    /// own AABB, the placing player's own body included (not excluded by identity -- this is
+    /// the reported bug).
+    Obstructed,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -973,6 +980,49 @@ pub enum PlaceOutcome {
         reason: RejectReason,
         current_state: Option<u32>,
     },
+}
+
+/// M3 field-report fix (Defect 1, Context "AUTHORITATIVE RESEARCH VERDICT" -- vanilla's own
+/// `isUnobstructed` gate, run after the placement block-state is resolved and before the
+/// block is written): `true` iff `shape` (the resolved placement state's own COLLISION shape
+/// -- `rc_physics::tier1_shape_table()`'s own table, that table's own doc comment: it holds
+/// collision shapes, never the outline/selection shape) is non-empty AND at least one of its
+/// own sub-boxes, translated to world space at `target`, overlaps at least one of
+/// `player_boxes`. An EMPTY `shape` short-circuits to "unobstructed" without ever inspecting
+/// `player_boxes` at all -- the shape alone decides this, never a block-kind special case
+/// (Context: "reproduce it that way, do not special-case block kinds"); this is also why a
+/// block whose real collision shape is empty (a torch, redstone wire, ...) is legitimately
+/// placeable inside a player. `player_boxes` is the caller's own complete "every entity whose
+/// blocks-building flag is set" collection (Context) -- this milestone's world has no entity
+/// but the player (Context: "matches vanilla's own blocks-building-is-false-by-default for
+/// everything else," a boundary this function assumes rather than enforces), so the caller
+/// always includes every currently-connected player's own AABB, the placer's own included --
+/// never excluded by identity, which is precisely the reported bug.
+pub fn is_placement_obstructed(
+    shape: &rc_physics::VoxelShape,
+    target: BlockPos,
+    player_boxes: &[rc_physics::Aabb],
+) -> bool {
+    if shape.is_empty() {
+        return false;
+    }
+    shape.boxes().iter().any(|local_box| {
+        let world_box = local_box.offset_by(target);
+        player_boxes
+            .iter()
+            .any(|&player_box| aabbs_overlap(world_box, player_box))
+    })
+}
+
+/// Three-axis AABB overlap, `rc_physics::SHAPE_EPSILON`-tolerant on every axis -- mirrors
+/// `rc_physics::collide`'s own identical private `box_overlaps` (not `pub` there, so this is
+/// its own restatement, not a reuse): two boxes merely touching along a shared face never
+/// count as obstructing.
+fn aabbs_overlap(a: rc_physics::Aabb, b: rc_physics::Aabb) -> bool {
+    use rc_physics::aabb::Axis;
+    a.overlaps_on(Axis::X, b, rc_physics::SHAPE_EPSILON)
+        && a.overlaps_on(Axis::Y, b, rc_physics::SHAPE_EPSILON)
+        && a.overlaps_on(Axis::Z, b, rc_physics::SHAPE_EPSILON)
 }
 
 /// Drains `engine` to a fixed point (Context, full algorithm), dispatching each popped item
@@ -1100,12 +1150,17 @@ pub fn finalize_break(
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
 /// unchanged), checks the cursor sanity bound (`cursor_within_sanity_bound`, M3 field-report
 /// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`), resolves the
-/// raw state via `tier1_oriented_state_table()`, calls `ctx.set_block` +
+/// raw state via `tier1_oriented_state_table()`, checks `is_placement_obstructed` (M3
+/// field-report fix, Defect 1 -- run after the raw state is resolved, before `ctx.set_block`,
+/// matching vanilla's own `isUnobstructed` ordering), calls `ctx.set_block` +
 /// `settle_neighbor_updates`. Wire-connection blocks (`RedstoneWire`) additionally check
 /// `NoSolidSupportBelow` (Context's own simplified "block below is the `FULL_CUBE` default
 /// shape-table row" rule) before calling `set_block`. `cursor` is the client-sent `Use Item
 /// On` cursor hit location (`cursor_x`/`_y`/`_z`, `connection.rs`'s own decode), validated
-/// against `location` (the raw clicked cell), never against `target`.
+/// against `location` (the raw clicked cell), never against `target`. `player_boxes` is
+/// `is_placement_obstructed`'s own complete entity-AABB collection, caller-supplied (this
+/// module has no ECS access of its own) -- see that function's own doc comment for the full
+/// "why every currently-connected player, the placer included" reasoning.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_placement(
     ctx_world: &mut dyn BlockWorldAccess,
@@ -1123,6 +1178,7 @@ pub fn apply_placement(
     held: HeldItemStub,
     yaw_degrees: f32,
     pitch_degrees: f32,
+    player_boxes: &[rc_physics::Aabb],
 ) -> PlaceOutcome {
     let target = resolve_place_position(location, face, inside_block);
 
@@ -1187,6 +1243,16 @@ pub fn apply_placement(
     }
 
     let raw_state = tier1_oriented_state_table().lookup(selection.kind, selection.orientation);
+
+    let placement_shape = rc_physics::tier1_shape_table().lookup(raw_state).shape;
+    if is_placement_obstructed(&placement_shape, target, player_boxes) {
+        return PlaceOutcome::Rejected {
+            pos: target,
+            reason: RejectReason::Obstructed,
+            current_state: Some(current.to_raw()),
+        };
+    }
+
     {
         let mut ctx = UpdateContext {
             world: ctx_world,
