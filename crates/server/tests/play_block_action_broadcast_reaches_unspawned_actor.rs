@@ -162,7 +162,10 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
     let phantom_id = world.alloc_network_entity_id();
     let mut phantom_acc = BytesMut::new();
 
-    world.queue_block_action(PendingBlockAction {
+    // `queue_block_action` now returns `Result<(), RegionUnavailable>` (M3 field-report fix,
+    // symptom 2, `world.rs`'s own doc comment) -- the region is alive throughout this test,
+    // so this call always succeeds; explicitly discarded rather than left `#[must_use]`.
+    let _ = world.queue_block_action(PendingBlockAction {
         network_entity_id: phantom_id,
         connection: handle.clone(),
         kind: BlockActionKind::StartDestroy {
