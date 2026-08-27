@@ -36,17 +36,30 @@ pub struct WireBehavior {
 
 impl WireBehavior {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            state: Mutex::new(HashMap::new()),
+            registry: OnceLock::new(),
+        }
     }
 
     /// Current stored power (`0` for a never-yet-computed position — matches vanilla's own
     /// freshly-placed-wire default of `0`).
     pub fn power(&self, pos: BlockPos) -> u8 {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.power)
+            .unwrap_or(0)
     }
 
     pub fn connections(&self, pos: BlockPos) -> WireConnections {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.connections)
+            .unwrap_or_default()
     }
 
     /// Test/composition-root-only: directly sets this position's own stored connectivity,
@@ -56,7 +69,12 @@ impl WireBehavior {
     /// minimal, necessary addition beyond Context §I½'s own literal deliverable listing, which
     /// names no such setter — documented as a deviation in the completion report).
     pub fn set_connections(&self, pos: BlockPos, connections: WireConnections) {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .entry(pos)
+            .or_default()
+            .connections = connections;
     }
 
     /// Sets this behavior's own registry handle (Context §I½). Called exactly once, by
@@ -64,7 +82,9 @@ impl WireBehavior {
     /// `register_tier1_redstone`-populated registry in an `Arc` (or directly, by a test that
     /// constructs this behavior standalone). Panics if called a second time.
     pub fn bind_registry(&self, registry: Arc<SignalSourceRegistry>) {
-        todo!()
+        self.registry
+            .set(registry)
+            .unwrap_or_else(|_| panic!("WireBehavior::bind_registry called more than once"));
     }
 
     fn registry(&self) -> &Arc<SignalSourceRegistry> {
@@ -72,6 +92,119 @@ impl WireBehavior {
             .get()
             .expect("WireBehavior: bind_registry must run before dispatch")
     }
+
+    /// `getIncomingWireSignal` (Context §D): four horizontal neighbors, plus -- for each
+    /// neighbor that is a redstone conductor with a non-conductor ceiling above `pos` -- the
+    /// wire one block above it, and -- for each non-conductor neighbor -- the wire one block
+    /// below it. `max(candidates) - 1`, floored at 0.
+    fn incoming_wire_signal(
+        &self,
+        world: &dyn BlockWorldAccess,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+    ) -> u8 {
+        let mut candidates: Vec<u8> = Vec::new();
+        for dir in [
+            Direction::West,
+            Direction::East,
+            Direction::North,
+            Direction::South,
+        ] {
+            let same_height = dir.apply(pos);
+            if let Some(p) = wire_power_at(world, registry, same_height) {
+                candidates.push(p);
+            }
+            if signal::is_conductor(world, same_height)
+                && !signal::is_conductor(world, Direction::Up.apply(pos))
+                && let Some(p) = wire_power_at(world, registry, Direction::Up.apply(same_height))
+            {
+                candidates.push(p);
+            }
+            if !signal::is_conductor(world, same_height)
+                && let Some(p) = wire_power_at(world, registry, Direction::Down.apply(same_height))
+            {
+                candidates.push(p);
+            }
+        }
+        candidates
+            .into_iter()
+            .max()
+            .map(|m| m.saturating_sub(1))
+            .unwrap_or(0)
+    }
+
+    /// `updatePowerStrength` (Context §D): `block_signal.max(incoming_wire_signal)`, with the
+    /// `block_signal == 15` short-circuit (pure perf optimization, no observable difference).
+    fn compute_power(
+        &self,
+        world: &dyn BlockWorldAccess,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+    ) -> u8 {
+        let block_signal = signal::best_neighbor_signal(world, registry, pos);
+        if block_signal == 15 {
+            return 15;
+        }
+        block_signal.max(self.incoming_wire_signal(world, registry, pos))
+    }
+
+    /// `shouldConnectTo`/`getConnectionState` (Context §D), restated as a single "does this
+    /// side connect at all" boolean (this blueprint's own documented scope narrowing -- the
+    /// visual `NONE`/`SIDE`/`UP` three-way property is not modeled).
+    fn connects_on_side(
+        &self,
+        world: &dyn BlockWorldAccess,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+        dir: Direction,
+    ) -> bool {
+        let same_height = dir.apply(pos);
+        if let Some(state) = world.get_block(same_height)
+            && registry
+                .resolve(state)
+                .connects_from(world, same_height, dir.opposite())
+        {
+            return true;
+        }
+        if !signal::is_conductor(world, Direction::Up.apply(pos)) {
+            let up = Direction::Up.apply(same_height);
+            if wire_power_at(world, registry, up).is_some() {
+                return true;
+            }
+        }
+        if !signal::is_conductor(world, same_height) {
+            let down = Direction::Down.apply(same_height);
+            if wire_power_at(world, registry, down).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn compute_connections(
+        &self,
+        world: &dyn BlockWorldAccess,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+    ) -> WireConnections {
+        WireConnections {
+            west: self.connects_on_side(world, registry, pos, Direction::West),
+            east: self.connects_on_side(world, registry, pos, Direction::East),
+            north: self.connects_on_side(world, registry, pos, Direction::North),
+            south: self.connects_on_side(world, registry, pos, Direction::South),
+        }
+    }
+}
+
+/// Whether the position holds a redstone wire (any `WireBehavior`, generalized via the
+/// `raw_wire_power` hook, Context §F/§C) and, if so, its current stored power.
+fn wire_power_at(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+) -> Option<u8> {
+    let state = world.get_block(pos)?;
+    registry.resolve(state).raw_wire_power(world, pos)
 }
 
 impl Default for WireBehavior {
@@ -88,7 +221,16 @@ impl RedstoneSignalSource for WireBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        todo!()
+        let power = self.power(pos);
+        let connections = self.connections(pos);
+        let connected = match towards {
+            Direction::West => connections.west,
+            Direction::East => connections.east,
+            Direction::North => connections.north,
+            Direction::South => connections.south,
+            Direction::Up | Direction::Down => false,
+        };
+        if connected { power } else { 0 }
     }
     /// `Down` only, unconditional on power (Context §A's worked QC example).
     fn direct_signal_toward(
@@ -97,7 +239,11 @@ impl RedstoneSignalSource for WireBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        todo!()
+        if towards == Direction::Down {
+            self.power(pos)
+        } else {
+            0
+        }
     }
     fn is_signal_source(&self) -> bool {
         true
@@ -109,7 +255,27 @@ impl RedstoneSignalSource for WireBehavior {
 
 impl BlockBehavior for WireBehavior {
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        todo!()
+        let registry = Arc::clone(self.registry());
+        let new_power = self.compute_power(ctx.world, &registry, pos);
+        let changed = {
+            let mut state = self.state.lock().unwrap();
+            let entry = state.entry(pos).or_default();
+            if entry.power == new_power {
+                false
+            } else {
+                entry.power = new_power;
+                true
+            }
+        };
+        if !changed {
+            return;
+        }
+        // The unconditional 7-cell-plus notify (Context §D): `pos` itself first, then its own
+        // 6 neighbors in `NEIGHBOR_CHANGED_ORDER` -- no shape update is fired.
+        signal::notify_neighbor_changed_only(ctx, pos);
+        for dir in crate::direction::NEIGHBOR_CHANGED_ORDER {
+            signal::notify_neighbor_changed_only(ctx, dir.apply(pos));
+        }
     }
     fn on_shape_update(
         &self,
@@ -118,6 +284,14 @@ impl BlockBehavior for WireBehavior {
         _from: Direction,
         _neighbor_state: BlockStateId,
     ) -> Option<BlockStateId> {
-        todo!()
+        let registry = Arc::clone(self.registry());
+        let connections = self.compute_connections(ctx.world, &registry, pos);
+        self.state
+            .lock()
+            .unwrap()
+            .entry(pos)
+            .or_default()
+            .connections = connections;
+        None
     }
 }

@@ -49,7 +49,11 @@ impl Tier1RedstoneHandles {
     /// before any Stage-4 dispatch can reach any of the four behaviors. Panics if called a
     /// second time.
     pub fn bind_registry(&self, registry: Arc<SignalSourceRegistry>) {
-        todo!()
+        self.wire.bind_registry(Arc::clone(&registry));
+        self.torch_floor.bind_registry(Arc::clone(&registry));
+        self.torch_wall.bind_registry(Arc::clone(&registry));
+        self.repeater.bind_registry(Arc::clone(&registry));
+        self.comparator.bind_registry(registry);
     }
 }
 
@@ -68,5 +72,80 @@ pub fn register_tier1_redstone(
     ids: &Tier1RedstoneStateIds,
     containers: Arc<dyn ContainerSignalSource>,
 ) -> Tier1RedstoneHandles {
-    todo!()
+    let wire = Arc::new(WireBehavior::new());
+    behaviors.register_range(
+        ids.wire.0,
+        ids.wire.1,
+        Arc::clone(&wire) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.wire.0,
+        ids.wire.1,
+        Arc::clone(&wire) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    let torch_floor = Arc::new(TorchBehavior::new(TorchAttachment::Floor));
+    behaviors.register_range(
+        ids.torch_floor.0,
+        ids.torch_floor.1,
+        Arc::clone(&torch_floor) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.torch_floor.0,
+        ids.torch_floor.1,
+        Arc::clone(&torch_floor) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    // Wall torch: attachment direction is per-block-state (depends on the FACING property),
+    // not representable by a single fixed `TorchAttachment` across an entire id range without a
+    // generated block-state-property registry (Context §I's own "no generated registry exists
+    // yet" gap) -- this blueprint registers one representative `Wall` orientation
+    // (`Direction::North`, arbitrary but fixed) for the whole `torch_wall` range, sufficient for
+    // every acceptance test in this blueprint's own scope (`wall_torch_reads_from_its_attach_
+    // direction` constructs its own standalone `TorchBehavior::new(Wall(..))`, never through
+    // this registration path) -- flagged for reconciliation once per-block-state wall
+    // orientation is representable.
+    let torch_wall = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::North)));
+    behaviors.register_range(
+        ids.torch_wall.0,
+        ids.torch_wall.1,
+        Arc::clone(&torch_wall) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.torch_wall.0,
+        ids.torch_wall.1,
+        Arc::clone(&torch_wall) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    let repeater = Arc::new(RepeaterBehavior::new());
+    behaviors.register_range(
+        ids.repeater.0,
+        ids.repeater.1,
+        Arc::clone(&repeater) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.repeater.0,
+        ids.repeater.1,
+        Arc::clone(&repeater) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    let comparator = Arc::new(ComparatorBehavior::new(containers));
+    behaviors.register_range(
+        ids.comparator.0,
+        ids.comparator.1,
+        Arc::clone(&comparator) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.comparator.0,
+        ids.comparator.1,
+        Arc::clone(&comparator) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    Tier1RedstoneHandles {
+        wire,
+        torch_floor,
+        torch_wall,
+        repeater,
+        comparator,
+    }
 }

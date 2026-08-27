@@ -29,21 +29,40 @@ pub struct RepeaterBehavior {
 
 impl RepeaterBehavior {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            facing: HashMap::new(),
+            state: Mutex::new(HashMap::new()),
+            registry: OnceLock::new(),
+        }
     }
 
     /// Test/composition-root-only: establishes a repeater's fixed facing and delay setting
     /// (placement is out of this blueprint's scope, Context §F).
     pub fn place(&mut self, pos: BlockPos, facing: Direction, delay_setting: u8) {
-        todo!()
+        self.facing.insert(pos, facing);
+        self.state.get_mut().unwrap().insert(
+            pos,
+            RepeaterState {
+                powered: false,
+                delay_setting,
+            },
+        );
     }
 
     pub fn facing(&self, pos: BlockPos) -> Direction {
-        todo!()
+        *self
+            .facing
+            .get(&pos)
+            .expect("RepeaterBehavior::facing: position was never placed")
     }
 
     pub fn delay_setting(&self, pos: BlockPos) -> u8 {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.delay_setting)
+            .unwrap_or(1)
     }
 
     pub fn get_delay(&self, pos: BlockPos) -> u64 {
@@ -51,29 +70,45 @@ impl RepeaterBehavior {
     }
 
     pub fn powered(&self, pos: BlockPos) -> bool {
-        todo!()
+        self.state
+            .lock()
+            .unwrap()
+            .get(&pos)
+            .map(|s| s.powered)
+            .unwrap_or(false)
     }
 
     fn set_powered(&self, pos: BlockPos, value: bool) {
-        todo!()
+        let mut state = self.state.lock().unwrap();
+        let entry = state.entry(pos).or_insert(RepeaterState {
+            powered: false,
+            delay_setting: 1,
+        });
+        entry.powered = value;
     }
 
     /// Reads the registry via `self.registry()` (Context §I½) — no longer takes a `registry`
     /// parameter; a test calling this directly must call `bind_registry` first.
     pub fn is_locked(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-        todo!()
+        self.alternate_signal(world, pos) > 0
     }
 
+    /// `alternate_signal` (Context §F): `max` of the two perpendicular side control-input
+    /// readings, each gated by `sideInputDiodesOnly` (repeater always sets this `true`).
     fn alternate_signal(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> u8 {
-        todo!()
+        let facing = self.facing(pos);
+        let (a, b) = signal::perpendicular_pair(facing);
+        let registry = self.registry();
+        control_input_signal(world, registry, pos, a)
+            .max(control_input_signal(world, registry, pos, b))
     }
 
     fn should_prioritize(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-        todo!()
+        signal::should_prioritize_diode(world, self.registry(), pos, self.facing(pos))
     }
 
     fn base_input_positive(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-        todo!()
+        signal::base_diode_input_signal(world, self.registry(), pos, self.facing(pos)) > 0
     }
 
     /// Sets this behavior's own registry handle (Context §I½). Called exactly once, by
@@ -81,13 +116,33 @@ impl RepeaterBehavior {
     /// `register_tier1_redstone`-populated registry in an `Arc` (or directly, by a test that
     /// constructs this behavior standalone). Panics if called a second time.
     pub fn bind_registry(&self, registry: Arc<SignalSourceRegistry>) {
-        todo!()
+        self.registry
+            .set(registry)
+            .unwrap_or_else(|_| panic!("RepeaterBehavior::bind_registry called more than once"));
     }
 
     fn registry(&self) -> &Arc<SignalSourceRegistry> {
         self.registry
             .get()
             .expect("RepeaterBehavior: bind_registry must run before dispatch")
+    }
+}
+
+/// `control_input_signal` (Context §F): `sideInputDiodesOnly` -- `0` unless the neighbor at
+/// `side.apply(pos)` is itself a diode, in which case its full `emitted_toward` reading back
+/// toward `pos` counts.
+fn control_input_signal(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+    side: Direction,
+) -> u8 {
+    let neighbor_pos = side.apply(pos);
+    match world.get_block(neighbor_pos) {
+        Some(state) if registry.resolve(state).is_diode() => {
+            signal::emitted_toward(world, registry, neighbor_pos, side.opposite())
+        }
+        _ => 0,
     }
 }
 
@@ -104,7 +159,11 @@ impl RedstoneSignalSource for RepeaterBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        todo!()
+        if self.powered(pos) && towards == self.facing(pos) {
+            15
+        } else {
+            0
+        }
     }
     fn direct_signal_toward(
         &self,
@@ -129,10 +188,46 @@ impl RedstoneSignalSource for RepeaterBehavior {
 }
 
 impl BlockBehavior for RepeaterBehavior {
+    /// `checkTickOnNeighbor` (Context §F).
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        todo!()
+        if self.is_locked(ctx.world, pos) {
+            return;
+        }
+        let should = self.base_input_positive(ctx.world, pos);
+        let powered = self.powered(pos);
+        if powered != should && !ctx.scheduled.is_block_tick_pending(pos) {
+            let priority = if self.should_prioritize(ctx.world, pos) {
+                TickPriority::ExtremelyHigh
+            } else if powered {
+                TickPriority::VeryHigh
+            } else {
+                TickPriority::High
+            };
+            ctx.schedule_block_tick(pos, self.get_delay(pos), priority);
+        }
     }
+
+    /// `tick` (Context §F), restated as an explicit two-phase state machine: turning off is
+    /// gated on the live `should` value; turning on is unconditional once reached (a scheduled
+    /// tick only ever fires because *some* earlier call found a mismatch, Context §F's own
+    /// "turn-on is immediate too" framing) -- then immediately re-checked so a since-ended short
+    /// input pulse still self-schedules a matching turn-off at this repeater's own fixed delay
+    /// width, rather than being silently swallowed.
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        todo!()
+        if self.is_locked(ctx.world, pos) {
+            return;
+        }
+        if self.powered(pos) {
+            if !self.base_input_positive(ctx.world, pos) {
+                self.set_powered(pos, false);
+                signal::notify_neighbor_changed_only(ctx, pos);
+            }
+        } else {
+            self.set_powered(pos, true);
+            signal::notify_neighbor_changed_only(ctx, pos);
+            if !self.base_input_positive(ctx.world, pos) {
+                ctx.schedule_block_tick(pos, self.get_delay(pos), TickPriority::VeryHigh);
+            }
+        }
     }
 }

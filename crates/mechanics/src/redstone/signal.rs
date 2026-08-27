@@ -94,7 +94,10 @@ pub struct SignalSourceRegistry {
 
 impl SignalSourceRegistry {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            ranges: Vec::new(),
+            default: Arc::new(NoSignalSource),
+        }
     }
 
     /// Panics on overlap with an already-registered range (identical contract to B01's
@@ -105,11 +108,26 @@ impl SignalSourceRegistry {
         end_exclusive: BlockStateId,
         source: Arc<dyn RedstoneSignalSource>,
     ) {
-        todo!()
+        let overlaps = self
+            .ranges
+            .iter()
+            .any(|(s, e, _)| start < *e && *s < end_exclusive);
+        assert!(
+            !overlaps,
+            "SignalSourceRegistry::register_range: [{start:?}, {end_exclusive:?}) overlaps an already-registered range"
+        );
+        self.ranges.push((start, end_exclusive, source));
+        self.ranges.sort_by_key(|(start, _, _)| *start);
     }
 
+    /// Returns the matching range's source, or the shared `NoSignalSource` default.
     pub fn resolve(&self, state: BlockStateId) -> &Arc<dyn RedstoneSignalSource> {
-        todo!()
+        for (start, end_exclusive, source) in &self.ranges {
+            if state >= *start && state < *end_exclusive {
+                return source;
+            }
+        }
+        &self.default
     }
 }
 
@@ -123,7 +141,14 @@ impl Default for SignalSourceRegistry {
 /// the block at `pos` (or air/unloaded, which is never a conductor) has a shape equal to
 /// exactly one box spanning `(0,0,0)..(1,1,1)`.
 pub fn is_conductor(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-    todo!()
+    let Some(state) = world.get_block(pos) else {
+        return false;
+    };
+    let props = rc_physics::tier1_shape_table().lookup(state.to_raw());
+    let boxes = props.shape.boxes();
+    boxes.len() == 1
+        && boxes[0].min == Vec3::new(0.0, 0.0, 0.0)
+        && boxes[0].max == Vec3::new(1.0, 1.0, 1.0)
 }
 
 /// `emitted_toward` (Context §A) — the one shared quasi-connectivity primitive.
@@ -133,7 +158,17 @@ pub fn emitted_toward(
     pos: BlockPos,
     towards: Direction,
 ) -> u8 {
-    todo!()
+    let Some(state) = world.get_block(pos) else {
+        return 0;
+    };
+    let weak = registry
+        .resolve(state)
+        .weak_signal_toward(world, pos, towards);
+    if is_conductor(world, pos) {
+        weak.max(direct_signal_to(world, registry, pos))
+    } else {
+        weak
+    }
 }
 
 /// `direct_signal_to` (Context §A) — all 6 faces of the conductor at `pos`.
@@ -142,7 +177,18 @@ pub fn direct_signal_to(
     registry: &SignalSourceRegistry,
     pos: BlockPos,
 ) -> u8 {
-    todo!()
+    let mut max_signal = 0u8;
+    for d in NEIGHBOR_CHANGED_ORDER {
+        let npos = d.apply(pos);
+        let Some(nstate) = world.get_block(npos) else {
+            continue;
+        };
+        let v = registry
+            .resolve(nstate)
+            .direct_signal_toward(world, npos, d.opposite());
+        max_signal = max_signal.max(v);
+    }
+    max_signal
 }
 
 /// `signal_into` (Context §A) — what `pos` receives from its neighbor in `from`.
@@ -152,7 +198,7 @@ pub fn signal_into(
     pos: BlockPos,
     from: Direction,
 ) -> u8 {
-    todo!()
+    emitted_toward(world, registry, from.apply(pos), from.opposite())
 }
 
 /// `best_neighbor_signal` (Context §A) — max over all 6 sides.
@@ -161,7 +207,11 @@ pub fn best_neighbor_signal(
     registry: &SignalSourceRegistry,
     pos: BlockPos,
 ) -> u8 {
-    todo!()
+    NEIGHBOR_CHANGED_ORDER
+        .into_iter()
+        .map(|d| signal_into(world, registry, pos, d))
+        .max()
+        .unwrap_or(0)
 }
 
 /// `has_signal(pos, from) = signal_into(pos, from) > 0` — a thin boolean convenience, used
@@ -172,7 +222,7 @@ pub fn has_signal(
     pos: BlockPos,
     from: Direction,
 ) -> bool {
-    todo!()
+    signal_into(world, registry, pos, from) > 0
 }
 
 /// The shared repeater/comparator "front-face signal, raised to a wire neighbor's raw power"
@@ -184,14 +234,48 @@ pub fn base_diode_input_signal(
     pos: BlockPos,
     facing: Direction,
 ) -> u8 {
-    todo!()
+    let front = facing.apply(pos);
+    let plain = signal_into(world, registry, pos, facing);
+    let raw_wire = world
+        .get_block(front)
+        .and_then(|state| registry.resolve(state).raw_wire_power(world, front));
+    match raw_wire {
+        Some(raw) if raw > plain => raw,
+        _ => plain,
+    }
 }
 
 /// Cross-region-aware neighbor-changed-ONLY notify (Context §I) — every tier-1 component's
 /// own state-change propagation goes through this, never a bare `ctx.engine.emit_*` call and
 /// never `UpdateContext::set_block` (which would also fire an unwanted shape-update pass).
 pub fn notify_neighbor_changed_only(ctx: &mut UpdateContext, at: BlockPos) {
-    todo!()
+    let dimension = ctx.world.dimension();
+    for dir in NEIGHBOR_CHANGED_ORDER {
+        let npos = dir.apply(at);
+        let chunk = npos.chunk_key(dimension);
+        let owner = (ctx.ownership.resolve)(chunk);
+        if owner == ctx.ownership.local {
+            ctx.engine.emit_single(PendingUpdate::NeighborChanged {
+                pos: npos,
+                from: dir.opposite(),
+            });
+        } else {
+            let new_state = ctx
+                .world
+                .get_block(at)
+                .expect("`at` is always locally-loaded when this fires");
+            ctx.outbound.push((
+                Address::Chunk(chunk),
+                RegionMessage::BorderUpdateEvent(BorderUpdateEvent {
+                    chunk,
+                    pos: at,
+                    kind: BorderUpdateKind::BlockChanged {
+                        new_state: new_state.to_raw(),
+                    },
+                }),
+            ));
+        }
+    }
 }
 
 /// The two horizontal directions perpendicular to `facing`'s own axis, in a fixed (but
@@ -199,7 +283,13 @@ pub fn notify_neighbor_changed_only(ctx: &mut UpdateContext, at: BlockPos) {
 /// `alternate_signal`; Context §G: comparator's side-input reading). Shared between
 /// `repeater.rs` and `comparator.rs`.
 pub(crate) fn perpendicular_pair(facing: Direction) -> (Direction, Direction) {
-    todo!()
+    match facing {
+        Direction::West | Direction::East => (Direction::North, Direction::South),
+        Direction::North | Direction::South => (Direction::West, Direction::East),
+        Direction::Up | Direction::Down => {
+            panic!("perpendicular_pair: a diode's own facing is always horizontal, got {facing:?}")
+        }
+    }
 }
 
 /// `should_prioritize` (Context §F), generalized over any diode via `facing` rather than
@@ -211,7 +301,18 @@ pub(crate) fn should_prioritize_diode(
     pos: BlockPos,
     facing: Direction,
 ) -> bool {
-    todo!()
+    let behind = facing.opposite().apply(pos);
+    let Some(state) = world.get_block(behind) else {
+        return false;
+    };
+    let source = registry.resolve(state);
+    if !source.is_diode() {
+        return false;
+    }
+    match source.diode_facing(behind) {
+        Some(behind_facing) => behind_facing != facing,
+        None => false,
+    }
 }
 
 /// The full `checkTickOnNeighbor` priority selection (Context §F, 3-way): `ExtremelyHigh` if
@@ -223,5 +324,11 @@ pub(crate) fn diode_priority(
     facing: Direction,
     currently_powered: bool,
 ) -> TickPriority {
-    todo!()
+    if should_prioritize_diode(world, registry, pos, facing) {
+        TickPriority::ExtremelyHigh
+    } else if currently_powered {
+        TickPriority::VeryHigh
+    } else {
+        TickPriority::High
+    }
 }

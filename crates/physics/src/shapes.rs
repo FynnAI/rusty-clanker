@@ -165,6 +165,26 @@ fn build_tier1_table() -> ShapeTable {
             max: Vec3::new(1.0, 0.125, 1.0),
         }])
     };
+    // Redstone wire: a flat layer, full x/z footprint, y: 0..0.0625 (1/16 block) -- M3-B04
+    // Context §B, refining this table's own original M3-B02 placeholder (`empty`, which is
+    // *also* non-full and so did not break M3-B02's own is-conductor-free scope, but is not
+    // wire's real hitbox).
+    let wire_shape = || {
+        VoxelShape::from_boxes(vec![Aabb {
+            min: Vec3::new(0.0, 0.0, 0.0),
+            max: Vec3::new(1.0, 0.0625, 1.0),
+        }])
+    };
+    // Redstone torch (floor and wall share the same box -- M3-B04 Context §B: "wall torches:
+    // the same box, offset toward the attached wall -- this blueprint's tests never depend on
+    // the wall-torch box's exact horizontal offset, only that it is non-full"): a centered
+    // post, x: 0.3125..0.6875, y: 0..0.625, z: 0.3125..0.6875.
+    let torch_shape = || {
+        VoxelShape::from_boxes(vec![Aabb {
+            min: Vec3::new(0.3125, 0.0, 0.3125),
+            max: Vec3::new(0.6875, 0.625, 0.6875),
+        }])
+    };
     // Chest: box [0.0625,0.9375]x[0,0.875]x[0.0625,0.9375] (Context table).
     let chest_shape = VoxelShape::from_boxes(vec![Aabb {
         min: Vec3::new(0.0625, 0.0, 0.0625),
@@ -189,10 +209,10 @@ fn build_tier1_table() -> ShapeTable {
         // default-full-cube fallback (which is for "any *other* unlisted block," implicitly
         // assumed ordinary terrain, never air itself; without this row every `air` lookup
         // would wrongly resolve as a solid full cube).
-        (0, empty.clone()),          // air
-        (5171, empty.clone()),       // redstone_wire
-        (6885, empty.clone()),       // redstone_torch
-        (6887, empty),               // redstone_wall_torch
+        (0, empty),                  // air
+        (5171, flat(wire_shape())),  // redstone_wire
+        (6885, flat(torch_shape())), // redstone_torch
+        (6887, flat(torch_shape())), // redstone_wall_torch
         (7037, flat(low_slab())),    // repeater
         (11264, flat(low_slab())),   // comparator
         (2263, full.clone()),        // piston (extended = false)
