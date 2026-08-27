@@ -27,6 +27,17 @@ use rusty_clanker_server::play::packets::{
 use rusty_clanker_server::play::{
     BlockActionKind, HardcodedWorld, PendingBlockAction, PlayerProfile, enter_play,
 };
+
+// M3-B03 test-authoring update: `BlockActionKind::Break` (M2-B07) is retired --
+// `StartDestroy` is its replacement (Deliverables, `block_action.rs`). This phantom actor
+// never joins at all, so `world.rs`'s own reach-check fallback (no `PlayerMotion` found)
+// applies: a synthetic motion at `SPAWN_POSITION` looking straight down (`pitch: 90.0`) --
+// the only fallback orientation that can honestly resolve a reach check against this
+// hardcoded world's own always-below-spawn content (`world.rs`'s own doc comment on that
+// fallback). `(0, -60, 0)` (grass directly below spawn) is exactly what that fallback ray
+// hits, so this test's own target needs no change beyond the variant rename. The same
+// fallback also has no `GameModeState`, defaulting to `instabuild: true` (creative) --
+// matching this test's own expectation of an immediate, unconditional break.
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Duration;
@@ -154,7 +165,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
     world.queue_block_action(PendingBlockAction {
         network_entity_id: phantom_id,
         connection: handle.clone(),
-        kind: BlockActionKind::Break {
+        kind: BlockActionKind::StartDestroy {
             location: BlockPos::new(0, -60, 0),
         },
         sequence: 42,

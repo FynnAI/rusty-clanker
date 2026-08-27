@@ -271,18 +271,19 @@ pub fn pack_position(pos: rc_core::BlockPos) -> i64 {
     (x << 38) | (z << 12) | y
 }
 
-/// M2-B07: one `PlayerAction`/`UseItemOn` (serverbound, block-modifying) — creative-style
-/// instant break only, per MECH-D61's restated minimal scope (this milestone). `status`'s
-/// enum values (`0`=StartDestroyBlock ... `6`=SwapItemInHand) and `face`'s wire type
-/// (`Byte`, not `VarInt` -- a real, historically-documented asymmetry against `UseItemOn`'s
-/// own `face`) are per this blueprint's own reconciliation caveat (Context).
+/// M3-B03 correction (Context, "Packet layout — corrected and new"): `status`'s enum values
+/// (`0`=StartDestroyBlock ... `6`=SwapItemInHand) are unchanged from M2-B07's own
+/// restatement, but `face` is corrected from a `Byte` to a `VarInt` enum (same 6-value
+/// vanilla `Direction` ordinal meaning as `Face::from_ordinal`, only the wire width/kind
+/// changes) and renamed `direction` to match the corrected field's own real name.
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
 #[packet(state = "play", bound = "server", id = 0x29)]
 pub struct PlayerAction {
     #[rc(varint)]
     pub status: i32,
     pub location: i64,
-    pub face: i8,
+    #[rc(varint)]
+    pub direction: i32,
     #[rc(varint)]
     pub sequence: i32,
 }
@@ -315,11 +316,14 @@ pub struct PlayerAction {
 ///    8-field shape would have left one byte permanently undecoded even once
 ///    dispatched to the right id.
 ///
-/// `PlayerAction` a single fixed placeholder block is placed on every successful
-/// `UseItemOn` (Context: "Placement content" -- no real item/inventory model exists
-/// yet). `face` is a `VarInt` here (unlike `PlayerAction.face`'s `Byte`) -- a real,
-/// long-standing asymmetry between these two packets, not a copy/paste
-/// inconsistency (Context).
+/// M3-B03: `face` renamed `direction` (Context, "Packet layout — corrected and new" — the
+/// field's own wire type/kind was already `VarInt`, unchanged, only the restated name
+/// changes to match `PlayerAction`'s own corrected field). `hits_world_border` is **kept**
+/// from the M2 field-report fix above, a real-client-wire-capture-verified field the M3-B03
+/// blueprint's own restated 8-field table omits — CLAUDE.md's own "current code reflects
+/// later fixes" rule: dropping it here would silently regress a real-client-verified parity
+/// fix for a blueprint-text discrepancy, so it stays, recorded as a deviation in the
+/// completion report.
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
 #[packet(state = "play", bound = "server", id = 0x42)]
 pub struct UseItemOn {
@@ -327,7 +331,7 @@ pub struct UseItemOn {
     pub hand: i32,
     pub location: i64,
     #[rc(varint)]
-    pub face: i32,
+    pub direction: i32,
     pub cursor_x: f32,
     pub cursor_y: f32,
     pub cursor_z: f32,
@@ -387,6 +391,35 @@ pub struct AcknowledgeBlockChange {
     #[rc(varint)]
     pub sequence: i32,
 }
+
+/// M3-B03 (new): per-tick crack-overlay broadcast (Context, "Dig packet lifecycle").
+/// `destroy_stage` is `0..=9` for an active crack stage; this blueprint always sends `-1`
+/// only on an `ABORT`/cancel where the block survives — never on a finalize (Context: the
+/// block's own `Block Update` implicitly clears the overlay client-side).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "client", id = 0x05)]
+pub struct SetBlockDestroyStage {
+    #[rc(varint)]
+    pub entity_id: i32,
+    pub location: i64,
+    pub destroy_stage: i8,
+}
+
+/// M3-B03 (new): the generic clientbound world-event packet (Context, "Packet layout —
+/// corrected and new"). `event_id`/`data` are both plain `Int`, **not** `VarInt` — restated
+/// exactly, distinct from every `VarInt` field above. This blueprint's only consumed event is
+/// `LEVEL_EVENT_BLOCK_BREAK` (block-break sound + particles).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "client", id = 0x2E)]
+pub struct LevelEvent {
+    pub event_id: i32,
+    pub location: i64,
+    pub data: i32,
+}
+
+/// Vanilla's own long-stable event id: "block break with sound + particles," `data` = the
+/// broken block's own raw pre-break state id (Context).
+pub const LEVEL_EVENT_BLOCK_BREAK: i32 = 2001;
 
 /// Inverse of this file's already-existing `pack_position` (Context: exact bit layout
 /// restated). Sign-extends each two's-complement field back from its packed width.

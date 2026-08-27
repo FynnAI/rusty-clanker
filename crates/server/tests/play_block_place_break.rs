@@ -13,11 +13,13 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, UseItemOn, pack_position,
+    KeepAliveServerbound, PlayerAction, SetPlayerPositionAndRotation, SetPlayerRotation, UseItemOn,
+    pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::Duration;
 
 async fn connected_pair() -> (TcpStream, TcpStream) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -134,6 +136,21 @@ async fn recv_packet_of_type(
     }
 }
 
+/// M3-B03 test-authoring addition: waits until `check` returns `true`, mirroring
+/// `play_movement_application.rs`'s own identical helper -- reach is now a real voxel
+/// raycast (MECH-D62), so a rotation/position change must actually be *applied* (visible in
+/// the player's own session record, synced every tick a fresh report arrives) before a
+/// dependent block action is sent, or that action's own raycast would still see the
+/// player's prior orientation.
+async fn wait_until(mut check: impl FnMut() -> bool) {
+    loop {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn break_and_place_broadcast_and_persist() {
     // M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a
@@ -148,8 +165,26 @@ async fn break_and_place_broadcast_and_persist() {
     // comfortable headroom without masking a genuine hang.
     tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let sessions = world.player_sessions();
+
+        // M3-B03 test-authoring update: reach is now a real voxel raycast (MECH-D62) --
+        // every target below needs A actually looking at it, not just standing nearby.
+        // Looking straight down (`pitch: 90.0`) hits whatever is directly below A's own
+        // eye position, regardless of yaw.
+        send_packet(
+            &mut a,
+            &SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.rotation) == Some([0.0, 90.0]))
+            .await;
 
         // --- Break the grass block directly below A's own spawn column ---
         send_packet(
@@ -157,7 +192,7 @@ async fn break_and_place_broadcast_and_persist() {
             &PlayerAction {
                 status: 0,
                 location: pack_position(BlockPos::new(0, -60, 0)),
-                face: 1,
+                direction: 1,
                 sequence: 1,
             },
         )
@@ -181,15 +216,32 @@ async fn break_and_place_broadcast_and_persist() {
         let observed = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(observed, update);
 
-        // --- Place above the still-intact grass block at (1, -60, 1) ---
+        // --- Place above the still-intact grass block at (2, -60, 2) -- A moves there
+        // first (still looking straight down), so the raycast lands on that column's own
+        // grass block instead of the now-empty hole at (0, -60, 0). ---
+        send_packet(
+            &mut a,
+            &SetPlayerPositionAndRotation {
+                x: 2.0,
+                y: -59.0,
+                z: 2.0,
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -59.0, 2.0]))
+            .await;
+
         send_packet(
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(1, -60, 1)),
-                face: 1,
+                location: pack_position(BlockPos::new(2, -60, 2)),
+                direction: 1,
                 cursor_x: 0.5,
-                cursor_y: 0.0,
+                cursor_y: 1.0,
                 cursor_z: 0.5,
                 inside_block: false,
                 hits_world_border: false,
@@ -206,7 +258,7 @@ async fn break_and_place_broadcast_and_persist() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 1)));
+        assert_eq!(update.location, pack_position(BlockPos::new(2, -59, 2)));
         assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
 
         let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
@@ -222,7 +274,7 @@ async fn break_and_place_broadcast_and_persist() {
             })
         );
         assert_eq!(
-            world.debug_query_block(BlockPos::new(1, -59, 1)).await,
+            world.debug_query_block(BlockPos::new(2, -59, 2)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::STONE.0,
                 dirty: true,

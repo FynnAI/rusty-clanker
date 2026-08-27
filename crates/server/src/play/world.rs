@@ -13,11 +13,11 @@ use rc_chunk_storage::io_pool::ChunkNbtResolvers;
 use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    AnvilDiskBackend, BiomeColumn, BlockStateColumn, ChunkKeyTag, ChunkStorageBackend,
-    CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds,
+    AnvilDiskBackend, BiomeColumn, BlockStateColumn, ChunkKeyTag, ChunkPersistenceState,
+    ChunkStorageBackend, CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds,
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
-use rc_messaging::{Address, RegionId, RegionMessageBus};
+use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
 use rc_physics::Vec3;
 use rc_protocol::encode_payload;
 use rc_registries::generated_v776::block_states::{
@@ -31,17 +31,22 @@ use rc_transport_inproc::{InProcessTransport, InProcessTransportConfig};
 use tokio::sync::oneshot;
 
 use super::block_action::{
-    ApplyOutcome, BLOCK_INTERACTION_RANGE_CREATIVE, ChunkIndex, DebugBlockInfo, PendingBlockAction,
-    RejectReason, apply_block_action, debug_query_block, eye_position_from_feet, target_position,
-    to_storage_biome_id, to_storage_id, within_reach,
+    BlockActionKind, ChunkIndex, DebugBlockInfo, PendingBlockAction, debug_query_block,
+    target_position, to_storage_biome_id, to_storage_id,
 };
 use super::connection::SPAWN_POSITION;
+use super::mining::{
+    self, BLOCK_INTERACTION_RANGE_CREATIVE, BLOCK_INTERACTION_RANGE_SURVIVAL, BreakOutcome,
+    DestroyOutcome, DestroyState, GameModeState, HeldItem, HeldItemStub, PlaceOutcome,
+    PlaceableBlockKind, StopOutcome, TickOutcome, ToolKind, ToolMaterial,
+};
 use super::movement::{
     ChunkBlockShapeSource, MovementOutcome, PendingMoveReport, PendingMovementPacket, PlayerMotion,
     TeleportState, evaluate_movement, feet_block_pos, merge_move_report,
 };
 use super::packets::{
-    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight,
+    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
+    LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent, SetBlockDestroyStage,
     SetChunkCacheCenter, SynchronizePlayerPosition, pack_position,
 };
 use super::persistence::PlayerSessionStore;
@@ -49,6 +54,8 @@ use super::registry_resolvers::McRegistryResolvers;
 use super::{PlayerProfile, chunk, enter_play};
 use crate::config::WorldConfig;
 use crate::net::{ConnectionHandle, PlayerSession, PlayerSessionSink};
+use rc_chunk_storage::RegistryId as _;
+use rc_mechanics::{BlockWorldAccess, RegionOwnership};
 
 pub const HARDCODED_REGION_ID: RegionId = RegionId(1);
 
@@ -709,6 +716,82 @@ struct PendingStreamChunk {
 /// generalized to this composition-root/M2-B07 boundary too).
 fn bootstrap_region(world: &mut World) {
     world.insert_resource(ChunkIndex::default());
+    // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate into `HardcodedWorld` for the
+    // first time"): inserts the six `Default`-able Stage-4 resources -- `RegionOwnership`
+    // (the seventh, per that same Context section) has no sensible uniform default and is
+    // instead inserted once, per region, immediately after `RcExecutor::spawn_region`
+    // returns (`with_config`'s own construction sequence, below).
+    rc_mechanics::stage4::ecs::bootstrap_default_stage4_resources(world);
+}
+
+/// Direct (non-`Query`) `BlockWorldAccess` adapter over `region.world`'s own chunk entities
+/// and `block_action::ChunkIndex` directory -- the tick loop's own Stage-3-equivalent manual
+/// step runs outside any `bevy_ecs::System`, so it cannot use `stage4::ecs::EcsBlockWorld`'s
+/// own `Query`-based construction (mirrors `movement.rs`'s own `ChunkBlockShapeSource`
+/// precedent for the identical reason). `local`/`dimension` are enough to answer
+/// `owner_of`/`local_identity` honestly at this milestone's own single-region scope (Context:
+/// "M2 stays inside M1-B05's single `HARDCODED_REGION_ID`", still true) without needing a
+/// real `RegionOwnership` instance threaded through here too.
+struct DirectBlockWorld<'w> {
+    world: &'w mut World,
+    dimension: DimensionId,
+    local: Address,
+}
+
+impl BlockWorldAccess for DirectBlockWorld<'_> {
+    fn get_block(&self, pos: BlockPos) -> Option<rc_chunk_storage::BlockStateId> {
+        let key = pos.chunk_key(self.dimension);
+        let entity = *self.world.resource::<ChunkIndex>().0.get(&key)?;
+        let column = self.world.get::<BlockStateColumn>(entity)?;
+        let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+        Some(column.get(lx, pos.y, lz))
+    }
+
+    fn set_block(&mut self, pos: BlockPos, state: rc_chunk_storage::BlockStateId) -> bool {
+        let key = pos.chunk_key(self.dimension);
+        let Some(entity) = self.world.resource::<ChunkIndex>().0.get(&key).copied() else {
+            return false;
+        };
+        let mut entity_mut = self.world.entity_mut(entity);
+        let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+        let changed = entity_mut
+            .get_mut::<BlockStateColumn>()
+            .map(|mut column| column.set(lx, pos.y, lz, state))
+            .unwrap_or(false);
+        if changed {
+            // Preserves M2-B07's own persistence guarantee (`Rejected`-free writes always
+            // dirty-mark their chunk) -- the real-client-verified "changes persist across
+            // restart" behavior (M2's own real-client test) must keep working through this
+            // blueprint's own new mutation path too.
+            if let Some(mut persistence) = entity_mut.get_mut::<ChunkPersistenceState>() {
+                persistence.mark_dirty();
+            }
+        }
+        changed
+    }
+
+    fn dimension(&self) -> DimensionId {
+        self.dimension
+    }
+
+    fn owner_of(&self, _chunk: ChunkKey) -> Address {
+        self.local
+    }
+
+    fn local_identity(&self) -> Address {
+        self.local
+    }
+}
+
+/// Scans `world`'s currently-spawned `PlayerMarker`s for `network_entity_id` -- mirrors
+/// `player_feet_position`'s own identical scan (below), generalized to return the whole
+/// `Entity` so a caller can also reach that same player's `PlayerMotion`/`GameModeState`/
+/// `HeldItem`/`DestroyState` components.
+fn find_player_entity(world: &World, network_entity_id: i32) -> Option<Entity> {
+    world.iter_entities().find_map(|entity_ref| {
+        let marker = entity_ref.get::<PlayerMarker>()?;
+        (marker.network_entity_id == network_entity_id).then_some(entity_ref.id())
+    })
 }
 
 /// Every raw id and threshold `SuperflatFiller`/`ChunkNbtResolvers` need, converted once
@@ -769,6 +852,13 @@ pub struct HardcodedWorld {
     /// New (M2 integration, M2-B06's own "Composition-root integration" recipe step 1):
     /// this world's player-record working set -- `player_sessions()`'s own doc comment.
     sessions: PlayerSessionStore,
+    /// New (M3-B03), test/diagnostic only -- `debug_set_held_item`'s own doc comment.
+    debug_held_item_tx:
+        tokio::sync::mpsc::UnboundedSender<(i32, HeldItemStub, oneshot::Sender<()>)>,
+    /// New (M3-B03), test/diagnostic only -- `debug_set_survival`'s own doc comment.
+    debug_survival_tx: tokio::sync::mpsc::UnboundedSender<(i32, bool, oneshot::Sender<()>)>,
+    /// New (M3-B03), test/diagnostic only -- `debug_stage4_counters`'s own doc comment.
+    stage4_counters_tx: tokio::sync::mpsc::UnboundedSender<oneshot::Sender<Stage4Counters>>,
 }
 
 impl HardcodedWorld {
@@ -819,6 +909,12 @@ impl HardcodedWorld {
         )>();
         let (chunk_grid_tx, mut chunk_grid_rx) =
             tokio::sync::mpsc::unbounded_channel::<ChunkGridRequest>();
+        let (debug_held_item_tx, mut debug_held_item_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, HeldItemStub, oneshot::Sender<()>)>();
+        let (debug_survival_tx, mut debug_survival_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, bool, oneshot::Sender<()>)>();
+        let (stage4_counters_tx, mut stage4_counters_rx) =
+            tokio::sync::mpsc::unbounded_channel::<oneshot::Sender<Stage4Counters>>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // M2 integration addition (M2-B06's own "Composition-root integration" recipe
@@ -881,11 +977,28 @@ impl HardcodedWorld {
                 rc_chunk_storage::lifecycle::snapshot_system_factory(),
                 vec![],
             );
+            // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate"): registers M3-B01's two
+            // Stage-4 systems into `DomainGroup::BlockRedstone` -- Stage 4 now runs for real
+            // every tick (inert in the steady state under this milestone's own tier-1 scope,
+            // `mining_stage4_wiring.rs`'s own acceptance test).
+            rc_mechanics::stage4::ecs::register_stage4(&mut builder);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );
             let mut region = executor.spawn_region(HARDCODED_REGION_ID);
             lifecycle.install_resources(&mut region.world);
+            // M3-B03 (Context, same section): `RegionOwnership` has no sensible uniform
+            // default (its own `resolve` closure is inherently per-region data) so it is
+            // inserted here, once, immediately after `spawn_region` returns -- mirrors
+            // M2-B07's own already-established `resolve_owner` closure shape verbatim, now
+            // as M3-B01's own `RegionOwnership` type. Every chunk key is trivially local
+            // (Context: "M2 stays inside M1-B05's single `HARDCODED_REGION_ID`", still true
+            // at M3's own scope -- ARCH-D24's own real directory remains a later blueprint's
+            // job).
+            region.world.insert_resource(RegionOwnership {
+                local: Address::Region(HARDCODED_REGION_ID),
+                resolve: Box::new(|_key: ChunkKey| Address::Region(HARDCODED_REGION_ID)),
+            });
 
             let transport = InProcessTransport::new(InProcessTransportConfig::default());
             transport.register_region(HARDCODED_REGION_ID);
@@ -1015,6 +1128,21 @@ impl HardcodedWorld {
                         TeleportState {
                             awaiting_teleport_id: None,
                             next_teleport_id: 2,
+                        },
+                        // M3-B03 join-drain additions (Deliverables, `world.rs`):
+                        // `GameModeState{instabuild: true}` (M1-B05's own hardcoded
+                        // Creative default, preserved as the real spawn value -- `#[derive
+                        // (Default)]`'s own `instabuild: false` is never relied on here,
+                        // `GameModeState`'s own doc comment), `HeldItem` defaulting to
+                        // `Block(Stone)` (M2-B07's own exact prior fixed placement
+                        // behavior, preserved as the default), `DestroyState` with its
+                        // `last_sent_stage` explicitly overridden to `-1` (Deliverables:
+                        // "-1 initial, via a `Default` override in the join-drain step").
+                        GameModeState { instabuild: true },
+                        HeldItem(HeldItemStub::Block(PlaceableBlockKind::Stone)),
+                        DestroyState {
+                            last_sent_stage: -1,
+                            ..Default::default()
                         },
                     ));
                 }
@@ -1259,13 +1387,15 @@ impl HardcodedWorld {
                     }
                 }
 
-                // M2-B07's own Stage-3-equivalent manual step (Context, "Which pipeline
-                // stage"): drain every block action queued since the previous tick,
+                // M3-B03's own Stage-3-equivalent manual step (Context, "Which pipeline
+                // stage", step 1): drain every block action queued since the previous tick,
                 // stable-sort by ascending `network_entity_id` (MECH-D4's "deterministic
-                // merge by ascending player id"), reach-validate (Context, "Where this
-                // check runs, precisely" -- deliberately not `apply_block_action`'s own
-                // concern), then apply/route and respond -- entirely before
-                // `executor.tick_region` runs this tick's own formally-numbered pipeline.
+                // merge by ascending player id"), reach-validate via a real voxel raycast
+                // (`mining::raycast_reach`, MECH-D62), then dispatch into `mining`'s own
+                // dig-lifecycle/placement functions -- each mutation immediately followed by
+                // `mining::settle_neighbor_updates` (Context above) -- entirely before
+                // `executor.tick_region` runs this tick's own formally-numbered pipeline
+                // (which is what actually drives Stage 4 for real, now that it is wired in).
                 let mut pending: Vec<PendingBlockAction> =
                     std::mem::take(&mut carried_block_actions);
                 while let Ok(action) = block_action_rx.try_recv() {
@@ -1273,84 +1403,459 @@ impl HardcodedWorld {
                 }
                 pending.sort_by_key(|action| action.network_entity_id);
 
-                let mut bus = RegionMessageBus::new();
-                // M2 stays single-region (Context: "M2 stays inside M1-B05's single
-                // HARDCODED_REGION_ID" -- no per-chunk `ChunkKey -> RegionId` directory
-                // exists yet, ARCH-D24's own deferred item) -- every chunk key is
-                // trivially local by construction. M2-B05 implementation note (a forced,
-                // necessary deviation from M2-B07's own committed `local_chunk_keys`
-                // check, recorded here and in the implementation changeset's commit
-                // body): that check compared against the *static* 121-chunk bootstrap set
-                // this blueprint just removed (`bootstrap_region`'s own doc comment);
-                // dynamic, ticket-driven residency has no equivalent fixed set to check
-                // against, and a chunk that is local but merely not yet finished loading
-                // must not be misreported as belonging to a different (nonexistent)
-                // region -- unconditional locality is both simpler and more correct at
-                // M2's own single-region scope.
-                let resolve_owner = |_key: ChunkKey| Address::Region(HARDCODED_REGION_ID);
+                // M3-B03: this tick's own Stage-4 resources, pulled out of `region.world` for
+                // the duration of this manual step (`World::remove_resource`/`insert_resource`
+                // -- the ordinary borrow checker has no way to prove a `&mut World` used for
+                // `DirectBlockWorld`'s own entity mutation is disjoint from these same
+                // resources also living inside that `World`, so they are held here instead,
+                // as plain owned locals, and reinserted once the loop below finishes).
+                let mut engine = region
+                    .world
+                    .remove_resource::<rc_mechanics::NeighborUpdateEngine>()
+                    .expect("bootstrap_default_stage4_resources always inserts this");
+                let mut scheduled = region
+                    .world
+                    .remove_resource::<rc_mechanics::ScheduledTickQueue>()
+                    .expect("bootstrap_default_stage4_resources always inserts this");
+                let mut events = region
+                    .world
+                    .remove_resource::<rc_mechanics::BlockEventQueue>()
+                    .expect("bootstrap_default_stage4_resources always inserts this");
+                let behaviors = region
+                    .world
+                    .remove_resource::<rc_mechanics::BlockBehaviorRegistry>()
+                    .expect("bootstrap_default_stage4_resources always inserts this");
+                // M2 stays inside M1-B05's single `HARDCODED_REGION_ID` (Context, still true
+                // at M3's own scope -- ARCH-D24's own real directory remains a later
+                // blueprint's job) -- every chunk key is trivially local by construction.
+                let mining_ownership =
+                    RegionOwnership::always_local(Address::Region(HARDCODED_REGION_ID));
+                let mut mining_outbound: Vec<(Address, RegionMessage)> = Vec::new();
+                let current_tick = region.tick_counter;
 
                 for action in pending {
-                    let target = target_position(&action.kind);
-                    // M2 field-report fix: reach validation now keys off the acting
-                    // player's own live position (`PlayerMarker::position`, kept current by
-                    // the movement-application step above) instead of the hardcoded
-                    // `SPAWN_POSITION` constant every previous version of this check used
-                    // unconditionally -- the fix for the reported "place/break only works
-                    // in a sphere around spawn" symptom (everything beyond `BLOCK_
-                    // INTERACTION_RANGE_CREATIVE` of `SPAWN_POSITION` was rejected as
-                    // `OutOfReach` no matter where the player actually stood). Falls back to
-                    // `SPAWN_POSITION` for the same join/action mpsc-ordering race `respond_
-                    // to_action`'s own fallback handles (the actor's own `PlayerMarker` has
-                    // not been spawned into `region.world` yet this tick) -- never panics on
-                    // a not-yet-spawned actor.
-                    let actor_position =
-                        player_feet_position(&region.world, action.network_entity_id).unwrap_or([
-                            SPAWN_POSITION.x as f64,
-                            SPAWN_POSITION.y as f64,
-                            SPAWN_POSITION.z as f64,
-                        ]);
-                    let out_of_reach = target.is_some_and(|target| {
-                        !within_reach(
-                            eye_position_from_feet(actor_position),
-                            target,
-                            BLOCK_INTERACTION_RANGE_CREATIVE,
-                        )
-                    });
-                    // Only a reach-validated `Break`/`Place` action needs its target
-                    // chunk resident before it can be applied -- an `Ignored` action
-                    // (`target` is `None`) or an out-of-reach one is fully resolved
-                    // without ever touching chunk data (`apply_block_action`'s own
-                    // Deliverables: reach is deliberately not its own concern).
-                    if let Some(target) = target
-                        && !out_of_reach
+                    // The final *write* position (`resolve_place_position`'s own offset for
+                    // `Place`, unchanged from block_action.rs) -- used for the chunk-
+                    // residency pre-check and, inside `mining::finalize_break`/
+                    // `apply_placement` themselves, for the actual mutation.
+                    let write_target = target_position(&action.kind);
+                    // The raw *clicked* position -- what `mining::raycast_reach` validates
+                    // against. Deliberately **not** `write_target` for a `Place` action: a
+                    // `Place`'s resolved write cell is frequently still air (nothing to hit
+                    // there by construction), while the clicked cell a real client's own
+                    // local raycast actually landed on is always the same value regardless
+                    // of `inside_block` -- `location` itself.
+                    let reach_click = match &action.kind {
+                        BlockActionKind::StartDestroy { location }
+                        | BlockActionKind::StopDestroy { location }
+                        | BlockActionKind::AbortDestroy { location } => Some(*location),
+                        BlockActionKind::Place { location, .. } => Some(*location),
+                        BlockActionKind::Ignored => None,
+                    };
+
+                    let entity = find_player_entity(&region.world, action.network_entity_id);
+                    // M2 field-report fix, restated for the raycast era: falls back to a
+                    // synthetic motion at `SPAWN_POSITION` for the same join/action mpsc-
+                    // ordering race the original fix handled -- never panics on a
+                    // not-yet-spawned actor. `pitch: 90.0` (straight down), not `0.0`: this
+                    // hardcoded world's own content is entirely *below* spawn height (the
+                    // superflat layer table), so a level look direction would never hit
+                    // anything at all; straight down is the only fallback orientation that
+                    // can honestly resolve a reach check for this world's own real content.
+                    let motion = entity
+                        .and_then(|e| region.world.get::<PlayerMotion>(e))
+                        .cloned()
+                        .unwrap_or_else(|| PlayerMotion {
+                            position: Vec3::new(
+                                SPAWN_POSITION.x as f64,
+                                SPAWN_POSITION.y as f64,
+                                SPAWN_POSITION.z as f64,
+                            ),
+                            velocity: Vec3::ZERO,
+                            yaw: 0.0,
+                            pitch: 90.0,
+                            on_ground: true,
+                            fall_distance: 0.0,
+                        });
+                    let instabuild = entity
+                        .and_then(|e| region.world.get::<GameModeState>(e))
+                        .map(|g| g.instabuild)
+                        .unwrap_or(true);
+                    let held = entity
+                        .and_then(|e| region.world.get::<HeldItem>(e))
+                        .map(|h| h.0)
+                        .unwrap_or(HeldItemStub::Block(PlaceableBlockKind::Stone));
+                    let mut destroy_state = entity
+                        .and_then(|e| region.world.get::<DestroyState>(e))
+                        .copied()
+                        .unwrap_or_default();
+
+                    let range = if instabuild {
+                        BLOCK_INTERACTION_RANGE_CREATIVE
+                    } else {
+                        BLOCK_INTERACTION_RANGE_SURVIVAL
+                    };
+                    let in_reach = match reach_click {
+                        Some(claimed) => {
+                            let shapes = ChunkBlockShapeSource {
+                                world: &region.world,
+                                index: region.world.resource::<ChunkIndex>(),
+                                dimension: DimensionId::OVERWORLD,
+                            };
+                            mining::raycast_reach(&motion, claimed, range, &shapes)
+                        }
+                        None => true,
+                    };
+
+                    // Only a reach-validated, targeted action needs its target chunk
+                    // resident before it can be applied -- an `Ignored` action (`write_
+                    // target` is `None`) or an out-of-reach one is fully resolved without
+                    // ever touching chunk data.
+                    if let Some(target) = write_target
+                        && in_reach
                         && !lifecycle.is_resident(target.chunk_key(DimensionId::OVERWORLD))
                     {
                         carried_block_actions.push(action);
                         continue;
                     }
 
-                    let outcome = if out_of_reach {
-                        ApplyOutcome::Rejected {
-                            pos: target
-                                .expect("out_of_reach is only ever true when target is Some"),
-                            reason: RejectReason::OutOfReach,
-                            current_state: None,
+                    if reach_click.is_some() && !in_reach {
+                        send_ack(&action);
+                        continue;
+                    }
+
+                    let tool = match held {
+                        HeldItemStub::Tool(material, kind) => (material, kind),
+                        HeldItemStub::Block(_) | HeldItemStub::EmptyHand => {
+                            (ToolMaterial::None, ToolKind::None)
                         }
-                    } else if target.is_none() {
-                        ApplyOutcome::NoOp
-                    } else {
-                        apply_block_action(
-                            &mut region.world,
-                            DimensionId::OVERWORLD,
-                            &action,
-                            &resolve_owner,
-                            Address::Region(HARDCODED_REGION_ID),
-                            &mut bus,
-                        )
                     };
-                    respond_to_action(&region.world, &action, outcome);
+
+                    match action.kind {
+                        BlockActionKind::StartDestroy { location } => {
+                            send_ack(&action);
+                            if instabuild {
+                                let pre_break = read_raw_state(
+                                    &region.world,
+                                    region.world.resource::<ChunkIndex>(),
+                                    DimensionId::OVERWORLD,
+                                    location,
+                                );
+                                let outcome = mining::finalize_break(
+                                    &mut DirectBlockWorld {
+                                        world: &mut region.world,
+                                        dimension: DimensionId::OVERWORLD,
+                                        local: Address::Region(HARDCODED_REGION_ID),
+                                    },
+                                    &mut engine,
+                                    &mut scheduled,
+                                    &mut events,
+                                    &mut mining_outbound,
+                                    &mining_ownership,
+                                    &behaviors,
+                                    current_tick,
+                                    location,
+                                    true,
+                                    tool,
+                                );
+                                respond_break(&region.world, &action, outcome, pre_break);
+                            } else {
+                                let props = mining::dig_properties_for_raw_state(read_raw_state(
+                                    &region.world,
+                                    region.world.resource::<ChunkIndex>(),
+                                    DimensionId::OVERWORLD,
+                                    location,
+                                ));
+                                let speed = mining::destroy_speed(
+                                    props,
+                                    tool,
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    !motion.on_ground,
+                                );
+                                let dig_outcome = mining::begin_destroy(
+                                    &mut destroy_state,
+                                    location,
+                                    false,
+                                    speed,
+                                    current_tick,
+                                );
+                                if dig_outcome == DestroyOutcome::FinalizeNow {
+                                    let pre_break = read_raw_state(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        location,
+                                    );
+                                    let outcome = mining::finalize_break(
+                                        &mut DirectBlockWorld {
+                                            world: &mut region.world,
+                                            dimension: DimensionId::OVERWORLD,
+                                            local: Address::Region(HARDCODED_REGION_ID),
+                                        },
+                                        &mut engine,
+                                        &mut scheduled,
+                                        &mut events,
+                                        &mut mining_outbound,
+                                        &mining_ownership,
+                                        &behaviors,
+                                        current_tick,
+                                        location,
+                                        false,
+                                        tool,
+                                    );
+                                    respond_break(&region.world, &action, outcome, pre_break);
+                                }
+                            }
+                        }
+                        BlockActionKind::StopDestroy { location } => {
+                            send_ack(&action);
+                            if !instabuild {
+                                let props = mining::dig_properties_for_raw_state(read_raw_state(
+                                    &region.world,
+                                    region.world.resource::<ChunkIndex>(),
+                                    DimensionId::OVERWORLD,
+                                    location,
+                                ));
+                                let speed = mining::destroy_speed(
+                                    props,
+                                    tool,
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    !motion.on_ground,
+                                );
+                                let stop_outcome = mining::stop_destroy(
+                                    &mut destroy_state,
+                                    location,
+                                    speed,
+                                    current_tick,
+                                );
+                                if stop_outcome == StopOutcome::FinalizeNow {
+                                    let pre_break = read_raw_state(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        location,
+                                    );
+                                    let outcome = mining::finalize_break(
+                                        &mut DirectBlockWorld {
+                                            world: &mut region.world,
+                                            dimension: DimensionId::OVERWORLD,
+                                            local: Address::Region(HARDCODED_REGION_ID),
+                                        },
+                                        &mut engine,
+                                        &mut scheduled,
+                                        &mut events,
+                                        &mut mining_outbound,
+                                        &mining_ownership,
+                                        &behaviors,
+                                        current_tick,
+                                        location,
+                                        false,
+                                        tool,
+                                    );
+                                    respond_break(&region.world, &action, outcome, pre_break);
+                                }
+                            }
+                        }
+                        BlockActionKind::AbortDestroy { .. } => {
+                            send_ack(&action);
+                            mining::abort_destroy(&mut destroy_state);
+                        }
+                        BlockActionKind::Place {
+                            location,
+                            face,
+                            inside_block,
+                        } => {
+                            send_ack(&action);
+                            let outcome = mining::apply_placement(
+                                &mut DirectBlockWorld {
+                                    world: &mut region.world,
+                                    dimension: DimensionId::OVERWORLD,
+                                    local: Address::Region(HARDCODED_REGION_ID),
+                                },
+                                &mut engine,
+                                &mut scheduled,
+                                &mut events,
+                                &mut mining_outbound,
+                                &mining_ownership,
+                                &behaviors,
+                                current_tick,
+                                location,
+                                face,
+                                inside_block,
+                                held,
+                                motion.yaw,
+                                motion.pitch,
+                            );
+                            respond_place(&region.world, &action, outcome);
+                        }
+                        BlockActionKind::Ignored => {
+                            send_ack(&action);
+                        }
+                    }
+
+                    if let Some(e) = entity
+                        && let Some(mut stored) = region.world.get_mut::<DestroyState>(e)
+                    {
+                        *stored = destroy_state;
+                    }
                 }
-                region.message_state.merge(bus);
+
+                // `mining_outbound` is merged into `region.message_state` once, below, after
+                // the destroy-state tick substep has had its own chance to append to it too
+                // (a finalized delayed destroy's own `finalize_break` call also writes into
+                // this same buffer) -- one merge, not two, so emission order stays a single
+                // well-defined sequence.
+
+                // M3-B03's own destroy-state tick substep (Context, "Which pipeline stage",
+                // step 2): for every player currently in the region, recompute/rebroadcast
+                // crack-stage progress or finalize a delayed destroy -- exactly mirroring
+                // vanilla's own real "tick() runs once per player, after that tick's
+                // packets" ordering. Two passes for the same borrow-checker reason the
+                // movement-evaluation step below uses one: the first collects each player's
+                // own current `DestroyState`/held tool/network id behind only immutable
+                // borrows, the second applies mutations and sends packets.
+                #[allow(clippy::type_complexity)]
+                let mut destroy_tick_subjects: Vec<(
+                    Entity,
+                    i32,
+                    DestroyState,
+                    (ToolMaterial, ToolKind),
+                )> = Vec::new();
+                {
+                    let mut query = region
+                        .world
+                        .query::<(Entity, &PlayerMarker, &DestroyState, &HeldItem)>();
+                    for (entity, marker, state, held) in query.iter(&region.world) {
+                        if !state.is_destroying && !state.has_delayed_destroy {
+                            continue;
+                        }
+                        let tool = match held.0 {
+                            HeldItemStub::Tool(material, kind) => (material, kind),
+                            HeldItemStub::Block(_) | HeldItemStub::EmptyHand => {
+                                (ToolMaterial::None, ToolKind::None)
+                            }
+                        };
+                        destroy_tick_subjects.push((
+                            entity,
+                            marker.network_entity_id,
+                            *state,
+                            tool,
+                        ));
+                    }
+                }
+                for (entity, network_entity_id, mut state, tool) in destroy_tick_subjects {
+                    let air = to_storage_id(AIR.0);
+                    let index = region.world.resource::<ChunkIndex>();
+                    let props_at_pos = mining::dig_properties_for_raw_state(read_raw_state(
+                        &region.world,
+                        index,
+                        DimensionId::OVERWORLD,
+                        state.destroy_pos,
+                    ));
+                    let current_at_pos = to_storage_id(read_raw_state(
+                        &region.world,
+                        region.world.resource::<ChunkIndex>(),
+                        DimensionId::OVERWORLD,
+                        state.destroy_pos,
+                    ));
+                    let current_at_delayed = to_storage_id(read_raw_state(
+                        &region.world,
+                        region.world.resource::<ChunkIndex>(),
+                        DimensionId::OVERWORLD,
+                        state.delayed_destroy_pos,
+                    ));
+                    let speed = mining::destroy_speed(props_at_pos, tool, 0, 0, 0, false, false);
+                    let tick_outcome = mining::tick_destroy_state(
+                        &mut state,
+                        speed,
+                        current_tick,
+                        current_at_pos,
+                        current_at_delayed,
+                        air,
+                    );
+                    match tick_outcome {
+                        TickOutcome::ActiveProgress(stage) => {
+                            let stage = stage as i8;
+                            if stage != state.last_sent_stage {
+                                state.last_sent_stage = stage;
+                                let payload = encode_payload(&SetBlockDestroyStage {
+                                    entity_id: network_entity_id,
+                                    location: pack_position(state.destroy_pos),
+                                    destroy_stage: stage,
+                                });
+                                broadcast_to_others(&region.world, network_entity_id, payload);
+                            }
+                        }
+                        TickOutcome::FinalizeDelayedNow => {
+                            let pos = state.delayed_destroy_pos;
+                            let pre_break = read_raw_state(
+                                &region.world,
+                                region.world.resource::<ChunkIndex>(),
+                                DimensionId::OVERWORLD,
+                                pos,
+                            );
+                            let outcome = mining::finalize_break(
+                                &mut DirectBlockWorld {
+                                    world: &mut region.world,
+                                    dimension: DimensionId::OVERWORLD,
+                                    local: Address::Region(HARDCODED_REGION_ID),
+                                },
+                                &mut engine,
+                                &mut scheduled,
+                                &mut events,
+                                &mut mining_outbound,
+                                &mining_ownership,
+                                &behaviors,
+                                current_tick,
+                                pos,
+                                false,
+                                tool,
+                            );
+                            if let BreakOutcome::Applied { .. } = outcome {
+                                broadcast_break(&region.world, pos, AIR.0, pre_break);
+                            }
+                        }
+                        TickOutcome::Idle
+                        | TickOutcome::CancelledBlockChanged
+                        | TickOutcome::CancelledDelayedBlockChanged => {}
+                    }
+                    if let Some(mut stored) = region.world.get_mut::<DestroyState>(entity) {
+                        *stored = state;
+                    }
+                }
+                if !mining_outbound.is_empty() {
+                    let mut bus = RegionMessageBus::new();
+                    for (to, msg) in mining_outbound {
+                        bus.send(to, msg);
+                    }
+                    region.message_state.merge(bus);
+                }
+
+                region.world.insert_resource(engine);
+                region.world.insert_resource(scheduled);
+                region.world.insert_resource(events);
+                region.world.insert_resource(behaviors);
+                // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate"): keeps `stage4::
+                // ecs::ChunkIndex` (a *different* resource type from `block_action::
+                // ChunkIndex`, despite the identical name -- distinct crates) current too,
+                // so a future sibling blueprint's own real `BlockBehavior`s (registered into
+                // the same `BlockBehaviorRegistry` this tick already threaded through) see
+                // accurate chunk residency once `executor.tick_region` below actually runs
+                // Stage 4's own two systems this same tick.
+                {
+                    let mut stage4_index = rc_mechanics::stage4::ecs::ChunkIndex::default();
+                    let mut chunk_query = region.world.query::<(&ChunkKeyTag, Entity)>();
+                    for (tag, entity) in chunk_query.iter(&region.world) {
+                        stage4_index.0.insert(tag.0, entity);
+                    }
+                    region.world.insert_resource(stage4_index);
+                }
 
                 // M3-B02 Stage-6b-equivalent (Context, "Which pipeline stage", step 2):
                 // evaluates every player CURRENTLY in the region (not just those with a
@@ -1467,7 +1972,7 @@ impl HardcodedWorld {
 
                 // Any report left over belongs to a `network_entity_id` with no
                 // `PlayerMarker` spawned in `region.world` yet this tick (the same
-                // join/action mpsc-ordering race `respond_to_action`'s own doc comment
+                // join/action mpsc-ordering race `broadcast_to_all`'s own doc comment
                 // handles for block actions) -- carried into the next tick's own drain
                 // rather than dropped.
                 for (network_entity_id, report) in pending_moves {
@@ -1477,12 +1982,61 @@ impl HardcodedWorld {
                     });
                 }
 
+                // M3-B03, test/diagnostic only: applies every queued `debug_set_held_item`/
+                // `debug_set_survival` call against this tick's own currently-spawned
+                // players -- a not-yet-spawned target (the same join/action mpsc-ordering
+                // race every other queue in this loop already tolerates) is silently
+                // dropped (its own oneshot reply simply goes unsent, which the caller's own
+                // `.await` on the receiving end observes as an error rather than hanging
+                // forever) rather than carried forward, matching this pair's own "test/
+                // diagnostic only" scope. Each call carries its own oneshot reply, sent only
+                // once the mutation has actually been applied -- `debug_set_held_item`/
+                // `debug_set_survival` are themselves `async fn`s the caller awaits, a
+                // deliberate deviation from this blueprint's own literal synchronous
+                // signature (Deliverables): a fire-and-forget send racing an unrelated
+                // round trip on a *different* channel (this file's own earlier draft) is not
+                // actually a reliable synchronization primitive -- two independently-polled
+                // channels give no guarantee about which one a given tick iteration observes
+                // first, even when the sends themselves are strictly ordered, so a test built
+                // on that assumption is flaky exactly the way a real CI run under heavy
+                // parallel load caught directly, not hypothetically.
+                while let Ok((network_entity_id, item, ack)) = debug_held_item_rx.try_recv() {
+                    if let Some(entity) = find_player_entity(&region.world, network_entity_id)
+                        && let Some(mut held) = region.world.get_mut::<HeldItem>(entity)
+                    {
+                        held.0 = item;
+                    }
+                    let _ = ack.send(());
+                }
+                while let Ok((network_entity_id, survival, ack)) = debug_survival_rx.try_recv() {
+                    if let Some(entity) = find_player_entity(&region.world, network_entity_id)
+                        && let Some(mut mode) = region.world.get_mut::<GameModeState>(entity)
+                    {
+                        mode.instabuild = !survival;
+                    }
+                    let _ = ack.send(());
+                }
+
                 while let Ok((pos, reply)) = query_rx.try_recv() {
                     let _ = reply.send(debug_query_block(
                         &region.world,
                         DimensionId::OVERWORLD,
                         pos,
                     ));
+                }
+
+                while let Ok(reply) = stage4_counters_rx.try_recv() {
+                    let engine = region
+                        .world
+                        .resource::<rc_mechanics::NeighborUpdateEngine>();
+                    let scheduled = region.world.resource::<rc_mechanics::ScheduledTickQueue>();
+                    let events = region.world.resource::<rc_mechanics::BlockEventQueue>();
+                    let _ = reply.send(Stage4Counters {
+                        neighbor_engine_idle: engine.is_idle(),
+                        block_ticks_pending: scheduled.block_len(),
+                        fluid_ticks_pending: scheduled.fluid_len(),
+                        block_events_pending_next_tick: events.pending_next_tick(),
+                    });
                 }
 
                 executor.tick_region(&mut region, &pool, &transport);
@@ -1514,6 +2068,9 @@ impl HardcodedWorld {
             thread_handle: Arc::new(Mutex::new(Some(handle))),
             chunk_grid_tx,
             sessions,
+            debug_held_item_tx,
+            debug_survival_tx,
+            stage4_counters_tx,
         }
     }
 
@@ -1614,71 +2171,216 @@ impl HardcodedWorld {
     pub fn player_sessions(&self) -> PlayerSessionStore {
         self.sessions.clone()
     }
+
+    /// Test/diagnostic only (Context: mirrors `debug_query_block`'s own precedent).
+    /// Applied at the start of the region's next tick that finds `network_entity_id`
+    /// currently spawned; `.await`s that same tick's own oneshot confirmation that the
+    /// mutation was applied (or silently dropped, if `network_entity_id` was never found)
+    /// before returning -- a deliberate deviation from this blueprint's own literal
+    /// synchronous signature (Deliverables), recorded here and in the completion report:
+    /// see `world.rs`'s own tick-loop drain doc comment for why a fire-and-forget send here
+    /// is not actually a reliable way for a caller to know the mutation has landed.
+    pub async fn debug_set_held_item(&self, network_entity_id: i32, item: HeldItemStub) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self
+            .debug_held_item_tx
+            .send((network_entity_id, item, ack_tx))
+            .is_ok()
+        {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// As `debug_set_held_item`. `survival: true` sets `GameModeState.instabuild = false`
+    /// (Context: "the smallest possible slice of MECH-D60's abilities model needed").
+    pub async fn debug_set_survival(&self, network_entity_id: i32, survival: bool) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self
+            .debug_survival_tx
+            .send((network_entity_id, survival, ack_tx))
+            .is_ok()
+        {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// Test/diagnostic only -- reads `NeighborUpdateEngine::is_idle()`/`ScheduledTickQueue::
+    /// block_len()`/`fluid_len()`/`BlockEventQueue::pending_next_tick()` straight off
+    /// `region.world`'s own M3-B01 resources (Acceptance tests, `mining_stage4_wiring.rs`).
+    /// Awaits the next tick's drain, mirroring `debug_query_block`.
+    pub async fn debug_stage4_counters(&self) -> Stage4Counters {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.stage4_counters_tx
+            .send(reply_tx)
+            .expect("the hardcoded region's tick-loop thread outlives every connection");
+        reply_rx.await.expect(
+            "the hardcoded region's tick-loop thread always replies before dropping the sender",
+        )
+    }
 }
 
-/// New (M2 field-report movement-application fix): the live position of the `PlayerMarker`
-/// whose `network_entity_id` matches `network_entity_id`, if currently spawned in `world` --
-/// the reach-check consumer's own lookup (the tick loop's own block-action processing
-/// step, above). `None` for the same join/action mpsc-ordering race `respond_to_action`'s
-/// own fallback handles (never panics on a not-yet-spawned actor).
-fn player_feet_position(world: &World, network_entity_id: i32) -> Option<[f64; 3]> {
-    world.iter_entities().find_map(|entity_ref| {
-        let marker = entity_ref.get::<PlayerMarker>()?;
-        (marker.network_entity_id == network_entity_id).then_some(marker.position)
-    })
+/// Test/diagnostic introspection only (`debug_stage4_counters`'s own doc comment) -- the
+/// M3-B01 Stage-4 substrate's own steady-state idleness, read directly off `region.world`'s
+/// resources rather than inferred from wire traffic.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Stage4Counters {
+    pub neighbor_engine_idle: bool,
+    pub block_ticks_pending: usize,
+    pub fluid_ticks_pending: usize,
+    pub block_events_pending_next_tick: usize,
 }
 
-/// `apply_block_action`'s response side (Context, Implementation step 8's own
-/// `respond_to_action` algorithm): always one `Acknowledge Block Change` to the acting
-/// connection first (MECH-D63 -- unconditional, whether the action succeeded or was
-/// rejected), then, depending on `outcome`, either a broadcast `Block Update` to every
-/// currently-connected player (including the actor itself -- Context explains why that is
-/// a deliberate, harmless superset of vanilla's own actor-excluded broadcast) or a
-/// corrective `Block Update` to the actor alone. Iterates `world`'s entities directly
-/// (`EntityRef::get`) rather than `World::query` so this function can take `&World`
-/// (matching the tick loop's own `&region.world` call site) instead of `&mut World`.
-fn respond_to_action(world: &World, action: &PendingBlockAction, outcome: ApplyOutcome) {
+/// The raw block-state id currently stored at `pos`, or `AIR` if `pos`'s chunk is not
+/// resident in `index` at all (M3-B03: shared by every dig-timing/finalize call site that
+/// needs to read a world position's own current content without going through a full
+/// `BlockWorldAccess` adapter -- `DirectBlockWorld`'s own `get_block` does the identical
+/// lookup for the `&mut`-borrowing call sites; this is the `&`-only twin for read-only
+/// lookups that must coexist with an unrelated mutable borrow of `region.world` elsewhere in
+/// the same statement).
+fn read_raw_state(world: &World, index: &ChunkIndex, dimension: DimensionId, pos: BlockPos) -> u32 {
+    let key = pos.chunk_key(dimension);
+    index
+        .0
+        .get(&key)
+        .and_then(|&entity| world.get::<BlockStateColumn>(entity))
+        .map(|column| {
+            let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+            column.get(lx, pos.y, lz).to_raw()
+        })
+        .unwrap_or(AIR.0)
+}
+
+/// Sends exactly one `Acknowledge Block Change` to the acting connection (MECH-D63 --
+/// unconditional, whether the action succeeds, is rejected, or is `Ignored`).
+fn send_ack(action: &PendingBlockAction) {
     let _ = action
         .connection
         .try_send_payload(encode_payload(&AcknowledgeBlockChange {
             sequence: action.sequence,
         }));
+}
 
+/// Broadcasts `payload` to every currently-connected player, guaranteeing the actor is
+/// reached even if their own `PlayerMarker` has not been spawned into `world` yet this same
+/// tick (M2 field-report fix, `task_9ce21947`, restated: two independent mpsc channels
+/// (`HardcodedWorld::join_tx`/`block_action_tx`) race, with no guarantee a join enqueued
+/// moments before this same action's own packet has already been drained). `actor_reached`
+/// tracks whether the iteration below already found and sent to the actor's own connection;
+/// if not, it is sent once more directly via `actor_connection` -- never double-sent when
+/// their `PlayerMarker` already existed.
+fn broadcast_to_all(
+    world: &World,
+    actor_connection: &ConnectionHandle,
+    actor_network_id: i32,
+    payload: bytes::Bytes,
+) {
+    let mut actor_reached = false;
+    for entity_ref in world.iter_entities() {
+        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
+            let _ = marker.connection.try_send_payload(payload.clone());
+            if marker.network_entity_id == actor_network_id {
+                actor_reached = true;
+            }
+        }
+    }
+    if !actor_reached {
+        let _ = actor_connection.try_send_payload(payload);
+    }
+}
+
+/// As `broadcast_to_all`, excluding `exclude_network_id` entirely (Context: `Set Block
+/// Destroy Stage`'s own "every *other* currently-connected player" rule -- the digging
+/// player's own client already predicts the crack overlay locally). No "actor may not be
+/// spawned yet" fallback is needed here: the excluded player is never the intended
+/// recipient in the first place.
+fn broadcast_to_others(world: &World, exclude_network_id: i32, payload: bytes::Bytes) {
+    for entity_ref in world.iter_entities() {
+        if let Some(marker) = entity_ref.get::<PlayerMarker>()
+            && marker.network_entity_id != exclude_network_id
+        {
+            let _ = marker.connection.try_send_payload(payload.clone());
+        }
+    }
+}
+
+/// A finalized break's own broadcast: `Block Update` (new state, always `AIR`) then `Level
+/// Event` (the break sound/particle effect, `data` = the block's own raw *pre*-break state
+/// id) -- both to every connected player (Context: "the broadcast to every connected player
+/// interest-set simplification... still valid").
+fn broadcast_break(world: &World, pos: BlockPos, new_state: u32, pre_break_state: u32) {
+    let update = encode_payload(&BlockUpdate {
+        location: pack_position(pos),
+        block_state_id: new_state as i32,
+    });
+    let level_event = encode_payload(&LevelEvent {
+        event_id: LEVEL_EVENT_BLOCK_BREAK,
+        location: pack_position(pos),
+        data: pre_break_state as i32,
+    });
+    for entity_ref in world.iter_entities() {
+        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
+            let _ = marker.connection.try_send_payload(update.clone());
+            let _ = marker.connection.try_send_payload(level_event.clone());
+        }
+    }
+}
+
+/// `mining::finalize_break`'s own response side: `Applied` broadcasts `Block Update` + `Level
+/// Event` to every connected player, guaranteeing the actor is reached even if not yet
+/// spawned (`broadcast_to_all`); `Rejected` (only ever `TargetAlreadyAir`, `finalize_break`'s
+/// own only rejection) sends a corrective `Block Update` to the actor alone.
+fn respond_break(
+    world: &World,
+    action: &PendingBlockAction,
+    outcome: BreakOutcome,
+    pre_break_state: u32,
+) {
     match outcome {
-        ApplyOutcome::Applied { pos, new_state }
-        | ApplyOutcome::RoutedCrossRegion { pos, new_state } => {
+        BreakOutcome::Applied { pos, .. } => {
+            let update = encode_payload(&BlockUpdate {
+                location: pack_position(pos),
+                block_state_id: AIR.0 as i32,
+            });
+            broadcast_to_all(world, &action.connection, action.network_entity_id, update);
+            let level_event = encode_payload(&LevelEvent {
+                event_id: LEVEL_EVENT_BLOCK_BREAK,
+                location: pack_position(pos),
+                data: pre_break_state as i32,
+            });
+            broadcast_to_all(
+                world,
+                &action.connection,
+                action.network_entity_id,
+                level_event,
+            );
+        }
+        BreakOutcome::Rejected {
+            pos, current_state, ..
+        } => {
+            let payload = encode_payload(&BlockUpdate {
+                location: pack_position(pos),
+                block_state_id: current_state as i32,
+            });
+            let _ = action.connection.try_send_payload(payload);
+        }
+    }
+}
+
+/// `mining::apply_placement`'s own response side: `Applied` broadcasts `Block Update` only
+/// (no `Level Event` for a placement, Context); `Rejected` sends a corrective `Block Update`
+/// to the actor alone only when `current_state` is populated (never for `RejectReason::
+/// OutOfReach` -- unreachable here, already filtered before dispatch -- and never for
+/// `NothingToPlace`, which has nothing to correct to).
+fn respond_place(world: &World, action: &PendingBlockAction, outcome: PlaceOutcome) {
+    match outcome {
+        PlaceOutcome::Applied { pos, new_state } => {
             let payload = encode_payload(&BlockUpdate {
                 location: pack_position(pos),
                 block_state_id: new_state as i32,
             });
-            // M2 field-report fix (task_9ce21947): the acting player's own `PlayerMarker`
-            // may not be spawned into `world` yet this same tick -- two independent mpsc
-            // channels (`HardcodedWorld::join_tx`/`block_action_tx`) race, with no
-            // guarantee that a join enqueued moments before this same action's own packet
-            // has already been drained into `region.world` by the time this action is
-            // processed. Broadcasting purely by iterating `world`'s own `PlayerMarker`s
-            // silently dropped exactly this actor's own copy in that case (every *other*
-            // already-spawned player still received theirs correctly, since only the
-            // actor's entity could possibly be missing this tick). `actor_reached` tracks
-            // whether the iteration below already found and sent to the actor's own
-            // connection; if not, it is sent once more directly via `action.connection`
-            // (already carried on `PendingBlockAction`, exactly like the unconditional ack
-            // above) -- guaranteeing the actor is reached regardless of spawn ordering,
-            // without ever double-sending when their `PlayerMarker` already existed.
-            let mut actor_reached = false;
-            for entity_ref in world.iter_entities() {
-                if let Some(marker) = entity_ref.get::<PlayerMarker>() {
-                    let _ = marker.connection.try_send_payload(payload.clone());
-                    if marker.network_entity_id == action.network_entity_id {
-                        actor_reached = true;
-                    }
-                }
-            }
-            if !actor_reached {
-                let _ = action.connection.try_send_payload(payload);
-            }
+            broadcast_to_all(world, &action.connection, action.network_entity_id, payload);
         }
-        ApplyOutcome::Rejected {
+        PlaceOutcome::Rejected {
             pos,
             current_state: Some(current),
             ..
@@ -1689,11 +2391,10 @@ fn respond_to_action(world: &World, action: &PendingBlockAction, outcome: ApplyO
             });
             let _ = action.connection.try_send_payload(payload);
         }
-        ApplyOutcome::Rejected {
+        PlaceOutcome::Rejected {
             current_state: None,
             ..
-        }
-        | ApplyOutcome::NoOp => {}
+        } => {}
     }
 }
 

@@ -11,7 +11,7 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, pack_position,
+    KeepAliveServerbound, PlayerAction, SetPlayerRotation, pack_position,
 };
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -119,6 +119,17 @@ async fn collect_acks_and_updates(
     (acks, updates)
 }
 
+/// M3-B03 test-authoring addition: waits until `check` returns `true` -- mirrors
+/// `play_movement_application.rs`'s own identical helper.
+async fn wait_until(mut check: impl FnMut() -> bool) {
+    loop {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 // M2 integration test-authoring fix: raised from `20` -- `enter_play` now awaits a real,
 // ticket-driven `RC-IoPool` chunk-grid load per join (`connection.rs`'s own
 // `request_chunk_grid` call), a genuinely asynchronous round trip absent when this budget
@@ -130,6 +141,7 @@ async fn collect_acks_and_updates(
 async fn sequence_acks_preserve_fifo_order_under_a_burst() {
     tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid = uuid::Uuid::from_u128(1);
         let (server, mut client) = connected_pair().await;
         let (inbound, handle) = spawn_connection(server, ConnectionConfig::default());
         let world_for_task = world.clone();
@@ -144,12 +156,32 @@ async fn sequence_acks_preserve_fifo_order_under_a_burst() {
         let mut accumulator = BytesMut::new();
         drain_play_entry(&mut client, &mut accumulator).await;
 
+        // M3-B03 test-authoring update: reach is now a real voxel raycast (MECH-D62) --
+        // looking straight down (`pitch: 90.0`) hits whatever is directly below the
+        // player's own eye position, comfortably within the 5.0 creative reach bound.
+        let sessions = world.player_sessions();
+        send_packet(
+            &mut client,
+            &SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.rotation) == Some([0.0, 90.0]))
+            .await;
+
         // Three breaks, sent back-to-back, before reading any response to any of them --
-        // every target comfortably within the 5.0 creative reach bound.
+        // a straight-down dig column under spawn: each break exposes the next layer, which
+        // is exactly what the very next break's own raycast then hits (Stone/Wood-pickaxe-
+        // style column digging) -- unlike M2-B07's own three-different-diagonal-columns
+        // shape, which a single fixed look direction could no longer all reach at once
+        // under a real raycast.
         let targets = [
-            (BlockPos::new(1, -60, 1), 10),
-            (BlockPos::new(2, -60, 1), 11),
-            (BlockPos::new(2, -60, 2), 12),
+            (BlockPos::new(0, -60, 0), 10),
+            (BlockPos::new(0, -61, 0), 11),
+            (BlockPos::new(0, -62, 0), 12),
         ];
         for (location, sequence) in targets {
             send_packet(
@@ -157,7 +189,7 @@ async fn sequence_acks_preserve_fifo_order_under_a_burst() {
                 &PlayerAction {
                     status: 0,
                     location: pack_position(location),
-                    face: 1,
+                    direction: 1,
                     sequence,
                 },
             )

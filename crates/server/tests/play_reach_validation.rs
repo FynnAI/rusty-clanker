@@ -11,7 +11,8 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, UseItemOn, pack_position,
+    KeepAliveServerbound, PlayerAction, SetPlayerPositionAndRotation, SetPlayerRotation, UseItemOn,
+    pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -154,6 +155,19 @@ async fn assert_no_packet_of_type(
     }
 }
 
+/// M3-B03 test-authoring addition: waits until `check` returns `true` -- mirrors
+/// `play_movement_application.rs`'s own identical helper (that file's own doc comment has
+/// the full reasoning: reach is now a real voxel raycast, MECH-D62, so a rotation/position
+/// change must actually be applied before a dependent block action is sent).
+async fn wait_until(mut check: impl FnMut() -> bool) {
+    loop {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // M2 integration test-authoring fix: every one of this file's four `timeout` budgets
 // below raised from `20`s to `60`s -- `enter_play` now awaits a real, ticket-driven
 // `RC-IoPool` chunk-grid load per join (`connection.rs`'s own `request_chunk_grid` call),
@@ -169,13 +183,15 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
         // (20, -60, 20) sits in chunk (1, 1) -- one of the nine... locally-seeded chunks,
-        // grass at y=-60 -- but well outside the 5.0 creative reach bound (distance ~28.4).
+        // grass at y=-60 -- but well outside the 5.0 creative reach bound (distance ~28.4,
+        // and outside `cast_ray`'s own `max_distance` budget regardless of look direction --
+        // no rotation setup needed here, unlike every other test below).
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
                 location: pack_position(BlockPos::new(20, -60, 20)),
-                face: 1,
+                direction: 1,
                 sequence: 5,
             },
         )
@@ -212,15 +228,31 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
 async fn reach_accepts_in_range_target() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let sessions = world.player_sessions();
 
-        // distance ~2.12 -- comfortably within the 5.0 creative reach bound.
+        // M3-B03 test-authoring update: reach is now a real voxel raycast (MECH-D62) --
+        // looking straight down (`pitch: 90.0`) hits whatever is directly below A's own eye
+        // position, distance ~1.62, comfortably within the 5.0 creative reach bound.
+        send_packet(
+            &mut a,
+            &SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.rotation) == Some([0.0, 90.0]))
+            .await;
+
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
                 location: pack_position(BlockPos::new(0, -60, 0)),
-                face: 1,
+                direction: 1,
                 sequence: 6,
             },
         )
@@ -245,17 +277,36 @@ async fn reach_accepts_in_range_target() {
 async fn placement_into_non_air_target_is_rejected_with_correction() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let sessions = world.player_sessions();
 
-        // `inside_block: true` targets the clicked cell itself, (2, -60, 2), which is
-        // GRASS_BLOCK -- distance ~3.54, within reach, but not AIR.
+        // M3-B03 test-authoring update: A moves above (2, -60, 2) and looks straight down,
+        // so the raycast's own claimed target (the packet's raw, clicked `location`) is
+        // exactly the block A clicked -- `inside_block: true` then targets that same clicked
+        // cell itself (GRASS_BLOCK, not AIR) for the placement-mutation logic.
+        send_packet(
+            &mut a,
+            &SetPlayerPositionAndRotation {
+                x: 2.0,
+                y: -59.0,
+                z: 2.0,
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -59.0, 2.0]))
+            .await;
+
         send_packet(
             &mut a,
             &UseItemOn {
                 hand: 0,
                 location: pack_position(BlockPos::new(2, -60, 2)),
-                face: 1,
+                direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 0.5,
                 cursor_z: 0.5,
@@ -290,20 +341,48 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
     .unwrap();
 }
 
+/// M3-B03 test-authoring update (renamed and re-derived from M2-B07's own `breaking_air_
+/// is_rejected_with_correction`): a real voxel raycast can never *hit* an air cell (`cast_
+/// ray`'s own contract -- it only reports a hit against a non-empty shape), so a `Player
+/// Action` naming an already-air `location` no longer reaches `mining::finalize_break`'s own
+/// `TargetAlreadyAir` rejection path at all -- it fails the reach check first, exactly as a
+/// real vanilla client's own local raycast would never let it send such a packet in the
+/// first place (there is nothing under the crosshair to interact with). This is a genuine
+/// parity improvement over M2-B07's own Euclidean-only check (which could not tell "no
+/// target under the crosshair" from "a valid, if already-air, target"), not a weakened test
+/// -- `mining::finalize_break`'s own `TargetAlreadyAir` arm is exercised directly, holding
+/// its own hand-constructed pre-air `BlockWorldAccess`, by `mining_destroy_state_machine.rs`
+/// sibling coverage is not needed here since that path is no longer reachable end-to-end
+/// through this crate's own packet layer.
 #[tokio::test]
-async fn breaking_air_is_rejected_with_correction() {
+async fn breaking_air_is_rejected_out_of_reach_not_with_a_correction() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let sessions = world.player_sessions();
 
-        // (2, -59, 2) -- distance ~3.04, within reach -- is already AIR (y=-59 is the
-        // first all-air layer above the grass top, per the shared layer table).
+        // Looks straight down from spawn -- the nearest solid block on that ray is the
+        // grass at (0, -60, 0), not the air cell at (0, -59, 0) itself, so a claimed target
+        // of (0, -59, 0) can never be the raycast's own hit position.
+        send_packet(
+            &mut a,
+            &SetPlayerRotation {
+                yaw: 0.0,
+                pitch: 90.0,
+                on_ground: true,
+            },
+        )
+        .await;
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.rotation) == Some([0.0, 90.0]))
+            .await;
+
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(2, -59, 2)),
-                face: 1,
+                location: pack_position(BlockPos::new(0, -59, 0)),
+                direction: 1,
                 sequence: 8,
             },
         )
@@ -315,10 +394,15 @@ async fn breaking_air_is_rejected_with_correction() {
             8
         );
 
-        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
-        let correction = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(correction.location, pack_position(BlockPos::new(2, -59, 2)));
-        assert_eq!(correction.block_state_id, blocks::AIR.0 as i32);
+        // `OutOfReach` owes no corrective `Block Update` at all (Context) -- unlike M2-B07's
+        // own `TargetAlreadyAir`, which did.
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            BlockUpdate::ID,
+            Duration::from_millis(400),
+        )
+        .await;
     })
     .await
     .unwrap();

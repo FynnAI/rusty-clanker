@@ -9,6 +9,7 @@
 pub mod aabb;
 pub mod collide;
 pub mod motion;
+pub mod raycast;
 pub mod shapes;
 pub mod trig;
 pub mod vec3;
@@ -21,6 +22,7 @@ pub use motion::{
     LivingMotionState, MovementIntent, SNEAK_EDGE_STEP, SNEAK_SPEED_MULTIPLIER,
     SPRINT_SPEED_MULTIPLIER, STEP_HEIGHT, step_living_entity_tick,
 };
+pub use raycast::{RayHit, cast_ray};
 pub use shapes::{
     BlockPhysicsProperties, BlockShapeSource, ShapeTable, VoxelShape, tier1_shape_table,
 };

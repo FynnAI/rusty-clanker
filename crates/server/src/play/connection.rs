@@ -482,15 +482,17 @@ fn dispatch_inbound(
         }
         PlayerAction::ID => {
             if let Ok(packet) = decode_one::<PlayerAction>(raw.body) {
-                // Only `status == 0` (StartDestroyBlock) ever turns into a break --
-                // creative-mode instant break fires on the start action alone (MECH-D61,
-                // Context); `1`/`2` (Abort/StopDestroyBlock) and every other status
-                // (`3..=6`) are `Ignored` -- still owed exactly one ack (MECH-D63), never a
-                // `Block Update`.
+                // M3-B03 (Deliverables, `block_action.rs`): `status` 0/2/1 map to
+                // `StartDestroy`/`StopDestroy`/`AbortDestroy` respectively -- the full dig
+                // packet lifecycle (Context, "Dig packet lifecycle"), superseding M2-B07's
+                // own creative-only `Break`-on-status-0-alone shape. Every other status
+                // (`3..=6`) stays `Ignored` -- still owed exactly one ack (MECH-D63), never
+                // a `Block Update`.
+                let location = unpack_position(packet.location);
                 let kind = match packet.status {
-                    0 => BlockActionKind::Break {
-                        location: unpack_position(packet.location),
-                    },
+                    0 => BlockActionKind::StartDestroy { location },
+                    2 => BlockActionKind::StopDestroy { location },
+                    1 => BlockActionKind::AbortDestroy { location },
                     _ => BlockActionKind::Ignored,
                 };
                 world.queue_block_action(PendingBlockAction {
@@ -503,11 +505,11 @@ fn dispatch_inbound(
         }
         UseItemOn::ID => {
             if let Ok(packet) = decode_one::<UseItemOn>(raw.body) {
-                // An out-of-range `face` value is decodable-but-nonsensical input --
+                // An out-of-range `direction` value is decodable-but-nonsensical input --
                 // clamped to a harmless default rather than disconnecting (this project's
                 // own established "tolerate everything not explicitly gated" dispatch
                 // philosophy, M1-B05's Context).
-                let face = Face::from_ordinal(packet.face).unwrap_or(Face::Up);
+                let face = Face::from_ordinal(packet.direction).unwrap_or(Face::Up);
                 let kind = BlockActionKind::Place {
                     location: unpack_position(packet.location),
                     face,

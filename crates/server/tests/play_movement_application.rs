@@ -26,7 +26,8 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, SetPlayerPosition, pack_position,
+    KeepAliveServerbound, PlayerAction, SetPlayerPosition, SetPlayerPositionAndRotation,
+    pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -174,12 +175,22 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
         // the 5.0 creative reach bound: before the M2 field-report fix, every reach check
         // used `SPAWN_POSITION` unconditionally, so this would always be rejected
         // `OutOfReach` no matter where the player actually claimed to stand.
+        //
+        // M3-B03 test-authoring update: reach is now a real voxel raycast (MECH-D62), which
+        // needs an actual look direction, not just a nearby position -- `SetPlayerPosition`
+        // alone (the default `yaw: 0.0, pitch: 0.0` look direction) would ray straight
+        // horizontally through open air forever in this hardcoded world's own always-below-
+        // spawn content, never hitting the intended target. `SetPlayerPositionAndRotation`
+        // moves and looks straight down (`pitch: 90.0`) in the same packet/tick, landing
+        // exactly on `(9, -60, 0)`, the block directly below the new position.
         send_packet(
             &mut a,
-            &SetPlayerPosition {
+            &SetPlayerPositionAndRotation {
                 x: 9.0,
                 y: -59.0,
                 z: 0.0,
+                yaw: 0.0,
+                pitch: 90.0,
                 on_ground: true,
             },
         )
@@ -195,7 +206,7 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
             &PlayerAction {
                 status: 0,
                 location: pack_position(BlockPos::new(9, -60, 0)),
-                face: 1,
+                direction: 1,
                 sequence: 30,
             },
         )
@@ -255,7 +266,7 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
             &PlayerAction {
                 status: 0,
                 location: pack_position(BlockPos::new(0, -60, 0)),
-                face: 1,
+                direction: 1,
                 sequence: 31,
             },
         )
