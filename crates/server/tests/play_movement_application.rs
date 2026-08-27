@@ -5,6 +5,19 @@
 //! constant every prior version of this check used unconditionally, the exact root cause of
 //! the reported "place/break only works in a sphere around spawn" symptom. Every test
 //! constructs its own `HardcodedWorld::new()` -- no test shares state with any other.
+//!
+//! M3-B02 test-authoring fix: both scenarios below originally moved the actor tens of
+//! blocks in a single `SetPlayerPosition` packet (28.4 and 40 blocks respectively) --
+//! plausible under M2's own raw decode-and-apply movement path, but M3-B02's own
+//! server-authoritative speed check (`SPEED_CHECK_THRESHOLD = 100.0` blocks^2, `evaluate_
+//! movement`) now rejects any single-tick claim that large from a resting `velocity ==
+//! Vec3::ZERO` state, issuing a teleport correction instead of applying it -- these tests'
+//! own `wait_until` polls would hang forever waiting for a position sync that never
+//! happens. Both scenarios are restated with a single `SetPlayerPosition` move of 9 blocks
+//! (`9^2 = 81 <= 100`, comfortably under the speed-check threshold) -- still far enough
+//! that the targeted block sits outside `BLOCK_INTERACTION_RANGE_CREATIVE` (5.0) from the
+//! fixed `SPAWN_POSITION`, so the same "the live position, not spawn, determines reach"
+//! assertion still holds.
 
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
@@ -155,32 +168,33 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
         let uuid = uuid::Uuid::from_u128(101);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 101).await;
 
-        // (20, -60, 20) sits in chunk (1, 1) -- one of the eleven-by-eleven locally-seeded
-        // chunks, grass at y=-60 -- ~28.4 blocks from the fixed `SPAWN_POSITION`, well
-        // outside the 5.0 creative reach bound: before this fix, every reach check used
-        // `SPAWN_POSITION` unconditionally, so this would always be rejected `OutOfReach`
-        // no matter where the player actually claimed to stand.
+        // (9, -59, 0) is a single, speed-check-legal 9-block move from `SPAWN_POSITION`
+        // (`9^2 = 81 <= SPEED_CHECK_THRESHOLD = 100.0`) that still lands the targeted block,
+        // (9, -60, 0), ~9.7 blocks from `SPAWN_POSITION`'s own eye position -- well outside
+        // the 5.0 creative reach bound: before the M2 field-report fix, every reach check
+        // used `SPAWN_POSITION` unconditionally, so this would always be rejected
+        // `OutOfReach` no matter where the player actually claimed to stand.
         send_packet(
             &mut a,
             &SetPlayerPosition {
-                x: 20.0,
-                y: -60.0,
-                z: 20.0,
+                x: 9.0,
+                y: -59.0,
+                z: 0.0,
                 on_ground: true,
             },
         )
         .await;
 
         let sessions = world.player_sessions();
-        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([20.0, -60.0, 20.0]))
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -59.0, 0.0]))
             .await;
 
-        // Now within ~2.1 blocks of the moved position -- accepted.
+        // Now within ~2.2 blocks of the moved position -- accepted.
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(20, -60, 20)),
+                location: pack_position(BlockPos::new(9, -60, 0)),
                 face: 1,
                 sequence: 30,
             },
@@ -195,11 +209,11 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
 
         let update = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(update).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(20, -60, 20)));
+        assert_eq!(update.location, pack_position(BlockPos::new(9, -60, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
         assert_eq!(
-            world.debug_query_block(BlockPos::new(20, -60, 20)).await,
+            world.debug_query_block(BlockPos::new(9, -60, 0)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::AIR.0,
                 dirty: true,
@@ -218,13 +232,14 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 102).await;
 
         // (0, -60, 0) sits ~2.1 blocks from `SPAWN_POSITION` -- comfortably in reach at
-        // join time. Moving to (40, -60, 0) first puts the player's own live eye position
-        // ~40 blocks away, well past the 5.0 creative bound.
+        // join time. Moving to (9, -59, 0) -- a single, speed-check-legal 9-block move
+        // (`9^2 = 81 <= SPEED_CHECK_THRESHOLD = 100.0`) -- puts the player's own live eye
+        // position ~8.8 blocks from the target, past the 5.0 creative bound.
         send_packet(
             &mut a,
             &SetPlayerPosition {
-                x: 40.0,
-                y: -60.0,
+                x: 9.0,
+                y: -59.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -232,7 +247,7 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
         .await;
 
         let sessions = world.player_sessions();
-        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([40.0, -60.0, 0.0]))
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -59.0, 0.0]))
             .await;
 
         send_packet(

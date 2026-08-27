@@ -7,19 +7,20 @@
 use std::time::{Duration, Instant};
 
 use rc_core::{BlockPos, DimensionId};
+use rc_physics::Vec3;
 use rc_protocol::{ConnectionState, RawPacket, RcPacket, decode_one, encode_payload};
 use tokio::sync::mpsc;
 
 use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
-use super::movement::{PendingMovementUpdate, feet_block_pos};
+use super::movement::{PendingMoveReport, PendingMovementPacket, feet_block_pos};
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
     KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
-    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerPosition,
-    SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition, UseItemOn,
-    pack_position, unpack_position,
+    SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerMovementFlags,
+    SetPlayerPosition, SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition,
+    UseItemOn, pack_position, unpack_position,
 };
 use super::persistence::PlayerSessionStore;
 use super::world::{HardcodedWorld, PendingJoin};
@@ -397,6 +398,17 @@ fn dispatch_inbound(
         ConfirmTeleportation::ID => {
             if let Ok(packet) = decode_one::<ConfirmTeleportation>(raw.body) {
                 tracing::trace!(teleport_id = packet.teleport_id, "confirm teleportation");
+                // M3-B02: preserves M1-B05's own accept-and-log behavior for this packet
+                // unchanged, additionally queuing it for the region's own per-tick
+                // `evaluate_movement` step (Context: "Teleport / position-sync protocol" --
+                // "On ConfirmTeleportation{teleport_id}").
+                world.queue_movement_packet(PendingMovementPacket {
+                    network_entity_id,
+                    report: PendingMoveReport {
+                        confirm_teleport_id: Some(packet.teleport_id),
+                        ..Default::default()
+                    },
+                });
             }
         }
         KeepAliveServerbound::ID => {
@@ -412,37 +424,60 @@ fn dispatch_inbound(
                 );
             }
         }
-        // M2 field-report fix: the real root cause of the reported "place/break only
-        // works in a sphere around spawn" / "no new chunks stream in" / "position never
-        // persists" symptoms -- these three ids fell into the `other =>` catch-all below
-        // and were silently dropped, unread, on every prior version of this dispatch loop
-        // (`play::packets`' own doc comment on the three structs below has the full
-        // root-cause writeup). Each decodes and enqueues a `PendingMovementUpdate` for the
-        // region's own per-tick apply step (`world.rs`'s own tick loop) -- never applies
+        // M3-B02: the four serverbound movement packets, each decoded and enqueued as a
+        // `PendingMovementPacket` for the region's own per-tick `evaluate_movement` step
+        // (`world.rs`'s own tick loop, Context: "Which pipeline stage") -- never applies
         // anything here directly, matching `PlayerAction`/`UseItemOn`'s own established
-        // "decode and enqueue, apply once per tick" pattern below.
+        // "decode and enqueue, apply once per tick" pattern below. Superseded the M2
+        // field-report fix's own minimal decode-and-apply path (`play::movement`'s own
+        // module doc comment has the full prior root-cause writeup for why these ids were
+        // ever unrecognized in the first place).
         SetPlayerPosition::ID => {
             if let Ok(packet) = decode_one::<SetPlayerPosition>(raw.body) {
-                world.queue_movement(PendingMovementUpdate::from_position(
+                world.queue_movement_packet(PendingMovementPacket {
                     network_entity_id,
-                    packet,
-                ));
+                    report: PendingMoveReport {
+                        position: Some(Vec3::new(packet.x, packet.y, packet.z)),
+                        on_ground: Some(packet.on_ground),
+                        ..Default::default()
+                    },
+                });
             }
         }
         SetPlayerPositionAndRotation::ID => {
             if let Ok(packet) = decode_one::<SetPlayerPositionAndRotation>(raw.body) {
-                world.queue_movement(PendingMovementUpdate::from_position_and_rotation(
+                world.queue_movement_packet(PendingMovementPacket {
                     network_entity_id,
-                    packet,
-                ));
+                    report: PendingMoveReport {
+                        position: Some(Vec3::new(packet.x, packet.y, packet.z)),
+                        rotation: Some((packet.yaw, packet.pitch)),
+                        on_ground: Some(packet.on_ground),
+                        confirm_teleport_id: None,
+                    },
+                });
             }
         }
         SetPlayerRotation::ID => {
             if let Ok(packet) = decode_one::<SetPlayerRotation>(raw.body) {
-                world.queue_movement(PendingMovementUpdate::from_rotation(
+                world.queue_movement_packet(PendingMovementPacket {
                     network_entity_id,
-                    packet,
-                ));
+                    report: PendingMoveReport {
+                        rotation: Some((packet.yaw, packet.pitch)),
+                        on_ground: Some(packet.on_ground),
+                        ..Default::default()
+                    },
+                });
+            }
+        }
+        SetPlayerMovementFlags::ID => {
+            if let Ok(packet) = decode_one::<SetPlayerMovementFlags>(raw.body) {
+                world.queue_movement_packet(PendingMovementPacket {
+                    network_entity_id,
+                    report: PendingMoveReport {
+                        on_ground: Some(packet.on_ground),
+                        ..Default::default()
+                    },
+                });
             }
         }
         PlayerAction::ID => {

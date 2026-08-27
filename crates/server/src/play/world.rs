@@ -18,6 +18,7 @@ use rc_chunk_storage::{
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionId, RegionMessageBus};
+use rc_physics::Vec3;
 use rc_protocol::encode_payload;
 use rc_registries::generated_v776::block_states::{
     self,
@@ -35,10 +36,13 @@ use super::block_action::{
     to_storage_biome_id, to_storage_id, within_reach,
 };
 use super::connection::SPAWN_POSITION;
-use super::movement::{PendingMovementUpdate, feet_block_pos};
+use super::movement::{
+    ChunkBlockShapeSource, MovementOutcome, PendingMoveReport, PendingMovementPacket, PlayerMotion,
+    TeleportState, evaluate_movement, feet_block_pos, merge_move_report,
+};
 use super::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart, LevelChunkWithLight,
-    SetChunkCacheCenter, pack_position,
+    SetChunkCacheCenter, SynchronizePlayerPosition, pack_position,
 };
 use super::persistence::PlayerSessionStore;
 use super::registry_resolvers::McRegistryResolvers;
@@ -743,11 +747,13 @@ pub struct HardcodedWorld {
     /// at this region's own Stage-3-equivalent manual step (Context, "Which pipeline
     /// stage").
     block_action_tx: tokio::sync::mpsc::UnboundedSender<PendingBlockAction>,
-    /// New (M2 field-report movement-application fix): enqueued by `connection.rs`'s
-    /// inbound dispatch on every decoded `SetPlayerPosition`/`SetPlayerPositionAndRotation`/
-    /// `SetPlayerRotation`, drained once per tick alongside `block_action_tx` above
-    /// (`apply_movement_updates`'s own doc comment).
-    movement_tx: tokio::sync::mpsc::UnboundedSender<PendingMovementUpdate>,
+    /// M3-B02 (superseding the M2 field-report movement-application fix's own
+    /// `PendingMovementUpdate`-typed channel): enqueued by `connection.rs`'s inbound
+    /// dispatch on every decoded movement packet -- the four serverbound movement packets
+    /// plus `ConfirmTeleportation` -- drained once per tick alongside `block_action_tx`
+    /// above, after this same tick's own block-action drain-and-apply step (Context,
+    /// "Which pipeline stage").
+    movement_tx: tokio::sync::mpsc::UnboundedSender<PendingMovementPacket>,
     /// New (M2-B07), test/diagnostic only -- `debug_query_block`'s own doc comment.
     query_tx:
         tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<DebugBlockInfo>>)>,
@@ -806,7 +812,7 @@ impl HardcodedWorld {
         let (block_action_tx, mut block_action_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
         let (movement_tx, mut movement_rx) =
-            tokio::sync::mpsc::unbounded_channel::<PendingMovementUpdate>();
+            tokio::sync::mpsc::unbounded_channel::<PendingMovementPacket>();
         let (query_tx, mut query_rx) = tokio::sync::mpsc::unbounded_channel::<(
             BlockPos,
             oneshot::Sender<Option<DebugBlockInfo>>,
@@ -905,12 +911,13 @@ impl HardcodedWorld {
             // grid`'s own doc comment -- the requested chunks' async load may take several
             // ticks to complete).
             let mut chunk_grid_requests: Vec<PendingChunkGridRequest> = Vec::new();
-            // New (M2 field-report movement-application fix): a movement update whose own
-            // `network_entity_id` has no `PlayerMarker` spawned in `region.world` yet this
-            // tick (the same join/action mpsc-ordering race `task_9ce21947` flagged for
-            // block actions, `respond_to_action`'s own doc comment) is carried into the
-            // next tick's own drain instead of being silently dropped.
-            let mut carried_movement_updates: Vec<PendingMovementUpdate> = Vec::new();
+            // M3-B02 (mirrors the M2 field-report movement-application fix's own identical
+            // pattern): a movement report whose own `network_entity_id` has no
+            // `PlayerMarker` spawned in `region.world` yet this tick (the same join/action
+            // mpsc-ordering race `task_9ce21947` flagged for block actions, `respond_to_
+            // action`'s own doc comment) is carried into the next tick's own drain instead
+            // of being silently dropped.
+            let mut carried_movement_updates: Vec<PendingMovementPacket> = Vec::new();
             // New (M2 field-report chunk-streaming fix): every chunk coordinate `stream_
             // chunks_for_moved_players` has requested for a moved player but that has not
             // yet become resident, carried across tick iterations exactly like `carried_
@@ -967,17 +974,49 @@ impl HardcodedWorld {
                         .into_iter()
                         .map(|(dx, dz)| (join_chunk.x + dx, join_chunk.z + dz))
                         .collect();
-                    region.world.spawn(PlayerMarker {
-                        network_entity_id: join.network_entity_id,
-                        username: join.username,
-                        connection: join.connection,
-                        uuid: join.uuid,
-                        position: join.position,
-                        rotation: join.rotation,
-                        on_ground: true,
-                        last_streamed_center: join_chunk,
-                        sent_chunks: already_sent,
-                    });
+                    // M3-B02: spawns `PlayerMotion`/`TeleportState` alongside `PlayerMarker`
+                    // in the same bundle -- `PlayerMotion`'s own initial position/rotation
+                    // uses this player's real just-loaded (or freshly defaulted) `join.
+                    // position`/`join.rotation`, not blindly the blueprint's own literal
+                    // `SPAWN_POSITION` default (a deliberate, recorded deviation: M1-B05's/
+                    // M2's own already-shipped persistence path already generalizes
+                    // "spawn at a resting position" to "resume at the last-known-good
+                    // one," and `join.position` already equals `SPAWN_POSITION` for a
+                    // brand-new player, so this is a strict superset, never a regression).
+                    // `PlayerMarker::position`/`rotation`/`on_ground` stay a synced mirror
+                    // of `PlayerMotion`, kept current by this tick loop's own movement-
+                    // resolution step below -- `block_action.rs`'s reach check and this
+                    // same loop's own chunk-streaming/persistence steps (neither owned by
+                    // this blueprint) read `PlayerMarker` directly and are not rewired.
+                    region.world.spawn((
+                        PlayerMarker {
+                            network_entity_id: join.network_entity_id,
+                            username: join.username,
+                            connection: join.connection,
+                            uuid: join.uuid,
+                            position: join.position,
+                            rotation: join.rotation,
+                            on_ground: true,
+                            last_streamed_center: join_chunk,
+                            sent_chunks: already_sent,
+                        },
+                        PlayerMotion {
+                            position: Vec3::new(
+                                join.position[0],
+                                join.position[1],
+                                join.position[2],
+                            ),
+                            velocity: Vec3::ZERO,
+                            yaw: join.rotation[0],
+                            pitch: join.rotation[1],
+                            on_ground: true,
+                            fall_distance: 0.0,
+                        },
+                        TeleportState {
+                            awaiting_teleport_id: None,
+                            next_teleport_id: 2,
+                        },
+                    ));
                 }
 
                 // M2 integration addition: registers (or replaces, harmlessly -- Context's
@@ -998,60 +1037,27 @@ impl HardcodedWorld {
                     });
                 }
 
-                // M2 field-report fix: drain and apply every pending movement update
-                // (`play::movement`'s own module doc comment has the full root-cause
-                // writeup) -- previously nothing in this tick loop ever touched
-                // `movement_rx` at all, so a decoded `SetPlayerPosition`/
-                // `SetPlayerPositionAndRotation`/`SetPlayerRotation` (`connection.rs`'s own
-                // dispatch arms) had nowhere to go. Applied before `ticket_manager.step()`
-                // (below) so this same tick's own churn computation already reflects any
-                // chunk-crossing move (`stream_chunks_for_moved_players`'s own doc
-                // comment, further down).
-                let mut movement_updates: Vec<PendingMovementUpdate> =
-                    std::mem::take(&mut carried_movement_updates);
-                while let Ok(update) = movement_rx.try_recv() {
-                    movement_updates.push(update);
+                // M3-B02 Stage-3-equivalent (Context, "Which pipeline stage", step 1):
+                // drain every queued movement packet since the previous tick, merging
+                // per-field "last write wins" into one coalesced report per player.
+                // Evaluation itself (Stage-6b-equivalent) happens later this same tick,
+                // after the block-action drain-and-apply step below, per Context's own
+                // exact placement instruction (physics/collision lookups need this tick's
+                // own already-refreshed `ChunkIndex`, which the block-action step below
+                // is itself the first consumer of).
+                let mut pending_moves: std::collections::HashMap<i32, PendingMoveReport> =
+                    std::collections::HashMap::new();
+                for carried in std::mem::take(&mut carried_movement_updates) {
+                    merge_move_report(
+                        pending_moves.entry(carried.network_entity_id).or_default(),
+                        &carried.report,
+                    );
                 }
-                for update in movement_updates {
-                    let mut query = region.world.query::<&mut PlayerMarker>();
-                    let Some(mut marker) = query
-                        .iter_mut(&mut region.world)
-                        .find(|marker| marker.network_entity_id == update.network_entity_id)
-                    else {
-                        // The same join/action mpsc-ordering race `task_9ce21947` flagged
-                        // for block actions (`respond_to_action`'s own doc comment) -- this
-                        // player's own `PlayerMarker` has not been spawned into
-                        // `region.world` yet this tick. Carried into the next tick's own
-                        // drain rather than dropped.
-                        carried_movement_updates.push(update);
-                        continue;
-                    };
-                    if let Some(position) = update.position {
-                        marker.position = position;
-                    }
-                    if let Some(rotation) = update.rotation {
-                        marker.rotation = rotation;
-                    }
-                    if let Some(on_ground) = update.on_ground {
-                        marker.on_ground = on_ground;
-                    }
-                    if update.position.is_some() || update.rotation.is_some() {
-                        // M2 field-report persistence fix: syncs the live position/rotation
-                        // straight back into this player's own session record on every
-                        // applied update, not only at disconnect -- `sessions_for_thread.
-                        // save_all()`'s own periodic sweep (below) and `SaveOnDisconnect`'s
-                        // own disconnect-time save (`connection.rs`) both simply persist
-                        // whatever this record currently holds, so both are only ever as
-                        // fresh as this sync. AC1c's own "player rejoins at the position
-                        // they left at" fix.
-                        let uuid = marker.uuid;
-                        let position = marker.position;
-                        let rotation = marker.rotation;
-                        sessions_for_thread.with_record_mut(uuid, |record| {
-                            record.data.pos = position;
-                            record.data.rotation = rotation;
-                        });
-                    }
+                while let Ok(packet) = movement_rx.try_recv() {
+                    merge_move_report(
+                        pending_moves.entry(packet.network_entity_id).or_default(),
+                        &packet.report,
+                    );
                 }
 
                 // M2 field-report chunk-streaming fix: recomputes every currently-spawned
@@ -1346,6 +1352,131 @@ impl HardcodedWorld {
                 }
                 region.message_state.merge(bus);
 
+                // M3-B02 Stage-6b-equivalent (Context, "Which pipeline stage", step 2):
+                // evaluates every player CURRENTLY in the region (not just those with a
+                // fresh report this tick -- Context's own "gravity/collision bookkeeping
+                // for a player who sent no packet this tick is a documented no-op, not a
+                // bug" rule), placed here -- after the block-action drain-and-apply step
+                // above, before `executor.tick_region` below -- per Context's own exact
+                // instruction: this tick's `ChunkIndex` refresh (above) is what
+                // `ChunkBlockShapeSource`'s block-shape lookups need already current, and
+                // the block-action step above is itself the first consumer of that same
+                // refresh, so movement evaluation follows it rather than the reverse.
+                //
+                // Two passes to satisfy the borrow checker: the first collects each
+                // player's evaluated outcome behind only immutable borrows of
+                // `region.world` (`ChunkBlockShapeSource` and the query both borrow it
+                // shared, so they may coexist); the second, once those borrows have
+                // ended, writes the results back and sends responses.
+                #[allow(clippy::type_complexity)]
+                let mut move_results: Vec<(
+                    Entity,
+                    ConnectionHandle,
+                    uuid::Uuid,
+                    PlayerMotion,
+                    TeleportState,
+                    MovementOutcome,
+                    bool,
+                )> = Vec::new();
+                {
+                    // `World::query` itself needs `&mut World` momentarily (to register the
+                    // query's component access) even though the returned `QueryState` does
+                    // not borrow `world` at all -- built before `shapes` below so that
+                    // momentary mutable borrow never overlaps `shapes`'s own immutable one.
+                    let mut query =
+                        region
+                            .world
+                            .query::<(Entity, &PlayerMarker, &PlayerMotion, &TeleportState)>();
+                    let shapes = ChunkBlockShapeSource {
+                        world: &region.world,
+                        index: region.world.resource::<ChunkIndex>(),
+                        dimension: DimensionId::OVERWORLD,
+                    };
+                    let mut entries: Vec<(
+                        Entity,
+                        i32,
+                        ConnectionHandle,
+                        uuid::Uuid,
+                        PlayerMotion,
+                        TeleportState,
+                    )> = query
+                        .iter(&region.world)
+                        .map(|(entity, marker, motion, teleport)| {
+                            (
+                                entity,
+                                marker.network_entity_id,
+                                marker.connection.clone(),
+                                marker.uuid,
+                                motion.clone(),
+                                teleport.clone(),
+                            )
+                        })
+                        .collect();
+                    entries.sort_by_key(|(_, network_id, ..)| *network_id);
+
+                    for (entity, network_id, connection, uuid, mut motion, mut teleport) in entries
+                    {
+                        let report = pending_moves.remove(&network_id);
+                        let had_report = report.is_some();
+                        let report = report.unwrap_or_default();
+                        let outcome =
+                            evaluate_movement(&mut motion, &mut teleport, &report, &shapes);
+                        move_results.push((
+                            entity, connection, uuid, motion, teleport, outcome, had_report,
+                        ));
+                    }
+                }
+
+                for (entity, connection, uuid, motion, teleport, outcome, had_report) in
+                    move_results
+                {
+                    if let Some(mut stored) = region.world.get_mut::<PlayerMotion>(entity) {
+                        *stored = motion.clone();
+                    }
+                    if let Some(mut stored) = region.world.get_mut::<TeleportState>(entity) {
+                        *stored = teleport.clone();
+                    }
+                    if let Some(mut marker) = region.world.get_mut::<PlayerMarker>(entity) {
+                        // Mirrors `motion`'s own resolved fields back onto `PlayerMarker`
+                        // (Context: not this blueprint's own state, but `block_action.rs`'s
+                        // reach check and this same loop's own chunk-streaming/persistence
+                        // steps -- neither owned by this blueprint -- still read it
+                        // directly, per the join-drain step's own doc comment above).
+                        marker.position = [motion.position.x, motion.position.y, motion.position.z];
+                        marker.rotation = [motion.yaw, motion.pitch];
+                        marker.on_ground = motion.on_ground;
+                    }
+                    if had_report {
+                        // M2 field-report persistence fix, preserved: syncs the live
+                        // position/rotation straight back into this player's own session
+                        // record whenever a fresh report actually arrived this tick, not
+                        // only at disconnect -- `sessions_for_thread.save_all()`'s own
+                        // periodic sweep (below) and `SaveOnDisconnect`'s own
+                        // disconnect-time save (`connection.rs`) both simply persist
+                        // whatever this record currently holds. AC1c's own "player rejoins
+                        // at the position they left at" fix.
+                        let position = [motion.position.x, motion.position.y, motion.position.z];
+                        let rotation = [motion.yaw, motion.pitch];
+                        sessions_for_thread.with_record_mut(uuid, |record| {
+                            record.data.pos = position;
+                            record.data.rotation = rotation;
+                        });
+                    }
+                    respond_to_movement(&connection, &motion, &teleport, outcome);
+                }
+
+                // Any report left over belongs to a `network_entity_id` with no
+                // `PlayerMarker` spawned in `region.world` yet this tick (the same
+                // join/action mpsc-ordering race `respond_to_action`'s own doc comment
+                // handles for block actions) -- carried into the next tick's own drain
+                // rather than dropped.
+                for (network_entity_id, report) in pending_moves {
+                    carried_movement_updates.push(PendingMovementPacket {
+                        network_entity_id,
+                        report,
+                    });
+                }
+
                 while let Ok((pos, reply)) = query_rx.try_recv() {
                     let _ = reply.send(debug_query_block(
                         &region.world,
@@ -1424,12 +1555,12 @@ impl HardcodedWorld {
             .expect("the hardcoded region's tick-loop thread outlives every connection");
     }
 
-    /// New (M2 field-report movement-application fix). Enqueues a decoded movement claim,
-    /// applied at the start of this region's next tick (`apply_movement_updates`'s own doc
-    /// comment). Never blocks.
-    pub fn queue_movement(&self, update: PendingMovementUpdate) {
+    /// M3-B02 (superseding the M2 field-report movement-application fix's own `queue_
+    /// movement`). Enqueues a decoded movement packet, applied at the start of this
+    /// region's next tick's Stage-3-equivalent step (Context). Never blocks.
+    pub fn queue_movement_packet(&self, packet: PendingMovementPacket) {
         self.movement_tx
-            .send(update)
+            .send(packet)
             .expect("the hardcoded region's tick-loop thread outlives every connection");
     }
 
@@ -1563,6 +1694,45 @@ fn respond_to_action(world: &World, action: &PendingBlockAction, outcome: ApplyO
             ..
         }
         | ApplyOutcome::NoOp => {}
+    }
+}
+
+/// `evaluate_movement`'s response side (Context: "Issuing a correction"). On
+/// `RejectSpeed`/`RejectMismatch`, sends a `SynchronizePlayerPosition` correction back to
+/// `motion`'s own last-known-good (unchanged by a rejected outcome) position/rotation; on
+/// `Disconnect`, closes the connection; every other outcome sends nothing further (an
+/// accepted move is silent -- no ack, matching vanilla's own "the server says nothing when
+/// it agrees" behavior).
+fn respond_to_movement(
+    connection: &ConnectionHandle,
+    motion: &PlayerMotion,
+    teleport: &TeleportState,
+    outcome: MovementOutcome,
+) {
+    match outcome {
+        MovementOutcome::RejectSpeed | MovementOutcome::RejectMismatch => {
+            let teleport_id = teleport.awaiting_teleport_id.expect(
+                "evaluate_movement always sets awaiting_teleport_id before returning a Reject* outcome",
+            );
+            let _ = connection.try_send_payload(encode_payload(&SynchronizePlayerPosition {
+                teleport_id,
+                x: motion.position.x,
+                y: motion.position.y,
+                z: motion.position.z,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                delta_z: 0.0,
+                yaw: motion.yaw,
+                pitch: motion.pitch,
+                relative_arguments: 0x00,
+            }));
+        }
+        MovementOutcome::Disconnect => {
+            connection.close();
+        }
+        MovementOutcome::NoPositionClaim
+        | MovementOutcome::IgnoredAwaitingTeleport
+        | MovementOutcome::Accepted => {}
     }
 }
 

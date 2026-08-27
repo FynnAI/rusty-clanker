@@ -3463,6 +3463,7 @@ dependencies = [
  "rc-messaging",
  "rc-mod-host",
  "rc-nbt",
+ "rc-physics",
  "rc-protocol",
  "rc-proxy",
  "rc-registries",

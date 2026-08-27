@@ -5,6 +5,17 @@
 //! (the session record's `pos`/`rotation` stayed at whatever `load_or_create` produced at
 //! join time forever), so `SaveOnDisconnect`'s own disconnect-time save
 //! (`play::connection`) always persisted the untouched join-time value.
+//!
+//! M3-B02 test-authoring fix: the single `SetPlayerPositionAndRotation` packet this test
+//! originally sent claimed a ~32.75-block move in one tick -- legal under M2's own raw
+//! decode-and-apply movement path, but well past M3-B02's own server-authoritative speed
+//! check (`SPEED_CHECK_THRESHOLD = 100.0` blocks^2 per tick, `evaluate_movement`), which now
+//! rejects it with a teleport correction instead of applying it. Restated as a short walk
+//! of six equal steps along the straight line from `SPAWN_POSITION` to the same final
+//! target (each step's own squared length is ~29.8, comfortably under the per-tick budget),
+//! confirming each step landed (`wait_until`, mirroring `play_movement_application.rs`'s
+//! own established pattern) before sending the next -- the final step's own claimed
+//! position is `(12.5, -58.0, -30.25)` exactly, unchanged from this test's original target.
 
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -104,23 +115,31 @@ async fn position_and_rotation_persist_across_a_real_disconnect_and_rejoin() {
             let mut acc = BytesMut::new();
             drain_play_entry(&mut client, &mut acc).await;
 
-            send_packet(
-                &mut client,
-                &SetPlayerPositionAndRotation {
-                    x: 12.5,
-                    y: -58.0,
-                    z: -30.25,
-                    yaw: 91.0,
-                    pitch: -12.0,
-                    on_ground: true,
-                },
-            )
-            .await;
-
-            wait_until(|| {
-                sessions.with_record_mut(uuid, |r| r.data.pos) == Some([12.5, -58.0, -30.25])
-            })
-            .await;
+            // Walks the straight line from `SPAWN_POSITION` (0, -59, 0) to the target
+            // (12.5, -58, -30.25) in six equal, speed-check-legal steps (M3-B02 test-
+            // authoring fix, module doc comment) rather than one large jump.
+            const STEPS: u32 = 6;
+            const TARGET: (f64, f64, f64) = (12.5, -58.0, -30.25);
+            for step in 1..=STEPS {
+                let t = step as f64 / STEPS as f64;
+                let pos = (TARGET.0 * t, -59.0 + (TARGET.1 - -59.0) * t, TARGET.2 * t);
+                send_packet(
+                    &mut client,
+                    &SetPlayerPositionAndRotation {
+                        x: pos.0,
+                        y: pos.1,
+                        z: pos.2,
+                        yaw: 91.0,
+                        pitch: -12.0,
+                        on_ground: true,
+                    },
+                )
+                .await;
+                wait_until(|| {
+                    sessions.with_record_mut(uuid, |r| r.data.pos) == Some([pos.0, pos.1, pos.2])
+                })
+                .await;
+            }
             assert_eq!(
                 sessions.with_record_mut(uuid, |r| r.data.rotation),
                 Some([91.0, -12.0])

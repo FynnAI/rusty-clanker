@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 rc-core = { path = "../core" }
+rc-physics = { path = "../physics" } # M3-B02 -- movement/collision (rc-physics is otherwise dependency-isolated, WS-D3 rule 1)
 rc-nbt = { path = "../nbt" } # M2-B05 — Mutf8Str/Mutf8String for registry_resolvers.rs's BlockStateNames/BiomeNames impls
 rc-scheduler = { path = "../scheduler" }
 rc-mechanics = { path = "../mechanics" }

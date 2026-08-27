@@ -218,11 +218,11 @@ pub struct ChunkBatchReceived {
 /// Field shapes restated from the M3-B02 movement-collision blueprint's own already-
 /// reconciled packet table (`blueprints/M3/M3-B02-movement-collision.md` Deliverables,
 /// reconciled there against a locally-generated `reports/packets.json` for protocol 776 --
-/// the wire shape itself is fixed protocol history, not an M3-scope design decision) --
-/// M3-B02's own replay-validation/speed-check/teleport-correction anti-cheat pipeline built
-/// on top of these same three packets is deliberately NOT implemented here (M3's own job);
-/// this M2-scope fix only decodes and applies the raw claimed position/rotation, with the
-/// basic finite-value clamp `play::movement::finite_position`/`finite_rotation` apply.
+/// the wire shape itself is fixed protocol history, not an M3-scope design decision).
+///
+/// M3-B02 superseded this M2-scope fix's own minimal decode-and-apply path with the real
+/// replay-validation/speed-check/teleport-correction pipeline these same packets (plus the
+/// fourth, `SetPlayerMovementFlags` below) now drive: `play::movement::evaluate_movement`.
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
 #[packet(state = "play", bound = "server", id = 0x1E)]
 pub struct SetPlayerPosition {
@@ -250,6 +250,15 @@ pub struct SetPlayerPositionAndRotation {
 pub struct SetPlayerRotation {
     pub yaw: f32,
     pub pitch: f32,
+    pub on_ground: bool,
+}
+
+/// M3-B02: the fourth serverbound movement packet -- carries only the on-ground flag, sent
+/// when neither position nor rotation changed this tick (Deliverables, Context: "Serverbound
+/// movement packets at protocol 776").
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "server", id = 0x21)]
+pub struct SetPlayerMovementFlags {
     pub on_ground: bool,
 }
 

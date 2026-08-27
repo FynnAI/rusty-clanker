@@ -5,6 +5,17 @@
 //! not already sent at Play-entry -- the fix for the reported "walking 4 chunks in any
 //! direction, no new chunks mesh" symptom. Every test constructs its own
 //! `HardcodedWorld::new()` -- no test shares state with any other.
+//!
+//! M3-B02 test-authoring fix: the single 96-block `SetPlayerPositionAndRotation` jump this
+//! test originally sent is no longer legal under M3-B02's own server-authoritative speed
+//! check (`SPEED_CHECK_THRESHOLD = 100.0` blocks^2 per tick, `evaluate_movement`) -- it is
+//! now rejected with a teleport correction instead of applied, so the `SetChunkCacheCenter`
+//! this test waits for never arrives. Restated as a sequence of 8-block steps (`8^2 = 64 <=
+//! 100`, comfortably under the per-tick budget even as `PlayerMotion.velocity` -- this
+//! test's own repeated-identical-step walk keeps "expected" and "moved" essentially equal
+//! every step) -- `wait_until` (mirroring `play_movement_application.rs`'s own established
+//! pattern) confirms each step actually landed before the next is sent, so the walk cannot
+//! outrun the region's own per-tick movement evaluation.
 
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -92,6 +103,17 @@ async fn spawn_actor(world: &HardcodedWorld, username: &str, uuid: u128) -> (Tcp
 /// coordinate is under test. Bounded only by the surrounding test's own outer
 /// `tokio::time::timeout` (`play_reach_validation.rs`'s own established convention: no
 /// second, independent inner deadline).
+/// As `play_movement_application.rs`'s own identical helper -- polls `check` until it
+/// returns `true`, bounded only by the surrounding test's own outer `tokio::time::timeout`.
+async fn wait_until(mut check: impl FnMut() -> bool) {
+    loop {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 async fn recv_matching<T: RcPacket, F: Fn(&T) -> bool>(
     socket: &mut TcpStream,
     accumulator: &mut BytesMut,
@@ -112,27 +134,42 @@ async fn recv_matching<T: RcPacket, F: Fn(&T) -> bool>(
 async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cache_center() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
+        let uuid = uuid::Uuid::from_u128(1);
+        let sessions = world.player_sessions();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
         // Play-entry's own initial grid is an 11x11 disc (radius 5) centered on chunk
-        // (0, 0) -- x in -5..=5. Moving to world x=96 (chunk 6) crosses the boundary at
-        // least once and re-centers the disc on chunk (6, 0): x in 1..=11. Chunk x=11 is
-        // strictly outside the original grid, so receiving it proves genuinely new content
-        // streamed in, not merely a resend of something Play-entry already sent.
-        send_packet(
-            &mut a,
-            &SetPlayerPositionAndRotation {
-                x: 96.0,
-                y: -59.0,
-                z: 0.0,
-                yaw: 0.0,
-                pitch: 0.0,
-                on_ground: true,
-            },
-        )
-        .await;
+        // (0, 0) -- x in -5..=5. Walking to world x=96 (chunk 6) in 8-block steps (M3-B02's
+        // own speed-check budget) crosses the boundary at least once and re-centers the
+        // disc on chunk (6, 0): x in 1..=11. Chunk x=11 is strictly outside the original
+        // grid, so receiving it proves genuinely new content streamed in, not merely a
+        // resend of something Play-entry already sent.
+        let mut x = 0.0_f64;
+        while x < 96.0 {
+            x += 8.0;
+            send_packet(
+                &mut a,
+                &SetPlayerPositionAndRotation {
+                    x,
+                    y: -59.0,
+                    z: 0.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    on_ground: true,
+                },
+            )
+            .await;
+            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -59.0, 0.0]))
+                .await;
+        }
 
-        let center = recv_matching::<SetChunkCacheCenter, _>(&mut a, &mut a_acc, |_| true).await;
+        // The walk crosses several chunk boundaries en route (one `SetChunkCacheCenter` per
+        // crossing) -- `recv_matching` scans past every earlier one to the final center,
+        // exactly as its own doc comment describes for `LevelChunkWithLight` below.
+        let center = recv_matching::<SetChunkCacheCenter, _>(&mut a, &mut a_acc, |c| {
+            (c.chunk_x, c.chunk_z) == (6, 0)
+        })
+        .await;
         assert_eq!((center.chunk_x, center.chunk_z), (6, 0));
 
         let chunk = recv_matching::<LevelChunkWithLight, _>(&mut a, &mut a_acc, |c| {

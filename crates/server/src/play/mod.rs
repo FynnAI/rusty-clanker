@@ -38,5 +38,11 @@ pub use block_action::{
 };
 pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
+pub use movement::{
+    ChunkBlockShapeSource, MISMATCH_TOLERANCE_SQ, MovementOutcome, POSITION_CLAMP_HORIZONTAL,
+    POSITION_CLAMP_VERTICAL, PendingMoveReport, PendingMovementPacket, PlayerMotion,
+    SPEED_CHECK_THRESHOLD, TeleportState, clamp_position, evaluate_movement, eye_position,
+    merge_move_report,
+};
 pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
 pub use world::{HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES};
