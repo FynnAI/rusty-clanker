@@ -14,6 +14,7 @@ rc-chunk-storage = { path = "../chunk-storage" }
 # so this edge is kept even though M3-B01's own Cargo.toml sample omits it.
 rc-physics = { path = "../physics" }
 bevy_ecs = { workspace = true }
+tracing = { workspace = true } # defect-2 fix -- rate-limited chain_limit_hit diagnostic, neighbor_update.rs
 
 [dependencies.rc-scheduler]
 path = "../scheduler"

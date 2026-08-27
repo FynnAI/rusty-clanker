@@ -159,7 +159,10 @@ impl RedstoneSignalSource for RepeaterBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        if self.powered(pos) && towards == self.facing(pos) {
+        // `FACING` points toward this repeater's own INPUT side (Context §F, ASSET-D18(f)
+        // research verdict); output flows out the opposite side ("a repeater fires away from
+        // you" -- placement sets `FACING = playerLookDirection.opposite()`).
+        if self.powered(pos) && towards == self.facing(pos).opposite() {
             15
         } else {
             0

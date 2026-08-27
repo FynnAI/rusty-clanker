@@ -218,7 +218,10 @@ impl RedstoneSignalSource for ComparatorBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        if towards == self.facing(pos) {
+        // `FACING` points toward this comparator's own INPUT side (Context §G, ASSET-D18(f)
+        // research verdict); output flows out the opposite side, matching repeater's own
+        // symmetric behavior.
+        if towards == self.facing(pos).opposite() {
             self.output(pos)
         } else {
             0

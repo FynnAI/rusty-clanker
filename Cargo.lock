@@ -3014,6 +3014,7 @@ dependencies = [
  "rc-messaging",
  "rc-physics",
  "rc-scheduler",
+ "tracing",
 ]
 
 [[package]]

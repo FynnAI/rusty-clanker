@@ -309,8 +309,15 @@ pub(crate) fn should_prioritize_diode(
     if !source.is_diode() {
         return false;
     }
+    // `behind` is the neighbor `pos`'s own output flows into (Context §F, ASSET-D18(f)
+    // research verdict). Its own `FACING` "points back" at `pos` -- i.e. its own output flows
+    // straight back into `pos`, two diodes facing directly at each other head-to-head -- exactly
+    // when `behind_facing == facing.opposite()`; that is the sole non-prioritized case. A
+    // same-facing behind-diode (the ordinary same-direction daisy chain, where `behind`'s own
+    // input reads straight from `pos`'s output) is instead prioritized, matching every other
+    // behind-diode orientation including the perpendicular-chain case.
     match source.diode_facing(behind) {
-        Some(behind_facing) => behind_facing != facing,
+        Some(behind_facing) => behind_facing != facing.opposite(),
         None => false,
     }
 }
