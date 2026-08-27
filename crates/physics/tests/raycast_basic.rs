@@ -116,6 +116,44 @@ fn ray_exceeding_max_distance_returns_none() {
     assert_eq!(hit, None);
 }
 
+/// M3 field-report fix (Defect B): pre-fix, the per-axis exit check compared `max_distance`
+/// against the newly-stepped-into cell's own FAR boundary (the next crossing beyond it)
+/// instead of its NEAR one, so a block whose near face sat comfortably within `max_distance`
+/// was skipped whenever its far face did not. Here the block at z=4 has its near face at
+/// true distance 3.5 (well under `max_distance = 4.0`) but its far face at 4.5 (over it) --
+/// exactly the shape of the bug.
+#[test]
+fn block_whose_near_face_is_within_max_distance_is_hit_even_when_its_far_face_is_not() {
+    let world = FixedBlocks::single(BlockPos::new(0, 0, 4), VoxelShape::full_cube());
+    let hit = cast_ray(
+        Vec3::new(0.5, 0.5, 0.5),
+        Vec3::new(0.0, 0.0, 1.0),
+        4.0,
+        &world,
+    )
+    .expect("the block's own near face, at distance 3.5, sits well within max_distance 4.0");
+    assert_eq!(hit.block_pos, BlockPos::new(0, 0, 4));
+    assert!(
+        (hit.distance - 3.5).abs() < 1e-9,
+        "expected distance ~3.5, got {}",
+        hit.distance
+    );
+}
+
+/// As the axis-aligned case above, but diagonal -- the case the field report specifically
+/// calls out as where a per-axis-only exit check misbehaves worst, since the bug can fire
+/// independently on either stepping axis. True near-corner distance from `(0.5, 0.5, 0.5)`
+/// to `(3, 0, 3)` along `normalize((1, 0, 1))` is `(3 - 0.5) * sqrt(2) ≈ 3.5355`, within
+/// `max_distance = 3.6`.
+#[test]
+fn diagonal_ray_hits_a_block_whose_near_corner_is_within_max_distance() {
+    let direction = normalize(Vec3::new(1.0, 0.0, 1.0));
+    let world = FixedBlocks::single(BlockPos::new(3, 0, 3), VoxelShape::full_cube());
+    let hit = cast_ray(Vec3::new(0.5, 0.5, 0.5), direction, 3.6, &world)
+        .expect("the block's own near corner, at distance ~3.5355, sits within max_distance 3.6");
+    assert_eq!(hit.block_pos, BlockPos::new(3, 0, 3));
+}
+
 /// Runs `cast_ray(..)` on a background thread and waits at most `bound` for it to return --
 /// used only by the two hang-regression tests below, whose entire point is a `direction`/
 /// `max_distance` pair the pre-fix DDA loop never terminates for at all (M3 field-report
