@@ -72,3 +72,10 @@ path = "src/bin/restart_persistence_runner.rs"
 [[bin]]
 name = "fetch_corpus_runner"
 path = "src/bin/fetch_corpus_runner.rs"
+
+# M3-B08's own necessary addition, identical forced-deviation precedent to the three
+# bin targets above: `xtask m3_report` drives `load_scenario::run_load_scenario` by
+# spawning this binary as a real OS subprocess.
+[[bin]]
+name = "load_scenario_runner"
+path = "src/bin/load_scenario_runner.rs"

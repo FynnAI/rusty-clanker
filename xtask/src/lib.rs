@@ -170,4 +170,13 @@ pub enum Command {
         #[arg(long)]
         only: Option<String>,
     },
+    /// M3-B08: drives the M3 acceptance harness (redstone corpus parity + 20-bot
+    /// single-region load leg) against a real, freshly-spawned `rusty-clanker-server`
+    /// and a real oracle, and writes `target/verify/m3-acceptance.json`.
+    M3Report {
+        #[arg(long)]
+        server_bin: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = m3_report::Mode::Smoke)]
+        mode: m3_report::Mode,
+    },
 }

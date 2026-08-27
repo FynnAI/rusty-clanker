@@ -200,5 +200,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::M3Report { server_bin, mode } => xtask::m3_report::run(server_bin, mode),
     }
 }

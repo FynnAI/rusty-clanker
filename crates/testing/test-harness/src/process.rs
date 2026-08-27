@@ -52,9 +52,8 @@ pub struct ManagedServerConfig {
 
 impl ManagedServerConfig {
     /// `startup_timeout: Duration::from_secs(30)`, `offline: true`, no `extra_args`,
-    /// every M2-B08/M3-B08 field `None`/`false` (an M1-B06-shaped config —
-    /// `require_world_dir` stays `false`, matching this constructor's own pre-M2-B08
-    /// behavior unchanged).
+    /// every M2-B08 field `None` (an M1-B06-shaped config — `require_world_dir` stays
+    /// `false`, matching this constructor's own pre-M2-B08 behavior unchanged).
     pub fn new(binary_path: PathBuf) -> Self {
         Self {
             binary_path,
@@ -88,8 +87,7 @@ pub struct ManagedServer {
     /// by a background reader thread only when `ManagedServerConfig::capture_stdout`
     /// was `true` at spawn time (`None` otherwise, so `stdout_snapshot` always returns
     /// an empty, never-growing vec for every pre-existing M1-B06/M2-B08 call site,
-    /// which never sets that field). Test-authoring changeset: `spawn_server`'s own
-    /// body does not populate this field yet (governance commit).
+    /// which never sets that field).
     stdout_lines: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
@@ -146,9 +144,12 @@ impl ManagedServer {
     /// New (M3-B08): a snapshot of every stdout line captured so far, in receipt
     /// order. Always empty if `ManagedServerConfig::capture_stdout` was `false` at
     /// spawn time — this method never panics or blocks waiting for output that will
-    /// never arrive. Test-authoring changeset: stubbed (governance commit).
+    /// never arrive.
     pub fn stdout_snapshot(&self) -> Vec<String> {
-        todo!()
+        match &self.stdout_lines {
+            Some(lines) => lines.lock().unwrap().clone(),
+            None => Vec::new(),
+        }
     }
 }
 
@@ -206,6 +207,12 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
     if let Some(save_event_log) = &config.save_event_log {
         command.arg("--save-event-log").arg(save_event_log);
     }
+    if let Some(tick_log) = &config.tick_log {
+        command.arg("--tick-log").arg(tick_log);
+    }
+    if let Some(region_lifecycle) = &config.region_lifecycle {
+        command.arg("--region-lifecycle").arg(region_lifecycle);
+    }
     command.args(&config.extra_args);
     // M2 integration addition: a real, capturable pipe for `ManagedServer::
     // graceful_shutdown`'s own stdin-line shutdown protocol (`main.rs`'s doc
@@ -214,12 +221,46 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
     // (which may not even be a real, writable stream when `xtask`/`cargo test` runs
     // this in the background).
     command.stdin(std::process::Stdio::piped());
+    // New (M3-B08): only piped (and only ever captured by a background reader
+    // thread, below) when the caller opted in -- every pre-existing call site keeps
+    // stdout inherited exactly as before.
+    if config.capture_stdout {
+        command.stdout(std::process::Stdio::piped());
+    }
 
     let mut child = command.spawn().map_err(|source| SpawnError::Spawn {
         path: config.binary_path.display().to_string(),
         source,
     })?;
     let stdin = child.stdin.take();
+
+    // New (M3-B08): a background thread doing buffered line reads off the child's
+    // piped stdout into a shared vec -- started immediately at spawn time (never
+    // gated on the TCP-readiness poll below) so the one-line `RC_REGION_COUNT=<n>`
+    // contract (Context, printed "immediately before the listening socket binds") is
+    // never missed by a reader that only started polling after the connect loop
+    // below already succeeded. Never blocks the connect-readiness poll itself -- the
+    // two run concurrently on separate threads.
+    let stdout_lines = if config.capture_stdout {
+        let lines: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        if let Some(stdout) = child.stdout.take() {
+            let lines_for_reader = lines.clone();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let reader = std::io::BufReader::new(stdout);
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) => lines_for_reader.lock().unwrap().push(line),
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        Some(lines)
+    } else {
+        None
+    };
 
     let deadline = Instant::now() + config.startup_timeout;
     loop {
@@ -228,7 +269,7 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
                 child,
                 addr,
                 stdin,
-                stdout_lines: None,
+                stdout_lines,
             });
         }
         // A child that exited before ever binding is also a startup failure, not
