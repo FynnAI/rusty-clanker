@@ -291,14 +291,24 @@ pub async fn enter_play(
     // `chunk::build_placeholder_chunk_data()`'s static, always-identical blob -- block
     // changes M2-B07 already applies to live chunk storage are now visible in a freshly
     // sent chunk (AC1b's own assertion).
-    let encoded_data = world
+    // M3 field-report fix (symptom 2): the hardcoded region's tick-loop thread may already
+    // be dead (a prior tick panicked -- e.g. a since-fixed out-of-world block update) by
+    // the time a fresh connection reaches this point; `request_chunk_grid` reports that as
+    // `None` rather than panicking (`RegionUnavailable`'s own doc comment) -- this
+    // connection attempt is simply refused, exactly like every `try_send_payload` failure
+    // above.
+    let Some(encoded_data) = world
         .request_chunk_grid(
             network_entity_id,
             player_chunk,
             chunk::PLACEHOLDER_RADIUS_CHUNKS as u8,
             coords.clone(),
         )
-        .await;
+        .await
+    else {
+        tracing::error!("region unavailable while requesting chunk grid; refusing join");
+        return;
+    };
 
     for ((chunk_x, chunk_z), data) in coords.into_iter().zip(encoded_data) {
         let level_chunk = LevelChunkWithLight {
@@ -331,19 +341,27 @@ pub async fn enter_play(
         return;
     }
 
-    world.queue_join(PendingJoin {
-        network_entity_id,
-        username: profile.username.clone(),
-        connection: handle.clone(),
-        // M2 field-report fix: this player's own real, just-loaded (or freshly defaulted)
-        // uuid/position/rotation -- previously lost the moment `PendingJoin` crossed this
-        // channel boundary, forcing the tick-loop's own `PlayerMarker` (before this fix,
-        // one that did not even carry a position field at all) and its own ticket
-        // registration to fall back on the hardcoded `SPAWN_POSITION` unconditionally.
-        uuid,
-        position: pos,
-        rotation,
-    });
+    if world
+        .queue_join(PendingJoin {
+            network_entity_id,
+            username: profile.username.clone(),
+            connection: handle.clone(),
+            // M2 field-report fix: this player's own real, just-loaded (or freshly
+            // defaulted) uuid/position/rotation -- previously lost the moment `PendingJoin`
+            // crossed this channel boundary, forcing the tick-loop's own `PlayerMarker`
+            // (before this fix, one that did not even carry a position field at all) and
+            // its own ticket registration to fall back on the hardcoded `SPAWN_POSITION`
+            // unconditionally.
+            uuid,
+            position: pos,
+            rotation,
+        })
+        .is_err()
+    {
+        // M3 field-report fix (symptom 2): `queue_join`'s own doc comment.
+        tracing::error!("region unavailable while joining; refusing join");
+        return;
+    }
 
     let mut keepalive = KeepAliveDriver::new(Instant::now());
     let mut poll = tokio::time::interval(KEEPALIVE_POLL_INTERVAL);
@@ -372,7 +390,9 @@ pub async fn enter_play(
                 let Some(raw) = maybe_raw else {
                     return;
                 };
-                dispatch_inbound(raw, &mut keepalive, &handle, world, network_entity_id);
+                if !dispatch_inbound(raw, &mut keepalive, &handle, world, network_entity_id) {
+                    return;
+                }
             }
         }
     }
@@ -389,13 +409,17 @@ pub async fn enter_play(
 /// validates reach or touches `world`'s chunk state directly -- that happens once per tick,
 /// batched, in `HardcodedWorld`'s own tick loop (Context, "Where this check runs,
 /// precisely").
+///
+/// Returns `false` iff a `queue_*` call above hit `RegionUnavailable` (M3 field-report fix,
+/// symptom 2: `world.rs`'s own `RegionUnavailable` doc comment) -- the caller's own dispatch
+/// loop closes the connection on that signal instead of this function panicking.
 fn dispatch_inbound(
     raw: RawPacket,
     keepalive: &mut KeepAliveDriver,
     handle: &ConnectionHandle,
     world: &HardcodedWorld,
     network_entity_id: i32,
-) {
+) -> bool {
     match raw.id {
         ConfirmTeleportation::ID => {
             if let Ok(packet) = decode_one::<ConfirmTeleportation>(raw.body) {
@@ -404,13 +428,19 @@ fn dispatch_inbound(
                 // unchanged, additionally queuing it for the region's own per-tick
                 // `evaluate_movement` step (Context: "Teleport / position-sync protocol" --
                 // "On ConfirmTeleportation{teleport_id}").
-                world.queue_movement_packet(PendingMovementPacket {
-                    network_entity_id,
-                    report: PendingMoveReport {
-                        confirm_teleport_id: Some(packet.teleport_id),
-                        ..Default::default()
-                    },
-                });
+                if world
+                    .queue_movement_packet(PendingMovementPacket {
+                        network_entity_id,
+                        report: PendingMoveReport {
+                            confirm_teleport_id: Some(packet.teleport_id),
+                            ..Default::default()
+                        },
+                    })
+                    .is_err()
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
             }
         }
         KeepAliveServerbound::ID => {
@@ -435,51 +465,71 @@ fn dispatch_inbound(
         // module doc comment has the full prior root-cause writeup for why these ids were
         // ever unrecognized in the first place).
         SetPlayerPosition::ID => {
-            if let Ok(packet) = decode_one::<SetPlayerPosition>(raw.body) {
-                world.queue_movement_packet(PendingMovementPacket {
-                    network_entity_id,
-                    report: PendingMoveReport {
-                        position: Some(Vec3::new(packet.x, packet.y, packet.z)),
-                        on_ground: Some(packet.on_ground),
-                        ..Default::default()
-                    },
-                });
+            if let Ok(packet) = decode_one::<SetPlayerPosition>(raw.body)
+                && world
+                    .queue_movement_packet(PendingMovementPacket {
+                        network_entity_id,
+                        report: PendingMoveReport {
+                            position: Some(Vec3::new(packet.x, packet.y, packet.z)),
+                            on_ground: Some(packet.on_ground),
+                            ..Default::default()
+                        },
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
             }
         }
         SetPlayerPositionAndRotation::ID => {
-            if let Ok(packet) = decode_one::<SetPlayerPositionAndRotation>(raw.body) {
-                world.queue_movement_packet(PendingMovementPacket {
-                    network_entity_id,
-                    report: PendingMoveReport {
-                        position: Some(Vec3::new(packet.x, packet.y, packet.z)),
-                        rotation: Some((packet.yaw, packet.pitch)),
-                        on_ground: Some(packet.on_ground),
-                        confirm_teleport_id: None,
-                    },
-                });
+            if let Ok(packet) = decode_one::<SetPlayerPositionAndRotation>(raw.body)
+                && world
+                    .queue_movement_packet(PendingMovementPacket {
+                        network_entity_id,
+                        report: PendingMoveReport {
+                            position: Some(Vec3::new(packet.x, packet.y, packet.z)),
+                            rotation: Some((packet.yaw, packet.pitch)),
+                            on_ground: Some(packet.on_ground),
+                            confirm_teleport_id: None,
+                        },
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
             }
         }
         SetPlayerRotation::ID => {
-            if let Ok(packet) = decode_one::<SetPlayerRotation>(raw.body) {
-                world.queue_movement_packet(PendingMovementPacket {
-                    network_entity_id,
-                    report: PendingMoveReport {
-                        rotation: Some((packet.yaw, packet.pitch)),
-                        on_ground: Some(packet.on_ground),
-                        ..Default::default()
-                    },
-                });
+            if let Ok(packet) = decode_one::<SetPlayerRotation>(raw.body)
+                && world
+                    .queue_movement_packet(PendingMovementPacket {
+                        network_entity_id,
+                        report: PendingMoveReport {
+                            rotation: Some((packet.yaw, packet.pitch)),
+                            on_ground: Some(packet.on_ground),
+                            ..Default::default()
+                        },
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
             }
         }
         SetPlayerMovementFlags::ID => {
-            if let Ok(packet) = decode_one::<SetPlayerMovementFlags>(raw.body) {
-                world.queue_movement_packet(PendingMovementPacket {
-                    network_entity_id,
-                    report: PendingMoveReport {
-                        on_ground: Some(packet.on_ground),
-                        ..Default::default()
-                    },
-                });
+            if let Ok(packet) = decode_one::<SetPlayerMovementFlags>(raw.body)
+                && world
+                    .queue_movement_packet(PendingMovementPacket {
+                        network_entity_id,
+                        report: PendingMoveReport {
+                            on_ground: Some(packet.on_ground),
+                            ..Default::default()
+                        },
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
             }
         }
         PlayerAction::ID => {
@@ -497,12 +547,18 @@ fn dispatch_inbound(
                     1 => BlockActionKind::AbortDestroy { location },
                     _ => BlockActionKind::Ignored,
                 };
-                world.queue_block_action(PendingBlockAction {
-                    network_entity_id,
-                    connection: handle.clone(),
-                    kind,
-                    sequence: packet.sequence,
-                });
+                if world
+                    .queue_block_action(PendingBlockAction {
+                        network_entity_id,
+                        connection: handle.clone(),
+                        kind,
+                        sequence: packet.sequence,
+                    })
+                    .is_err()
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
             }
         }
         UseItemOn::ID => {
@@ -518,12 +574,18 @@ fn dispatch_inbound(
                     inside_block: packet.inside_block,
                     cursor: (packet.cursor_x, packet.cursor_y, packet.cursor_z),
                 };
-                world.queue_block_action(PendingBlockAction {
-                    network_entity_id,
-                    connection: handle.clone(),
-                    kind,
-                    sequence: packet.sequence,
-                });
+                if world
+                    .queue_block_action(PendingBlockAction {
+                        network_entity_id,
+                        connection: handle.clone(),
+                        kind,
+                        sequence: packet.sequence,
+                    })
+                    .is_err()
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
             }
         }
         // M3 field-report fix (Symptom 2): the only wire source for sneak/crouch state at
@@ -533,11 +595,16 @@ fn dispatch_inbound(
         // State.sneaking`, which `mining::is_within_block_interaction_range`'s own pose-aware
         // eye height (`movement::eye_position`) reads.
         PlayerInput::ID => {
-            if let Ok(packet) = decode_one::<PlayerInput>(raw.body) {
-                world.queue_player_input(PendingPlayerInput {
-                    network_entity_id,
-                    sneaking: packet.shift(),
-                });
+            if let Ok(packet) = decode_one::<PlayerInput>(raw.body)
+                && world
+                    .queue_player_input(PendingPlayerInput {
+                        network_entity_id,
+                        sneaking: packet.shift(),
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
             }
         }
         other => {
@@ -547,4 +614,5 @@ fn dispatch_inbound(
             );
         }
     }
+    true
 }

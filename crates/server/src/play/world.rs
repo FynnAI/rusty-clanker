@@ -15,6 +15,7 @@ use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
     AnvilDiskBackend, BiomeColumn, BlockStateColumn, ChunkKeyTag, ChunkPersistenceState,
     ChunkStorageBackend, CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds,
+    WORLD_HEIGHT, WORLD_MIN_Y,
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
@@ -739,8 +740,26 @@ struct DirectBlockWorld<'w> {
     local: Address,
 }
 
+/// `true` iff `world_y` falls inside the pinned world's vertical bounds (`WORLD_MIN_Y ..
+/// WORLD_MIN_Y + WORLD_HEIGHT`). `BlockPos` itself performs no such validation (Context,
+/// `rc-core`'s own doc comment on that type) and `rc-chunk-storage`'s own `BlockStateColumn`
+/// accessors `assert!` instead of returning gracefully (`column.rs`'s own documented
+/// contract, load-bearing for that crate's other callers) -- every `BlockWorldAccess`
+/// implementation that ultimately reaches those accessors (this one; `stage4::ecs::
+/// EcsBlockWorld`, mirrored) must therefore pre-check here, at exactly this boundary, so a
+/// position derived from a neighbour/offset that lands outside the world (breaking or
+/// placing a block at the world floor/ceiling, MECH-D-adjacent fan-out) resolves as "not
+/// present" instead of ever reaching the asserting accessor. Mirrors `movement.rs`'s own
+/// established `pos.y < WORLD_MIN_Y || pos.y >= WORLD_MIN_Y + WORLD_HEIGHT` check.
+fn y_in_world_bounds(world_y: i32) -> bool {
+    (WORLD_MIN_Y..WORLD_MIN_Y + WORLD_HEIGHT).contains(&world_y)
+}
+
 impl BlockWorldAccess for DirectBlockWorld<'_> {
     fn get_block(&self, pos: BlockPos) -> Option<rc_chunk_storage::BlockStateId> {
+        if !y_in_world_bounds(pos.y) {
+            return None;
+        }
         let key = pos.chunk_key(self.dimension);
         let entity = *self.world.resource::<ChunkIndex>().0.get(&key)?;
         let column = self.world.get::<BlockStateColumn>(entity)?;
@@ -749,6 +768,13 @@ impl BlockWorldAccess for DirectBlockWorld<'_> {
     }
 
     fn set_block(&mut self, pos: BlockPos, state: rc_chunk_storage::BlockStateId) -> bool {
+        if !y_in_world_bounds(pos.y) {
+            // Vanilla parity (Context (c)'s field-report note): a write beyond the world's
+            // own vertical bounds is simply dropped, never an error and never propagated --
+            // no fan-out follows since `UpdateContext::set_block`'s caller only observes
+            // `false`, indistinguishable from any other already-established no-op write.
+            return false;
+        }
         let key = pos.chunk_key(self.dimension);
         let Some(entity) = self.world.resource::<ChunkIndex>().0.get(&key).copied() else {
             return false;
@@ -866,6 +892,31 @@ pub struct HardcodedWorld {
     /// New (M3-B03), test/diagnostic only -- `debug_stage4_counters`'s own doc comment.
     stage4_counters_tx: tokio::sync::mpsc::UnboundedSender<oneshot::Sender<Stage4Counters>>,
 }
+
+/// M3 field-report fix (symptom 2): `HardcodedWorld`'s per-connection channel methods
+/// (`queue_join`/`queue_block_action`/`queue_movement_packet`/`queue_player_input`/
+/// `request_chunk_grid`) return this instead of panicking once the hardcoded region's own
+/// tick-loop thread has died -- this project's single hardcoded region has no supervision
+/// or restart (out of scope, Context (c)), so every sender/oneshot reply that thread used
+/// to own is gone for the rest of the process's life. Vanilla has no equivalent: a real
+/// dedicated server simply exits on an unrecoverable tick-loop panic. This project instead
+/// keeps already-open ports responsive, so a dead region must degrade every further
+/// connection attempt gracefully (close/refuse with a diagnostic) rather than panic the
+/// per-connection tokio task that happens to touch it next -- `connection.rs`'s own
+/// established `if send.is_err() { return; }` idiom, extended to this failure mode too.
+#[derive(Debug)]
+pub struct RegionUnavailable;
+
+impl std::fmt::Display for RegionUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the hardcoded region's tick-loop thread is no longer running"
+        )
+    }
+}
+
+impl std::error::Error for RegionUnavailable {}
 
 impl HardcodedWorld {
     /// Backward-compatible zero-argument constructor (M1-B05's own original signature,
@@ -2156,10 +2207,15 @@ impl HardcodedWorld {
 
     /// Enqueues a `PlayerMarker` spawn, applied at the start of the region's next tick
     /// (Context's join-queue). Never blocks (`UnboundedSender::send` never blocks).
-    pub fn queue_join(&self, join: PendingJoin) {
-        self.join_tx
-            .send(join)
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
+    ///
+    /// `Err(RegionUnavailable)` iff the hardcoded region's tick-loop thread has already
+    /// died (M3 field-report fix, symptom 2: this project's single hardcoded region has no
+    /// supervision/restart, so once that thread is gone it stays gone for the rest of the
+    /// process's life) -- every caller treats this the same way `try_send_payload`
+    /// failures elsewhere in `connection.rs` are already treated: close/refuse this one
+    /// connection attempt with a diagnostic, never panic the per-connection task over it.
+    pub fn queue_join(&self, join: PendingJoin) -> Result<(), RegionUnavailable> {
+        self.join_tx.send(join).map_err(|_| RegionUnavailable)
     }
 
     /// Signals the region thread to stop after finishing its current tick, run
@@ -2180,43 +2236,45 @@ impl HardcodedWorld {
     }
 
     /// New. Enqueues a decoded block action, applied at the start of this region's next
-    /// tick's Stage-3-equivalent step (Context). Never blocks.
-    pub fn queue_block_action(&self, action: PendingBlockAction) {
+    /// tick's Stage-3-equivalent step (Context). Never blocks. `queue_join`'s own doc
+    /// comment has the full `Err` rationale, shared by every method below.
+    pub fn queue_block_action(&self, action: PendingBlockAction) -> Result<(), RegionUnavailable> {
         self.block_action_tx
             .send(action)
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
+            .map_err(|_| RegionUnavailable)
     }
 
     /// M3-B02 (superseding the M2 field-report movement-application fix's own `queue_
     /// movement`). Enqueues a decoded movement packet, applied at the start of this
     /// region's next tick's Stage-3-equivalent step (Context). Never blocks.
-    pub fn queue_movement_packet(&self, packet: PendingMovementPacket) {
-        self.movement_tx
-            .send(packet)
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
+    pub fn queue_movement_packet(
+        &self,
+        packet: PendingMovementPacket,
+    ) -> Result<(), RegionUnavailable> {
+        self.movement_tx.send(packet).map_err(|_| RegionUnavailable)
     }
 
     /// M3 field-report fix (Symptom 2). Enqueues a decoded `player_input` packet, applied
     /// early in this region's next tick -- ahead of that same tick's own block-action
     /// drain-and-apply step, so a reach check later in the same tick already sees the latest
     /// sneak state (Context). Never blocks.
-    pub fn queue_player_input(&self, input: PendingPlayerInput) {
+    pub fn queue_player_input(&self, input: PendingPlayerInput) -> Result<(), RegionUnavailable> {
         self.player_input_tx
             .send(input)
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
+            .map_err(|_| RegionUnavailable)
     }
 
     /// New, test/diagnostic only (Context, `debug_query_block`'s own doc comment). Awaits
     /// this tick's or the next tick's debug-query drain step, whichever comes first after
-    /// the call.
+    /// the call. Already `Option`-returning for "not found" -- a dead tick-loop thread (send
+    /// failure, or the reply sender dropped mid-flight) folds into that same `None`, exactly
+    /// as `queue_join`'s own doc comment describes, without needing a distinct error type
+    /// for a method whose contract was already "maybe nothing" (`block_action.rs`'s doc
+    /// comment on this same return shape).
     pub async fn debug_query_block(&self, pos: BlockPos) -> Option<DebugBlockInfo> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.query_tx
-            .send((pos, reply_tx))
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
-        reply_rx.await.expect(
-            "the hardcoded region's tick-loop thread always replies before dropping the sender",
-        )
+        self.query_tx.send((pos, reply_tx)).ok()?;
+        reply_rx.await.ok().flatten()
     }
 
     /// New (M2 integration): registers a real ticket for `network_entity_id` centered on
@@ -2228,13 +2286,18 @@ impl HardcodedWorld {
     /// always-identical blob (`M2-COMPLETION-REPORT.md`'s own diagnosed gap). Never
     /// blocks the caller's own OS thread -- awaits a oneshot reply the tick thread
     /// fulfils once every requested chunk is resident.
+    ///
+    /// `None` iff the tick-loop thread is already gone (`queue_join`'s own doc comment) --
+    /// this is `enter_play`'s own very first fallible call into `HardcodedWorld`, made
+    /// before any player state exists to clean up, so a plain "stop joining" is enough for
+    /// the caller (`connection.rs`).
     pub async fn request_chunk_grid(
         &self,
         network_entity_id: i32,
         center: ChunkKey,
         ticket_radius: u8,
         coords: Vec<(i32, i32)>,
-    ) -> Vec<Vec<u8>> {
+    ) -> Option<Vec<Vec<u8>>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.chunk_grid_tx
             .send(ChunkGridRequest {
@@ -2244,10 +2307,8 @@ impl HardcodedWorld {
                 coords,
                 reply: reply_tx,
             })
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
-        reply_rx.await.expect(
-            "the hardcoded region's tick-loop thread always replies before dropping the sender",
-        )
+            .ok()?;
+        reply_rx.await.ok()
     }
 
     /// New (M2 integration, M2-B06's own "Composition-root integration" recipe step 2/3):
@@ -2566,4 +2627,129 @@ fn unique_temp_world_dir() -> PathBuf {
         std::process::id(),
         std::thread::current().id()
     ))
+}
+
+/// M3 field-report fix (symptom 1): `DirectBlockWorld`'s own bounds guard, exercised through
+/// the real `mining::finalize_break`/`apply_placement` call sites a live player's break/place
+/// actually goes through (`world.rs`'s own manual Stage-3-equivalent tick step) -- the
+/// original crash's own exact reproduction ("the owner broke a bedrock block at the world
+/// floor", Context). Unit tests (not `crates/server/tests/**`) since `DirectBlockWorld` is
+/// private to this module.
+#[cfg(test)]
+mod direct_block_world_bounds {
+    use super::*;
+
+    fn spawn_one_chunk(world: &mut World, filled: rc_chunk_storage::BlockStateId) -> ChunkKey {
+        world.insert_resource(ChunkIndex::default());
+        let key = ChunkKey::new(DimensionId::OVERWORLD, 0, 0);
+        let column = BlockStateColumn::new(filled, PaletteThresholds::blocks(8));
+        let entity = world
+            .spawn((ChunkKeyTag(key), column, ChunkPersistenceState::new()))
+            .id();
+        world.resource_mut::<ChunkIndex>().0.insert(key, entity);
+        key
+    }
+
+    #[test]
+    fn breaking_bedrock_at_the_world_floor_does_not_panic_and_skips_the_below_world_neighbour() {
+        let mut ecs_world = World::new();
+        spawn_one_chunk(&mut ecs_world, to_storage_id(AIR.0));
+        let floor_pos = BlockPos::new(0, WORLD_MIN_Y, 0);
+        {
+            let mut direct = DirectBlockWorld {
+                world: &mut ecs_world,
+                dimension: DimensionId::OVERWORLD,
+                local: Address::Region(RegionId(1)),
+            };
+            assert!(direct.set_block(floor_pos, to_storage_id(BEDROCK.0)));
+        }
+
+        let ownership = RegionOwnership::always_local(Address::Region(RegionId(1)));
+        let mut engine = rc_mechanics::NeighborUpdateEngine::new();
+        let mut scheduled = rc_mechanics::ScheduledTickQueue::new();
+        let mut events = rc_mechanics::BlockEventQueue::new();
+        let mut outbound = Vec::new();
+        let behaviors = rc_mechanics::BlockBehaviorRegistry::new();
+        let mut direct = DirectBlockWorld {
+            world: &mut ecs_world,
+            dimension: DimensionId::OVERWORLD,
+            local: Address::Region(RegionId(1)),
+        };
+
+        // The original crash's own exact shape: breaking the block sitting at the world's
+        // own floor fans a `NeighborChanged`/`ShapeUpdate` pair out to `floor_pos`'s own
+        // `Down` neighbour, one below the world -- `column.rs`'s own `section_index_for_y`
+        // `assert!` before this fix, `DirectBlockWorld`'s own guard (`y_in_world_bounds`)
+        // after it.
+        let outcome = mining::finalize_break(
+            &mut direct,
+            &mut engine,
+            &mut scheduled,
+            &mut events,
+            &mut outbound,
+            &ownership,
+            &behaviors,
+            0,
+            floor_pos,
+            true,
+            (ToolMaterial::None, ToolKind::None),
+        );
+        assert!(
+            matches!(outcome, BreakOutcome::Applied { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(direct.get_block(floor_pos), Some(to_storage_id(AIR.0)));
+        // Vanilla parity (Context (c)): the below-world neighbour was never touched -- it
+        // still resolves to `None`, not some spuriously-written value.
+        assert_eq!(direct.get_block(BlockPos::new(0, WORLD_MIN_Y - 1, 0)), None);
+    }
+
+    #[test]
+    fn placing_at_the_world_ceiling_does_not_panic_and_skips_the_above_world_neighbour() {
+        let mut ecs_world = World::new();
+        spawn_one_chunk(&mut ecs_world, to_storage_id(AIR.0));
+        let ceiling_pos = BlockPos::new(0, WORLD_MIN_Y + WORLD_HEIGHT - 1, 0);
+
+        let ownership = RegionOwnership::always_local(Address::Region(RegionId(1)));
+        let mut engine = rc_mechanics::NeighborUpdateEngine::new();
+        let mut scheduled = rc_mechanics::ScheduledTickQueue::new();
+        let mut events = rc_mechanics::BlockEventQueue::new();
+        let mut outbound = Vec::new();
+        let behaviors = rc_mechanics::BlockBehaviorRegistry::new();
+        let mut direct = DirectBlockWorld {
+            world: &mut ecs_world,
+            dimension: DimensionId::OVERWORLD,
+            local: Address::Region(RegionId(1)),
+        };
+
+        // `inside_block: true` places directly at `location` (`resolve_place_position`'s own
+        // rule) -- the world's own top valid layer, already air (the fixture's own default
+        // fill) -- fanning a pair out to the `Up` neighbour, one above the world.
+        let outcome = mining::apply_placement(
+            &mut direct,
+            &mut engine,
+            &mut scheduled,
+            &mut events,
+            &mut outbound,
+            &ownership,
+            &behaviors,
+            0,
+            ceiling_pos,
+            super::super::block_action::Face::Up,
+            true,
+            (0.5, 0.5, 0.5),
+            HeldItemStub::Block(PlaceableBlockKind::Stone),
+            0.0,
+            0.0,
+        );
+        assert!(
+            matches!(outcome, PlaceOutcome::Applied { .. }),
+            "{outcome:?}"
+        );
+        assert_ne!(direct.get_block(ceiling_pos), Some(to_storage_id(AIR.0)));
+        assert_eq!(
+            direct.get_block(BlockPos::new(0, WORLD_MIN_Y + WORLD_HEIGHT, 0)),
+            None
+        );
+    }
 }

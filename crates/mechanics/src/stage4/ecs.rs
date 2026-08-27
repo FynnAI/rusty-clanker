@@ -6,7 +6,7 @@
 //! (M0-B05/M3-B01's `RcExecutorBuilder`/`RegionMessageOutbox`).
 
 use bevy_ecs::prelude::*;
-use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag};
+use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag, WORLD_HEIGHT, WORLD_MIN_Y};
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionMessage};
 use rc_scheduler::DomainGroup;
@@ -38,10 +38,32 @@ impl<'w, 's> EcsBlockWorld<'w, 's> {
     fn local_pos(pos: BlockPos) -> (u8, u8) {
         (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8)
     }
+
+    /// `true` iff `world_y` falls inside the pinned world's vertical bounds. `BlockPos`
+    /// performs no such validation itself (`rc-core`'s own doc comment on that type), and
+    /// `rc-chunk-storage`'s own `BlockStateColumn` accessors `assert!` rather than returning
+    /// gracefully (`column.rs`'s documented contract -- load-bearing for that crate's other,
+    /// already-must-be-in-bounds callers, so it stays strict there). `get_block`/`set_block`
+    /// below pre-check here, at exactly this `BlockWorldAccess` boundary, instead of
+    /// sprinkling the same check across every one of this crate's neighbour-offset call
+    /// sites (`border.rs`'s fan-out, `redstone/*.rs`'s signal/piston lookups, `stage4.rs`'s
+    /// own dispatch): a position derived from a neighbour/offset that lands outside the
+    /// world resolves as "not present" here, which every one of those call sites already
+    /// treats identically to "chunk not loaded" (a pre-existing, already-safe case) --
+    /// reproducing vanilla's own "a write beyond build height is silently dropped, never an
+    /// error, never propagated" semantics for free. Mirrors `crates/server/src/play/
+    /// world.rs`'s own identical `DirectBlockWorld` guard and `movement.rs`'s own established
+    /// `pos.y < WORLD_MIN_Y || pos.y >= WORLD_MIN_Y + WORLD_HEIGHT` check.
+    fn y_in_world_bounds(world_y: i32) -> bool {
+        (WORLD_MIN_Y..WORLD_MIN_Y + WORLD_HEIGHT).contains(&world_y)
+    }
 }
 
 impl<'w, 's> BlockWorldAccess for EcsBlockWorld<'w, 's> {
     fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
+        if !Self::y_in_world_bounds(pos.y) {
+            return None;
+        }
         let chunk_key = pos.chunk_key(self.dimension());
         let entity = *self.chunk_index.0.get(&chunk_key)?;
         let (_, column) = self.query.get(entity).ok()?;
@@ -50,6 +72,9 @@ impl<'w, 's> BlockWorldAccess for EcsBlockWorld<'w, 's> {
     }
 
     fn set_block(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
+        if !Self::y_in_world_bounds(pos.y) {
+            return false;
+        }
         let chunk_key = pos.chunk_key(self.dimension());
         let Some(&entity) = self.chunk_index.0.get(&chunk_key) else {
             return false;

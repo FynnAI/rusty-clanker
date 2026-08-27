@@ -506,12 +506,19 @@ impl PistonBehavior {
             written.push(target);
         }
 
+        // M3 field-report fix: `target` (`i == n`'s own `push_direction.apply(plan.
+        // to_push[n-1])`, one past the resolved chain's last element) can land one block
+        // beyond the world's own floor/ceiling when the piston sits flush against it --
+        // `set_block` above silently no-ops there (`y_in_world_bounds`, `stage4::ecs`/
+        // `world.rs`'s shared guard), so `written` can hold a position that was never
+        // actually written. `get_block` still resolves it the same way (`None`), which
+        // this loop must now tolerate instead of `.expect`ing "just written above, must be
+        // present" -- that invariant no longer holds for a beyond-world target. Vanilla
+        // parity: no fan-out follows a write that never landed.
         for pos in written {
-            let state = ctx
-                .world
-                .get_block(pos)
-                .expect("just written above, must be present");
-            border::fan_out_from_changed_block(ctx, pos, state);
+            if let Some(state) = ctx.world.get_block(pos) {
+                border::fan_out_from_changed_block(ctx, pos, state);
+            }
         }
     }
 
@@ -550,12 +557,15 @@ impl PistonBehavior {
         ctx.world.set_block(piston_pos, base_state);
         written.push(piston_pos);
 
+        // M3 field-report fix, mirroring `commit_extend`'s own identical note: `old_head`
+        // can itself land beyond the world's floor/ceiling when `piston_pos` sits flush
+        // against it (`push_direction.apply(piston_pos)`), in which case `set_block` above
+        // silently no-op'd it -- tolerate `get_block` resolving `None` here instead of
+        // `.expect`ing a write that never landed.
         for pos in written {
-            let state = ctx
-                .world
-                .get_block(pos)
-                .expect("just written above, must be present");
-            border::fan_out_from_changed_block(ctx, pos, state);
+            if let Some(state) = ctx.world.get_block(pos) {
+                border::fan_out_from_changed_block(ctx, pos, state);
+            }
         }
     }
 }
