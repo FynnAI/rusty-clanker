@@ -181,3 +181,107 @@ async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cach
     .await
     .unwrap();
 }
+
+/// M3 field-report regression (Defect C): `PlayerMarker::position` -- what the chunk-streaming
+/// step reads to detect a crossing -- and this same crossing's own session-record persistence
+/// are written a few field-assignments apart, inside the very same per-tick loop iteration
+/// (`world.rs`'s own Stage-6b-equivalent step). A correctly-ordered streaming step therefore
+/// detects and reacts to a crossing within that SAME region tick; `SERVER_TICK_PERIOD`
+/// (`rc_scheduler::pool`) is 50 ms, so the gap between "this crossing's own position is
+/// confirmed persisted" and "its `SetChunkCacheCenter` arrives" should be a few milliseconds of
+/// socket/decode overhead, nowhere near a full extra tick.
+///
+/// Before this fix, the streaming step instead read `PlayerMarker::position` at the TOP of the
+/// tick -- still the *previous* tick's resolved value the whole time it ran -- so this same
+/// crossing was not acted on until the streaming step's own next run, at the earliest one full
+/// `SERVER_TICK_PERIOD` later. Measured directly against both versions of the code (ten runs
+/// each, isolated, this file only): the fixed version consistently lands at 2-3 ms; the
+/// pre-fix, one-tick-late version consistently lands at 40-47 ms (just under the 50 ms period,
+/// as expected -- the remainder is however much of that tick's own earlier work had already
+/// elapsed before this crossing's own position was written). This test's own bound (20 ms)
+/// sits in the wide, empty middle of that gap -- comfortably (>6x) above the fixed version's
+/// own typical latency, comfortably (>2x) below the pre-fix version's.
+#[tokio::test]
+async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_resolves() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let uuid = uuid::Uuid::from_u128(2);
+        let sessions = world.player_sessions();
+        let (mut a, mut a_acc) = spawn_actor(&world, "b", 2).await;
+
+        // Walks to one 8-block step short of the boundary crossing this test actually times
+        // (mirrors the sibling test above), confirming each intermediate step landed via the
+        // ordinary, coarse `wait_until` -- by the time this loop ends, `last_streamed_center`
+        // is already correctly re-centered on chunk (5, 0) from the earlier crossings along
+        // the way, so the final step below is a genuinely fresh, newly-detected crossing.
+        let mut x = 0.0_f64;
+        while x < 88.0 {
+            x += 8.0;
+            send_packet(
+                &mut a,
+                &SetPlayerPositionAndRotation {
+                    x,
+                    y: -59.0,
+                    z: 0.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    on_ground: true,
+                },
+            )
+            .await;
+            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -59.0, 0.0]))
+                .await;
+        }
+        assert_eq!(
+            x, 88.0,
+            "chunk 5 (world x 80..=95) -- one step short of the final crossing"
+        );
+
+        // The final step: chunk 5 -> chunk 6 -- this is the one this test's own timing
+        // assertion is anchored to.
+        let final_x = 96.0;
+        send_packet(
+            &mut a,
+            &SetPlayerPositionAndRotation {
+                x: final_x,
+                y: -59.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                on_ground: true,
+            },
+        )
+        .await;
+
+        // Fine-grained polling (2 ms -- far tighter than `wait_until`'s own 20 ms, deliberately,
+        // so this anchor stays close to the real wall-clock moment the region thread's own
+        // Stage-6b-equivalent step actually wrote this resolved position into the session
+        // record) -- confirms the final step landed, then immediately starts timing how long
+        // the matching `SetChunkCacheCenter` takes to arrive.
+        loop {
+            if sessions.with_record_mut(uuid, |r| r.data.pos) == Some([final_x, -59.0, 0.0]) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let anchor = std::time::Instant::now();
+
+        let center = recv_matching::<SetChunkCacheCenter, _>(&mut a, &mut a_acc, |c| {
+            (c.chunk_x, c.chunk_z) == (6, 0)
+        })
+        .await;
+        let elapsed = anchor.elapsed();
+        assert_eq!((center.chunk_x, center.chunk_z), (6, 0));
+
+        assert!(
+            elapsed < Duration::from_millis(20),
+            "SetChunkCacheCenter arrived {elapsed:?} after this crossing's own position was \
+             already confirmed persisted -- expected a few ms (this file's own doc comment has \
+             measured figures for both versions) if the chunk-streaming step reads this tick's \
+             own freshly resolved position instead of last tick's stale mirror (M3 field-report \
+             Defect C)"
+        );
+    })
+    .await
+    .unwrap();
+}

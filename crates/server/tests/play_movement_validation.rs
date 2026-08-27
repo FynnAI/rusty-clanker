@@ -9,7 +9,7 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     ChunkBatchFinished, ConfirmTeleportation, KeepAliveClientbound, KeepAliveServerbound,
-    SetPlayerPosition, SynchronizePlayerPosition,
+    SetPlayerPosition, SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition,
 };
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -290,6 +290,126 @@ async fn nan_position_disconnects_the_connection() {
         // connection out and closing it -- or nothing at all).
         let mut chunk = [0u8; 4096];
         loop {
+            match tokio::time::timeout(Duration::from_secs(30), a.read(&mut chunk)).await {
+                Ok(Ok(0)) => return, // EOF -- connection closed, as expected.
+                Ok(Ok(n)) => a_acc.extend_from_slice(&chunk[..n]),
+                Ok(Err(_)) => return, // connection reset -- also closed.
+                Err(_) => panic!("connection did not close within the bounded timeout"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report regression (Defect A): mirrors `nan_position_disconnects_the_connection`
+/// exactly, but for the *rotation* half of the blueprint's own jointly-stated "any reported
+/// position OR rotation coordinate that is NaN or non-finite is rejected outright" rule
+/// (Context, "Server-side movement validation") -- a bare `SetPlayerRotation` carries no
+/// position claim at all, so this exercises `evaluate_movement`'s rotation check as the sole
+/// path to `MovementOutcome::Disconnect`, independent of the position check a few lines below
+/// it.
+#[tokio::test]
+async fn nan_rotation_disconnects_the_connection() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 5).await;
+
+        send_packet(
+            &mut a,
+            &SetPlayerRotation {
+                yaw: 0.0,
+                pitch: f32::NAN,
+                on_ground: true,
+            },
+        )
+        .await;
+
+        // A bare `SetPlayerRotation` carries no position claim at all -- without this fix,
+        // `evaluate_movement` applies the NaN unconditionally and then returns
+        // `NoPositionClaim` (not `Disconnect`), which sends nothing and closes nothing.
+        // `KEEPALIVE_INTERVAL` (`play::keepalive`, 15 s) plus its own grace window would
+        // *eventually* close a connection like that anyway once the never-answered keep-alive
+        // challenge this raw read loop ignores times out -- a real close, but for the wrong
+        // reason, which would make a generous, `nan_position_disconnects_the_connection`-style
+        // 30 s wait here pass either way and prove nothing. A tight bound is used instead,
+        // comfortably wide for the real `Disconnect` path (well under one region tick) and
+        // comfortably narrower than any keep-alive-driven close could ever land inside.
+        let mut chunk = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), a.read(&mut chunk)).await {
+                Ok(Ok(0)) => return, // EOF -- connection closed, as expected.
+                Ok(Ok(n)) => a_acc.extend_from_slice(&chunk[..n]),
+                Ok(Err(_)) => return, // connection reset -- also closed.
+                Err(_) => panic!(
+                    "connection did not close within the bounded timeout -- a real Disconnect \
+                     closes almost immediately, well under this bound"
+                ),
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report regression (Defect A, "the correction packet path"): pairs a NaN pitch
+/// with an otherwise-ordinary speed violation (`wildly_out_of_range_move_triggers_a_teleport_
+/// correction`'s own `x: 5000.0`) in a single `SetPlayerPositionAndRotation`. Before this fix,
+/// `evaluate_movement` wrote the unvalidated rotation into `motion` *before* the speed check
+/// ran, so the speed violation's own `RejectSpeed` correction echoed that same NaN pitch
+/// straight back onto the wire in a real `SynchronizePlayerPosition` packet (`respond_to_
+/// movement`'s own `pitch: motion.pitch` field) -- malformed input reaching a real client
+/// instead of the connection simply closing. This asserts the fixed, correct behavior: no
+/// `SynchronizePlayerPosition` of any kind is ever sent (the rotation check disconnects before
+/// the speed check is even reached), and the connection actually closes.
+#[tokio::test]
+async fn nan_rotation_paired_with_a_speed_violation_disconnects_before_any_correction_is_sent() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 6).await;
+
+        send_packet(
+            &mut a,
+            &SetPlayerPositionAndRotation {
+                x: 5000.0,
+                y: -59.0,
+                z: 0.0,
+                yaw: 0.0,
+                pitch: f32::NAN,
+                on_ground: true,
+            },
+        )
+        .await;
+
+        // A single combined read loop, deliberately not `assert_no_packet_of_type` followed
+        // by a separate EOF-wait (that helper's own inner `recv_packet` asserts `n > 0` on
+        // every read, i.e. treats EOF as a hard failure -- exactly the *expected*, passing
+        // outcome here, since the fix disconnects promptly rather than merely staying quiet
+        // for the window). Reads until either a `SynchronizePlayerPosition` arrives (a
+        // leaked, NaN-carrying correction -- fails the test immediately, the exact bug this
+        // guards against) or the connection closes (EOF/reset -- the expected `Disconnect`
+        // outcome, confirming the correction was never built in the first place, not merely
+        // raced past). Any other well-framed packet (e.g. a keep-alive challenge) is
+        // tolerated and answered, as `recv_clientbound` does elsewhere in this file.
+        let mut chunk = [0u8; 4096];
+        loop {
+            if let Some(payload) =
+                rc_protocol::try_decode_frame(&mut a_acc, CompressionState::Disabled).unwrap()
+            {
+                let mut body = payload;
+                let id = VarInt::decode(&mut body).unwrap().get();
+                assert_ne!(
+                    id,
+                    SynchronizePlayerPosition::ID,
+                    "a SynchronizePlayerPosition must never be sent -- the rotation check must \
+                     disconnect before the speed check's own correction is ever built"
+                );
+                if id == KeepAliveClientbound::ID {
+                    let challenge = decode_one::<KeepAliveClientbound>(body).unwrap();
+                    send_packet(&mut a, &KeepAliveServerbound { id: challenge.id }).await;
+                }
+                continue;
+            }
             match tokio::time::timeout(Duration::from_secs(30), a.read(&mut chunk)).await {
                 Ok(Ok(0)) => return, // EOF -- connection closed, as expected.
                 Ok(Ok(n)) => a_acc.extend_from_slice(&chunk[..n]),

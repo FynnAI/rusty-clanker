@@ -380,6 +380,50 @@ mod tests {
         assert_eq!(teleport.awaiting_teleport_id, Some(2));
     }
 
+    /// M3 field-report regression (Defect A): a non-finite rotation must be rejected exactly
+    /// like a non-finite position (blueprint Context, "Server-side movement validation" --
+    /// "any reported position OR rotation coordinate that is NaN or non-finite"), and -- the
+    /// part the original gap missed -- must never be written into `motion` first. `yaw`/
+    /// `pitch` start at deliberately distinguishable non-zero values so this test can tell
+    /// "rejected before being applied" apart from "coincidentally still the default."
+    #[test]
+    fn evaluate_movement_disconnects_on_a_non_finite_rotation_without_mutating_motion() {
+        let mut motion = fresh_motion();
+        motion.yaw = 45.0;
+        motion.pitch = 10.0;
+        let mut teleport = fresh_teleport();
+        let outcome = evaluate_movement(
+            &mut motion,
+            &mut teleport,
+            &PendingMoveReport {
+                rotation: Some((f32::NAN, 0.0)),
+                ..Default::default()
+            },
+            &EmptyShapes,
+        );
+        assert_eq!(outcome, MovementOutcome::Disconnect);
+        assert_eq!(motion.yaw, 45.0, "rejected rotation must not be applied");
+        assert_eq!(motion.pitch, 10.0, "rejected rotation must not be applied");
+
+        // The non-finite half can be either component -- both must be checked.
+        let mut motion2 = fresh_motion();
+        motion2.yaw = 45.0;
+        motion2.pitch = 10.0;
+        let mut teleport2 = fresh_teleport();
+        let outcome2 = evaluate_movement(
+            &mut motion2,
+            &mut teleport2,
+            &PendingMoveReport {
+                rotation: Some((0.0, f32::NAN)),
+                ..Default::default()
+            },
+            &EmptyShapes,
+        );
+        assert_eq!(outcome2, MovementOutcome::Disconnect);
+        assert_eq!(motion2.yaw, 45.0);
+        assert_eq!(motion2.pitch, 10.0);
+    }
+
     #[test]
     fn evaluate_movement_disconnects_on_a_non_finite_claim() {
         let mut motion = fresh_motion();
