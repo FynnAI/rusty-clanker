@@ -36,3 +36,12 @@ rc-registries = { path = "../crates/registries" }
 # silently desync the disk-comparison leg from the real file the server actually wrote.
 rc-auth = { path = "../crates/auth" }
 uuid = { workspace = true }
+# M3-B07: `corpus::parity_check`'s own in-process replay/diff leg
+# (`rc_gametest::{replay, trace, spec}`) — safe to link directly into `xtask.exe`
+# under this project's pinned *stable* toolchain (WS-D4) because `rc-gametest` never
+# depends on `rc-paritybot`/`azalea` (that crate's own `Cargo.toml` doc comment has
+# the full citation). `corpus::fetch_corpus`'s own live-oracle capture leg needs a
+# real bot connection and is therefore never linked here — it drives
+# `rc-paritybot`'s new `fetch_corpus_runner` bin target as a subprocess instead,
+# mirroring `m1_report`/`m2_report`'s own already-established pattern exactly.
+rc-gametest = { path = "../crates/testing/gametest" }

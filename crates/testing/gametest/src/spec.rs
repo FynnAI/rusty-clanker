@@ -92,14 +92,55 @@ pub enum SpecError {
 /// Parses one `.ron` file and validates `max_ticks <= MAX_TICKS`, every action's
 /// `tick < max_ticks`, and `blocks` non-empty.
 pub fn load_spec(path: &Path) -> Result<ContraptionSpec, SpecError> {
-    todo!()
+    let text = std::fs::read_to_string(path).map_err(|source| SpecError::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let spec: ContraptionSpec = ron::from_str(&text).map_err(|source| SpecError::Parse {
+        path: path.display().to_string(),
+        source: Box::new(source),
+    })?;
+
+    if spec.max_ticks > MAX_TICKS {
+        return Err(SpecError::MaxTicksExceeded {
+            id: spec.id,
+            max_ticks: spec.max_ticks,
+        });
+    }
+    for action in &spec.actions {
+        if action.tick >= spec.max_ticks as u64 {
+            return Err(SpecError::ActionTickOutOfRange {
+                id: spec.id,
+                tick: action.tick,
+                max_ticks: spec.max_ticks,
+            });
+        }
+    }
+    if spec.blocks.is_empty() {
+        return Err(SpecError::NoBlocks { id: spec.id });
+    }
+
+    Ok(spec)
 }
 
 /// The contiguous, inclusive `(min, max)` bounding box covering every `PlacedBlock`
 /// and `ScriptedAction` position — the exact `bounds_min`/`bounds_max` both capture
 /// and replay must produce for this spec's `RedstoneTrace`.
 pub fn bounding_box(spec: &ContraptionSpec) -> ((i32, i32, i32), (i32, i32, i32)) {
-    todo!()
+    let mut min = (i32::MAX, i32::MAX, i32::MAX);
+    let mut max = (i32::MIN, i32::MIN, i32::MIN);
+
+    let all_positions = spec
+        .blocks
+        .iter()
+        .map(|b| b.pos)
+        .chain(spec.actions.iter().map(|a| a.pos));
+    for (x, y, z) in all_positions {
+        min = (min.0.min(x), min.1.min(y), min.2.min(z));
+        max = (max.0.max(x), max.1.max(y), max.2.max(z));
+    }
+
+    (min, max)
 }
 
 /// `world_origin_for(index) = (index as i32 * 64, 4, 0)` (blueprint Context,
@@ -107,5 +148,5 @@ pub fn bounding_box(spec: &ContraptionSpec) -> ((i32, i32, i32), (i32, i32, i32)
 /// tier-1's largest possible footprint, so no two contraptions' fan-out can ever
 /// cross-talk during capture.
 pub fn world_origin_for(index: usize) -> (i32, i32, i32) {
-    todo!()
+    (index as i32 * 64, 4, 0)
 }

@@ -65,3 +65,10 @@ path = "src/bin/idle_stability_runner.rs"
 [[bin]]
 name = "restart_persistence_runner"
 path = "src/bin/restart_persistence_runner.rs"
+
+# M3-B07's own necessary addition, identical forced-deviation precedent to the two
+# bin targets above: `xtask corpus::fetch_corpus` drives `corpus_capture::
+# run_full_corpus_capture` by spawning this binary as a real OS subprocess.
+[[bin]]
+name = "fetch_corpus_runner"
+path = "src/bin/fetch_corpus_runner.rs"

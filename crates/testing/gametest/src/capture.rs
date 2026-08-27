@@ -52,7 +52,12 @@ pub struct OracleServerHandle {
 
 impl Drop for OracleServerHandle {
     fn drop(&mut self) {
-        todo!()
+        // Best-effort, unconditional (Deliverables doc comment) — mirrors
+        // `rc_test_harness::process::ManagedServer`'s own guaranteed-teardown
+        // discipline. Errors here are never actionable (the process may already be
+        // gone) and are deliberately swallowed.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -66,7 +71,45 @@ pub fn launch_oracle_server(
     port: u16,
     startup_timeout: Duration,
 ) -> Result<OracleServerHandle, CaptureError> {
-    todo!()
+    std::fs::create_dir_all(work_dir)?;
+    std::fs::write(work_dir.join("eula.txt"), b"eula=true\n")?;
+    let properties = format!(
+        "online-mode=false\n\
+         level-type=flat\n\
+         generate-structures=false\n\
+         spawn-protection=0\n\
+         difficulty=peaceful\n\
+         gamemode=creative\n\
+         server-port={port}\n"
+    );
+    std::fs::write(work_dir.join("server.properties"), properties)?;
+
+    let mut child = Command::new("java")
+        .arg("-jar")
+        .arg(jar_path)
+        .arg("nogui")
+        .current_dir(work_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let deadline = Instant::now() + startup_timeout;
+    loop {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return Ok(OracleServerHandle { child, port });
+        }
+        if let Ok(Some(_status)) = child.try_wait() {
+            // The process already exited — never keep polling a dead child.
+            return Err(CaptureError::OracleStartupTimeout(startup_timeout));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CaptureError::OracleStartupTimeout(startup_timeout));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Writes one line plus `\n` to `handle`'s stdin, immediately (no batching) — every
@@ -77,10 +120,21 @@ pub fn send_console_command(
     handle: &mut OracleServerHandle,
     command: &str,
 ) -> Result<(), CaptureError> {
-    todo!()
+    let stdin = handle
+        .child
+        .stdin
+        .as_mut()
+        .expect("OracleServerHandle is always constructed with piped stdin");
+    writeln!(stdin, "{command}")?;
+    stdin.flush()?;
+    Ok(())
 }
 
 /// Pure: blueprint Context, "Self-validating state-id pairing".
 pub fn check_state_id_consistency(declared: &PlacedBlock, observed: u32) -> Result<(), (u32, u32)> {
-    todo!()
+    if declared.state_id == observed {
+        Ok(())
+    } else {
+        Err((declared.state_id, observed))
+    }
 }

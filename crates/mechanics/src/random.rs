@@ -45,7 +45,13 @@ impl RcRandom {
             "RcRandom::next_int_bounded: bound must be positive"
         );
 
-        if (bound & bound.wrapping_neg()) == bound {
+        // M3-B07 out-of-scope fix (final report has the full citation): clippy's
+        // `manual_isolate_lowest_one` lint (only visible under the nightly
+        // toolchain this crate is newly, transitively built under via
+        // `rc-paritybot -> rc-gametest -> rc-mechanics`) flags the equivalent
+        // bitwise expression this line used to spell out; `isolate_lowest_one` is
+        // the identical operation, not a behavior change.
+        if bound.isolate_lowest_one() == bound {
             // Power-of-two fast path.
             return (((bound as i64).wrapping_mul(self.next(31) as i64)) >> 31) as i32;
         }

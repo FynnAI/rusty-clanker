@@ -5,6 +5,7 @@
 //! (`Cli`, `Command`) directly, without shelling out to the compiled binary.
 //! `main.rs` is a thin wrapper dispatching on `Command` to each verb's `run()`.
 
+pub mod corpus;
 pub mod datagen;
 pub mod fetch_data;
 pub mod fixture_manifest;
@@ -146,5 +147,26 @@ pub enum Command {
         server_bin: std::path::PathBuf,
         #[arg(long, value_enum, default_value_t = m2_report::Mode::Smoke)]
         mode: m2_report::Mode,
+    },
+    /// M3-B07: capture the redstone parity corpus from a real, legally obtained
+    /// vanilla oracle server into the git-ignored `corpus/redstone/` trace cache
+    /// (WS-D10). Never a Tier-1 gate (Context, "CI tier placement").
+    FetchCorpus {
+        #[arg(long, default_value = "26.2")]
+        version: String,
+        #[arg(long)]
+        server_jar: Option<std::path::PathBuf>,
+        /// Restrict to one contraption id, for local iteration.
+        #[arg(long)]
+        only: Option<String>,
+    },
+    /// M3-B07: `xtask parity-check <corpus>` — this blueprint wires exactly the
+    /// `"redstone"` corpus (WS-D9 already reserves the verb shape for a future
+    /// `"worldgen"` corpus too, added by whichever M5 blueprint needs it, not this
+    /// one).
+    ParityCheck {
+        corpus: String,
+        #[arg(long)]
+        only: Option<String>,
     },
 }

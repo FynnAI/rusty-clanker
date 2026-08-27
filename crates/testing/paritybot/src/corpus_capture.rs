@@ -15,19 +15,108 @@
 //! `xtask.exe` itself never links this module or `azalea`.
 
 use std::path::Path;
+use std::time::Duration;
 
-use rc_gametest::capture::{CaptureError, OracleServerHandle, check_state_id_consistency};
+use rc_gametest::capture::{
+    CaptureError, OracleServerHandle, check_state_id_consistency, send_console_command,
+};
 use rc_gametest::spec::{ContraptionSpec, bounding_box, world_origin_for};
-use rc_gametest::trace::RedstoneTrace;
+use rc_gametest::trace::{
+    BlockObservation, RedstoneTrace, TickSnapshot, read_trace_if_current, write_trace,
+};
 
 use crate::packet_capture::BlockSnapshotView;
+
+/// Bounded wait for one placement's resulting packet to arrive (blueprint Context,
+/// "Rates and limits" budgets one capture step at ≤50 ms; this poll is generous
+/// enough to absorb real network/tick-processing jitter without ever hanging
+/// forever). Polling (not a single fixed sleep) lets the ambient `LocalSet` driving
+/// the azalea client task make progress between checks.
+const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Real-wall-clock allowance per `tick step 1` (blueprint Context, "Rates and
+/// limits": "≤50 ms per step including the snapshot read" is the *budget*, not a
+/// hard wait — this is simply how long this module gives the oracle's own tick and
+/// the resulting packets time to land before reading the snapshot).
+const TICK_STEP_SETTLE: Duration = Duration::from_millis(50);
+
+async fn wait_for_state_id(view: &BlockSnapshotView, pos: (i32, i32, i32)) -> Option<u32> {
+    let deadline = tokio::time::Instant::now() + OBSERVATION_TIMEOUT;
+    loop {
+        if let Some(id) = view.state_id_at(pos) {
+            return Some(id);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
+    }
+}
+
+fn world_pos(origin: (i32, i32, i32), rel: (i32, i32, i32)) -> (i32, i32, i32) {
+    (origin.0 + rel.0, origin.1 + rel.1, origin.2 + rel.2)
+}
+
+/// `/setblock <world x> <world y> <world z> <vanilla_state>` (blueprint Context,
+/// capture pipeline step 7/9 — placement and every scripted action are both plain,
+/// immediate `Level.setBlock` calls, neither privileged over the other).
+fn issue_setblock(
+    handle: &mut OracleServerHandle,
+    world_pos: (i32, i32, i32),
+    vanilla_state: &str,
+) -> Result<(), CaptureError> {
+    send_console_command(
+        handle,
+        &format!(
+            "setblock {} {} {} {vanilla_state}",
+            world_pos.0, world_pos.1, world_pos.2
+        ),
+    )
+}
+
+/// Snapshots every position in `[bounds_min, bounds_max]` (relative to `origin`)
+/// from `view`'s currently-known state, in the trace format's own `(y, z, x)`
+/// ascending canonical order — the live-oracle counterpart to `rc_gametest::replay`'s
+/// private `snapshot_volume`, reading a `BlockSnapshotView` instead of a
+/// `BlockWorldAccess`.
+fn snapshot_volume_from_view(
+    view: &BlockSnapshotView,
+    origin: (i32, i32, i32),
+    bounds_min: (i32, i32, i32),
+    bounds_max: (i32, i32, i32),
+    has_analog: impl Fn((i32, i32, i32)) -> bool,
+) -> Vec<BlockObservation> {
+    let mut out = Vec::new();
+    for y in bounds_min.1..=bounds_max.1 {
+        for z in bounds_min.2..=bounds_max.2 {
+            for x in bounds_min.0..=bounds_max.0 {
+                let rel = (x, y, z);
+                let wp = world_pos(origin, rel);
+                let state_id = view.state_id_at(wp).unwrap_or(0);
+                let analog = if has_analog(rel) {
+                    view.analog_at(wp)
+                } else {
+                    None
+                };
+                out.push(BlockObservation {
+                    pos: rel,
+                    state_id,
+                    analog,
+                });
+            }
+        }
+    }
+    out
+}
 
 /// Full end-to-end capture for one contraption at `world_origin_for(index)` against
 /// an already-launched `handle` and an already-connected `view` (blueprint Context,
 /// capture pipeline steps 3–10, restated as this function's exact algorithm —
 /// freeze, gamerules, teleport, place-with-validation, snapshot tick 0,
 /// scripted-action + step loop, snapshot per tick, `fill air` cleanup).
-/// `source_jar_sha1` is threaded straight into the resulting `RedstoneTrace`.
+/// `source_jar_sha1` is threaded straight into the resulting `RedstoneTrace`. Step
+/// 3 (freeze) and step 4 (gamerules) are one-time, whole-corpus setup performed by
+/// `run_full_corpus_capture`, not repeated here.
 pub async fn capture_contraption(
     handle: &mut OracleServerHandle,
     view: &BlockSnapshotView,
@@ -35,7 +124,90 @@ pub async fn capture_contraption(
     index: usize,
     source_jar_sha1: &str,
 ) -> Result<RedstoneTrace, CaptureError> {
-    todo!()
+    let origin = world_origin_for(index);
+    let (bounds_min, bounds_max) = bounding_box(spec);
+    let has_analog: std::collections::HashSet<(i32, i32, i32)> = spec
+        .blocks
+        .iter()
+        .filter(|b| b.has_analog_state)
+        .map(|b| b.pos)
+        .collect();
+    let has_analog = move |pos: (i32, i32, i32)| has_analog.contains(&pos);
+
+    // Step 6 (teleport): follow the bot to this contraption's origin.
+    send_console_command(
+        handle,
+        &format!(
+            "tp rc_fetch_corpus_bot {} {} {}",
+            origin.0, origin.1, origin.2
+        ),
+    )?;
+
+    // Step 7: placement, self-validating against the oracle's own observed state id.
+    for block in &spec.blocks {
+        let wp = world_pos(origin, block.pos);
+        issue_setblock(handle, wp, &block.vanilla_state)?;
+        let observed =
+            wait_for_state_id(view, wp)
+                .await
+                .ok_or_else(|| CaptureError::ObservationTimeout {
+                    contraption_id: spec.id.clone(),
+                    pos: block.pos,
+                })?;
+        check_state_id_consistency(block, observed).map_err(|(declared, observed)| {
+            CaptureError::StateIdMismatch {
+                contraption_id: spec.id.clone(),
+                pos: block.pos,
+                declared,
+                observed,
+                vanilla_state: block.vanilla_state.clone(),
+            }
+        })?;
+    }
+
+    // Step 8: tick 0 snapshot.
+    let mut ticks = Vec::with_capacity(spec.max_ticks as usize + 1);
+    ticks.push(TickSnapshot {
+        tick: 0,
+        blocks: snapshot_volume_from_view(view, origin, bounds_min, bounds_max, &has_analog),
+    });
+
+    // Step 9: scripted actions + tick-step loop.
+    for t in 1..=spec.max_ticks as u64 {
+        for action in spec.actions.iter().filter(|a| a.tick == t) {
+            let wp = world_pos(origin, action.pos);
+            issue_setblock(handle, wp, &action.vanilla_state)?;
+        }
+        send_console_command(handle, "tick step 1")?;
+        tokio::time::sleep(TICK_STEP_SETTLE).await;
+        ticks.push(TickSnapshot {
+            tick: t,
+            blocks: snapshot_volume_from_view(view, origin, bounds_min, bounds_max, &has_analog),
+        });
+    }
+
+    // Step 10 (cleanup half): clear this contraption's footprint before the next
+    // `world_origin_for` slot is used — write-and-persist is `run_full_corpus_
+    // capture`'s own job, not this function's.
+    let min_wp = world_pos(origin, bounds_min);
+    let max_wp = world_pos(origin, bounds_max);
+    send_console_command(
+        handle,
+        &format!(
+            "fill {} {} {} {} {} {} air",
+            min_wp.0, min_wp.1, min_wp.2, max_wp.0, max_wp.1, max_wp.2
+        ),
+    )?;
+
+    Ok(RedstoneTrace {
+        format_version: rc_gametest::trace::TRACE_FORMAT_VERSION,
+        contraption_id: spec.id.clone(),
+        source_jar_sha1: source_jar_sha1.to_string(),
+        tool_version: env!("CARGO_PKG_VERSION").to_string(),
+        bounds_min,
+        bounds_max,
+        ticks,
+    })
 }
 
 /// Orchestrates the whole corpus: launches one oracle, connects one bot, applies the
@@ -52,5 +224,52 @@ pub async fn run_full_corpus_capture(
     specs: &[ContraptionSpec],
     source_jar_sha1: &str,
 ) -> Result<Vec<(String, Result<(), CaptureError>)>, CaptureError> {
-    todo!()
+    let mut handle = rc_gametest::capture::launch_oracle_server(
+        jar_path,
+        work_dir,
+        25566,
+        Duration::from_secs(120),
+    )?;
+
+    // Step 3: freeze immediately — the very first command written to stdin.
+    send_console_command(&mut handle, "tick freeze")?;
+    // Step 4: gamerules — eliminates every non-redstone source of block-state change.
+    for gamerule in [
+        "gamerule doDaylightCycle false",
+        "gamerule doWeatherCycle false",
+        "gamerule randomTickSpeed 0",
+        "gamerule doMobSpawning false",
+    ] {
+        send_console_command(&mut handle, gamerule)?;
+    }
+
+    // Step 6: one bot connection for the whole corpus run.
+    let (view, _observer) = crate::packet_capture::connect_and_observe(
+        "127.0.0.1",
+        handle.port,
+        "rc_fetch_corpus_bot",
+        Duration::from_secs(30),
+    )
+    .await
+    .map_err(|err| CaptureError::BotConnect(err.to_string()))?;
+
+    let mut results = Vec::with_capacity(specs.len());
+    for (index, spec) in specs.iter().enumerate() {
+        let trace_path = corpus_dir.join(&spec.id).join("trace.postcard");
+        if let Ok(Some(cached)) = read_trace_if_current(&trace_path)
+            && cached.source_jar_sha1 == source_jar_sha1
+        {
+            results.push((spec.id.clone(), Ok(())));
+            continue;
+        }
+
+        let outcome = capture_contraption(&mut handle, &view, spec, index, source_jar_sha1).await;
+        let outcome = match outcome {
+            Ok(trace) => write_trace(&trace_path, &trace).map_err(CaptureError::Io),
+            Err(err) => Err(err),
+        };
+        results.push((spec.id.clone(), outcome));
+    }
+
+    Ok(results)
 }

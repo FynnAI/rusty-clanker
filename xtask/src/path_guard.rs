@@ -72,6 +72,14 @@ pub const PROTECTED_PATHS: &[ProtectedPath] = &[
         pattern: "benches-baselines/**",
         reason: "committed criterion baselines (TEST-D29)",
     },
+    ProtectedPath {
+        pattern: "crates/testing/gametest/**",
+        reason: "rc-gametest: trace/spec/replay/capture logic (M3-B07)",
+    },
+    ProtectedPath {
+        pattern: "crates/testing/gametest/corpus/redstone/**",
+        reason: "committed contraption RON definitions + manifest (M3-B07, TEST-D42/D47)",
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

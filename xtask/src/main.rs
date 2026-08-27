@@ -176,5 +176,29 @@ fn main() -> ExitCode {
         Command::VerifierReport { base } => xtask::verifier_report::run(base.as_deref()),
         Command::M1Report { server_bin, mode } => xtask::m1_report::run(server_bin, mode),
         Command::M2Report { server_bin, mode } => xtask::m2_report::run(server_bin, mode),
+        Command::FetchCorpus {
+            version,
+            server_jar,
+            only,
+        } => {
+            let args = xtask::corpus::fetch_corpus::FetchCorpusArgs {
+                version,
+                server_jar,
+                only,
+            };
+            xtask::corpus::fetch_corpus::run(&args)
+        }
+        Command::ParityCheck { corpus, only } => match corpus.as_str() {
+            "redstone" => {
+                let args = xtask::corpus::parity_check::ParityCheckRedstoneArgs { only };
+                xtask::corpus::parity_check::run(&args)
+            }
+            other => {
+                eprintln!(
+                    "parity-check: unknown corpus '{other}' — only 'redstone' is wired by M3-B07"
+                );
+                ExitCode::FAILURE
+            }
+        },
     }
 }

@@ -86,21 +86,39 @@ pub enum DiffError {
 /// Serializes via `postcard` (already workspace-pinned, CLUSTER-D12) — the format
 /// this blueprint's git-ignored `corpus/redstone/<id>/trace.postcard` cache uses.
 pub fn write_trace(path: &Path, trace: &RedstoneTrace) -> std::io::Result<()> {
-    todo!()
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = postcard::to_allocvec(trace)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    std::fs::write(path, bytes)
 }
 
 /// A normal decode: succeeds regardless of `format_version`'s numeric value (the
 /// version-gating policy lives in `read_trace_if_current`, not here) — `Err` only for
 /// an absent/unreadable file or bytes that fail to decode as a `RedstoneTrace` at all.
 pub fn read_trace(path: &Path) -> Result<RedstoneTrace, TraceReadError> {
-    todo!()
+    let bytes = std::fs::read(path).map_err(|source| TraceReadError::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    postcard::from_bytes(&bytes).map_err(|source| TraceReadError::Decode {
+        path: path.display().to_string(),
+        source,
+    })
 }
 
 /// `Ok(None)` for "absent, or a `format_version` mismatch" (both are legitimate,
 /// silent "must regenerate" signals for `fetch-corpus`'s own cache-hit logic);
 /// `Err` only for a genuine I/O or decode failure.
 pub fn read_trace_if_current(path: &Path) -> Result<Option<RedstoneTrace>, TraceReadError> {
-    todo!()
+    if !path.exists() {
+        return Ok(None);
+    }
+    match read_trace(path)? {
+        trace if trace.format_version == TRACE_FORMAT_VERSION => Ok(Some(trace)),
+        _stale => Ok(None),
+    }
 }
 
 /// Structural precondition: `expected.contraption_id == actual.contraption_id`,
@@ -112,5 +130,77 @@ pub fn diff_traces(
     expected: &RedstoneTrace,
     actual: &RedstoneTrace,
 ) -> Result<DiffReport, DiffError> {
-    todo!()
+    let structural_mismatch = |detail: String| DiffError::StructuralMismatch {
+        expected_id: expected.contraption_id.clone(),
+        actual_id: actual.contraption_id.clone(),
+        detail,
+    };
+
+    if expected.contraption_id != actual.contraption_id {
+        return Err(structural_mismatch("contraption_id differs".to_string()));
+    }
+    if expected.bounds_min != actual.bounds_min || expected.bounds_max != actual.bounds_max {
+        return Err(structural_mismatch(format!(
+            "bounds differ: expected {:?}..={:?}, actual {:?}..={:?}",
+            expected.bounds_min, expected.bounds_max, actual.bounds_min, actual.bounds_max
+        )));
+    }
+    if expected.ticks.len() != actual.ticks.len() {
+        return Err(structural_mismatch(format!(
+            "tick count differs: expected {}, actual {}",
+            expected.ticks.len(),
+            actual.ticks.len()
+        )));
+    }
+
+    let mut mismatches = Vec::new();
+    let mut analog_gaps = Vec::new();
+
+    for (expected_tick, actual_tick) in expected.ticks.iter().zip(actual.ticks.iter()) {
+        if expected_tick.tick != actual_tick.tick {
+            return Err(structural_mismatch(format!(
+                "tick value mismatch at the same sequence index: expected {}, actual {}",
+                expected_tick.tick, actual_tick.tick
+            )));
+        }
+        if expected_tick.blocks.len() != actual_tick.blocks.len() {
+            return Err(structural_mismatch(format!(
+                "tick {}: blocks length differs: expected {}, actual {}",
+                expected_tick.tick,
+                expected_tick.blocks.len(),
+                actual_tick.blocks.len()
+            )));
+        }
+        for (expected_block, actual_block) in
+            expected_tick.blocks.iter().zip(actual_tick.blocks.iter())
+        {
+            if expected_block.pos != actual_block.pos {
+                return Err(structural_mismatch(format!(
+                    "tick {}: position sequence differs at the same index: expected {:?}, actual {:?}",
+                    expected_tick.tick, expected_block.pos, actual_block.pos
+                )));
+            }
+            if expected_block.state_id != actual_block.state_id {
+                mismatches.push(TraceMismatch {
+                    tick: expected_tick.tick,
+                    pos: expected_block.pos,
+                    expected_state_id: expected_block.state_id,
+                    actual_state_id: actual_block.state_id,
+                });
+            }
+            if expected_block.analog != actual_block.analog {
+                analog_gaps.push(AnalogNotYetComparable {
+                    tick: expected_tick.tick,
+                    pos: expected_block.pos,
+                    expected_analog: expected_block.analog,
+                    actual_analog: actual_block.analog,
+                });
+            }
+        }
+    }
+
+    Ok(DiffReport {
+        mismatches,
+        analog_gaps,
+    })
 }
