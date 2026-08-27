@@ -27,7 +27,7 @@ pub struct SystemId {
 /// Accumulates system registrations, then computes the ARCH-D8 conflict graph once.
 pub struct RcExecutorBuilder {
     bootstrap: fn(&mut bevy_ecs::world::World),
-    groups: [Vec<Registration>; 5],
+    groups: [Vec<Registration>; 7],
 }
 
 struct Registration {
@@ -43,7 +43,15 @@ impl RcExecutorBuilder {
     pub fn new(bootstrap: fn(&mut bevy_ecs::world::World)) -> Self {
         Self {
             bootstrap,
-            groups: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            groups: [
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
         }
     }
 
@@ -77,7 +85,7 @@ impl RcExecutorBuilder {
         let mut prototype = World::new();
         (self.bootstrap)(&mut prototype);
 
-        let mut compiled_groups: Vec<CompiledGroup> = Vec::with_capacity(5);
+        let mut compiled_groups: Vec<CompiledGroup> = Vec::with_capacity(7);
 
         for (group_index, registrations) in self.groups.into_iter().enumerate() {
             let group = DomainGroup::ALL[group_index];
@@ -131,9 +139,9 @@ impl RcExecutorBuilder {
             });
         }
 
-        let groups: [CompiledGroup; 5] = compiled_groups
+        let groups: [CompiledGroup; 7] = compiled_groups
             .try_into()
-            .unwrap_or_else(|_| unreachable!("exactly 5 domain groups by construction"));
+            .unwrap_or_else(|_| unreachable!("exactly 7 domain groups by construction"));
 
         Ok(RcExecutor::new(self.bootstrap, groups))
     }

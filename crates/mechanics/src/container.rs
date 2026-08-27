@@ -37,7 +37,18 @@ pub fn comparator_signal_from_slots(
     slots: &[Option<ItemStackRecord>],
     max_stack: &dyn ItemMaxStackSize,
 ) -> u8 {
-    todo!()
+    let mut fullness_sum: f32 = 0.0;
+    let mut occupied: u32 = 0;
+    for stack in slots.iter().flatten() {
+        let cap = max_stack.max_stack_size(&stack.id).min(64) as f32;
+        fullness_sum += stack.count as f32 / cap;
+        occupied += 1;
+    }
+    if occupied == 0 {
+        return 0;
+    }
+    let average = fullness_sum / slots.len() as f32;
+    (average * 14.0).floor() as u8 + 1
 }
 
 /// First non-empty slot within `allowed_slots`, in the order `allowed_slots` itself lists
@@ -48,7 +59,10 @@ pub fn find_leftmost_extract_slot(
     slots: &[Option<ItemStackRecord>],
     allowed_slots: &[usize],
 ) -> Option<usize> {
-    todo!()
+    allowed_slots
+        .iter()
+        .find(|&&i| slots.get(i).is_some_and(Option::is_some))
+        .copied()
 }
 
 /// First slot within `allowed_slots` that already holds `item_id` with `count < cap`, or the
@@ -61,7 +75,20 @@ pub fn find_leftmost_insert_slot(
     cap: u32,
     allowed_slots: &[usize],
 ) -> Option<usize> {
-    todo!()
+    for &i in allowed_slots {
+        if let Some(Some(stack)) = slots.get(i)
+            && stack.id == item_id
+            && (stack.count as u32) < cap
+        {
+            return Some(i);
+        }
+    }
+    for &i in allowed_slots {
+        if let Some(None) = slots.get(i) {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Moves exactly one item unit from `src[src_slot]` to `dst[dst_slot]` (creating a fresh
@@ -76,13 +103,49 @@ pub fn move_one_item(
     dst: &mut [Option<ItemStackRecord>],
     dst_slot: usize,
 ) {
-    todo!()
+    debug_assert!(src[src_slot].is_some(), "move_one_item: src slot is empty");
+
+    let (new_id, new_components) = {
+        let src_stack = src[src_slot].as_ref().unwrap();
+        debug_assert!(
+            dst[dst_slot].as_ref().is_none_or(|d| d.id == src_stack.id),
+            "move_one_item: dst slot holds a different, non-stackable item id"
+        );
+        (src_stack.id.clone(), src_stack.components.clone())
+    };
+
+    match &mut dst[dst_slot] {
+        Some(existing) => existing.count += 1,
+        None => {
+            dst[dst_slot] = Some(ItemStackRecord {
+                id: new_id,
+                count: 1,
+                components: new_components,
+            });
+        }
+    }
+
+    let src_stack = src[src_slot].as_mut().unwrap();
+    src_stack.count -= 1;
+    if src_stack.count <= 0 {
+        src[src_slot] = None;
+    }
 }
 
 /// Decrements `slot`'s count by `n`, clearing it to `None` if the result is `0`. Panics
 /// (`debug_assert!`) if `slot` is `None` or its count is `< n`.
 pub fn decrement_or_clear(slot: &mut Option<ItemStackRecord>, n: i32) {
-    todo!()
+    debug_assert!(slot.is_some(), "decrement_or_clear: slot is empty");
+    if let Some(stack) = slot.as_mut() {
+        debug_assert!(
+            stack.count >= n,
+            "decrement_or_clear: n exceeds slot's count"
+        );
+        stack.count -= n;
+        if stack.count <= 0 {
+            *slot = None;
+        }
+    }
 }
 
 /// Places `count` units of `item_id` into `slot`: creates a fresh stack if `slot` is `None`,
@@ -90,7 +153,16 @@ pub fn decrement_or_clear(slot: &mut Option<ItemStackRecord>, n: i32) {
 /// helper (a furnace recipe's own output never needs a leftmost-slot search — it always
 /// targets exactly `FURNACE_SLOT_OUTPUT`).
 pub fn place_or_stack_output(slot: &mut Option<ItemStackRecord>, item_id: &str, count: i32) {
-    todo!()
+    match slot {
+        Some(existing) => existing.count += count,
+        None => {
+            *slot = Some(ItemStackRecord {
+                id: item_id.to_string(),
+                count,
+                components: None,
+            });
+        }
+    }
 }
 
 /// The seam `hopper.rs`'s transfer algorithm is written once, generically, against (Context:

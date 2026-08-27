@@ -38,7 +38,24 @@ pub fn draw_random_tick_positions(
     chunk_min_z: i32,
     random_tick_speed: u32,
 ) -> Vec<RandomTickPosition> {
-    todo!()
+    let mut out = Vec::with_capacity(24 * random_tick_speed as usize);
+    for section in 0..24i32 {
+        let section_min_y = -64 + section * 16;
+        for _ in 0..random_tick_speed {
+            let bits = rng.next_int() as u32;
+            let local_x = (bits & 15) as i32;
+            let local_z = ((bits >> 8) & 15) as i32;
+            let local_y = ((bits >> 16) & 15) as i32;
+            out.push(RandomTickPosition {
+                pos: BlockPos::new(
+                    chunk_min_x + local_x,
+                    section_min_y + local_y,
+                    chunk_min_z + local_z,
+                ),
+            });
+        }
+    }
+    out
 }
 
 /// Convenience: `RcRandom::new(chunk_random_seed(seed.0, chunk_x, chunk_z, tick))` then
@@ -53,5 +70,6 @@ pub fn random_tick_chunk(
     tick_counter: u64,
     random_tick_speed: u32,
 ) -> Vec<RandomTickPosition> {
-    todo!()
+    let mut rng = RcRandom::new(chunk_random_seed(seed.0, chunk_x, chunk_z, tick_counter));
+    draw_random_tick_positions(&mut rng, chunk_x * 16, chunk_z * 16, random_tick_speed)
 }

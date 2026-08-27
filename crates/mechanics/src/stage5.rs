@@ -42,7 +42,57 @@ pub fn run_random_tick_phase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     ownership: &RegionOwnership,
 ) {
-    todo!()
+    for &(chunk_x, chunk_z) in chunks {
+        // Constructed directly here (rather than via `random_tick::random_tick_chunk`'s own
+        // convenience wrapper) so this same `rng` instance stays reachable afterward, for
+        // every one of this chunk's own dispatch calls' `RandomTickContext::rng` field --
+        // "further draws from the *same* per-chunk-per-tick stream the position-selection
+        // loop itself already consumes" (behavior.rs's own doc comment).
+        let mut rng = RcRandom::new(crate::random::chunk_random_seed(
+            seed.0,
+            chunk_x,
+            chunk_z,
+            tick_counter,
+        ));
+        let positions =
+            draw_random_tick_positions(&mut rng, chunk_x * 16, chunk_z * 16, random_tick_speed);
+
+        for candidate in positions {
+            let pos: BlockPos = candidate.pos;
+            let Some(state) = world.get_block(pos) else {
+                continue;
+            };
+            let behavior = behaviors.resolve(state);
+
+            let base = UpdateContext {
+                world,
+                engine,
+                scheduled,
+                events,
+                outbound,
+                ownership,
+                current_tick: tick_counter,
+            };
+            let mut ctx = RandomTickContext {
+                base,
+                rng: &mut rng,
+            };
+            behavior.on_random_tick(&mut ctx, pos);
+
+            engine.drain(&mut |eng, item| {
+                let mut item_ctx = UpdateContext {
+                    world,
+                    engine: eng,
+                    scheduled,
+                    events,
+                    outbound,
+                    ownership,
+                    current_tick: tick_counter,
+                };
+                dispatch_pending_update(&mut item_ctx, behaviors, item);
+            });
+        }
+    }
 }
 
 /// Duplicates `stage4.rs`'s own private `dispatch_pending_update` (that function is not `pub`
@@ -55,5 +105,32 @@ fn dispatch_pending_update(
     behaviors: &BlockBehaviorRegistry,
     item: PendingUpdate,
 ) {
-    todo!()
+    match item {
+        PendingUpdate::NeighborChanged { pos, from } => {
+            if let Some(state) = ctx.get_block(pos) {
+                let behavior = behaviors.resolve(state);
+                behavior.on_neighbor_changed(ctx, pos, from);
+            }
+        }
+        PendingUpdate::ShapeUpdate {
+            pos,
+            from,
+            remaining_depth,
+        } => {
+            let Some(state) = ctx.get_block(pos) else {
+                return;
+            };
+            let Some(neighbor_state) = ctx.get_block(from.apply(pos)) else {
+                return;
+            };
+            let behavior = behaviors.resolve(state);
+            if let Some(new_state) = behavior.on_shape_update(ctx, pos, from, neighbor_state) {
+                ctx.world.set_block(pos, new_state);
+                if remaining_depth > 0 {
+                    ctx.engine
+                        .emit_shape_update_fanout_at_depth(pos, remaining_depth - 1);
+                }
+            }
+        }
+    }
 }

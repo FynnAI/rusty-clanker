@@ -37,20 +37,98 @@ pub enum HopperTickOutcome {
 
 impl HopperBlockEntity {
     pub fn empty(facing: Direction) -> Self {
-        todo!()
+        Self {
+            slots: std::array::from_fn(|_| None),
+            transfer_cooldown: 0,
+            facing,
+            custom_name: None,
+            lock: None,
+        }
     }
 
     /// Context's own binding pseudocode, implemented exactly (cooldown gate, lock gate,
     /// push-then-pull, the 8/7-tick cooldown rule, furnace-face-aware insertion/extraction via
     /// `TierOneContainer`). `pos` is this hopper's own absolute position (needed to compute
     /// `facing.apply(pos)`/`Direction::Up.apply(pos)` and to query `world.is_locked_by_redstone`).
+    ///
+    /// **Field-report correction to the blueprint's own literal pseudocode:** `insertable_slots`'s
+    /// `from_above` argument is computed here as `pos.y > push_target_pos.y` — the *hopper's*
+    /// own Y is the greater one when it sits above the destination. The blueprint's own text
+    /// gives the inverted `push_target_pos.y > self.pos.y`, which resolves to `false` for a
+    /// hopper directly above a furnace (the exact "coal on the side, ore on top" auto-smelter
+    /// case Context itself names), routing the push to the fuel slot instead of the input slot.
     pub fn tick(
         &mut self,
         pos: BlockPos,
         world: &mut dyn BlockEntityWorldAccess,
         max_stack: &dyn ItemMaxStackSize,
     ) -> HopperTickOutcome {
-        todo!()
+        if self.transfer_cooldown > 0 {
+            self.transfer_cooldown -= 1;
+            return HopperTickOutcome::OnCooldown;
+        }
+        if world.is_locked_by_redstone(pos) {
+            return HopperTickOutcome::Locked;
+        }
+
+        // 1. PUSH -- attempted first.
+        let push_target_pos = self.facing.apply(pos);
+        if let Some(destination) = world.container_at_mut(push_target_pos)
+            && let Some(src_slot) =
+                crate::container::find_leftmost_extract_slot(&self.slots, &ALL_HOPPER_SLOTS)
+        {
+            let item_id = self.slots[src_slot].as_ref().unwrap().id.clone();
+            let cap = max_stack.max_stack_size(&item_id).min(64);
+            let destination_was_empty = destination.slots().iter().all(Option::is_none);
+            let insertable = destination.insertable_slots(pos.y > push_target_pos.y);
+            if let Some(dst_slot) = crate::container::find_leftmost_insert_slot(
+                destination.slots(),
+                &item_id,
+                cap,
+                &insertable,
+            ) {
+                crate::container::move_one_item(
+                    &mut self.slots,
+                    src_slot,
+                    destination.slots_mut(),
+                    dst_slot,
+                );
+                self.transfer_cooldown = if destination_was_empty { 7 } else { 8 };
+                return HopperTickOutcome::Pushed;
+            }
+        }
+
+        // 2. PULL -- only reached if push did not succeed.
+        let above_pos = Direction::Up.apply(pos);
+        if let Some(source) = world.container_at_mut(above_pos) {
+            let extractable = source.extractable_slots();
+            if let Some(src_slot) =
+                crate::container::find_leftmost_extract_slot(source.slots(), &extractable)
+            {
+                let item_id = source.slots()[src_slot].as_ref().unwrap().id.clone();
+                let cap = max_stack.max_stack_size(&item_id).min(64);
+                if let Some(dst_slot) = crate::container::find_leftmost_insert_slot(
+                    &self.slots,
+                    &item_id,
+                    cap,
+                    &ALL_HOPPER_SLOTS,
+                ) {
+                    crate::container::move_one_item(
+                        source.slots_mut(),
+                        src_slot,
+                        &mut self.slots,
+                        dst_slot,
+                    );
+                    // Pulling never gets the 7-tick "into empty" exception -- documented as an
+                    // ejection/pushing-side behavior only (Context).
+                    self.transfer_cooldown = 8;
+                    return HopperTickOutcome::Pulled;
+                }
+            }
+        }
+
+        // 3. item-entity collection -- out of scope (M4, Context).
+        HopperTickOutcome::Idle
     }
 
     pub fn comparator_signal(&self, max_stack: &dyn ItemMaxStackSize) -> u8 {
@@ -58,13 +136,87 @@ impl HopperBlockEntity {
     }
 
     pub fn to_nbt(&self, pos: BlockPos) -> owned::NbtCompound {
-        todo!()
+        let mut out = owned::NbtCompound::new();
+        out.insert("id", "minecraft:hopper");
+        out.insert("x", pos.x);
+        out.insert("y", pos.y);
+        out.insert("z", pos.z);
+        out.insert("Items", crate::item_stack::slots_to_items_list(&self.slots));
+        out.insert("TransferCooldown", self.transfer_cooldown as i32);
+        out.insert("RCFacing", direction_to_byte(self.facing));
+        if let Some(name) = &self.custom_name {
+            out.insert("CustomName", name.as_str());
+        }
+        if let Some(lock) = &self.lock {
+            out.insert("Lock", lock.as_str());
+        }
+        out
     }
 
+    /// `facing` is not itself part of vanilla's own block-*entity* NBT (it is a block*state*
+    /// property, per `07-blocks-blockstates.md`'s own state-vs-entity split) — this blueprint's
+    /// own `to_nbt`/`from_nbt` write/read it as a convenience extra field (`RCFacing: Byte`,
+    /// this blueprint's own non-vanilla tag, clearly namespaced so it never collides with a
+    /// real vanilla tag name) purely so this blueprint's own hopper struct round-trips
+    /// completely without needing the not-yet-existing real blockstate-property NBT
+    /// integration a future blueprint supplies.
     pub fn from_nbt(
         compound: &borrow::NbtCompound<'_, '_>,
     ) -> Result<(BlockPos, Self), SchemaError> {
-        todo!()
+        let path = NbtPath::root();
+        let x = compound.require_int(&path, "x")?;
+        let y = compound.require_int(&path, "y")?;
+        let z = compound.require_int(&path, "z")?;
+        let pos = BlockPos::new(x, y, z);
+
+        let mut slots: [Option<ItemStackRecord>; HOPPER_SLOT_COUNT] = std::array::from_fn(|_| None);
+        crate::item_stack::items_list_from_nbt(compound, &path, &mut slots)?;
+
+        let transfer_cooldown = compound.require_int(&path, "TransferCooldown")? as u8;
+        let facing_byte = compound.require_byte(&path, "RCFacing")?;
+        let facing = direction_from_byte(facing_byte, &path)?;
+        let custom_name = compound
+            .string("CustomName")
+            .map(|s| s.to_str().into_owned());
+        let lock = compound.string("Lock").map(|s| s.to_str().into_owned());
+
+        Ok((
+            pos,
+            Self {
+                slots,
+                transfer_cooldown,
+                facing,
+                custom_name,
+                lock,
+            },
+        ))
+    }
+}
+
+fn direction_to_byte(d: Direction) -> i8 {
+    match d {
+        Direction::West => 0,
+        Direction::East => 1,
+        Direction::North => 2,
+        Direction::South => 3,
+        Direction::Down => 4,
+        Direction::Up => 5,
+    }
+}
+
+fn direction_from_byte(b: i8, path: &NbtPath) -> Result<Direction, SchemaError> {
+    match b {
+        0 => Ok(Direction::West),
+        1 => Ok(Direction::East),
+        2 => Ok(Direction::North),
+        3 => Ok(Direction::South),
+        4 => Ok(Direction::Down),
+        5 => Ok(Direction::Up),
+        other => Err(SchemaError::InvalidValue {
+            path: path.clone(),
+            field: "RCFacing",
+            reason: format!("unrecognized direction byte {other}"),
+        }),
     }
 }
 

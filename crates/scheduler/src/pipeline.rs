@@ -21,8 +21,9 @@ pub enum Stage {
     NetworkOutboundEncode = 11,
 }
 
-/// The five ARCH-D8 domain groups. `stage()` is this blueprint's own concrete,
-/// cited stage mapping (Context: "The five domain groups and their stage mapping").
+/// The seven ARCH-D8 domain groups. `stage()` is this blueprint's own concrete,
+/// cited stage mapping (Context: "The five domain groups and their stage mapping",
+/// extended by M3-B06 to seven).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DomainGroup {
     BlockRedstone,
@@ -30,15 +31,25 @@ pub enum DomainGroup {
     Lighting,
     ChunkSerialize,
     NetCodec,
+    /// M3-B06: Stage 5, Random Block Tick (ARCH-D14). "Conflict-graph-batched,
+    /// deferred" dispatch, identical in kind to `AiPhysics`/`Lighting`/`ChunkSerialize`
+    /// — see that blueprint's own Context for why exactly one system is ever
+    /// registered here.
+    RandomTick,
+    /// M3-B06: Stage 7, Block Entity Tick (ARCH-D17). Same dispatch kind as
+    /// `RandomTick` above.
+    BlockEntity,
 }
 
 impl DomainGroup {
-    pub const ALL: [DomainGroup; 5] = [
+    pub const ALL: [DomainGroup; 7] = [
         DomainGroup::BlockRedstone,
         DomainGroup::AiPhysics,
         DomainGroup::Lighting,
         DomainGroup::ChunkSerialize,
         DomainGroup::NetCodec,
+        DomainGroup::RandomTick,
+        DomainGroup::BlockEntity,
     ];
 
     /// The Deliverables' cited stage mapping table.
@@ -49,11 +60,14 @@ impl DomainGroup {
             DomainGroup::Lighting => Stage::Lighting,
             DomainGroup::ChunkSerialize => Stage::ChunkSnapshot,
             DomainGroup::NetCodec => Stage::NetworkOutboundEncode,
+            DomainGroup::RandomTick => Stage::RandomBlockTick,
+            DomainGroup::BlockEntity => Stage::BlockEntityTick,
         }
     }
 
-    /// 0-based index into `RcExecutor`'s internal 5-element group array; stable,
-    /// matches `Self::ALL`'s declaration order.
+    /// 0-based index into `RcExecutor`'s internal 7-element group array; stable,
+    /// matches `Self::ALL`'s declaration order. **Not** the same number as
+    /// `Stage`'s own discriminant (a different axis, a pipeline-stage ordinal).
     pub const fn index(self) -> usize {
         match self {
             DomainGroup::BlockRedstone => 0,
@@ -61,6 +75,8 @@ impl DomainGroup {
             DomainGroup::Lighting => 2,
             DomainGroup::ChunkSerialize => 3,
             DomainGroup::NetCodec => 4,
+            DomainGroup::RandomTick => 5,
+            DomainGroup::BlockEntity => 6,
         }
     }
 }

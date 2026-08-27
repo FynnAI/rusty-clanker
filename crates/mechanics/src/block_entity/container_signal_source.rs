@@ -22,7 +22,9 @@ pub struct Tier1ContainerSignalSource {
 
 impl Tier1ContainerSignalSource {
     pub fn new() -> Self {
-        todo!()
+        Self {
+            signals: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Called once per tier-1 block entity, every Stage-7 pass (Deliverables,
@@ -33,7 +35,7 @@ impl Tier1ContainerSignalSource {
     /// stays unread by any comparator until the first Stage-7 pass after it is created (a
     /// documented, bounded, at-most-one-tick latency — Context).
     pub fn record(&self, pos: BlockPos, signal: u8) {
-        todo!()
+        self.signals.lock().unwrap().insert(pos, signal);
     }
 
     /// Removes a position's cached entry. Not called by anything in this blueprint (no
@@ -41,7 +43,7 @@ impl Tier1ContainerSignalSource {
     /// gap) — provided for a future removal-pipeline blueprint to call alongside its own
     /// block-entity despawn, so a stale signal never outlives the container it described.
     pub fn forget(&self, pos: BlockPos) {
-        todo!()
+        self.signals.lock().unwrap().remove(&pos);
     }
 }
 

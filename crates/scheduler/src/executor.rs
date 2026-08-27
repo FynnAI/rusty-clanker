@@ -25,13 +25,41 @@ pub(crate) struct CompiledGroup {
     pub(crate) waves: Vec<Vec<usize>>,       // from compute_waves; ignored by Stage 4's dispatch
 }
 
+/// M3-B06 field-report fix: `DomainGroup::ALL`'s own declaration order stays exactly what
+/// M0-B05 fixed it as (`BlockRedstone, AiPhysics, Lighting, ChunkSerialize, NetCodec`) with
+/// the two new M3-B06 groups appended at the end (`RandomTick, BlockEntity`) — required,
+/// since `DomainGroup::index()`'s return values (and `spawn_region`'s own per-group slot
+/// fill, which is order-independent) are pinned by M3-B06's own already-committed acceptance
+/// tests. But `tick_region`'s *dispatch* order must track ascending `Stage` value, not
+/// `ALL`'s raw array order — M3-B06's own Deliverables claimed "no new dispatch logic is
+/// needed... `tick_region` is already specified generically over each domain group," which
+/// is not correct: appending `RandomTick`/`BlockEntity` to the end of `ALL` and iterating
+/// `ALL` directly (the pre-M3-B06 code) would run Stage 5's and Stage 7's own content
+/// *after* Stage 11's `NetCodec` pass, on every tick — random-tick and block-entity state
+/// changes would consistently miss that same tick's own network snapshot, an undocumented,
+/// unbounded, silent one-tick-late deviation forbidden by this project's own "vanilla parity
+/// is bit-identical by default" binding principle. `DISPATCH_ORDER` is `ALL`'s own seven
+/// members reordered to ascending `Stage` value once, by hand, at compile time (`RandomTick`
+/// = Stage 5 slots in between `BlockRedstone` = Stage 4 and `AiPhysics` = Stage 6;
+/// `BlockEntity` = Stage 7 slots in between `AiPhysics` = Stage 6 and `Lighting` = Stage 8) —
+/// `tick_region` iterates this, never `DomainGroup::ALL` directly.
+const DISPATCH_ORDER: [DomainGroup; 7] = [
+    DomainGroup::BlockRedstone,
+    DomainGroup::RandomTick,
+    DomainGroup::AiPhysics,
+    DomainGroup::BlockEntity,
+    DomainGroup::Lighting,
+    DomainGroup::ChunkSerialize,
+    DomainGroup::NetCodec,
+];
+
 /// The built, immutable RC-Executor (ARCH-D8: conflict graph computed once,
 /// "reused for every tick of every region"). `Send + Sync` — safe to share
 /// (`&RcExecutor`) across multiple regions' ticks running concurrently on
 /// different threads, a later blueprint's use case, not exercised here.
 pub struct RcExecutor {
     bootstrap: fn(&mut bevy_ecs::world::World),
-    groups: [CompiledGroup; 5],
+    groups: [CompiledGroup; 7],
 }
 
 /// Minimal per-tick result. Extended by later blueprints as needed (e.g. per-stage
@@ -44,7 +72,7 @@ pub struct TickReport {
 impl RcExecutor {
     /// Crate-private constructor -- `RcExecutorBuilder::build` (`registry.rs`) is
     /// the only caller; the conflict graph is computed there, once.
-    pub(crate) fn new(bootstrap: fn(&mut World), groups: [CompiledGroup; 5]) -> Self {
+    pub(crate) fn new(bootstrap: fn(&mut World), groups: [CompiledGroup; 7]) -> Self {
         Self { bootstrap, groups }
     }
 
@@ -55,8 +83,15 @@ impl RcExecutor {
         let mut world = World::new();
         (self.bootstrap)(&mut world);
 
-        let mut system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 5] =
-            [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let mut system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 7] = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ];
 
         for group in DomainGroup::ALL {
             let compiled = &self.groups[group.index()];
@@ -157,7 +192,7 @@ impl RcExecutor {
         // ARCH-D9 exception) and Stage 11 (read-only, never applied -- Constraint f).
         let mut deferred_targets: Vec<(u8, u32, usize, usize)> = Vec::new();
 
-        for group in DomainGroup::ALL {
+        for group in DISPATCH_ORDER {
             let compiled = &self.groups[group.index()];
             let instances = &mut system_instances[group.index()];
 
