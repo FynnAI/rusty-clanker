@@ -38,8 +38,14 @@ rc-gametest = { path = "../gametest" }
 simdnbt = { workspace = true }
 
 [dev-dependencies]
-# none beyond the above — this crate's own self-tests use rc-test-harness's
-# fake_server directly, no additional test-only dependency needed
+# M3 field-report fix (DEFECT 3): `restart_persistence_self_tests.rs`'s own aim-geometry
+# regression test hand-verifies `restart_persistence::click_aim_point` against a *real*
+# `rc_physics::cast_ray` (the exact algorithm `crates/server/src/play/mining.rs::
+# raycast_reach` uses) over a small in-test `BlockShapeSource` mirroring M1-B05's superflat
+# layer table — not a second, potentially-drifting reimplementation of the raycast itself.
+# Test-only: `rusty-clanker-server` already depends on `rc-physics` directly; this crate's
+# own library code never does.
+rc-physics = { path = "../../physics" }
 
 # Forced deviation (Context, "azalea's own upstream nightly-toolchain requirement"):
 # `xtask`'s own binary must never gain a Cargo dependency edge on this crate --

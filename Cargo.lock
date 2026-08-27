@@ -3063,6 +3063,7 @@ dependencies = [
  "bytes",
  "rc-core",
  "rc-gametest",
+ "rc-physics",
  "rc-protocol",
  "rc-registries",
  "rc-test-harness",
