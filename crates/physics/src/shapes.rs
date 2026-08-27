@@ -129,20 +129,24 @@ static TIER1_TABLE: OnceLock<ShapeTable> = OnceLock::new();
 /// default-full-cube fallback (correct for "any *other* unlisted block," i.e. ordinary
 /// terrain) would wrongly resolve air as a solid block too.
 ///
-/// **Default-state-only scope, a documented deviation from the blueprint's literal
-/// "enumerated over every one of that block's own registered block states" instruction**:
-/// `rc_registries::generated_v776::block_states` publishes only each block's *default*
-/// state id, never a per-block id range or a reverse id -> block-type lookup, so there is no
-/// way for this table (or its caller) to enumerate a listed block's other property
-/// combinations (a repeater's other facings/delays/locked/powered states, etc.) without
-/// either a registry-range table `xtask codegen` does not emit or an `rc-registries`
-/// dependency this crate's isolation rule forbids. A raw id for one of these blocks in a
-/// non-default state falls through to `default_full_cube()`, same as any ordinary block --
-/// a real but narrow parity gap, bounded to this milestone's own hand-authored source (a)
-/// (source (b), `xtask extract-shapes`, is explicitly deferred, Open Questions) and to a
-/// state no code path in this crate's own consumer (`rusty-clanker-server`) currently
-/// produces (`block_action.rs`'s own placement content is always plain `STONE`/`AIR`; none
-/// of these tier-1 special-shaped blocks are ever placed anywhere in M3's world yet).
+/// **Every orientation the placement path can actually produce, not only each block's own
+/// default state**: `rc_registries::generated_v776::block_states` publishes only each
+/// block's *default* state id, never a per-block id range or a reverse id -> block-type
+/// lookup, so this table cannot enumerate a listed block's *every* real registry state (a
+/// repeater's own full facing/delay/locked/powered cross-product, etc. -- that gap is real
+/// and stays open, `Open Questions`). It can, and now does, cover every id `rusty-clanker-
+/// server`'s own placement path (`play::mining::apply_placement`, via `tier1_oriented_state_
+/// table()`) actually writes into the world: repeater/comparator/redstone-wall-torch/chest
+/// each get one row per `HORIZONTAL4` facing, and hopper one row per horizontal facing plus
+/// its own `Full(Down)` id, below -- one row per `<default-state id> + direction_offset`,
+/// the identical arithmetic `play::mining::tier1_oriented_entries()` uses to *write* that
+/// same id, restated here by hand since this crate cannot import that function either (same
+/// isolation rule). **The two tables must stay in sync by hand** -- `crates/server/tests/
+/// mining_oriented_shape_table.rs` is the regression seam that catches them drifting apart
+/// (M3 field-report Defect B: before this fix, every non-default orientation of these five
+/// blocks silently fell through to `default_full_cube()`, wrongly making, e.g., a
+/// South-facing repeater collide -- and, `rc_mechanics::redstone::signal::is_conductor`
+/// reusing this exact table, conduct redstone -- like a solid block).
 pub fn tier1_shape_table() -> &'static ShapeTable {
     TIER1_TABLE.get_or_init(build_tier1_table)
 }
@@ -186,10 +190,12 @@ fn build_tier1_table() -> ShapeTable {
         }])
     };
     // Chest: box [0.0625,0.9375]x[0,0.875]x[0.0625,0.9375] (Context table).
-    let chest_shape = VoxelShape::from_boxes(vec![Aabb {
-        min: Vec3::new(0.0625, 0.0, 0.0625),
-        max: Vec3::new(0.9375, 0.875, 0.9375),
-    }]);
+    let chest_shape = || {
+        VoxelShape::from_boxes(vec![Aabb {
+            min: Vec3::new(0.0625, 0.0, 0.0625),
+            max: Vec3::new(0.9375, 0.875, 0.9375),
+        }])
+    };
     // Hopper: union of a top rim box and a simplified single funnel box (Context table).
     let hopper_shape = VoxelShape::from_boxes(vec![
         Aabb {
@@ -209,16 +215,48 @@ fn build_tier1_table() -> ShapeTable {
         // default-full-cube fallback (which is for "any *other* unlisted block," implicitly
         // assumed ordinary terrain, never air itself; without this row every `air` lookup
         // would wrongly resolve as a solid full cube).
-        (0, empty),                  // air
-        (5171, flat(wire_shape())),  // redstone_wire
-        (6885, flat(torch_shape())), // redstone_torch
-        (6887, flat(torch_shape())), // redstone_wall_torch
-        (7037, flat(low_slab())),    // repeater
-        (11264, flat(low_slab())),   // comparator
-        (2263, full.clone()),        // piston (extended = false)
-        (2241, full.clone()),        // sticky_piston (extended = false)
-        (3988, flat(chest_shape)),   // chest
-        (11313, flat(hopper_shape)), // hopper
+        (0, empty),                          // air
+        (5171, flat(wire_shape())),          // redstone_wire
+        (6885, flat(torch_shape())),         // redstone_torch
+        (6887, flat(torch_shape())),         // redstone_wall_torch
+        (7037, flat(low_slab())),            // repeater, facing North (direction_offset 0)
+        (11264, flat(low_slab())),           // comparator, facing North (direction_offset 0)
+        (2263, full.clone()),                // piston (extended = false)
+        (2241, full.clone()),                // sticky_piston (extended = false)
+        (3988, flat(chest_shape())),         // chest, facing North (direction_offset 0)
+        (11313, flat(hopper_shape.clone())), // hopper, facing North (direction_offset 0)
+        // Every other horizontal orientation `play::mining::apply_placement` can actually
+        // write for these five blocks (M3 field-report Defect B) -- `<default-state id> +
+        // direction_offset`, `direction_offset(South) = 1, (East) = 2, (West) = 3`, the
+        // identical arithmetic `play::mining::tier1_oriented_entries()` uses to *write* these
+        // same ids (`direction_offset`'s own doc comment there: North=0, South=1, East=2,
+        // West=3, Up=4, Down=5) -- restated here by hand since this crate cannot import that
+        // function (this table's own doc comment above). Each of these five blocks' own
+        // shape is rotationally identical across every horizontal facing in this milestone's
+        // own simplified per-block boxes (Context table) -- only the *id* changes per
+        // facing, never the box -- so every offset row below reuses the same shape value the
+        // facing-North row above already registers.
+        (6888, flat(torch_shape())), // redstone_wall_torch, facing South
+        (6889, flat(torch_shape())), // redstone_wall_torch, facing East
+        (6890, flat(torch_shape())), // redstone_wall_torch, facing West
+        (7038, flat(low_slab())),    // repeater, facing South
+        (7039, flat(low_slab())),    // repeater, facing East
+        (7040, flat(low_slab())),    // repeater, facing West
+        (11265, flat(low_slab())),   // comparator, facing South
+        (11266, flat(low_slab())),   // comparator, facing East
+        (11267, flat(low_slab())),   // comparator, facing West
+        (3989, flat(chest_shape())), // chest, facing South
+        (3990, flat(chest_shape())), // chest, facing East
+        (3991, flat(chest_shape())), // chest, facing West
+        (11314, flat(hopper_shape.clone())), // hopper, facing South
+        (11315, flat(hopper_shape.clone())), // hopper, facing East
+        (11316, flat(hopper_shape.clone())), // hopper, facing West
+        // Hopper's own clamped-Down orientation (`play::mining::resolve_orientation`'s own
+        // Hopper rule: a hopper placed against the top or bottom face of a neighbor always
+        // faces Down, never Up) -- `HOPPER.0 + 10`, matching `tier1_oriented_entries()`'s
+        // own identical `+ 10` offset (chosen there to sit safely past every `direction_
+        // offset` value `0..=5` any *other* row for this same base id uses).
+        (11323, flat(hopper_shape)), // hopper, facing Down
         // piston_head (M3-B05 Context §D) -- six placeholder ids, one per facing (no real
         // per-property-combination registry exists yet, Context §I; kept in sync by hand with
         // `crates/mechanics/src/redstone/piston.rs`'s own identical `PISTON_HEAD_IDS` table and

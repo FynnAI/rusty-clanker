@@ -35,6 +35,21 @@ pub fn cast_ray(
     max_distance: f64,
     shapes: &dyn BlockShapeSource,
 ) -> Option<RayHit> {
+    // Defense in depth (M3 field-report Defect A), independent of every caller's own
+    // upstream validation (`play::mining::raycast_reach`'s own `look_vector` output is
+    // never itself NaN once `play::movement::evaluate_movement` rejects a non-finite
+    // rotation before it ever reaches `motion.yaw`/`motion.pitch` -- but this function must
+    // stay safe on its own terms for any future caller too): a non-finite direction makes
+    // every `signum()`/`axis_t_delta`/`initial_t_max` value below either `NaN` or a
+    // never-advancing `0` step, and a zero-length direction (every component `0.0`) makes
+    // every `t_max_*` axis permanently `INFINITY` (`axis_t_delta`'s own "never advances"
+    // case, on all three axes at once) -- either way `cell` would never change and every
+    // `t_max_* > max_distance` exit check below would never fire, spinning forever. Bailing
+    // out here is the only correct answer for a direction with no well-defined ray at all.
+    if !direction.is_finite() || direction.length_squared() == 0.0 {
+        return None;
+    }
+
     let mut cell = BlockPos::new(
         origin.x.floor() as i32,
         origin.y.floor() as i32,
@@ -53,7 +68,28 @@ pub fn cast_ray(
     let mut t_max_y = initial_t_max(origin.y, direction.y, cell.y);
     let mut t_max_z = initial_t_max(origin.z, direction.z, cell.z);
 
-    loop {
+    // Defense in depth, independent of the `direction` guard above: a real DDA sweep with a
+    // well-defined direction crosses at most one grid line per axis for every unit of
+    // distance travelled, so the number of cells visited before `t` exceeds `max_distance`
+    // is bounded by roughly `3 * max_distance` (one term per axis) -- `+ 4` covers the
+    // starting cell and the loop's own off-by-one at each exit check. This cap never trusts
+    // `max_distance` alone to end the loop, since a `NaN` `max_distance` would make every
+    // `t_max_* > max_distance` comparison below false forever (the exact failure mode the
+    // `direction` guard above exists to prevent for `direction` specifically -- this is the
+    // same defense for `max_distance`). `f64::clamp` itself propagates a `NaN` input straight
+    // through (its own doc comment: "returns NaN if the number is NaN," unlike the `.max(0.0)
+    // .min(..)` chain this originally used) rather than folding it to `0` the way `direction`'s
+    // own finite guard above does -- but that is still safe here, one step later: `as u64`
+    // saturates a NaN operand to `0` (Rust's own documented, non-panicking float -> int cast
+    // rule), so `max_steps` below ends up `4` either way, `NaN` or `0.0`. A merely huge or
+    // `INFINITY` `max_distance` is clamped to a value already far past any real caller's own
+    // reach (`play::mining::BLOCK_INTERACTION_RANGE_CREATIVE == 5.0`), so `max_steps` itself
+    // is always a small, finite, real integer no matter what `max_distance` turns out to be.
+    const MAX_TRUSTED_DISTANCE: f64 = 1.0e4;
+    let safe_max_distance = max_distance.clamp(0.0, MAX_TRUSTED_DISTANCE);
+    let max_steps = (3.0 * safe_max_distance).ceil() as u64 + 4;
+
+    for _ in 0..max_steps {
         let properties = shapes.properties_at(cell);
         if !properties.shape.is_empty()
             && let Some(hit) = closest_sub_box_hit(
@@ -87,6 +123,13 @@ pub fn cast_ray(
             }
         }
     }
+    // The hard iteration cap above is a defensive backstop, never expected to bind for any
+    // real `(direction, max_distance)` pair the `direction`-finite/non-zero guard and the
+    // ordinary `t_max_* > max_distance` exit checks already let through -- reaching it means
+    // `max_distance` itself was non-finite (the one case those ordinary checks cannot catch,
+    // per this cap's own doc comment above), so `None` (no hit found within any well-defined
+    // distance) is the only honest answer.
+    None
 }
 
 /// `t_delta_i`: distance along the ray to cross one full cell on this axis. `INFINITY` for

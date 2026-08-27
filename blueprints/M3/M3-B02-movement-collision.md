@@ -364,7 +364,17 @@ fn evaluate_movement(player, report, shapes) -> MovementOutcome {
         if Some(id) == player.teleport.awaiting_teleport_id { player.teleport.awaiting_teleport_id = None; }
     }
     if let Some(on_ground) = report.on_ground { player.motion.on_ground = on_ground; }
-    if let Some((yaw, pitch)) = report.rotation { player.motion.yaw = yaw; player.motion.pitch = pitch; }
+    if let Some((yaw, pitch)) = report.rotation {
+        // Malformed-input rejection (Context above) binds "position/rotation" jointly -- a
+        // non-finite yaw/pitch is rejected exactly like a non-finite position, not merely
+        // skipped, and BEFORE either field is written into player.motion (an unvalidated
+        // write here would hand a NaN rotation straight to any caller that reads
+        // player.motion.yaw/pitch afterward, including a correction's own last-known-good
+        // SynchronizePlayerPosition -- Context, "Issuing a correction").
+        if !yaw.is_finite() || !pitch.is_finite() { return MovementOutcome::Disconnect; }
+        player.motion.yaw = yaw;
+        player.motion.pitch = pitch;
+    }
 
     let Some(reported_pos) = report.position else { return MovementOutcome::NoPositionClaim; };
     if !reported_pos.is_finite() { return MovementOutcome::Disconnect; }

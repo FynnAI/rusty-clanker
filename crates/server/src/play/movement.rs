@@ -139,6 +139,20 @@ pub fn evaluate_movement(
         motion.on_ground = on_ground;
     }
     if let Some((yaw, pitch)) = report.rotation {
+        // Malformed-input rejection (14 §3.15 step 1, blueprint Context "Server-side movement
+        // validation") binds "any reported position OR rotation coordinate" jointly -- a
+        // non-finite yaw/pitch is disconnected exactly like a non-finite position, not merely
+        // skipped, and validated BEFORE either field is written into `motion`. Writing first
+        // and validating after (this file's own former gap, M3 field-report Defect A) would
+        // hand a NaN rotation straight to `motion.yaw`/`motion.pitch` for every later reader
+        // this tick -- `raycast_reach`'s own `look_vector` call (`mining.rs`) chief among
+        // them, whose `cast_ray` has no NaN guard of its own downstream -- and would also
+        // leak into a same-tick `RejectSpeed`/`RejectMismatch` correction's own "last-known-
+        // good rotation" (`respond_to_movement`, `world.rs`), putting NaN on the wire to a
+        // real client.
+        if !yaw.is_finite() || !pitch.is_finite() {
+            return MovementOutcome::Disconnect;
+        }
         motion.yaw = yaw;
         motion.pitch = pitch;
     }

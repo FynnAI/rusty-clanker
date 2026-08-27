@@ -1188,46 +1188,18 @@ impl HardcodedWorld {
                     );
                 }
 
-                // M2 field-report chunk-streaming fix: recomputes every currently-spawned
-                // player's own current chunk and, for any whose chunk changed since the
-                // last time this ran, re-centers their ticket (`TicketManager::move_player`
-                // -- that method's own doc comment: "no production call site exists at M2...
-                // exposed for a future mechanics blueprint," this is that call site now),
-                // sends the matching `SetChunkCacheCenter` update (cadence: only on an
-                // actual chunk-key change, `PlayerMarker::last_streamed_center`'s own doc
-                // comment -- matches vanilla's own `ClientboundSetChunkCacheCenterPacket`
-                // cadence), and queues every newly-visible, not-yet-sent chunk coordinate
-                // for this tick's own streaming resolution step (below, after the
-                // `ChunkIndex` refresh). Runs every tick unconditionally -- cheap
-                // (`O(players)`) and a correct no-op whenever nobody's chunk changed. This
-                // is AC1b's own "walking N chunks streams new chunks in" fix.
-                let mut moved_query = region.world.query::<&mut PlayerMarker>();
-                for mut marker in moved_query.iter_mut(&mut region.world) {
-                    let current_chunk =
-                        feet_block_pos(marker.position).chunk_key(DimensionId::OVERWORLD);
-                    if current_chunk == marker.last_streamed_center {
-                        continue;
-                    }
-                    marker.last_streamed_center = current_chunk;
-                    ticket_manager
-                        .move_player(PlayerTicketId(marker.network_entity_id), current_chunk);
-                    let _ =
-                        marker
-                            .connection
-                            .try_send_payload(encode_payload(&SetChunkCacheCenter {
-                                chunk_x: current_chunk.x,
-                                chunk_z: current_chunk.z,
-                            }));
-                    for (dx, dz) in chunk::placeholder_chunk_coords() {
-                        let coord = (current_chunk.x + dx, current_chunk.z + dz);
-                        if marker.sent_chunks.insert(coord) {
-                            pending_stream_chunks.push(PendingStreamChunk {
-                                network_entity_id: marker.network_entity_id,
-                                coord,
-                            });
-                        }
-                    }
-                }
+                // M2 field-report chunk-streaming fix, M3 field-report re-placement (Defect
+                // C): the actual crossing-detection/re-center step used to live here, reading
+                // `PlayerMarker::position` before it had been refreshed for this tick -- a
+                // stale, one-tick-late read (`PlayerMarker::position`'s own doc comment: kept
+                // current by "this tick loop's own movement-resolution step below"). Moved
+                // below, after that same movement-resolution (Stage-6b-equivalent) step has
+                // written this tick's real, freshly resolved position into every currently-
+                // spawned player's `PlayerMarker` -- see the relocated step's own doc comment
+                // for the full rationale. `ticket_manager.step()`/`ChunkIndex` refresh/`chunk_
+                // grid_requests`/`pending_stream_chunks` resolution below are unaffected by
+                // this move (Context, M3-B02: they run here, before the block-action drain,
+                // regardless of player-movement-driven ticket re-centering).
 
                 // M2-B05's own load/unload churn, immediately before `tick_region`
                 // (Context: "restate which stage and sync point", `M1-B05`'s own
@@ -1968,6 +1940,68 @@ impl HardcodedWorld {
                         });
                     }
                     respond_to_movement(&connection, &motion, &teleport, outcome);
+                }
+
+                // M2 field-report chunk-streaming fix, M3 field-report re-placement (Defect
+                // C -- corrects a one-tick-stale read): recomputes every currently-spawned
+                // player's own current chunk and, for any whose chunk changed since the
+                // last time this ran, re-centers their ticket (`TicketManager::move_player`
+                // -- that method's own doc comment: "no production call site exists at M2...
+                // exposed for a future mechanics blueprint," this is that call site now),
+                // sends the matching `SetChunkCacheCenter` update (cadence: only on an
+                // actual chunk-key change, `PlayerMarker::last_streamed_center`'s own doc
+                // comment -- matches vanilla's own `ClientboundSetChunkCacheCenterPacket`
+                // cadence), and queues every newly-visible, not-yet-sent chunk coordinate
+                // for a later tick's own streaming resolution step (the one above, ahead of
+                // the block-action drain -- Context, M3-B02, kept there since it needs no
+                // fresh position of its own, only this tick's or an earlier tick's already-
+                // queued `pending_stream_chunks`/`chunk_grid_requests`). Runs every tick
+                // unconditionally -- cheap (`O(players)`) and a correct no-op whenever
+                // nobody's chunk changed. This is AC1b's own "walking N chunks streams new
+                // chunks in" fix.
+                //
+                // Placed here, after the movement-resolution loop directly above has written
+                // this tick's real, freshly resolved position into every currently-spawned
+                // player's `PlayerMarker` (the `marker.position = ...` assignment in that
+                // same loop) -- not at the top of the tick, where `PlayerMarker::position`
+                // still held the *previous* tick's resolved value the whole time this step's
+                // own crossing check ran (M3 field-report Defect C: every chunk-boundary
+                // crossing was therefore acted on one tick, ~50 ms, late -- a latency bug,
+                // not data loss, since it self-corrected every following tick regardless).
+                // `PlayerMotion`/`PlayerMarker` deliberately stay two separate components
+                // (Context, `PlayerMarker::position`'s own doc comment) so this step keeps
+                // reading the mirror, now simply read at the point in the tick where that
+                // mirror is actually current. Movement resolution itself stays exactly where
+                // M3-B02 placed it -- after the block-action drain, so its own collision
+                // lookups see this tick's already-refreshed `ChunkIndex` -- this fix only
+                // reorders this streaming step relative to that fixed point, never movement
+                // resolution relative to the block-action drain.
+                let mut moved_query = region.world.query::<&mut PlayerMarker>();
+                for mut marker in moved_query.iter_mut(&mut region.world) {
+                    let current_chunk =
+                        feet_block_pos(marker.position).chunk_key(DimensionId::OVERWORLD);
+                    if current_chunk == marker.last_streamed_center {
+                        continue;
+                    }
+                    marker.last_streamed_center = current_chunk;
+                    ticket_manager
+                        .move_player(PlayerTicketId(marker.network_entity_id), current_chunk);
+                    let _ =
+                        marker
+                            .connection
+                            .try_send_payload(encode_payload(&SetChunkCacheCenter {
+                                chunk_x: current_chunk.x,
+                                chunk_z: current_chunk.z,
+                            }));
+                    for (dx, dz) in chunk::placeholder_chunk_coords() {
+                        let coord = (current_chunk.x + dx, current_chunk.z + dz);
+                        if marker.sent_chunks.insert(coord) {
+                            pending_stream_chunks.push(PendingStreamChunk {
+                                network_entity_id: marker.network_entity_id,
+                                coord,
+                            });
+                        }
+                    }
                 }
 
                 // Any report left over belongs to a `network_entity_id` with no
