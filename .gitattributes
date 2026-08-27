@@ -1,0 +1,6 @@
+# Hash-manifested fixture files must reach the working tree byte-identical to their
+# committed blobs on every platform (TEST-D47's sha256 custody would otherwise break
+# under core.autocrlf=true checkouts, observed live: all five M3-B07 corpus .ron
+# files failed manifest verification on Windows purely through LF->CRLF rewriting).
+crates/testing/gametest/corpus/** text eol=lf
+crates/testing/rc-golden-data/fixtures/** -text
