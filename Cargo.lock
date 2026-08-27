@@ -2989,6 +2989,21 @@ name = "rc-entity-macros"
 version = "0.1.0"
 
 [[package]]
+name = "rc-gametest"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "rc-chunk-storage",
+ "rc-core",
+ "rc-mechanics",
+ "rc-messaging",
+ "ron",
+ "serde",
+ "thiserror 2.0.20",
+ "xtask",
+]
+
+[[package]]
 name = "rc-mechanics"
 version = "0.1.0"
 dependencies = [
@@ -3046,9 +3061,11 @@ dependencies = [
  "azalea",
  "bytes",
  "rc-core",
+ "rc-gametest",
  "rc-protocol",
  "rc-registries",
  "rc-test-harness",
+ "simdnbt",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -3272,6 +3289,20 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ron"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81116b9531d61eabc41aeb228e4b6b2435bcca3233b98cf3b3077d4e6e9debb3"
+dependencies = [
+ "bitflags",
+ "once_cell",
+ "serde",
+ "serde_derive",
+ "typeid",
+ "unicode-ident",
 ]
 
 [[package]]
@@ -4795,6 +4826,7 @@ dependencies = [
  "rc-auth",
  "rc-chunk-storage",
  "rc-core",
+ "rc-gametest",
  "rc-nbt",
  "rc-registries",
  "rc-test-harness",

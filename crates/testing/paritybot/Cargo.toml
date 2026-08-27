@@ -23,6 +23,19 @@ rc-core = { path = "../../core" }
 # off the generated registry table (`M0-B07`'s own output) rather than duplicating
 # their numeric value by hand.
 rc-registries = { path = "../../registries" }
+# M3-B07: `corpus_capture`'s own azalea-free half (`OracleServerHandle`/
+# `launch_oracle_server`/`send_console_command`/`check_state_id_consistency`, plus
+# `ContraptionSpec`/`RedstoneTrace`) lives in `rc-gametest` — this crate is already
+# nightly-only (azalea, above), so depending on it here carries no additional
+# toolchain cost, unlike the reverse edge (`rc-gametest`'s own `Cargo.toml` doc
+# comment explains why that direction is forbidden).
+rc-gametest = { path = "../gametest" }
+# M3-B07: `packet_capture::extract_comparator_output`'s own `NbtCompound::int` read
+# off a `ClientboundBlockEntityData` packet's `tag: simdnbt::owned::Nbt` field —
+# in-workspace only (already pinned, `crates/nbt/Cargo.toml`; the exact version
+# azalea itself already depends on transitively, so this adds no new version to the
+# dependency graph).
+simdnbt = { workspace = true }
 
 [dev-dependencies]
 # none beyond the above — this crate's own self-tests use rc-test-harness's

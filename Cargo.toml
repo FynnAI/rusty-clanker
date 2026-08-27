@@ -9,6 +9,7 @@ members = [
     "crates/*",
     "crates/testing/test-harness",
     "crates/testing/paritybot",
+    "crates/testing/gametest",
     "xtask",
 ]
 exclude = ["crates/testing"]

@@ -1,0 +1,36 @@
+{
+  "protocol_version": 0,
+  "mc_version": "26.2",
+  "entries": [
+    {
+      "path": "torch_inverter_basic.ron",
+      "sha256": "57782f490eb3603d913ce8e47569148be20ccbeedf4cb70a083fc1f10c19a30d",
+      "generator_tool_version": "manual/M3-B07",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "repeater_pulse_stretch_2tick.ron",
+      "sha256": "1084bc0a543fba783c8bcd1f3eee9a7336e3b1028edf92b184c1fc492ef25db0",
+      "generator_tool_version": "manual/M3-B07",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "comparator_subtract_analog_probe.ron",
+      "sha256": "de7877646731bf72b15780eed993cd9b2bb3344e1aa220b8f826cf94f3f642b7",
+      "generator_tool_version": "manual/M3-B07",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "two_torch_and_gate.ron",
+      "sha256": "a3975f94ea05143917b695dde7459f22230c70a095a342bfb688842324a91a4b",
+      "generator_tool_version": "manual/M3-B07",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "repeater_lock_t_flip_flop.ron",
+      "sha256": "7abf35ff03f53c0fd516714178a3032b177636161ba0e92cac8d209434699339",
+      "generator_tool_version": "manual/M3-B07",
+      "source_jar_sha1": "n/a"
+    }
+  ]
+}

@@ -4,6 +4,8 @@
 //! per server, rather than replacing it.
 
 pub mod chunk_decode_check;
+pub mod corpus_capture;
 pub mod idle_stability;
+pub mod packet_capture;
 pub mod restart_persistence;
 pub mod vanilla_registry_defaults;

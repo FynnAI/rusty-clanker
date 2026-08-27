@@ -1,0 +1,20 @@
+// M3-B07 redstone parity corpus — content-plan entry #2 (PulseGenerator).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/pulse/repeater_pulse_stretch_2tick",
+    category: PulseGenerator,
+    description: "A single repeater (delay=2) fed a shorter-than-delay input pulse, restretching it to the repeater's own fixed output width.",
+    quirk: "DiodeBlock.tick's self-reschedule-a-second-tick pattern reproducing a too-short input pulse at the repeater's own fixed DELAY*2 width (08-redstone-ticking.md §3.6).",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=2,locked=false,powered=false]", state_id: 110),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)
