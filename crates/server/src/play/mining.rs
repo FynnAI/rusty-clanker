@@ -8,19 +8,19 @@
 //! is this blueprint's own restatement, not a copy of any Mojang or third-party source
 //! (Constraints (c)).
 //!
-//! Test-authoring changeset (TEST-D45/D46): every function body below is `todo!()` --
-//! signatures, derives, and doc comments only, so `crates/server/tests/mining_*.rs` and
-//! `crates/physics/tests/raycast_basic.rs`'s own sibling-crate coverage compile against the
-//! real public API and fail at the `todo!()` panic, not a missing-item compile error. The
-//! implementation changeset fills in bodies only.
-
-#![allow(
-    unused_variables,
-    unused_imports,
-    dead_code,
-    clippy::too_many_arguments,
-    clippy::ptr_arg
-)]
+//! Two resolved ambiguities in the blueprint's own prose, settled against its own golden
+//! test data and worked examples (recorded here, restated in the completion report):
+//! - `has_correct_tool_for_drops`: the per-block table's own "none — any tool (incl. hand)
+//!   always drops" rows (Dirt/Grass/Piston/Chest) only hold if a `None` `min_tier_for_drops`
+//!   bypasses the tool-*kind* check too, not only the tier check — the golden table's own
+//!   row 9 (bare-hand Piston, 45 ticks, `divisor = 30`) is reachable only under that reading;
+//!   the alternative (kind must always match) would give a wrong `divisor = 100` there.
+//! - `nearest_direction6`'s pitch-sign mapping: the blueprint's own restated prose ("look.y >
+//!   0 -> Down") is inverted from what its own `look_vector` formula actually produces (a
+//!   positive-pitch/looking-down input yields a *negative* `look.y`, since `look.y =
+//!   -sin(pitch_rad)`) — this file follows the formula (`look.y < 0 -> Down`), the only
+//!   reading consistent with both the formula itself and the worked acceptance-test example
+//!   (`piston_faces_up_when_player_looks_steeply_down`).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -91,7 +91,15 @@ pub enum HeldItemStub {
 impl ToolMaterial {
     /// Context's own tool-speed-multiplier table. `None` (bare hand) is `1`.
     pub const fn speed_multiplier(self) -> f64 {
-        todo!()
+        match self {
+            ToolMaterial::None => 1.0,
+            ToolMaterial::Wood => 2.0,
+            ToolMaterial::Gold => 12.0,
+            ToolMaterial::Stone => 4.0,
+            ToolMaterial::Iron => 6.0,
+            ToolMaterial::Diamond => 8.0,
+            ToolMaterial::Netherite => 9.0,
+        }
     }
 
     /// Context's own mining-tier table (`None`/`Wood`/`Gold` = 0, `Stone` = 1, `Iron` = 2,
@@ -99,7 +107,12 @@ impl ToolMaterial {
     /// never grants `has_correct_tool_for_drops`; a `min_tier_for_drops: Some(_)` block also
     /// requires the tool *kind* to match (`has_correct_tool_for_drops`'s own doc comment).
     pub const fn tier(self) -> u8 {
-        todo!()
+        match self {
+            ToolMaterial::None | ToolMaterial::Wood | ToolMaterial::Gold => 0,
+            ToolMaterial::Stone => 1,
+            ToolMaterial::Iron => 2,
+            ToolMaterial::Diamond | ToolMaterial::Netherite => 3,
+        }
     }
 }
 
@@ -135,7 +148,43 @@ pub struct DigProperties {
 /// test, `Bedrock`'s own synthetic case) constructs the value directly, matching the
 /// blueprint's own Acceptance-tests instruction.
 pub fn dig_properties(kind: PlaceableBlockKind) -> DigProperties {
-    todo!()
+    match kind {
+        PlaceableBlockKind::Stone => DigProperties {
+            hardness: 1.5,
+            effective_tool: ToolKind::Pickaxe,
+            min_tier_for_drops: Some(0),
+        },
+        PlaceableBlockKind::RedstoneWire
+        | PlaceableBlockKind::RedstoneTorch
+        | PlaceableBlockKind::Repeater
+        | PlaceableBlockKind::Comparator => DigProperties {
+            hardness: 0.0,
+            effective_tool: ToolKind::None,
+            min_tier_for_drops: None,
+        },
+        PlaceableBlockKind::Piston | PlaceableBlockKind::StickyPiston => DigProperties {
+            hardness: 1.5,
+            effective_tool: ToolKind::Pickaxe,
+            min_tier_for_drops: None,
+        },
+        PlaceableBlockKind::Chest => DigProperties {
+            hardness: 2.5,
+            effective_tool: ToolKind::Axe,
+            min_tier_for_drops: None,
+        },
+        PlaceableBlockKind::Furnace
+        | PlaceableBlockKind::BlastFurnace
+        | PlaceableBlockKind::Smoker => DigProperties {
+            hardness: 3.5,
+            effective_tool: ToolKind::Pickaxe,
+            min_tier_for_drops: Some(1),
+        },
+        PlaceableBlockKind::Hopper => DigProperties {
+            hardness: 3.0,
+            effective_tool: ToolKind::Pickaxe,
+            min_tier_for_drops: Some(1),
+        },
+    }
 }
 
 /// `Instant` for hardness == 0, `Unbreakable` for hardness < 0, `PerTick(progress)`
@@ -151,7 +200,7 @@ pub enum DestroySpeed {
 /// of `05`'s stated `0.2^n` shape — restated exactly, moderate confidence on levels III/IV
 /// specifically, Open Questions).
 fn mining_fatigue_multiplier(level: u8) -> f64 {
-    todo!()
+    0.3f64.powi(level.min(4) as i32)
 }
 
 /// The complete dig-timing formula (Context, full algorithm; operation order — base
@@ -170,20 +219,65 @@ pub fn destroy_speed(
     in_water_no_aqua_affinity: bool,
     airborne: bool,
 ) -> DestroySpeed {
-    todo!()
+    if props.hardness < 0.0 {
+        return DestroySpeed::Unbreakable;
+    }
+    if props.hardness == 0.0 {
+        return DestroySpeed::Instant;
+    }
+
+    let (material, kind) = tool;
+    let effective = kind == props.effective_tool;
+    let mut speed = if effective {
+        material.speed_multiplier()
+    } else {
+        1.0
+    };
+
+    if effective && efficiency_level > 0 {
+        let level = efficiency_level as f64;
+        speed += level * level + 1.0;
+    }
+
+    speed *= 1.0 + 0.2 * haste_level as f64;
+    speed *= mining_fatigue_multiplier(fatigue_level);
+
+    if in_water_no_aqua_affinity {
+        speed /= 5.0;
+    }
+    if airborne {
+        speed /= 5.0;
+    }
+
+    let divisor = if has_correct_tool_for_drops(props, tool) {
+        30.0
+    } else {
+        100.0
+    };
+    DestroySpeed::PerTick(speed / (props.hardness * divisor))
 }
 
 /// See this module's own doc comment ("Two resolved ambiguities") for why a `None`
 /// `min_tier_for_drops` bypasses the tool-*kind* check too, not only the tier check.
 pub fn has_correct_tool_for_drops(props: DigProperties, tool: (ToolMaterial, ToolKind)) -> bool {
-    todo!()
+    match props.min_tier_for_drops {
+        None => true,
+        Some(required) => tool.1 == props.effective_tool && tool.0.tier() >= required,
+    }
 }
 
 /// `ceil(1.0 / progress_per_tick)` for `DestroySpeed::PerTick`; `1` for `Instant`; panics for
 /// `Unbreakable` (Context: a caller must never reach this path for an unbreakable block —
 /// MECH-D61's own "never breaks" rule is enforced earlier, at `START_DESTROY_BLOCK` time).
 pub fn ticks_to_break(speed: DestroySpeed) -> u64 {
-    todo!()
+    match speed {
+        DestroySpeed::Instant => 1,
+        DestroySpeed::Unbreakable => panic!(
+            "ticks_to_break: Unbreakable has no finite tick count -- MECH-D61's own \"never \
+             breaks\" rule must be enforced earlier, at START_DESTROY_BLOCK time (Context)"
+        ),
+        DestroySpeed::PerTick(progress_per_tick) => (1.0 / progress_per_tick).ceil() as u64,
+    }
 }
 
 /// This formula's own progress-at-elapsed-ticks shape, shared by `begin_destroy`/
@@ -193,7 +287,11 @@ pub fn ticks_to_break(speed: DestroySpeed) -> u64 {
 /// in survival" rule applied uniformly through the state machine rather than needing a
 /// separate refusal path at every call site).
 fn progress_for(speed: DestroySpeed, elapsed_ticks: u64) -> f64 {
-    todo!()
+    match speed {
+        DestroySpeed::Instant => 1.0,
+        DestroySpeed::Unbreakable => 0.0,
+        DestroySpeed::PerTick(progress_per_tick) => progress_per_tick * elapsed_ticks as f64,
+    }
 }
 
 // --- Dig packet lifecycle (Context: "Dig packet lifecycle -- server-side state machine")
@@ -246,7 +344,20 @@ pub fn begin_destroy(
     speed: DestroySpeed,
     current_tick: u64,
 ) -> DestroyOutcome {
-    todo!()
+    if instabuild {
+        return DestroyOutcome::FinalizeNow;
+    }
+
+    if progress_for(speed, 1) >= 1.0 {
+        state.is_destroying = false;
+        return DestroyOutcome::FinalizeNow;
+    }
+
+    state.is_destroying = true;
+    state.destroy_pos = pos;
+    state.destroy_progress_start = current_tick;
+    state.last_sent_stage = -1;
+    DestroyOutcome::Tracking
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -267,12 +378,31 @@ pub fn stop_destroy(
     speed: DestroySpeed,
     current_tick: u64,
 ) -> StopOutcome {
-    todo!()
+    if !state.is_destroying || pos != state.destroy_pos {
+        return StopOutcome::NothingQueued;
+    }
+
+    let elapsed = current_tick - state.destroy_progress_start + 1;
+    let progress = progress_for(speed, elapsed);
+    state.is_destroying = false;
+
+    if progress >= 0.7 {
+        return StopOutcome::FinalizeNow;
+    }
+
+    if !state.has_delayed_destroy {
+        state.has_delayed_destroy = true;
+        state.delayed_destroy_pos = state.destroy_pos;
+        state.delayed_tick_start = state.destroy_progress_start;
+        return StopOutcome::DelayedQueued;
+    }
+
+    StopOutcome::NothingQueued
 }
 
 /// `ABORT_DESTROY_BLOCK`'s own logic (Context) — clears only `is_destroying`.
 pub fn abort_destroy(state: &mut DestroyState) {
-    todo!()
+    state.is_destroying = false;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -300,7 +430,31 @@ pub fn tick_destroy_state(
     current_state_at_delayed_pos: StorageBlockStateId,
     air: StorageBlockStateId,
 ) -> TickOutcome {
-    todo!()
+    if state.has_delayed_destroy {
+        if current_state_at_delayed_pos == air {
+            state.has_delayed_destroy = false;
+            return TickOutcome::CancelledDelayedBlockChanged;
+        }
+        let elapsed = current_tick - state.delayed_tick_start + 1;
+        if progress_for(speed, elapsed) >= 1.0 {
+            state.has_delayed_destroy = false;
+            return TickOutcome::FinalizeDelayedNow;
+        }
+        return TickOutcome::Idle;
+    }
+
+    if state.is_destroying {
+        if current_state_at_pos == air {
+            state.is_destroying = false;
+            return TickOutcome::CancelledBlockChanged;
+        }
+        let elapsed = current_tick - state.destroy_progress_start + 1;
+        let progress = progress_for(speed, elapsed);
+        let stage = ((progress * 10.0).floor() as i64).clamp(0, 9) as u8;
+        return TickOutcome::ActiveProgress(stage);
+    }
+
+    TickOutcome::Idle
 }
 
 // --- Reach (Context: "Reach validation -- superseded to a real per-player-position voxel
@@ -316,19 +470,56 @@ pub const BLOCK_INTERACTION_RANGE_CREATIVE: f64 = 5.0;
 /// `f64::sin`/`cos` (Context: this is a server-authoritative validation aid, not a
 /// rendered/predicted quantity `18-float-determinism.md`'s trig-table rule binds).
 pub fn look_vector(yaw_degrees: f32, pitch_degrees: f32) -> Vec3 {
-    todo!()
+    let yaw_rad = yaw_degrees as f64 * std::f64::consts::PI / 180.0;
+    let pitch_rad = pitch_degrees as f64 * std::f64::consts::PI / 180.0;
+    let yaw_sin = rc_physics::mth_sin(yaw_rad) as f64;
+    let yaw_cos = rc_physics::mth_cos(yaw_rad) as f64;
+    Vec3::new(
+        -yaw_sin * pitch_rad.cos(),
+        -pitch_rad.sin(),
+        yaw_cos * pitch_rad.cos(),
+    )
 }
 
 /// The horizontal look vector's dominant axis, by magnitude, signed (Context).
 pub fn nearest_horizontal_direction4(yaw_degrees: f32) -> Direction {
-    todo!()
+    let look = look_vector(yaw_degrees, 0.0);
+    if look.x.abs() >= look.z.abs() {
+        if look.x > 0.0 {
+            Direction::East
+        } else {
+            Direction::West
+        }
+    } else if look.z > 0.0 {
+        Direction::South
+    } else {
+        Direction::North
+    }
 }
 
 /// The full look vector's dominant axis among all three, signed (Context — see this
 /// module's own doc comment for why the `y`-sign mapping below is `look.y < 0 -> Down`,
 /// correcting the blueprint's own inverted restatement of its own formula).
 pub fn nearest_direction6(yaw_degrees: f32, pitch_degrees: f32) -> Direction {
-    todo!()
+    let look = look_vector(yaw_degrees, pitch_degrees);
+    let (ax, ay, az) = (look.x.abs(), look.y.abs(), look.z.abs());
+    if ay >= ax && ay >= az {
+        if look.y < 0.0 {
+            Direction::Down
+        } else {
+            Direction::Up
+        }
+    } else if ax >= az {
+        if look.x > 0.0 {
+            Direction::East
+        } else {
+            Direction::West
+        }
+    } else if look.z > 0.0 {
+        Direction::South
+    } else {
+        Direction::North
+    }
 }
 
 /// Context's own full algorithm: casts from `eye_position(motion.position)` toward
@@ -345,7 +536,12 @@ pub fn raycast_reach(
     range: f64,
     shapes: &dyn BlockShapeSource,
 ) -> bool {
-    todo!()
+    let origin = eye_position(motion.position);
+    let direction = look_vector(motion.yaw, motion.pitch);
+    match cast_ray(origin, direction, range, shapes) {
+        Some(hit) => hit.block_pos == claimed_target,
+        None => false,
+    }
 }
 
 // --- Placement orientation (Context: "Orientation from placement context") ---
@@ -365,7 +561,14 @@ pub struct PlacementSelection {
 }
 
 fn face_to_direction(face: Face) -> Direction {
-    todo!()
+    match face {
+        Face::Down => Direction::Down,
+        Face::Up => Direction::Up,
+        Face::North => Direction::North,
+        Face::South => Direction::South,
+        Face::West => Direction::West,
+        Face::East => Direction::East,
+    }
 }
 
 /// Context's own per-block-type table, dispatched by `kind`. `clicked_face`/`yaw`/`pitch`
@@ -377,7 +580,65 @@ pub fn resolve_orientation(
     yaw_degrees: f32,
     pitch_degrees: f32,
 ) -> Result<PlacementSelection, RejectReason> {
-    todo!()
+    match kind {
+        PlaceableBlockKind::Stone | PlaceableBlockKind::RedstoneWire => Ok(PlacementSelection {
+            kind,
+            orientation: Orientation::None,
+            is_wall_variant: false,
+        }),
+        PlaceableBlockKind::RedstoneTorch => match clicked_face {
+            Face::Up => Ok(PlacementSelection {
+                kind,
+                orientation: Orientation::None,
+                is_wall_variant: false,
+            }),
+            Face::Down => Err(RejectReason::InvalidTorchFace),
+            horizontal => Ok(PlacementSelection {
+                kind,
+                orientation: Orientation::Horizontal(face_to_direction(horizontal)),
+                is_wall_variant: true,
+            }),
+        },
+        PlaceableBlockKind::Repeater
+        | PlaceableBlockKind::Comparator
+        | PlaceableBlockKind::Chest
+        | PlaceableBlockKind::Furnace
+        | PlaceableBlockKind::BlastFurnace
+        | PlaceableBlockKind::Smoker => {
+            let dir = nearest_horizontal_direction4(yaw_degrees).opposite();
+            Ok(PlacementSelection {
+                kind,
+                orientation: Orientation::Horizontal(dir),
+                is_wall_variant: false,
+            })
+        }
+        PlaceableBlockKind::Piston | PlaceableBlockKind::StickyPiston => {
+            let dir = nearest_direction6(yaw_degrees, pitch_degrees).opposite();
+            Ok(PlacementSelection {
+                kind,
+                orientation: Orientation::Full(dir),
+                is_wall_variant: false,
+            })
+        }
+        PlaceableBlockKind::Hopper => {
+            let raw_opposite = face_to_direction(clicked_face).opposite();
+            let dir = if raw_opposite == Direction::Up {
+                Direction::Down
+            } else {
+                raw_opposite
+            };
+            let orientation = if dir == Direction::Down {
+                Orientation::Full(dir)
+            } else {
+                Orientation::Horizontal(dir)
+            };
+            Ok(PlacementSelection {
+                kind,
+                orientation,
+                is_wall_variant: false,
+            })
+        }
+    }
 }
 
 /// A closed, hand-authored `(PlaceableBlockKind, Orientation) -> raw BlockStateId` table
@@ -394,14 +655,21 @@ pub struct OrientedStateTable {
 impl OrientedStateTable {
     /// Test/production-shared constructor.
     pub fn from_entries(entries: Vec<((PlaceableBlockKind, Orientation), u32)>) -> Self {
-        todo!()
+        OrientedStateTable {
+            entries: entries.into_iter().collect(),
+        }
     }
 
     /// Panics (a config-time bug, not a runtime-input bug) if `kind`/`orientation` has no
     /// entry — every tier-1 `(kind, orientation)` pair this blueprint's own placement logic
     /// can ever construct has a row.
     pub fn lookup(&self, kind: PlaceableBlockKind, orientation: Orientation) -> u32 {
-        todo!()
+        *self.entries.get(&(kind, orientation)).unwrap_or_else(|| {
+            panic!(
+                "OrientedStateTable::lookup: no entry for ({kind:?}, {orientation:?}) -- a \
+                 config-time defect, not a malformed-packet case"
+            )
+        })
     }
 }
 
@@ -421,7 +689,14 @@ const FULL6: [Direction; 6] = [
 ];
 
 fn direction_offset(dir: Direction) -> u32 {
-    todo!()
+    match dir {
+        Direction::North => 0,
+        Direction::South => 1,
+        Direction::East => 2,
+        Direction::West => 3,
+        Direction::Up => 4,
+        Direction::Down => 5,
+    }
 }
 
 /// The complete tier-1 `(kind, orientation)` -> raw-id entry set, shared by
@@ -429,13 +704,89 @@ fn direction_offset(dir: Direction) -> u32 {
 /// `raw_state_dig_properties()` below (iterated in reverse, raw id -> `DigProperties`) — one
 /// definition, two consumers, so the two can never drift apart.
 fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
-    todo!()
+    let mut entries = vec![
+        ((PlaceableBlockKind::Stone, Orientation::None), STONE.0),
+        (
+            (PlaceableBlockKind::RedstoneWire, Orientation::None),
+            REDSTONE_WIRE.0,
+        ),
+        (
+            (PlaceableBlockKind::RedstoneTorch, Orientation::None),
+            REDSTONE_TORCH.0,
+        ),
+    ];
+
+    for dir in HORIZONTAL4 {
+        let offset = direction_offset(dir);
+        entries.push((
+            (
+                PlaceableBlockKind::RedstoneTorch,
+                Orientation::Horizontal(dir),
+            ),
+            REDSTONE_WALL_TORCH.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Repeater, Orientation::Horizontal(dir)),
+            REPEATER.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Comparator, Orientation::Horizontal(dir)),
+            COMPARATOR.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Chest, Orientation::Horizontal(dir)),
+            CHEST.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Furnace, Orientation::Horizontal(dir)),
+            FURNACE.0 + offset,
+        ));
+        entries.push((
+            (
+                PlaceableBlockKind::BlastFurnace,
+                Orientation::Horizontal(dir),
+            ),
+            BLAST_FURNACE.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Smoker, Orientation::Horizontal(dir)),
+            SMOKER.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::Hopper, Orientation::Horizontal(dir)),
+            HOPPER.0 + offset,
+        ));
+    }
+    // Hopper's own clamped-Down case needs a raw id distinct from its 4 horizontal ones —
+    // `+ 10` sits safely past every `direction_offset` value (`0..=5`) any other row here
+    // uses for this same base id.
+    entries.push((
+        (
+            PlaceableBlockKind::Hopper,
+            Orientation::Full(Direction::Down),
+        ),
+        HOPPER.0 + 10,
+    ));
+
+    for dir in FULL6 {
+        let offset = direction_offset(dir);
+        entries.push((
+            (PlaceableBlockKind::Piston, Orientation::Full(dir)),
+            PISTON.0 + offset,
+        ));
+        entries.push((
+            (PlaceableBlockKind::StickyPiston, Orientation::Full(dir)),
+            STICKY_PISTON.0 + offset,
+        ));
+    }
+
+    entries
 }
 
 static TIER1_ORIENTED_TABLE: OnceLock<OrientedStateTable> = OnceLock::new();
 
 pub fn tier1_oriented_state_table() -> &'static OrientedStateTable {
-    todo!()
+    TIER1_ORIENTED_TABLE.get_or_init(|| OrientedStateTable::from_entries(tier1_oriented_entries()))
 }
 
 /// Fallback `DigProperties` for a raw block-state id this blueprint's own world never
@@ -465,11 +816,44 @@ static RAW_STATE_DIG_PROPERTIES: OnceLock<HashMap<u32, DigProperties>> = OnceLoc
 /// blocks (`Bedrock`/`Dirt`/`Grass Block`); any other raw id (none exist in this milestone's
 /// own world content) falls back to `FALLBACK_DIG_PROPERTIES`.
 pub fn dig_properties_for_raw_state(raw: u32) -> DigProperties {
-    todo!()
+    raw_state_dig_properties_table()
+        .get(&raw)
+        .copied()
+        .unwrap_or(FALLBACK_DIG_PROPERTIES)
 }
 
 fn raw_state_dig_properties_table() -> &'static HashMap<u32, DigProperties> {
-    todo!()
+    RAW_STATE_DIG_PROPERTIES.get_or_init(|| {
+        let mut map = HashMap::new();
+        for ((kind, _orientation), raw_id) in tier1_oriented_entries() {
+            map.entry(raw_id).or_insert_with(|| dig_properties(kind));
+        }
+        map.insert(
+            BEDROCK.0,
+            DigProperties {
+                hardness: -1.0,
+                effective_tool: ToolKind::None,
+                min_tier_for_drops: None,
+            },
+        );
+        map.insert(
+            DIRT.0,
+            DigProperties {
+                hardness: 0.5,
+                effective_tool: ToolKind::Shovel,
+                min_tier_for_drops: None,
+            },
+        );
+        map.insert(
+            GRASS_BLOCK.0,
+            DigProperties {
+                hardness: 0.6,
+                effective_tool: ToolKind::Shovel,
+                min_tier_for_drops: None,
+            },
+        );
+        map
+    })
 }
 
 // --- Top-level action application ---
@@ -535,7 +919,43 @@ pub fn settle_neighbor_updates(
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
 ) {
-    todo!()
+    engine.drain(&mut |eng, item| {
+        let mut ctx = UpdateContext {
+            world,
+            engine: eng,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        };
+        match item {
+            PendingUpdate::NeighborChanged { pos, from } => {
+                if let Some(state) = ctx.get_block(pos) {
+                    let behavior = behaviors.resolve(state);
+                    behavior.on_neighbor_changed(&mut ctx, pos, from);
+                }
+            }
+            PendingUpdate::ShapeUpdate {
+                pos,
+                from,
+                remaining_depth: _,
+            } => {
+                let Some(state) = ctx.get_block(pos) else {
+                    return;
+                };
+                let Some(neighbor_state) = ctx.get_block(from.apply(pos)) else {
+                    return;
+                };
+                let behavior = behaviors.resolve(state);
+                if let Some(new_state) =
+                    behavior.on_shape_update(&mut ctx, pos, from, neighbor_state)
+                {
+                    ctx.set_block(pos, new_state);
+                }
+            }
+        }
+    });
 }
 
 /// Finalizes a break: reads current state at `pos`, rejects `TargetAlreadyAir` if already
@@ -557,7 +977,48 @@ pub fn finalize_break(
     instabuild: bool,
     tool: (ToolMaterial, ToolKind),
 ) -> BreakOutcome {
-    todo!()
+    let current = ctx_world
+        .get_block(pos)
+        .unwrap_or_else(|| to_storage_id(AIR.0));
+    if current.to_raw() == AIR.0 {
+        return BreakOutcome::Rejected {
+            pos,
+            reason: RejectReason::TargetAlreadyAir,
+            current_state: current.to_raw(),
+        };
+    }
+
+    let drop_eligible = if instabuild {
+        false
+    } else {
+        let props = dig_properties_for_raw_state(current.to_raw());
+        has_correct_tool_for_drops(props, tool)
+    };
+
+    {
+        let mut ctx = UpdateContext {
+            world: ctx_world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        };
+        ctx.set_block(pos, to_storage_id(AIR.0));
+    }
+    settle_neighbor_updates(
+        ctx_world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        behaviors,
+        current_tick,
+    );
+
+    BreakOutcome::Applied { pos, drop_eligible }
 }
 
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
@@ -583,5 +1044,85 @@ pub fn apply_placement(
     yaw_degrees: f32,
     pitch_degrees: f32,
 ) -> PlaceOutcome {
-    todo!()
+    let target = resolve_place_position(location, face, inside_block);
+
+    let kind = match held {
+        HeldItemStub::Block(kind) => kind,
+        HeldItemStub::Tool(..) | HeldItemStub::EmptyHand => {
+            return PlaceOutcome::Rejected {
+                pos: target,
+                reason: RejectReason::NothingToPlace,
+                current_state: None,
+            };
+        }
+    };
+
+    let current = ctx_world
+        .get_block(target)
+        .unwrap_or_else(|| to_storage_id(AIR.0));
+    if current.to_raw() != AIR.0 {
+        return PlaceOutcome::Rejected {
+            pos: target,
+            reason: RejectReason::TargetNotAir,
+            current_state: Some(current.to_raw()),
+        };
+    }
+
+    let selection = match resolve_orientation(kind, face, yaw_degrees, pitch_degrees) {
+        Ok(selection) => selection,
+        Err(reason) => {
+            return PlaceOutcome::Rejected {
+                pos: target,
+                reason,
+                current_state: Some(current.to_raw()),
+            };
+        }
+    };
+
+    if matches!(kind, PlaceableBlockKind::RedstoneWire) {
+        let below = BlockPos::new(target.x, target.y - 1, target.z);
+        let supported = ctx_world
+            .get_block(below)
+            .map(|state| {
+                rc_physics::tier1_shape_table().lookup(state.to_raw()).shape
+                    == rc_physics::VoxelShape::full_cube()
+            })
+            .unwrap_or(false);
+        if !supported {
+            return PlaceOutcome::Rejected {
+                pos: target,
+                reason: RejectReason::NoSolidSupportBelow,
+                current_state: Some(current.to_raw()),
+            };
+        }
+    }
+
+    let raw_state = tier1_oriented_state_table().lookup(selection.kind, selection.orientation);
+    {
+        let mut ctx = UpdateContext {
+            world: ctx_world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        };
+        ctx.set_block(target, to_storage_id(raw_state));
+    }
+    settle_neighbor_updates(
+        ctx_world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        behaviors,
+        current_tick,
+    );
+
+    PlaceOutcome::Applied {
+        pos: target,
+        new_state: raw_state,
+    }
 }
