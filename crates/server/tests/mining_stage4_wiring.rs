@@ -130,7 +130,12 @@ async fn stage4_is_inert_with_no_registered_behavior() {
         // scope (no fluids, no leaf decay, no real redstone behavior registered) it has
         // nothing to do.
         for _ in 0..10 {
-            assert_idle(world.debug_stage4_counters().await);
+            assert_idle(
+                world
+                    .debug_stage4_counters()
+                    .await
+                    .expect("the hardcoded region stays alive for this test's own duration"),
+            );
         }
 
         // One ordinary break, then the same counters must return to idle again within the
@@ -172,7 +177,12 @@ async fn stage4_is_inert_with_no_registered_behavior() {
             pack_position(BlockPos::new(0, -60, 0))
         );
 
-        assert_idle(world.debug_stage4_counters().await);
+        assert_idle(
+            world
+                .debug_stage4_counters()
+                .await
+                .expect("the hardcoded region stays alive for this test's own duration"),
+        );
     })
     .await
     .unwrap();

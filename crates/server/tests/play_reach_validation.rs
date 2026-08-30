@@ -19,8 +19,8 @@ use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, SetPlayerPositionAndRotation, SetPlayerRotation, UseItemOn,
-    pack_position,
+    KeepAliveServerbound, LevelEvent, PlayerAction, SetPlayerPositionAndRotation,
+    SetPlayerRotation, UseItemOn, pack_position,
 };
 use rusty_clanker_server::play::{DebugBlockInfo, HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -355,11 +355,12 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
 /// "hitting" a cell at all, so it can no longer distinguish "an air target near the player"
 /// from "a solid one" the way the retired voxel raycast did -- a NEAR air target is now
 /// genuinely in reach and reaches `mining::finalize_break`'s own `TargetAlreadyAir` rejection
-/// path instead (which owes its own corrective `Block Update`, unlike `OutOfReach`; not
-/// exercised by this test file -- `mining_destroy_state_machine.rs` covers `TargetAlreadyAir`
-/// directly). This test keeps demonstrating `OutOfReach`'s own "ack only, no correction" rule
-/// specifically, using a target far enough away that no reach model (old or new) would ever
-/// accept it, air or not.
+/// path instead (which owes its own corrective `Block Update`, unlike `OutOfReach`) --
+/// `breaking_an_in_reach_air_target_is_rejected_with_correction`, immediately below, covers
+/// that path directly (`mining_destroy_state_machine.rs` never did: that file's own suite is
+/// pure `DestroyState` state-machine coverage, no `RejectReason` anywhere in it). This test
+/// keeps demonstrating `OutOfReach`'s own "ack only, no correction" rule specifically, using a
+/// target far enough away that no reach model (old or new) would ever accept it, air or not.
 #[tokio::test]
 async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_correction() {
     tokio::time::timeout(Duration::from_secs(60), async {
@@ -390,6 +391,67 @@ async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_corre
         assert_no_packet_of_type(
             &mut a,
             &mut a_acc,
+            BlockUpdate::ID,
+            Duration::from_millis(400),
+        )
+        .await;
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report test-authoring fix: `mining::finalize_break`'s own only rejection --
+/// `RejectReason::TargetAlreadyAir`, taken when a reach-validated break targets a cell that is
+/// already air -- had zero coverage in this suite (this file's own doc comment on the sibling
+/// test immediately above has the full "why" for `TargetAlreadyAir` existing as a real,
+/// distinguishable-from-`OutOfReach` rejection path since the box-distance reach predicate
+/// landed). `SPAWN_POSITION` itself (`(0, -59, 0)`, `connection.rs`) is air (this world's own
+/// content sits entirely at `y <= -60`) and sits essentially on top of a freshly-spawned
+/// actor's own eye -- genuinely in reach under any threshold, old or new. Asserts the actor's
+/// own `respond_break`'s `Rejected` arm: exactly one corrective `Block Update` carrying the
+/// real (air) state, no `Level Event` (that packet is `Applied`-only, never sent on a
+/// `Rejected` outcome), and no broadcast to a bystander at all (`Rejected` only ever replies to
+/// the actor, `respond_break`'s own doc comment).
+#[tokio::test]
+async fn breaking_an_in_reach_air_target_is_rejected_with_correction() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(BlockPos::new(0, -59, 0)),
+                direction: 1,
+                sequence: 9,
+            },
+        )
+        .await;
+
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            9
+        );
+
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        let correction = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(correction.location, pack_position(BlockPos::new(0, -59, 0)));
+        assert_eq!(correction.block_state_id, blocks::AIR.0 as i32);
+
+        assert_no_packet_of_type(
+            &mut a,
+            &mut a_acc,
+            LevelEvent::ID,
+            Duration::from_millis(400),
+        )
+        .await;
+
+        assert_no_packet_of_type(
+            &mut b,
+            &mut b_acc,
             BlockUpdate::ID,
             Duration::from_millis(400),
         )

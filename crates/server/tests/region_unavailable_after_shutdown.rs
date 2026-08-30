@@ -84,3 +84,20 @@ async fn request_chunk_grid_and_queue_join_degrade_gracefully_once_the_region_th
     .await
     .expect("must resolve promptly once the region thread is gone, never hang");
 }
+
+/// M3 field-report fix: `debug_stage4_counters` was the one straggler this sweep's own
+/// original changeset missed -- it kept `.expect()`ing on the send/reply-await pair long
+/// after every sibling method here had already been converted. Must resolve `None`, never
+/// panic, never hang, exactly like `debug_query_block`/`request_chunk_grid` above.
+#[tokio::test]
+async fn debug_stage4_counters_degrades_gracefully_once_the_region_thread_is_gone() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let world = HardcodedWorld::new();
+        shut_down(&world).await;
+
+        let counters = world.debug_stage4_counters().await;
+        assert!(counters.is_none());
+    })
+    .await
+    .expect("must resolve promptly once the region thread is gone, never hang");
+}
