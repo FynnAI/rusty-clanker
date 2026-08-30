@@ -152,6 +152,51 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
     }
 }
 
+/// Per-stage timeout wrapper: a hang names its exact stage instead of collapsing into one
+/// opaque whole-test deadline. Same helper, verbatim, as `play_block_action_broadcast_
+/// reaches_unspawned_actor.rs`'s own copy (that file's own doc comment has the original CI
+/// incident) -- adopted here by `delayed_destroy_auto_finalize_excludes_the_breaker_from_
+/// the_level_event` for the identical reason (M3 field-report test-authoring fix, CI run
+/// 33321141994; see that test's own doc comment for the full incident writeup).
+async fn staged<T>(
+    stage: &'static str,
+    limit: Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(value) => value,
+        Err(_) => panic!("stage {stage:?} timed out after {limit:?}"),
+    }
+}
+
+/// Runs `work` to completion while concurrently draining `socket`'s own inbound traffic the
+/// whole time (auto-answering every keep-alive challenge, `recv_clientbound`'s own per-call
+/// side effect, and otherwise discarding whatever else arrives) -- `work` itself must never
+/// touch `socket`, only things external to it. M3 field-report test-authoring fix (CI run
+/// 33321141994; see `delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_
+/// event`'s own doc comment for the full incident writeup): a `wait_until` polling
+/// `sessions`, or a `world.debug_set_*` round trip, both depend on the very same potentially
+/// load-stretched world tick thread that test's own delayed destroy does, without `work`
+/// itself ever reading `socket` to observe it -- so `socket` would otherwise sit unread, and
+/// so un-keep-alived, for however long `work` actually takes in real time. `select!`'s own
+/// per-iteration re-creation of the `recv_clientbound` branch (never held across loop turns,
+/// unlike `work`, `tokio::pin!`-ed once above the loop) is what makes racing the two safe: a
+/// cancelled in-flight read never loses already-buffered bytes, since `accumulator` itself
+/// outlives every individual iteration's own dropped read attempt.
+async fn drain_while<T>(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::pin!(work);
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            _ = recv_clientbound(socket, accumulator) => {}
+        }
+    }
+}
+
 #[tokio::test]
 async fn creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event() {
     tokio::time::timeout(Duration::from_secs(60), async {
@@ -388,95 +433,194 @@ async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_s
 /// and the resulting delayed destroy auto-finalizes several ticks later entirely on its own
 /// (`mining::tick_destroy_state`'s own per-tick drain) -- proving the exclusion holds on THIS
 /// call site too, not only `respond_break`'s.
+///
+/// M3 field-report test-authoring fix (CI run 33321141994, `windows-2025`, full suite under
+/// load): this test previously hung until its own outer 60s budget, then panicked inside
+/// `recv_packet` with `called Result::unwrap() on an Err value: Os { code: 10053, kind:
+/// ConnectionAborted, .. }`. Reproduced locally (multiple runs, ~60-67s each) by racing this
+/// file's own single test binary against three concurrent full-workspace `nextest` runs --
+/// a genuinely load-sensitive timing gap, not a fluke.
+///
+/// Root cause is test-side, not a product race: the delayed destroy this test waits on is
+/// paced by the region's own real, non-drift-compounding 20 TPS tick clock
+/// (`TickClock::await_next_tick`, `crates/scheduler/src/pool/tick_clock.rs` -- "Never skips
+/// or batches ticks under sustained overrun"), so its ~23-tick nominal ~1.15s duration is
+/// only *nominal*: under heavy host contention the region's own dedicated tick thread can go
+/// real seconds between actually getting scheduled, stretching the same exact 23 ticks to
+/// tens of real seconds -- by design, never by skipping a tick (MECH-D61's own timing stays
+/// exact tick-for-tick; only wall-clock elapsed time balloons). This test's own former shape
+/// waited on B's own `BlockUpdate`/`LevelEvent` first and never touched A's own socket at
+/// all in between, so A never read (and so never auto-answered, `recv_clientbound`'s own
+/// per-call side effect) any `KeepAliveClientbound` challenge the server sent it during that
+/// whole open-ended wait. `KeepAliveDriver`'s own ~30s nominal disconnect schedule
+/// (`keepalive.rs`, `KEEPALIVE_INTERVAL = 15s`) runs on A's own connection task via a plain
+/// `tokio::time::interval`, wholly independent of the region tick thread's own speed -- under
+/// the exact same host contention that stretches the delayed destroy, A's own connection
+/// task can just as easily go real seconds between polls too, but the two delays are
+/// unrelated races on the same clock, and CI's own captured `Os { code: 10053, .. }` proves
+/// A's own connection was already aborted by the server (`connection.rs`'s own
+/// `handle.close()` on `KeepAliveAction::Disconnect`) by the time this test ever tried to
+/// read from it again. `mining::tick_destroy_state`/`world.rs`'s own `destroy_tick_subjects`
+/// loop never mishandles a slow tick, and `broadcast_break` still queues A's own `BlockUpdate`
+/// correctly every single time (`world.rs`'s own doc comment on that function) -- the queued
+/// payload just never reaches a socket the server itself already closed.
+///
+/// Fix, two parts, both needed (an initial fix covering only the first was still caught
+/// failing this exact same way, a handful of times in 320 runs, by this very torture-load
+/// repro -- closing the gap rather than declaring an ~90%-lower failure rate good enough):
+/// (1) read A's own socket concurrently with B's own wait (`tokio::join!` below), the same
+/// two-actor shape `distance_based_reach_ignores_occlusion_and_accepts_a_block_behind_
+/// another` above already uses elsewhere in this file -- A's own `recv_clientbound` calls
+/// keep auto-answering every keep-alive challenge for the whole delayed-finalize wait. (2)
+/// the preamble *before* that wait -- the position `wait_until` and the two `world.debug_
+/// set_*` calls -- depends on this exact same load-stretchable tick thread without ever
+/// reading A's own socket either, so `drain_while` (this file's own new helper, just above
+/// `staged`) concurrently services A's socket through that stretch too. Between the two,
+/// nothing from A's own join to this test's own final assertion ever leaves A's socket
+/// unread for a load-sensitive stretch. Deterministic rather than merely more patient: no
+/// timeout value below is load-sensitive any more, since the actual race (A's own silence)
+/// is gone, not just raced with a bigger number. What remains genuinely load-sensitive -- how
+/// long the tick-paced delayed destroy itself can take in real time -- gets its own named,
+/// generously (not arbitrarily) sized stage below (`staged`, this file's own copy of
+/// `play_block_action_broadcast_reaches_unspawned_actor.rs`'s established pattern) rather
+/// than one opaque whole-test budget, so a genuine future hang here names which wait
+/// actually stalled.
 #[tokio::test]
 async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event() {
-    tokio::time::timeout(Duration::from_secs(60), async {
-        let world = HardcodedWorld::new();
-        let uuid_a = uuid::Uuid::from_u128(1);
-        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
-        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
-        let sessions = world.player_sessions();
+    let world = HardcodedWorld::new();
+    let uuid_a = uuid::Uuid::from_u128(1);
+    let (mut a, mut a_acc) = staged(
+        "spawn-a",
+        Duration::from_secs(30),
+        spawn_actor(&world, "a", 1),
+    )
+    .await;
+    let (mut b, mut b_acc) = staged(
+        "spawn-b",
+        Duration::from_secs(30),
+        spawn_actor(&world, "b", 2),
+    )
+    .await;
+    let sessions = world.player_sessions();
 
-        send_packet(
-            &mut a,
-            &SetPlayerPositionAndRotation {
-                x: 3.0,
-                y: -59.0,
-                z: 3.0,
-                yaw: 0.0,
-                pitch: 90.0,
-                on_ground: true,
-            },
-        )
-        .await;
+    send_packet(
+        &mut a,
+        &SetPlayerPositionAndRotation {
+            x: 3.0,
+            y: -59.0,
+            z: 3.0,
+            yaw: 0.0,
+            pitch: 90.0,
+            on_ground: true,
+        },
+    )
+    .await;
+    // Neither `wait_until` (polls `sessions` directly) nor the two `world.debug_set_*` calls
+    // below ever touch A's own socket, yet both depend on the same potentially load-
+    // stretched world tick thread the delayed destroy itself does (this test's own doc
+    // comment, "Root cause") -- `drain_while` keeps A's own socket serviced concurrently for
+    // however long this whole preamble actually takes, closing the one gap the `tokio::
+    // join!` fix further below does not (that fix only covers the delayed-finalize wait
+    // itself, not this earlier stretch).
+    drain_while(&mut a, &mut a_acc, async {
         wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([3.0, -59.0, 3.0]))
             .await;
 
-        // Survival + Wood pickaxe on Stone: golden-table row 2 -> 23 ticks total, so stopping
-        // after the very first tick (progress ~= 1/23 ~= 0.043) sits well under the 0.7
-        // finalize-now threshold and queues a delayed destroy instead.
+        // Survival + Wood pickaxe on Stone: golden-table row 2 -> 23 ticks total, so
+        // stopping after the very first tick (progress ~= 1/23 ~= 0.043) sits well under the
+        // 0.7 finalize-now threshold and queues a delayed destroy instead.
         world.debug_set_survival(1, true).await;
         world
             .debug_set_held_item(1, HeldItemStub::Tool(ToolMaterial::Wood, ToolKind::Pickaxe))
             .await;
-
-        send_packet(
-            &mut a,
-            &PlayerAction {
-                status: 0,
-                location: pack_position(BlockPos::new(3, -60, 3)),
-                direction: 1,
-                sequence: 1,
-            },
-        )
-        .await;
-        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
-        assert_eq!(
-            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
-            1
-        );
-
-        send_packet(
-            &mut a,
-            &PlayerAction {
-                status: 2,
-                location: pack_position(BlockPos::new(3, -60, 3)),
-                direction: 1,
-                sequence: 2,
-            },
-        )
-        .await;
-        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
-        assert_eq!(
-            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
-            2
-        );
-
-        // No further packet from A -- the delayed destroy finalizes on its own, ~23 ticks
-        // (~1.15s at 20 TPS) after the original `START_DESTROY_BLOCK`.
-        let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
-        let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(3, -60, 3)));
-        assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
-        let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
-        let level_event = decode_one::<LevelEvent>(body).unwrap();
-        assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
-        assert_eq!(level_event.data, blocks::GRASS_BLOCK.0 as i32);
-
-        // A receives the identical Block Update (unconditional resync) but never a Level
-        // Event -- M3 field-report fix, Defect 2, this call site.
-        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
-        assert_eq!(decode_one::<BlockUpdate>(body).unwrap(), update);
-        assert_no_packet_of_type(
-            &mut a,
-            &mut a_acc,
-            LevelEvent::ID,
-            Duration::from_millis(500),
-        )
-        .await;
     })
-    .await
-    .unwrap();
+    .await;
+
+    send_packet(
+        &mut a,
+        &PlayerAction {
+            status: 0,
+            location: pack_position(BlockPos::new(3, -60, 3)),
+            direction: 1,
+            sequence: 1,
+        },
+    )
+    .await;
+    let body = staged(
+        "start-destroy-ack",
+        Duration::from_secs(15),
+        recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID),
+    )
+    .await;
+    assert_eq!(
+        decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+        1
+    );
+
+    send_packet(
+        &mut a,
+        &PlayerAction {
+            status: 2,
+            location: pack_position(BlockPos::new(3, -60, 3)),
+            direction: 1,
+            sequence: 2,
+        },
+    )
+    .await;
+    let body = staged(
+        "stop-destroy-ack",
+        Duration::from_secs(15),
+        recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID),
+    )
+    .await;
+    assert_eq!(
+        decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+        2
+    );
+
+    // The delayed destroy finalizes on its own, ~23 ticks (~1.15s at 20 TPS nominal, far
+    // more in real time under host contention -- this doc comment's own "Root cause") after
+    // the original `START_DESTROY_BLOCK`. A's own socket is read concurrently with B's own
+    // wait here (this doc comment's own "Fix"), never left silent for however long that
+    // actually takes.
+    let (b_update, a_update) = staged(
+        "delayed-finalize-broadcast",
+        Duration::from_secs(120),
+        async {
+            tokio::join!(
+                async {
+                    let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
+                    let update = decode_one::<BlockUpdate>(body).unwrap();
+                    assert_eq!(update.location, pack_position(BlockPos::new(3, -60, 3)));
+                    assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+                    let body = recv_packet_of_type(&mut b, &mut b_acc, LevelEvent::ID).await;
+                    let level_event = decode_one::<LevelEvent>(body).unwrap();
+                    assert_eq!(level_event.event_id, LEVEL_EVENT_BLOCK_BREAK);
+                    assert_eq!(level_event.data, blocks::GRASS_BLOCK.0 as i32);
+                    update
+                },
+                async {
+                    // A receives the identical Block Update (unconditional resync) -- M3
+                    // field-report fix, Defect 2, this call site.
+                    let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+                    decode_one::<BlockUpdate>(body).unwrap()
+                },
+            )
+        },
+    )
+    .await;
+    assert_eq!(a_update, b_update);
+
+    // ...but A never receives a Level Event (Defect 2) -- checked only now, once A's own
+    // Block Update has already landed above, so this window observes genuine idleness
+    // rather than A merely still catching up on a load-stretched broadcast.
+    assert_no_packet_of_type(
+        &mut a,
+        &mut a_acc,
+        LevelEvent::ID,
+        Duration::from_millis(500),
+    )
+    .await;
 }
 
 #[tokio::test]
