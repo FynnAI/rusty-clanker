@@ -623,3 +623,106 @@ async fn placement_selects_the_held_items_own_block_and_orientation() {
     .await
     .unwrap();
 }
+
+/// M3 field-report regression test (CI run 33319009203, `placement_selects_the_held_items_
+/// own_block_and_orientation` above): reproduces, deterministically rather than by chance,
+/// the exact race between `debug_set_held_item` and its own target actor's join that CI
+/// caught only under parallel load. Root cause (verified locally with an instrumented
+/// build, ~35% failure rate under contention, always the identical shape): `spawn_actor`'s
+/// own completion (`ChunkBatchFinished` receipt) proves only that `connection.rs`'s own
+/// `enter_play` is *about* to call `queue_join`, never that the join has actually reached
+/// `HardcodedWorld`'s own tick-loop thread and been drained into a spawned `PlayerMarker` --
+/// the same join/action mpsc-ordering race `carried_movement_updates`'s own doc comment
+/// (`world.rs`) already documents for ordinary movement reports. The pre-fix held-item/
+/// survival drain handled a not-yet-spawned target differently and wrongly: it still
+/// unconditionally acked, so a caller's `.await` returned believing the mutation had
+/// landed while `HeldItem` silently kept its join-time default forever after.
+///
+/// Races many independent `HardcodedWorld`s concurrently (each gets its own OS tick-loop
+/// thread) rather than looping one at a time -- real OS-thread contention, not mere
+/// iteration count, is what widens this race's own window enough to hit reliably; a
+/// sequential loop on an otherwise-idle machine reproduced it far less often locally. Every
+/// one of these actors calls `debug_set_held_item` with no `.await` in between `spawn_actor`
+/// being kicked off (via `tokio::spawn`, not `.await`ed yet) and the call itself -- the
+/// tightest window this file's own public API can create between "join queued" (or not
+/// even that far yet) and "held-item mutation queued".
+#[tokio::test]
+async fn debug_set_held_item_survives_a_join_still_racing_it() {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            tasks.push(tokio::spawn(async move {
+                let world = HardcodedWorld::new();
+                let uuid_a = uuid::Uuid::from_u128(1);
+                // `enter_play`'s own `alloc_network_entity_id` call is the connection
+                // task's very first synchronous step (`connection.rs`, before any
+                // `.await`) -- id 1 is deterministic for a fresh `HardcodedWorld`'s
+                // first-ever spawn (`spawn_actor`'s own doc comment, this file).
+                let world_for_spawn = world.clone();
+                let spawn_task =
+                    tokio::spawn(async move { spawn_actor(&world_for_spawn, "a", 1).await });
+                // No `.await` precedes this call -- races `debug_set_held_item`'s own
+                // channel send directly against `connection.rs`'s own `queue_join` call
+                // for this exact actor, deliberately not waiting for the join to land
+                // first the way a well-behaved caller normally would (this test's own
+                // point: the API contract must hold regardless).
+                world
+                    .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Repeater))
+                    .await;
+                let (mut a, mut a_acc) = spawn_task.await.unwrap();
+
+                send_packet(
+                    &mut a,
+                    &SetPlayerRotation {
+                        yaw: 0.0,
+                        pitch: 90.0,
+                        on_ground: true,
+                    },
+                )
+                .await;
+                wait_until(|| sessions_rotation_ready(&world, uuid_a)).await;
+
+                send_packet(
+                    &mut a,
+                    &UseItemOn {
+                        hand: 0,
+                        location: pack_position(BlockPos::new(1, -60, 0)),
+                        direction: 1,
+                        cursor_x: 0.5,
+                        cursor_y: 1.0,
+                        cursor_z: 0.5,
+                        inside_block: false,
+                        hits_world_border: false,
+                        sequence: 2,
+                    },
+                )
+                .await;
+
+                let body =
+                    recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+                assert_eq!(
+                    decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+                    2
+                );
+
+                let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+                let update = decode_one::<BlockUpdate>(body).unwrap();
+                assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 0)));
+                let expected_raw = tier1_oriented_state_table().lookup(
+                    PlaceableBlockKind::Repeater,
+                    Orientation::Horizontal(Direction::North),
+                );
+                assert_eq!(
+                    update.block_state_id, expected_raw as i32,
+                    "held-item mutation queued before this actor's own join must still \
+                     apply once the join lands, never silently keep the join-time default"
+                );
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
