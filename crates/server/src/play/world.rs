@@ -1090,6 +1090,21 @@ impl HardcodedWorld {
             // action`'s own doc comment) is carried into the next tick's own drain instead
             // of being silently dropped.
             let mut carried_movement_updates: Vec<PendingMovementPacket> = Vec::new();
+            // M3 field-report fix (held-item application race, CI run 33319009203):
+            // mirrors `carried_movement_updates`'s own identical pattern for the exact
+            // same join/action mpsc-ordering race, applied here to `debug_set_held_item`/
+            // `debug_set_survival` instead of ordinary movement reports -- a queued
+            // mutation whose own `network_entity_id` has no `PlayerMarker` spawned in
+            // `region.world` yet this tick is carried into the next tick's own drain
+            // rather than silently dropped-yet-acked (the drain loop below's own doc
+            // comment has the full incident writeup). Each entry keeps its own oneshot
+            // reply alive across ticks exactly as `PendingBlockAction`'s own carried
+            // entries do; the reply is sent only once the mutation has actually landed,
+            // restoring the "ack implies applied" invariant this pair's own doc comment
+            // already promised.
+            let mut carried_debug_held_item: Vec<(i32, HeldItemStub, oneshot::Sender<()>)> =
+                Vec::new();
+            let mut carried_debug_survival: Vec<(i32, bool, oneshot::Sender<()>)> = Vec::new();
             // New (M2 field-report chunk-streaming fix): every chunk coordinate `stream_
             // chunks_for_moved_players` has requested for a moved player but that has not
             // yet become resident, carried across tick iterations exactly like `carried_
@@ -2146,37 +2161,74 @@ impl HardcodedWorld {
 
                 // M3-B03, test/diagnostic only: applies every queued `debug_set_held_item`/
                 // `debug_set_survival` call against this tick's own currently-spawned
-                // players -- a not-yet-spawned target (the same join/action mpsc-ordering
-                // race every other queue in this loop already tolerates) is silently
-                // dropped (its own oneshot reply simply goes unsent, which the caller's own
-                // `.await` on the receiving end observes as an error rather than hanging
-                // forever) rather than carried forward, matching this pair's own "test/
-                // diagnostic only" scope. Each call carries its own oneshot reply, sent only
-                // once the mutation has actually been applied -- `debug_set_held_item`/
-                // `debug_set_survival` are themselves `async fn`s the caller awaits, a
-                // deliberate deviation from this blueprint's own literal synchronous
-                // signature (Deliverables): a fire-and-forget send racing an unrelated
-                // round trip on a *different* channel (this file's own earlier draft) is not
-                // actually a reliable synchronization primitive -- two independently-polled
-                // channels give no guarantee about which one a given tick iteration observes
-                // first, even when the sends themselves are strictly ordered, so a test built
-                // on that assumption is flaky exactly the way a real CI run under heavy
+                // players. Each call carries its own oneshot reply, sent only once the
+                // mutation has actually been applied -- `debug_set_held_item`/`debug_set_
+                // survival` are themselves `async fn`s the caller awaits, a deliberate
+                // deviation from this blueprint's own literal synchronous signature
+                // (Deliverables): a fire-and-forget send racing an unrelated round trip on
+                // a *different* channel (this file's own earlier draft) is not actually a
+                // reliable synchronization primitive -- two independently-polled channels
+                // give no guarantee about which one a given tick iteration observes first,
+                // even when the sends themselves are strictly ordered, so a test built on
+                // that assumption is flaky exactly the way a real CI run under heavy
                 // parallel load caught directly, not hypothetically.
-                while let Ok((network_entity_id, item, ack)) = debug_held_item_rx.try_recv() {
-                    if let Some(entity) = find_player_entity(&region.world, network_entity_id)
-                        && let Some(mut held) = region.world.get_mut::<HeldItem>(entity)
-                    {
-                        held.0 = item;
-                    }
-                    let _ = ack.send(());
+                //
+                // M3 field-report fix (CI run 33319009203, `play_block_break_place_full.rs`'s
+                // own `placement_selects_the_held_items_own_block_and_orientation`, reproduced
+                // locally under parallel load with an instrumented build: ~35% failure rate,
+                // always the identical shape): a not-yet-spawned target -- `spawn_actor`'s own
+                // completion (`ChunkBatchFinished` receipt) only proves `connection.rs`'s
+                // `enter_play` is *about* to call `queue_join`, never that the join has
+                // actually reached `join_rx`, let alone been drained above -- is the same
+                // join/action mpsc-ordering race `carried_movement_updates`'s own doc comment
+                // already documents for ordinary movement reports. The pre-fix code here
+                // handled it differently and wrongly: `find_player_entity` returning `None`
+                // left the mutation un-applied but *still* unconditionally sent `ack.send(())`
+                // -- the exact opposite of this pair's own doc comment, which already promised
+                // "applied at the start of the region's next tick that finds network_entity_id
+                // currently spawned" (a carry-forward contract the implementation never
+                // actually honored). The caller's `.await` therefore returned `Ok(())`,
+                // believing the mutation had landed, while `HeldItem`/`GameModeState` silently
+                // kept their join-time default forever after -- restoring the "ack implies
+                // applied" invariant this pair's own doc comment already promised: a
+                // not-yet-spawned target is now carried into the next tick's own drain,
+                // exactly like `carried_movement_updates`, and the oneshot reply fires only
+                // once `find_player_entity` actually succeeds and the mutation is written.
+                // This is the real hazard the M4 real-inventory path must also avoid: any
+                // future held-item/inventory mutation applied by `network_entity_id` against
+                // this same tick loop needs the identical carry-forward discipline, never a
+                // silent "not found this tick" drop, however the caller learns of success.
+                let mut pending_held_item: Vec<(i32, HeldItemStub, oneshot::Sender<()>)> =
+                    std::mem::take(&mut carried_debug_held_item);
+                while let Ok(msg) = debug_held_item_rx.try_recv() {
+                    pending_held_item.push(msg);
                 }
-                while let Ok((network_entity_id, survival, ack)) = debug_survival_rx.try_recv() {
-                    if let Some(entity) = find_player_entity(&region.world, network_entity_id)
-                        && let Some(mut mode) = region.world.get_mut::<GameModeState>(entity)
-                    {
-                        mode.instabuild = !survival;
+                for (network_entity_id, item, ack) in pending_held_item {
+                    match find_player_entity(&region.world, network_entity_id) {
+                        Some(entity) => {
+                            if let Some(mut held) = region.world.get_mut::<HeldItem>(entity) {
+                                held.0 = item;
+                            }
+                            let _ = ack.send(());
+                        }
+                        None => carried_debug_held_item.push((network_entity_id, item, ack)),
                     }
-                    let _ = ack.send(());
+                }
+                let mut pending_survival: Vec<(i32, bool, oneshot::Sender<()>)> =
+                    std::mem::take(&mut carried_debug_survival);
+                while let Ok(msg) = debug_survival_rx.try_recv() {
+                    pending_survival.push(msg);
+                }
+                for (network_entity_id, survival, ack) in pending_survival {
+                    match find_player_entity(&region.world, network_entity_id) {
+                        Some(entity) => {
+                            if let Some(mut mode) = region.world.get_mut::<GameModeState>(entity) {
+                                mode.instabuild = !survival;
+                            }
+                            let _ = ack.send(());
+                        }
+                        None => carried_debug_survival.push((network_entity_id, survival, ack)),
+                    }
                 }
 
                 while let Ok((pos, reply)) = query_rx.try_recv() {
@@ -2356,13 +2408,18 @@ impl HardcodedWorld {
     }
 
     /// Test/diagnostic only (Context: mirrors `debug_query_block`'s own precedent).
-    /// Applied at the start of the region's next tick that finds `network_entity_id`
-    /// currently spawned; `.await`s that same tick's own oneshot confirmation that the
-    /// mutation was applied (or silently dropped, if `network_entity_id` was never found)
-    /// before returning -- a deliberate deviation from this blueprint's own literal
-    /// synchronous signature (Deliverables), recorded here and in the completion report:
-    /// see `world.rs`'s own tick-loop drain doc comment for why a fire-and-forget send here
-    /// is not actually a reliable way for a caller to know the mutation has landed.
+    /// Applied at the start of the first region tick that finds `network_entity_id`
+    /// currently spawned -- a target not yet spawned (the join/action mpsc-ordering
+    /// race the tick-loop drain's own doc comment covers in full) is retried every
+    /// subsequent tick rather than dropped, so this only ever returns once the mutation
+    /// has actually landed (M3 field-report fix, CI run 33319009203: the pre-fix
+    /// version acked unconditionally on a single not-found attempt, silently no-opping
+    /// the mutation while still telling the caller it had succeeded). `.await`s that
+    /// same tick's own oneshot confirmation before returning -- a deliberate deviation
+    /// from this blueprint's own literal synchronous signature (Deliverables), recorded
+    /// here and in the completion report: see `world.rs`'s own tick-loop drain doc
+    /// comment for why a fire-and-forget send here is not actually a reliable way for a
+    /// caller to know the mutation has landed.
     pub async fn debug_set_held_item(&self, network_entity_id: i32, item: HeldItemStub) {
         let (ack_tx, ack_rx) = oneshot::channel();
         if self
