@@ -35,7 +35,7 @@ stateDiagram-v2
     Handshaking --> Login: Intention=2
     Handshaking --> Login: Intention=3 (Transfer)
     Status --> [*]: connection closed after Pong
-    Login --> Configuration: Login Success
+    Login --> Configuration: Login Acknowledged (serverbound ack of Login Finished)
     Configuration --> Play: Finish Configuration (client ACKs)
     Play --> Configuration: server-initiated reconfigure
     Play --> [*]: Disconnect / Transfer (reconnect elsewhere)
@@ -80,12 +80,14 @@ Generated packet shape (illustrative output of NET-D9's codegen, not hand-mainta
 ```rust
 // crates/protocol/generated/v776/play/clientbound.rs
 #[derive(RcPacket)]
-#[packet(state = "play", bound = "client", id = 0x2C)]
+#[packet(state = "play", bound = "client", id = 0x2D)]
 pub struct LevelChunkWithLight {
     pub chunk_x: i32,
     pub chunk_z: i32,
-    #[rc(nbt)]
-    pub heightmaps: HeightmapsNbt,
+    // VarInt-prefixed list of (heightmap-kind, packed long array) tuples — never NBT
+    // (verified against the reference and live against a real client, M1).
+    #[rc(prefixed_array = "VarInt")]
+    pub heightmaps: Vec<HeightmapEntry>,
     #[rc(prefixed_array = "VarInt")]
     pub data: Vec<u8>,
     #[rc(prefixed_array = "VarInt")]
