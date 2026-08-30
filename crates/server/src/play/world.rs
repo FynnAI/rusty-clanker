@@ -2390,15 +2390,13 @@ impl HardcodedWorld {
     /// Test/diagnostic only -- reads `NeighborUpdateEngine::is_idle()`/`ScheduledTickQueue::
     /// block_len()`/`fluid_len()`/`BlockEventQueue::pending_next_tick()` straight off
     /// `region.world`'s own M3-B01 resources (Acceptance tests, `mining_stage4_wiring.rs`).
-    /// Awaits the next tick's drain, mirroring `debug_query_block`.
-    pub async fn debug_stage4_counters(&self) -> Stage4Counters {
+    /// Awaits the next tick's drain, mirroring `debug_query_block`. `None` iff the tick-loop
+    /// thread is already gone -- `queue_join`'s own doc comment has the full `RegionUnavailable`
+    /// rationale, shared by this method exactly as by every other one below it.
+    pub async fn debug_stage4_counters(&self) -> Option<Stage4Counters> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.stage4_counters_tx
-            .send(reply_tx)
-            .expect("the hardcoded region's tick-loop thread outlives every connection");
-        reply_rx.await.expect(
-            "the hardcoded region's tick-loop thread always replies before dropping the sender",
-        )
+        self.stage4_counters_tx.send(reply_tx).ok()?;
+        reply_rx.await.ok()
     }
 }
 

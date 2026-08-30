@@ -279,7 +279,11 @@ pub fn eye_position(position: Vec3, crouching: bool) -> Vec3 {
 /// the one place that actually performs this reduction, reading this field directly). Vanilla's
 /// own additional headroom fit-check (whether the entity's own bounding box actually fits the
 /// crouching height at its current position) is intentionally skipped -- not load-bearing for
-/// reach validation, the only consumer of pose at this milestone's own scope.
+/// either of this field's two independent consumers, both in `world.rs`'s own tick loop: the
+/// reach-validation step reads it to select `eye_position`'s own crouching height, and the
+/// placement-obstruction gate reads it again, separately, to size each currently-connected
+/// player's own `Aabb` (`PLAYER_HEIGHT_SNEAKING` vs `PLAYER_HEIGHT`) before testing a placement's
+/// resolved shape against it.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayerInputState {
     pub sneaking: bool,
