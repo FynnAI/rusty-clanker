@@ -17,6 +17,17 @@
 //! one `LocalSet`, the only mechanism azalea's own non-`Send` connection state
 //! permits), exactly mirroring `fetch_corpus_runner`'s own established precedent of
 //! one shared ambient `LocalSet` driving multiple concurrent azalea sessions.
+//!
+//! M3 field-report fix (self-placement obstruction): each interaction cycle's own clicked
+//! column is `interaction_target(interaction_post)`, never `interaction_post` itself --
+//! that function's own doc comment has the full geometry writeup for why the original
+//! same-cell target silently obstructed every placement once `mining::is_placement_
+//! obstructed` started rejecting a placement into the acting player's own body. `verify_
+//! effect` (`restart_persistence.rs`'s own established precedent) reads the target position's
+//! own block state back after every place/break, failing loudly (`LoadBotError::
+//! InteractionRejected`, naming the bot/cycle/position) instead of trusting the fire-and-
+//! forget `block_interact`/`mine` call -- a silently-rejecting server can no longer produce a
+//! green load leg that never actually exercised real placement/break/broadcast traffic.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -24,6 +35,7 @@ use std::time::{Duration, Instant};
 use azalea::pathfinder::goals::BlockPosGoal;
 use azalea::prelude::*;
 use rc_core::BlockPos;
+use rc_registries::generated_v776::block_states::default_state::{AIR, STONE};
 
 /// ARCH-D6's own grid-cell size, restated locally — `rc-paritybot` has no dependency
 /// on `rc-scheduler` (a production crate; WS-D3's dependency-graph rule keeps test
@@ -37,6 +49,11 @@ pub const COLS: u32 = 5;
 pub const ROWS: u32 = 4;
 pub const PATROL_HALF_EXTENT: i32 = 3;
 pub const INTERACTION_POST_OFFSET_SOUTH: i32 = 2;
+/// M3 field-report fix (self-placement obstruction): the interaction cycle's own clicked
+/// column sits this many blocks east of `interaction_post` -- `interaction_target`'s own
+/// doc comment has the full geometry writeup. Never `0`: an in-bounds, non-zero offset is
+/// exactly what keeps the resolved placement cell outside the acting bot's own `Aabb`.
+pub const INTERACTION_TARGET_OFFSET_EAST: i32 = 1;
 pub const INTERACTION_PERIOD_TICKS: u32 = 40;
 pub const START_STAGGER_TICKS_PER_BOT: u32 = 2;
 /// M3-B03's own `BLOCK_INTERACTION_RANGE_CREATIVE`, restated (Context: this
@@ -62,6 +79,38 @@ pub fn block_grid_cell(x: i32, z: i32) -> (i32, i32) {
     (
         x.div_euclid(GRID_CELL_BLOCKS),
         z.div_euclid(GRID_CELL_BLOCKS),
+    )
+}
+
+/// M3 field-report fix (self-placement obstruction): one interaction cycle's own resolved
+/// placement/break cell -- `interaction_post` offset `INTERACTION_TARGET_OFFSET_EAST`
+/// blocks east, never `interaction_post` itself.
+///
+/// `run_one_load_bot`'s own `goto(BlockPosGoal(interaction_post))` step parks the bot with
+/// its feet occupying `interaction_post` exactly; the cycle used to right-click the block
+/// *below* that same cell, and azalea's own `force_block` path fabricates every
+/// `block_interact` hit with `direction = Up` regardless of which cell was clicked, so
+/// `resolve_place_position`'s offset (`crates/server/src/play/block_action.rs`) always
+/// resolved the placement into the clicked cell's own `y + 1` -- `interaction_post` itself,
+/// the one cell every bot's own body already occupies. Since `mining::is_placement_
+/// obstructed` now rejects a placement into the acting player's own body (no identity
+/// exclusion, that function's own doc comment), every such placement was silently rejected,
+/// and the follow-up break of an already-air `interaction_post` no-opped right behind it --
+/// this scenario stopped exercising real placement/break/broadcast traffic entirely.
+///
+/// Right-clicking the block below THIS function's own result instead resolves the placement
+/// one column east of `interaction_post` -- a cell no bot's own `Aabb` (`PLAYER_HALF_WIDTH`,
+/// well under one block) ever overlaps, still trivially within `CREATIVE_REACH`, and (Context,
+/// `plan_bot_layout`'s own per-cell centering) still deep inside this same bot's own arena
+/// lane -- `arena_bounds_stay_at_least_30_blocks_inside_the_cell_edge`'s own margin puts at
+/// least 30 blocks between any waypoint and the lane edge, so a 1-block eastward nudge can
+/// never cross into a neighboring bot's own lane and give two bots' interaction columns a
+/// chance to obstruct one another.
+pub fn interaction_target(interaction_post: BlockPos) -> BlockPos {
+    BlockPos::new(
+        interaction_post.x + INTERACTION_TARGET_OFFSET_EAST,
+        interaction_post.y,
+        interaction_post.z,
     )
 }
 
@@ -132,6 +181,31 @@ pub struct BotOutcome {
 pub enum LoadBotError {
     #[error("no Event::Login observed within {0:?}")]
     LoginTimeout(Duration),
+    /// M3 field-report fix (self-placement obstruction): mirrors `restart_persistence.rs`'s
+    /// own `ActionError::ActionRejected` -- a scripted interaction cycle's own `action` at
+    /// `pos` did not take effect (a rejection, most likely; conceivably a real persistence
+    /// bug). Named by `bot`/`cycle` so a silently-rejecting server fails loudly and
+    /// diagnosably instead of producing a green load leg that never actually exercised real
+    /// placement/break/broadcast traffic.
+    #[error(
+        "bot {bot}'s interaction cycle {cycle}'s own {action} at {pos:?} did not take effect: \
+         expected raw block-state id {expected}, observed {observed}"
+    )]
+    InteractionRejected {
+        bot: String,
+        cycle: u64,
+        action: &'static str,
+        pos: BlockPos,
+        expected: u32,
+        observed: u32,
+    },
+    /// As `InteractionRejected`, for the narrower case of no resolvable azalea world at all
+    /// (`restart_persistence.rs`'s own `ActionError::NoWorld` precedent) -- distinct from a
+    /// wrong block state because there is no observed value to report.
+    #[error(
+        "bot {bot}'s interaction cycle {cycle} found no resolvable azalea world to verify against"
+    )]
+    NoWorld { bot: String, cycle: u64 },
 }
 
 #[derive(Default)]
@@ -182,6 +256,55 @@ async fn handle(bot: Client, event: Event, state: SharedState) {
 
 fn to_azalea_pos(pos: BlockPos) -> azalea::BlockPos {
     azalea::BlockPos::new(pos.x, pos.y, pos.z)
+}
+
+/// Reads `pos`'s raw block-state id straight out of azalea's own already-decoded chunk
+/// storage -- `restart_persistence.rs`'s own `read_raw_block_state` precedent, restated here
+/// (that module's own `ActionError` is not reusable across scenarios: `rc-paritybot` keeps
+/// each scenario's own error type self-contained, module doc comment's "a fourth scenario
+/// module... not a rewrite"). `None` iff azalea reports no resolvable world at all.
+fn read_raw_block_state(client: &Client, pos: BlockPos) -> Option<u32> {
+    let world = client.world().ok()?;
+    Some(
+        world
+            .read()
+            .get_block_state(to_azalea_pos(pos))
+            .unwrap_or_default()
+            .into(),
+    )
+}
+
+/// `interaction_target`'s own second half, "close that hole": after one scripted
+/// place/break's own settle wait, confirms `pos` actually holds the state the action implies
+/// instead of silently trusting the fire-and-forget `block_interact`/`mine` call --
+/// `restart_persistence.rs`'s own `verify_effect` precedent, restated for this scenario's own
+/// `LoadBotError` shape (that function's own doc comment has the full "why this must fail
+/// loudly" reasoning, identical here).
+fn verify_effect(
+    client: &Client,
+    bot: &str,
+    cycle: u64,
+    action: &'static str,
+    pos: BlockPos,
+    expected: u32,
+) -> Result<(), LoadBotError> {
+    let Some(observed) = read_raw_block_state(client, pos) else {
+        return Err(LoadBotError::NoWorld {
+            bot: bot.to_string(),
+            cycle,
+        });
+    };
+    if observed != expected {
+        return Err(LoadBotError::InteractionRejected {
+            bot: bot.to_string(),
+            cycle,
+            action,
+            pos,
+            expected,
+            observed,
+        });
+    }
+    Ok(())
 }
 
 /// Runs one bot's full behavior loop (Context) against `plan`: connects
@@ -285,16 +408,36 @@ pub async fn run_one_load_bot(
                 )
                 .await;
 
-                // Right-click the block *below* the post -- `Face::Up`'s offset
-                // (`restart_persistence.rs`'s own established precedent) places the
-                // held `minecraft:stone` (M3-B03's own default `HeldItem`) at the
-                // post itself.
-                let below = azalea::BlockPos::new(post.x, post.y - 1, post.z);
-                client.block_interact(below);
+                // Right-click the block below `interaction_target(post)`, never below
+                // `post` itself -- `interaction_target`'s own doc comment has the full
+                // self-placement-obstruction writeup (`Face::Up`'s offset,
+                // `restart_persistence.rs`'s own established precedent, places the held
+                // `minecraft:stone`, M3-B03's own default `HeldItem`, one cell above the
+                // clicked one).
+                let target = interaction_target(post);
+                let target_below = azalea::BlockPos::new(target.x, target.y - 1, target.z);
+                client.block_interact(target_below);
                 client.wait_ticks(ACTION_SETTLE_TICKS).await;
+                verify_effect(
+                    &client,
+                    &plan.username,
+                    outcome.interaction_cycles,
+                    "place",
+                    target,
+                    STONE.0,
+                )?;
 
-                let _ = tokio::time::timeout(STEP_TIMEOUT, client.mine(to_azalea_pos(post))).await;
+                let _ =
+                    tokio::time::timeout(STEP_TIMEOUT, client.mine(to_azalea_pos(target))).await;
                 client.wait_ticks(ACTION_SETTLE_TICKS).await;
+                verify_effect(
+                    &client,
+                    &plan.username,
+                    outcome.interaction_cycles,
+                    "break",
+                    target,
+                    AIR.0,
+                )?;
 
                 outcome.interaction_cycles += 1;
                 ticks_since_interaction = 0;

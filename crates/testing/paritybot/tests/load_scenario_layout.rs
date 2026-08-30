@@ -4,7 +4,8 @@
 //! `rusty-clanker-server`, module doc comment).
 
 use rc_paritybot::load_scenario::{
-    ARENA_MAX, ARENA_MIN, BASE_Y, COLS, ROWS, block_grid_cell, plan_bot_layout,
+    ARENA_MAX, ARENA_MIN, BASE_Y, COLS, INTERACTION_TARGET_OFFSET_EAST, ROWS, block_grid_cell,
+    interaction_target, plan_bot_layout,
 };
 
 fn plans() -> Vec<rc_paritybot::load_scenario::BotPlan> {
@@ -75,6 +76,38 @@ fn start_offset_ticks_are_distinct_and_ascending_by_index() {
     let plans = plans();
     for (index, plan) in plans.iter().enumerate() {
         assert_eq!(plan.start_offset_ticks, index as u32 * 2);
+    }
+}
+
+/// M3 field-report fix (self-placement obstruction) regression: every bot's own
+/// `interaction_target` must land beside its `interaction_post`, never on it -- the exact
+/// cell the bot's own feet occupy once it `goto`s there -- and must stay inside that same
+/// bot's own arena lane (`block_grid_cell`'s own spawn-relative grid cell), so no two bots'
+/// interaction columns can ever obstruct one another.
+#[test]
+fn interaction_target_never_coincides_with_its_own_post_and_stays_in_lane() {
+    let spawn_cell = block_grid_cell(0, 0);
+    for plan in plans() {
+        let post = plan.interaction_post;
+        let target = interaction_target(post);
+
+        assert_ne!(
+            target, post,
+            "{}'s interaction target must not be its own interaction post",
+            plan.username
+        );
+        assert_eq!(
+            target,
+            rc_core::BlockPos::new(post.x + INTERACTION_TARGET_OFFSET_EAST, post.y, post.z),
+            "{}'s interaction target must be exactly INTERACTION_TARGET_OFFSET_EAST east of its post",
+            plan.username
+        );
+        assert_eq!(
+            block_grid_cell(target.x, target.z),
+            spawn_cell,
+            "{}'s interaction target {target:?} left the spawn's own grid cell",
+            plan.username
+        );
     }
 }
 
