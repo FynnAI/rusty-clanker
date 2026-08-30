@@ -26,3 +26,4 @@ Thumbs.db
 # Runtime world saves from local test servers (never commit player data)
 crates/server/world/
 /world/
+crates/testing/paritybot/world/
