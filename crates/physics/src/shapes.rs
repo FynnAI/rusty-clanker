@@ -281,9 +281,9 @@ fn build_tier1_table() -> ShapeTable {
         (2288, flat(piston_head_shape(1, true))),  // piston_head, sticky, facing = Up
         (2291, flat(piston_head_shape(1, false))), // piston_head, normal, facing = Down
         (2292, flat(piston_head_shape(1, false))), // piston_head, sticky, facing = Down
-        (5328, full.clone()),                         // furnace
-        (20763, full.clone()),                        // blast_furnace
-        (20755, full),                                // smoker
+        (5328, full.clone()),                      // furnace
+        (20763, full.clone()),                     // blast_furnace
+        (20755, full),                             // smoker
     ];
 
     // `redstone_wire`'s own *entire* reachable id range (M3 field-report fix: wire's conductor

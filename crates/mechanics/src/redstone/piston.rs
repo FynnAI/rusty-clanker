@@ -172,7 +172,10 @@ fn piston_state_id(sticky: bool, extended: bool, facing: Direction) -> BlockStat
 fn piston_head_id(facing: Direction, sticky: bool) -> BlockStateId {
     const SHORT_FALSE_IDX: u32 = 1;
     BlockStateId(
-        PISTON_HEAD_BASE + piston_facing_index(facing) * 4 + SHORT_FALSE_IDX * 2 + u32::from(sticky),
+        PISTON_HEAD_BASE
+            + piston_facing_index(facing) * 4
+            + SHORT_FALSE_IDX * 2
+            + u32::from(sticky),
     )
 }
 

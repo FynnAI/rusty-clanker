@@ -510,7 +510,12 @@ impl BlockBehavior for WireBehavior {
         // to keep correct.
         let (east_shape, north_shape, south_shape, west_shape) =
             self.compute_connection_shapes(ctx.world, &registry, pos);
-        self.state.lock().unwrap().entry(pos).or_default().connections = WireConnections {
+        self.state
+            .lock()
+            .unwrap()
+            .entry(pos)
+            .or_default()
+            .connections = WireConnections {
             east: east_shape != WireSideShape::None,
             north: north_shape != WireSideShape::None,
             south: south_shape != WireSideShape::None,
@@ -528,8 +533,13 @@ impl BlockBehavior for WireBehavior {
         // would return the state it already holds is, observably, a no-op.
         match ctx.get_block(pos) {
             Some(current) if is_wire_range(current.0) => {
-                let new_id =
-                    new_connections_state_id(current.0, east_shape, north_shape, south_shape, west_shape);
+                let new_id = new_connections_state_id(
+                    current.0,
+                    east_shape,
+                    north_shape,
+                    south_shape,
+                    west_shape,
+                );
                 if new_id == current {
                     None
                 } else {
