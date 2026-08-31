@@ -3,18 +3,21 @@
 use rc_mechanics::direction::Direction;
 use rc_physics::{BlockPhysicsProperties, Vec3, tier1_shape_table};
 
-/// The same six placeholder literals `crates/physics/src/shapes.rs`'s own six new
-/// `tier1_shape_table()` entries key their rows by (Context §D) — kept in sync by hand, exactly
-/// like every other placeholder-literal cross-reference this project's own tier-1 blueprints
-/// already established (Constraints (b)).
+/// The same real `minecraft:piston_head` ids (`type=normal, short=false`)
+/// `crates/physics/src/shapes.rs`'s own twelve `tier1_shape_table()` entries key their rows by
+/// (Context §D, M3 field-report fix Task 3) — kept in sync by hand, exactly like every other
+/// cross-reference this project's own tier-1 blueprints already established (Constraints (b)).
+/// Cited directly off `datagen-output/26.2/generated/reports/blocks.json`, protocol 776; the
+/// shape itself is identical regardless of `type` (`piston.rs`'s own `piston_head_id` doc
+/// comment), so `normal` alone suffices for this file's own shape-only assertions.
 fn piston_head_id_for(facing: Direction) -> u32 {
     match facing {
-        Direction::West => 900_001,
-        Direction::East => 900_002,
-        Direction::North => 900_003,
-        Direction::South => 900_004,
-        Direction::Down => 900_005,
-        Direction::Up => 900_006,
+        Direction::West => 2283,
+        Direction::East => 2275,
+        Direction::North => 2271,
+        Direction::South => 2279,
+        Direction::Down => 2291,
+        Direction::Up => 2287,
     }
 }
 

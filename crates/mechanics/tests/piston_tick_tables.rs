@@ -86,7 +86,13 @@ impl BlockBehavior for EventLoggingWrapper {
     }
 }
 
-const PISTON_HEAD_EAST: BlockStateId = BlockStateId(900_002);
+/// M3 field-report fix (Task 3): the real `minecraft:piston_head` ids for facing=East,
+/// `short=false` (`piston.rs`'s own `piston_head_id` doc comment has the full arithmetic
+/// citation) -- `type` distinguishes a plain piston's own head from a sticky one, so the two
+/// need separate constants now that both are real, distinct ids (unlike the former single
+/// placeholder both shared).
+const PISTON_HEAD_EAST: BlockStateId = BlockStateId(2275); // type=normal
+const STICKY_PISTON_HEAD_EAST: BlockStateId = BlockStateId(2276); // type=sticky
 
 struct Harness {
     world: FakeWorld,
@@ -202,6 +208,17 @@ fn simple_extension() {
             log: Arc::clone(&log),
         }) as Arc<dyn BlockBehavior>,
     );
+    // Own-state writeback (M3 field-report fix, Task 3): the base's own `EXTENDED` flip is now
+    // written *immediately*, at block-event time (`write_base_extended`'s own doc comment) --
+    // `piston_pos`'s own stored id moves to the real facing=East range (2257..=2268) well before
+    // the later scheduled commit's own dispatch (`run_scheduled(2)` below) needs to resolve it
+    // back to this same `piston` instance, mirroring `piston_door_element`'s own established
+    // "own-state writeback moves the id outside the placeholder-only range" precedent.
+    behaviors.register_range(
+        BlockStateId(2257),
+        BlockStateId(2269),
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
 
     let mut h = Harness::new(behaviors);
     h.world.set_block(piston_pos, PISTON_ID);
@@ -218,6 +235,18 @@ fn simple_extension() {
     assert!(piston.should_be_extended(piston_pos));
     h.run_block_events(0);
     assert!(h.scheduled.is_block_tick_pending(piston_pos));
+    // M3 field-report fix (Task 3): the base's own `EXTENDED` id is already written at this
+    // point (real vanilla timing, `write_base_extended`'s own doc comment) -- only the
+    // structural move (piston_head/pushed content, `PistonBehavior::is_extended`'s own
+    // internal-flag semantics, tracked separately from the world's stored id) still awaits the
+    // 2-tick commit below. This immediate write's own fan-out reaches only `piston_pos`'s own 6
+    // direct neighbors (none of which is `watch_pos`, two cells out) -- `log` stays empty here,
+    // unchanged from before this fix.
+    assert_eq!(
+        h.world.get_block(piston_pos),
+        Some(BlockStateId(2258)), // extended=true, facing=east
+        "the base's own EXTENDED id flips immediately, at block-event time"
+    );
     assert!(!piston.is_extended(piston_pos));
     assert!(log.lock().unwrap().is_empty());
 
@@ -254,8 +283,16 @@ fn qc_double_piston() {
 
     let piston1 = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
     piston1.place(p1, Direction::Up, false);
+    // M3 field-report fix (Task 3): `piston2` is deliberately `sticky = true` here (unlike
+    // `piston1`), even though this test cares only about QC-activation independence, not
+    // stickiness -- own-state writeback (`write_base_extended`'s own doc comment) now writes
+    // each piston's own *real* facing=Up id immediately, and `piston`/`sticky_piston` share the
+    // identical `facing=Up` id (2261 vs 2239) only when they differ in this one property, which
+    // is exactly what keeps `piston1`'s and `piston2`'s own registered dispatch ranges below
+    // disjoint (two genuinely separate `PistonBehavior` instances, standing in for two
+    // independent in-region positions, cannot otherwise both claim the identical real id).
     let piston2 = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston2.place(p2, Direction::Up, false);
+    piston2.place(p2, Direction::Up, true);
 
     let mut behaviors = BlockBehaviorRegistry::new();
     behaviors.register_range(
@@ -266,6 +303,16 @@ fn qc_double_piston() {
     behaviors.register_range(
         PISTON2_ID,
         BlockStateId(PISTON2_ID.0 + 1),
+        Arc::clone(&piston2) as Arc<dyn BlockBehavior>,
+    );
+    behaviors.register_range(
+        BlockStateId(2257),
+        BlockStateId(2269),
+        Arc::clone(&piston1) as Arc<dyn BlockBehavior>,
+    );
+    behaviors.register_range(
+        BlockStateId(2235),
+        BlockStateId(2247),
         Arc::clone(&piston2) as Arc<dyn BlockBehavior>,
     );
 
@@ -357,7 +404,7 @@ fn piston_door_element() {
         .set_block(Direction::Down.apply(piston_pos), source_id);
 
     extend_fully(&mut h, &piston, piston_pos, &source);
-    assert_eq!(h.world.get_block(head_pos), Some(PISTON_HEAD_EAST));
+    assert_eq!(h.world.get_block(head_pos), Some(STICKY_PISTON_HEAD_EAST));
 
     // The door: a single stone block directly in front of the now-settled head.
     h.world.set_block(door_pos, STONE);
@@ -456,6 +503,14 @@ fn commit_reads_live_state_and_skips_a_changed_position() {
         BlockStateId(PISTON_ID.0 + 1),
         Arc::clone(&piston) as Arc<dyn BlockBehavior>,
     );
+    // Own-state writeback (M3 field-report fix, Task 3) -- `simple_extension`'s own identical
+    // note: the base's own real id is written immediately, well before `h.run_scheduled(2)`
+    // below needs to resolve it back to this same `piston` instance.
+    behaviors.register_range(
+        BlockStateId(2257),
+        BlockStateId(2269),
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
 
     let mut h = Harness::new(behaviors);
     h.world.set_block(piston_pos, PISTON_ID);
@@ -534,8 +589,26 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
     h.run_block_events(0);
     assert!(h.scheduled.is_block_tick_pending(piston_pos));
 
+    // M3 field-report fix (Task 3): the base's own `EXTENDED` id already flipped immediately,
+    // at block-event time above (`write_base_extended`'s own doc comment) -- its own fan-out
+    // already reached `WATCH_ID` (a *direct* West neighbor of `piston_pos` here, unlike `simple_
+    // extension`'s two-cells-out `watch_pos`), before this test's own "external break"
+    // simulation below ever runs.
+    assert_eq!(
+        h.world.get_block(piston_pos),
+        Some(BlockStateId(2258)), // extended=true, facing=east
+    );
+    let logged_before_break = log.lock().unwrap().len();
+    assert_eq!(
+        logged_before_break, 2,
+        "the immediate base flip already fanned out one on_neighbor_changed/on_shape_update pair"
+    );
+
     // Simulate the base having been broken mid-flight (M3-B03's own mining path, not itself
-    // invoked here -- only its net effect on world state, Acceptance tests' own framing).
+    // invoked here -- only its net effect on world state, Acceptance tests' own framing) --
+    // *after* the immediate base flip above, exactly the ordering Context §G case 1 exists to
+    // detect (something else changed the base between the block event resolving and the
+    // structural commit that was scheduled to follow it).
     h.world.set_block(piston_pos, BROKEN_ID);
 
     // The stage4 dispatcher would itself skip a broken position (it resolves the *current*
@@ -550,7 +623,7 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
     assert_eq!(
         h.world.get_block(piston_pos),
         Some(BROKEN_ID),
-        "nothing written, not even the base"
+        "nothing further written, not even a re-affirmed base -- Context §G case 1's whole-abort"
     );
     assert_eq!(
         h.world.get_block(facing.apply(piston_pos)),
@@ -558,8 +631,10 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
         "no piston_head ever appears"
     );
     assert!(!piston.has_pending_move(piston_pos));
-    assert!(
-        log.lock().unwrap().is_empty(),
-        "zero fan-out for the abandoned move"
+    assert_eq!(
+        log.lock().unwrap().len(),
+        logged_before_break,
+        "the abandoned *structural* move produces zero further fan-out beyond the immediate \
+         base flip's own already-logged pair"
     );
 }

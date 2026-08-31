@@ -20,7 +20,10 @@ use support::{FakeWorld, TestSignalSource};
 
 const PISTON_ID: BlockStateId = BlockStateId(100);
 const SOURCE_ID: BlockStateId = BlockStateId(1);
-const PISTON_HEAD_EAST: BlockStateId = BlockStateId(900_002);
+/// M3 field-report fix (Task 3): the real `minecraft:piston_head` id for `type=normal,
+/// facing=east, short=false` (`piston.rs`'s own `piston_head_id` doc comment has the full
+/// arithmetic citation).
+const PISTON_HEAD_EAST: BlockStateId = BlockStateId(2275);
 const AIR: BlockStateId = BlockStateId(0);
 
 struct EventLoggingWrapper {

@@ -48,7 +48,13 @@ const PISTON_EXTENDED: BlockStateId = BlockStateId(900_101);
 /// `minecraft:piston` entry, protocol 776: `facing=south,extended=true` = state 2259) -- must
 /// classify as `Immovable` exactly like `PISTON_EXTENDED`'s own placeholder above.
 const PISTON_EXTENDED_REAL: BlockStateId = BlockStateId(2259);
-const PISTON_HEAD: BlockStateId = BlockStateId(900_001);
+/// M3 field-report fix (Task 3): the real `minecraft:piston_head` id (`type=normal,
+/// facing=east, short=false`, cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, protocol 776) that closed `piston.rs`'s
+/// own former `PISTON_HEAD_IDS` placeholder table -- any id in `classify`'s own now-real
+/// `PISTON_HEAD_RANGE` classifies identically, this one is chosen only to match
+/// `piston_head_id`'s own real writes for facing=East.
+const PISTON_HEAD: BlockStateId = BlockStateId(2275);
 const CHEST: BlockStateId = BlockStateId(3988);
 const FURNACE: BlockStateId = BlockStateId(5328);
 const HOPPER: BlockStateId = BlockStateId(11313);
