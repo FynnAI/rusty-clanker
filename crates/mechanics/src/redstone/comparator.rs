@@ -337,7 +337,21 @@ impl BlockBehavior for ComparatorBehavior {
     /// `checkTickOnNeighbor` (Context §G): overridden to compare against the *stored analog
     /// value* in addition to the boolean -- otherwise the same shared `DiodeBlock`-base
     /// priority-selection logic as repeater's own override.
+    ///
+    /// M3 field-report fix (regression correction): support-loss destruction lives here now,
+    /// direction-agnostically, relocated from `on_placed` (WRONG HOOK -- vanilla never
+    /// self-validates a command-placed block; a `/setblock`'d comparator with no floor support
+    /// survives until some neighbor changes, confirmed against a real oracle diff:
+    /// `comparator_2tick_fixed_delay`'s own isolated floor-less comparator stays alive in the
+    /// oracle trace while the old `on_placed` check destroyed it at tick 0). Every one of the
+    /// six `on_neighbor_changed` trigger directions re-checks support, which always looks
+    /// straight down regardless of `_from` -- mirrors `RepeaterBehavior::on_neighbor_changed`'s
+    /// identical relocated check and `WireBehavior::should_pop`'s original shape.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
+            ctx.set_block(pos, AIR_ID);
+            return;
+        }
         self.seed_powered_from_world(ctx.world, pos);
         let registry = Arc::clone(self.registry());
         let facing = self.facing(pos);
@@ -392,6 +406,13 @@ impl BlockBehavior for ComparatorBehavior {
     /// own freshly-written `BlockStateId` at `pos` (a real `/setblock`-shaped placement, never
     /// this behavior's own internal writeback) calls `on_placed` instead of a losing, ordering-
     /// sensitive direct `place()` call of its own.
+    ///
+    /// M3 field-report fix (regression correction): no longer checks floor support -- vanilla
+    /// never self-validates a command-placed block (`on_neighbor_changed`'s own doc comment has
+    /// the full citation, including why `comparator_tie_no_turn_on`'s own comparator is instead
+    /// destroyed by its *neighbors'* own subsequent placements, each firing this comparator's
+    /// `on_neighbor_changed`); a comparator `/setblock`'d with no floor support simply survives
+    /// until some neighbor changes.
     fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
         let Some(current) = ctx.get_block(pos) else {
             return;
@@ -399,20 +420,6 @@ impl BlockBehavior for ComparatorBehavior {
         let rel = current.0.wrapping_sub(COMPARATOR_BASE);
         if rel >= 16 {
             return; // not a real comparator id -- defensive only, dispatch never reaches here otherwise
-        }
-        // M3 field-report fix (Task 3): `DiodeBlock` requires a real conductor directly beneath
-        // it, checked immediately at placement time -- mirrors `WireBehavior::should_pop`'s own
-        // identical `Down`-direction check, but run here (unconditionally, every placement)
-        // rather than only reactively off a later `Down`-direction shape update, since nothing
-        // in this fixture's own geometry ever places anything at the floor position to trigger
-        // a reactive check at all (confirmed empirically: `redstone/comparator/comparator_tie_
-        // no_turn_on`'s own comparator has no floor anywhere in its own `blocks:`/`actions:`
-        // list, ever, and the real oracle shows it destroyed from tick 0, `docs/findings-for-
-        // planning.md`). `is_conductor` on an absent/unloaded floor position already answers
-        // `false` (its own doc comment), so this needs no extra `world.get_block` guard.
-        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
-            ctx.world.set_block(pos, AIR_ID);
-            return;
         }
         let facing = signal::diode_facing_from_index(rel / 4);
         let mode = if (rel % 4) / 2 == 0 {

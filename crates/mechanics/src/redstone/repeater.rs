@@ -323,7 +323,22 @@ impl BlockBehavior for RepeaterBehavior {
     /// own doc comment) -- vanilla's `RepeaterBlock` overrides `neighborChanged` beyond
     /// `DiodeBlock`'s base specifically to recompute+write `LOCKED` on every call, independent
     /// of (and not gated by) whether a `POWERED`-toggle tick also gets scheduled below.
+    ///
+    /// M3 field-report fix (regression correction): support-loss destruction lives here now,
+    /// direction-agnostically, relocated from `on_placed` (WRONG HOOK -- vanilla never
+    /// self-validates a command-placed block; a `/setblock`'d repeater with no floor support
+    /// survives until some neighbor changes, confirmed against a real oracle diff:
+    /// `comparator_2tick_fixed_delay`'s own isolated floor-less comparator stays alive in the
+    /// oracle trace while the old `on_placed` check destroyed it at tick 0). Every one of the
+    /// six `on_neighbor_changed` trigger directions re-checks support, which always looks
+    /// straight down regardless of `_from` -- mirrors `WireBehavior::should_pop`'s identical
+    /// check, but reachable from any neighbor-changed trigger rather than only a `Down`-
+    /// direction shape update.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
+            ctx.set_block(pos, AIR_ID);
+            return;
+        }
         self.seed_powered_from_world(ctx.world, pos);
         let locked = self.is_locked(ctx.world, pos);
         if !locked {
@@ -377,6 +392,11 @@ impl BlockBehavior for RepeaterBehavior {
     /// internal writeback, which goes through the raw world accessor and never reaches this
     /// hook) calls `on_placed` instead of a losing, ordering-sensitive direct `place()` call of
     /// its own.
+    ///
+    /// M3 field-report fix (regression correction): no longer checks floor support -- vanilla
+    /// never self-validates a command-placed block (`on_neighbor_changed`'s own doc comment has
+    /// the full citation); a repeater `/setblock`'d with no floor support simply survives until
+    /// some neighbor changes.
     fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
         let Some(current) = ctx.get_block(pos) else {
             return;
@@ -384,13 +404,6 @@ impl BlockBehavior for RepeaterBehavior {
         let rel = current.0.wrapping_sub(REPEATER_BASE);
         if rel >= 64 {
             return; // not a real repeater id -- defensive only, dispatch never reaches here otherwise
-        }
-        // M3 field-report fix (Task 3): `DiodeBlock` requires a real conductor directly beneath
-        // it, checked immediately at placement time -- mirrors `ComparatorBehavior::on_placed`'s
-        // own identical fix/doc comment (same shared base class, same requirement).
-        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
-            ctx.world.set_block(pos, AIR_ID);
-            return;
         }
         let delay_setting = (rel / 16) as u8 + 1;
         let facing = signal::diode_facing_from_index((rel % 16) / 4);
