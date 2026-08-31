@@ -34,19 +34,19 @@ fn empty_spec() -> ContraptionSpec {
 fn replay_contraption_never_produces_a_nonempty_outbound() {
     let path = corpus_dir().join("torch_inverter_basic.ron");
     let spec = load_spec(&path).expect("load torch_inverter_basic.ron");
-    let registry = tier1_registry(&spec);
+    let (registry, container_signals) = tier1_registry(&spec);
 
     // A single always_local region can never route a message cross-region
     // (Deliverables, `replay_contraption`'s own doc comment) — `replay_contraption`
     // asserts this internally; this test's job is proving that assertion is never
     // tripped for a legitimate single-region contraption. Reaching this line at all
     // is the assertion.
-    let _trace = replay_contraption(&spec, &registry, None);
+    let _trace = replay_contraption(&spec, &registry, &container_signals, None);
 }
 
 #[test]
 fn tier1_registry_resolves_unregistered_ids_to_the_shared_noop_default() {
-    let registry = tier1_registry(&empty_spec());
+    let (registry, _container_signals) = tier1_registry(&empty_spec());
 
     // Governance fix (M3 field-report): `tier1_registry` now wires the real M3-B04/M3-B05
     // tier-1 registrations (`tier1_registry`'s own doc comment has the full citation), so this
@@ -64,7 +64,7 @@ fn tier1_registry_resolves_unregistered_ids_to_the_shared_noop_default() {
 
 #[test]
 fn tier1_registry_resolves_registered_redstone_ids_to_real_behaviors() {
-    let registry = tier1_registry(&empty_spec());
+    let (registry, _container_signals) = tier1_registry(&empty_spec());
     let noop = registry.resolve(BlockStateId(0));
 
     // One representative id per registered range (the same literals
@@ -127,8 +127,8 @@ fn snapshot_volume_covers_the_full_bounding_box_in_canonical_order() {
         actions: vec![],
     };
 
-    let registry = tier1_registry(&spec);
-    let trace = replay_contraption(&spec, &registry, None);
+    let (registry, container_signals) = tier1_registry(&spec);
+    let trace = replay_contraption(&spec, &registry, &container_signals, None);
     let tick0 = &trace.ticks[0];
 
     // (y, z, x) ascending, y fixed at 0 for this spec: z outer, x inner.

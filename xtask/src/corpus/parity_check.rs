@@ -179,8 +179,8 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
             }
         };
 
-        let registry = tier1_registry(&spec);
-        let actual = replay_contraption(&spec, &registry, None);
+        let (registry, container_signals) = tier1_registry(&spec);
+        let actual = replay_contraption(&spec, &registry, &container_signals, None);
 
         match diff_traces(&expected, &actual) {
             Ok(report) if report.mismatches.is_empty() => {

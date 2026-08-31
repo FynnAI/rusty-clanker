@@ -12,7 +12,10 @@ use rc_gametest::spec::{Category, ContraptionSpec, PlacedBlock};
 use rc_gametest::trace::{
     BlockObservation, DiffError, RedstoneTrace, TRACE_FORMAT_VERSION, TickSnapshot, diff_traces,
 };
-use rc_mechanics::{BlockBehavior, BlockBehaviorRegistry, Direction, TickPriority, UpdateContext};
+use rc_mechanics::{
+    BlockBehavior, BlockBehaviorRegistry, Direction, TickPriority, Tier1ContainerSignalSource,
+    UpdateContext,
+};
 
 fn sample_trace() -> RedstoneTrace {
     RedstoneTrace {
@@ -273,7 +276,8 @@ fn perturbed_engine_state_diffs_from_hand_computed_reference() {
             flip_to: TARGET_WRONG,
         }),
     );
-    let wrong_actual = replay_contraption(&spec, &wrong_registry, None);
+    let container_signals = Tier1ContainerSignalSource::new();
+    let wrong_actual = replay_contraption(&spec, &wrong_registry, &container_signals, None);
     let wrong_diff = diff_traces(&reference, &wrong_actual)
         .expect("both traces share the same spec — structurally comparable");
     assert!(
@@ -295,7 +299,8 @@ fn perturbed_engine_state_diffs_from_hand_computed_reference() {
         BlockStateId(TARGET_A),
         Arc::new(FlipOnScheduledTick { flip_to: TARGET_B }),
     );
-    let correct_actual = replay_contraption(&spec, &correct_registry, None);
+    let container_signals = Tier1ContainerSignalSource::new();
+    let correct_actual = replay_contraption(&spec, &correct_registry, &container_signals, None);
     let correct_diff = diff_traces(&reference, &correct_actual)
         .expect("both traces share the same spec — structurally comparable");
     assert!(

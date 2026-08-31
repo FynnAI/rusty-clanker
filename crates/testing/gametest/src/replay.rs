@@ -17,20 +17,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rc_chunk_storage::BlockStateId;
+use rc_chunk_storage::{BlockStateId, ItemStackRecord};
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::direction::Direction;
-use rc_mechanics::redstone::comparator::NoContainers;
 use rc_mechanics::redstone::piston::PistonBehavior;
 use rc_mechanics::redstone::{
-    ComparatorBehavior, ComparatorMode, RedstoneSignalSource, RepeaterBehavior,
-    SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior, register_redstone_block,
+    ComparatorBehavior, ComparatorMode, ContainerSignalSource, RedstoneSignalSource,
+    RepeaterBehavior, SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
+    register_redstone_block,
 };
-use rc_mechanics::stage4;
 use rc_mechanics::{
-    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo,
-    NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehavior, BlockBehaviorRegistry, BlockEntityKind, BlockEntityWorldAccess, BlockEventQueue,
+    BlockWorldAccess, BorderHalo, ChestBlockEntity, DefaultMaxStackSize, FuelTable,
+    FurnaceBlockEntity, FurnaceLitStateResolver, HopperBlockEntity, NeighborUpdateEngine,
+    PendingUpdate, RegionOwnership, ScheduledTickQueue, SmeltingRecipeTable,
+    Tier1ContainerSignalSource, TierOneContainer, UpdateContext,
 };
+use rc_mechanics::{stage4, stage7};
 use rc_messaging::{Address, RegionId, RegionMessage};
 
 use crate::spec::{ContraptionSpec, bounding_box};
@@ -78,6 +81,117 @@ impl BlockWorldAccess for ReplayWorld {
     }
 }
 
+/// A `HashMap`-backed `BlockEntityWorldAccess` scoped to one contraption replay (M3 fix-agent
+/// brief, "bring the three container fixtures into the replay") — mirrors `ReplayWorld`'s own
+/// "production replay world, not merely a test fixture" role, reusing `crates/mechanics/tests/
+/// container_signal_source_wiring.rs`'s own `FakeContainerWorld` test-double shape as this
+/// crate's own driver behind the tick loop rather than a test double. No furnace ever appears in
+/// this corpus's own committed fixtures — `get_furnace_mut` always answers `None`, matching a
+/// `world` with zero furnace block entities, never a special-cased gap.
+///
+/// `load_order` tracks each entity's own first-seeded position explicitly (a plain `Vec`, never
+/// `HashMap` key iteration, which this project's own determinism requirements forbid relying on)
+/// — `block_entities_in_chunk`'s one ordering guarantee that is itself vanilla-observable
+/// (`BlockEntityIndex`'s own stored load order, `block_entity/mod.rs`'s own doc comment).
+struct ReplayBlockEntityWorld {
+    chests: HashMap<BlockPos, ChestBlockEntity>,
+    hoppers: HashMap<BlockPos, HopperBlockEntity>,
+    load_order: Vec<(BlockPos, BlockEntityKind)>,
+    dimension: DimensionId,
+}
+
+impl ReplayBlockEntityWorld {
+    fn new(dimension: DimensionId) -> Self {
+        Self {
+            chests: HashMap::new(),
+            hoppers: HashMap::new(),
+            load_order: Vec::new(),
+            dimension,
+        }
+    }
+
+    fn chunk_of(&self, pos: BlockPos) -> ChunkKey {
+        pos.chunk_key(self.dimension)
+    }
+
+    /// Records `pos`'s own first appearance only — a later re-seed at an already-tracked
+    /// position (a fixture that re-`/setblock`s the same chest/hopper via `actions:`) updates
+    /// the stored entity's own content without moving its place in `load_order`, mirroring real
+    /// vanilla's own "block entity stays at its original chunk-index slot across a data merge."
+    fn note_load_order(&mut self, pos: BlockPos, kind: BlockEntityKind) {
+        if !self.load_order.iter().any(|&(p, _)| p == pos) {
+            self.load_order.push((pos, kind));
+        }
+    }
+
+    fn insert_chest(&mut self, pos: BlockPos, chest: ChestBlockEntity) {
+        self.note_load_order(pos, BlockEntityKind::Chest);
+        self.chests.insert(pos, chest);
+    }
+
+    fn insert_hopper(&mut self, pos: BlockPos, hopper: HopperBlockEntity) {
+        self.note_load_order(pos, BlockEntityKind::Hopper);
+        self.hoppers.insert(pos, hopper);
+    }
+}
+
+impl BlockEntityWorldAccess for ReplayBlockEntityWorld {
+    fn region_chunks(&self) -> Vec<ChunkKey> {
+        let mut keys: Vec<ChunkKey> = self
+            .load_order
+            .iter()
+            .map(|&(pos, _)| self.chunk_of(pos))
+            .collect();
+        keys.sort_unstable_by_key(|k| (k.x, k.z));
+        keys.dedup();
+        keys
+    }
+
+    fn block_entities_in_chunk(&self, chunk: ChunkKey) -> Vec<(BlockPos, BlockEntityKind)> {
+        self.load_order
+            .iter()
+            .copied()
+            .filter(|&(pos, _)| self.chunk_of(pos) == chunk)
+            .collect()
+    }
+
+    fn container_at_mut(&mut self, pos: BlockPos) -> Option<&mut dyn TierOneContainer> {
+        if let Some(h) = self.hoppers.get_mut(&pos) {
+            return Some(h);
+        }
+        if let Some(c) = self.chests.get_mut(&pos) {
+            return Some(c);
+        }
+        None
+    }
+
+    fn get_hopper_mut(&mut self, pos: BlockPos) -> Option<&mut HopperBlockEntity> {
+        self.hoppers.get_mut(&pos)
+    }
+    fn get_furnace_mut(&mut self, _pos: BlockPos) -> Option<&mut FurnaceBlockEntity> {
+        None
+    }
+    fn get_chest_mut(&mut self, pos: BlockPos) -> Option<&mut ChestBlockEntity> {
+        self.chests.get_mut(&pos)
+    }
+    /// Not implemented by the real production adapter either (`stage7::ecs::EcsBlockEntityWorld`'s
+    /// own identical, already-documented gap: "no comparator/wire/redstone-signal-strength query
+    /// exists ... outside Stage 4's own internal state") — mirrored here for the same reason,
+    /// never a replay-only shortcut.
+    fn is_locked_by_redstone(&self, _pos: BlockPos) -> bool {
+        false
+    }
+    /// A no-op, exactly as the production adapter's own identical method — this corpus never
+    /// places a furnace, so no lit-state swap is ever needed.
+    fn swap_furnace_lit_state(
+        &mut self,
+        _pos: BlockPos,
+        _now_lit: bool,
+        _resolver: Option<&dyn FurnaceLitStateResolver>,
+    ) {
+    }
+}
+
 /// Drives `spec` through Rusty Clanker's own Stage-4 core for exactly
 /// `spec.max_ticks` ticks, against a single-region `RegionOwnership::always_local`
 /// (this contraption never spans a region), producing a `RedstoneTrace` in exactly
@@ -85,6 +199,7 @@ impl BlockWorldAccess for ReplayWorld {
 pub fn replay_contraption(
     spec: &ContraptionSpec,
     behaviors: &BlockBehaviorRegistry,
+    container_signals: &Tier1ContainerSignalSource,
     analog_reader: Option<&dyn Fn(BlockPos) -> Option<u8>>,
 ) -> RedstoneTrace {
     let mut world = ReplayWorld::new(DimensionId::OVERWORLD);
@@ -99,6 +214,16 @@ pub fn replay_contraption(
     // step is a hard bug, since a single, `always_local`-owned region can never
     // route a message cross-region, Deliverables doc comment).
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+
+    // M3 fix-agent brief ("bring the three container fixtures into the replay"): the Stage-7
+    // block-entity world this replay now drives alongside Stage 4, plus the minimal fixed tables
+    // `run_block_entity_tick` requires (`DefaultMaxStackSize`/`SmeltingRecipeTable::minimal_
+    // tier1`/`FuelTable::minimal_tier1` — the identical minimal tables `container_signal_source_
+    // wiring.rs`'s own acceptance suite already uses, M3-B06's established harness pattern).
+    let mut block_entities = ReplayBlockEntityWorld::new(DimensionId::OVERWORLD);
+    let recipes = SmeltingRecipeTable::minimal_tier1();
+    let fuels = FuelTable::minimal_tier1();
+    let max_stack = DefaultMaxStackSize;
 
     let (bounds_min, bounds_max) = bounding_box(spec);
 
@@ -119,6 +244,7 @@ pub fn replay_contraption(
             pos,
             state,
         );
+        seed_container_if_present(&mut block_entities, pos, state, &block.vanilla_state);
     }
 
     let mut ticks = Vec::with_capacity(spec.max_ticks as usize + 1);
@@ -143,6 +269,7 @@ pub fn replay_contraption(
                 pos,
                 state,
             );
+            seed_container_if_present(&mut block_entities, pos, state, &action.vanilla_state);
         }
 
         stage4::run_scheduled_phase(
@@ -166,6 +293,21 @@ pub fn replay_contraption(
             behaviors,
             &mut outbound,
             t,
+        );
+
+        // Stage 7 (M3-B06): block-entity ticking, strictly *after* Stage 4 within this same
+        // tick — `DISPATCH_ORDER` (`crates/scheduler/src/executor.rs`) fixes `BlockRedstone`
+        // (Stage 4) ahead of `BlockEntity` (Stage 7) precisely so scheduled-tick/block-event
+        // redstone dispatch never misses that same tick's own block-entity state; this replay's
+        // hand-driven tick loop reproduces that ordering by calling Stage 7 here, immediately
+        // after both Stage-4 sub-phases above.
+        stage7::run_block_entity_tick(
+            &mut block_entities,
+            &recipes,
+            &fuels,
+            &max_stack,
+            None,
+            container_signals,
         );
 
         ticks.push(TickSnapshot {
@@ -251,6 +393,14 @@ const REPEATER_RANGE: (u32, u32) = (7034, 7097); // facing x delay x locked x po
 const COMPARATOR_RANGE: (u32, u32) = (11263, 11278); // facing x mode x powered
 const PISTON_RANGE: (u32, u32) = (2257, 2268); // extended x facing
 const STICKY_PISTON_RANGE: (u32, u32) = (2235, 2246); // extended x facing
+/// `minecraft:chest`'s full reachable range (`type` x `facing` x `waterlogged`) — M3 fix-agent
+/// brief: not a redstone tier-1 component at all (no `BlockBehavior`/`RedstoneSignalSource`
+/// registration below), used only to recognize a chest placement for Stage-7 block-entity
+/// seeding (`seed_container_if_present`).
+const CHEST_RANGE: (u32, u32) = (3987, 4010);
+/// `minecraft:hopper`'s full reachable range (`enabled` x `facing`) — same "seeding trigger
+/// only, never a redstone registration" status as `CHEST_RANGE` above.
+const HOPPER_RANGE: (u32, u32) = (11313, 11322);
 
 fn in_range(id: u32, range: (u32, u32)) -> bool {
     id >= range.0 && id <= range.1
@@ -288,6 +438,173 @@ fn facing_property(vanilla_state: &str) -> Direction {
     }
 }
 
+/// One entry from a fixture's own inline `Items:[...]` block-entity NBT list (M3 fix-agent
+/// brief, step 2: "Container contents") — the exact minimal subset this corpus's own committed
+/// fixtures use: `Slot: Byte`, `id: String`, `Count: Byte`. Nothing else.
+struct SeedItem {
+    slot: u8,
+    id: String,
+    count: i32,
+}
+
+/// Seeds a fresh chest/hopper block entity at `pos` from `vanilla_state`'s own trailing `{...}`
+/// block-entity NBT (M3 fix-agent brief, step 2) the instant `place_and_settle` places a
+/// chest/hopper-ranged state — mirrors real placement, where a single `/setblock ...
+/// {Items:[...]}}` command creates the block entity with that exact content already loaded. A
+/// no-op for every other state id (every non-container block this corpus's own fixtures place).
+fn seed_container_if_present(
+    block_entities: &mut ReplayBlockEntityWorld,
+    pos: BlockPos,
+    state: BlockStateId,
+    vanilla_state: &str,
+) {
+    if in_range(state.0, CHEST_RANGE) {
+        let mut chest = ChestBlockEntity::empty();
+        for item in seed_items(vanilla_state) {
+            place_seed_item(&mut chest.slots, item, vanilla_state);
+        }
+        block_entities.insert_chest(pos, chest);
+    } else if in_range(state.0, HOPPER_RANGE) {
+        let facing = facing_property(vanilla_state);
+        let mut hopper = HopperBlockEntity::empty(facing);
+        for item in seed_items(vanilla_state) {
+            place_seed_item(&mut hopper.slots, item, vanilla_state);
+        }
+        block_entities.insert_hopper(pos, hopper);
+    }
+}
+
+fn place_seed_item(slots: &mut [Option<ItemStackRecord>], item: SeedItem, vanilla_state: &str) {
+    let slot = item.slot as usize;
+    assert!(
+        slot < slots.len(),
+        "seed_container_if_present: Slot {slot} out of range (container has {} slots) in {vanilla_state:?}",
+        slots.len()
+    );
+    slots[slot] = Some(ItemStackRecord {
+        id: item.id,
+        count: item.count,
+        components: None,
+    });
+}
+
+/// Parses `vanilla_state`'s own trailing block-entity NBT compound (the `{...}` suffix after any
+/// `[...]` blockstate-property bracket — legal `/setblock` grammar, `spec.rs`'s own doc comment)
+/// into the `Items` list it carries, or an empty `Vec` if `vanilla_state` carries no `{...}`
+/// suffix at all (an empty container — every non-hopper/chest fixture block, and any hopper/
+/// chest this corpus ever places with nothing inside). Reject-loudly (`panic!`) on anything
+/// outside the exact minimal subset this corpus's own committed fixtures actually use — a bare
+/// `{Items:[{Slot:<n>b,id:"<id>",Count:<n>b}, ...]}` compound, nothing else (no `CustomName`/
+/// `Lock`/`TransferCooldown`/item `components` tags) — never silently ignored (M3 fix-agent
+/// brief, step 2's own explicit instruction).
+fn seed_items(vanilla_state: &str) -> Vec<SeedItem> {
+    let Some(brace_start) = vanilla_state.find('{') else {
+        return Vec::new();
+    };
+    let nbt = &vanilla_state[brace_start..];
+    assert!(
+        nbt.starts_with('{') && nbt.ends_with('}'),
+        "seed_items: malformed block-entity NBT suffix in {vanilla_state:?}"
+    );
+    let inner = &nbt[1..nbt.len() - 1];
+    let list_inner = inner
+        .strip_prefix("Items:[")
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or_else(|| {
+            panic!(
+                "seed_items: only a bare `Items:[...]` block-entity NBT compound is supported, \
+                 got {inner:?} (vanilla_state {vanilla_state:?})"
+            )
+        });
+    if list_inner.trim().is_empty() {
+        return Vec::new();
+    }
+    split_top_level_compounds(list_inner)
+        .into_iter()
+        .map(|entry| parse_item_entry(entry, vanilla_state))
+        .collect()
+}
+
+/// Splits `s` into its top-level `{...}` entries (depth-tracked — none of `Slot`/`id`/`Count`'s
+/// own values ever nest a compound in this corpus's own committed subset, but the split is
+/// depth-aware regardless rather than a naive comma-split, so a malformed/unsupported nested
+/// value is at least captured whole for `parse_item_entry`'s own field-by-field rejection to
+/// report clearly instead of being silently mis-split).
+fn split_top_level_compounds(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = None;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(&s[start.expect("split_top_level_compounds: unbalanced braces")..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn parse_item_entry(entry: &str, vanilla_state: &str) -> SeedItem {
+    let inner = entry
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or_else(|| {
+            panic!("seed_items: malformed item entry {entry:?} in {vanilla_state:?}")
+        });
+    let mut slot = None;
+    let mut id = None;
+    let mut count = None;
+    for field in inner.split(',') {
+        let (key, value) = field.split_once(':').unwrap_or_else(|| {
+            panic!("seed_items: malformed item field {field:?} in {vanilla_state:?}")
+        });
+        match key {
+            "Slot" => slot = Some(parse_nbt_byte(value, vanilla_state)),
+            "id" => id = Some(parse_nbt_quoted_string(value, vanilla_state)),
+            "Count" => count = Some(parse_nbt_byte(value, vanilla_state) as i32),
+            other => panic!(
+                "seed_items: unsupported item NBT key {other:?} in {entry:?} (vanilla_state \
+                 {vanilla_state:?}) — only Slot/id/Count are supported"
+            ),
+        }
+    }
+    SeedItem {
+        slot: slot.unwrap_or_else(|| panic!("seed_items: item entry missing Slot in {entry:?}")),
+        id: id.unwrap_or_else(|| panic!("seed_items: item entry missing id in {entry:?}")),
+        count: count.unwrap_or_else(|| panic!("seed_items: item entry missing Count in {entry:?}")),
+    }
+}
+
+fn parse_nbt_byte(value: &str, vanilla_state: &str) -> u8 {
+    value
+        .strip_suffix(['b', 'B'])
+        .unwrap_or(value)
+        .parse()
+        .unwrap_or_else(|err| {
+            panic!("seed_items: not a byte: {value:?} in {vanilla_state:?}: {err}")
+        })
+}
+
+fn parse_nbt_quoted_string(value: &str, vanilla_state: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or_else(|| {
+            panic!("seed_items: expected a quoted string, got {value:?} in {vanilla_state:?}")
+        })
+        .to_string()
+}
+
 /// Governance fix (M3 field-report): wires the same production composition — M3-B04's four
 /// tier-1 components (wire, torch-floor, torch-wall, repeater, comparator) followed by M3-B05's
 /// piston, piston strictly after the four components have fully populated `SignalSourceRegistry`
@@ -317,9 +634,20 @@ fn facing_property(vanilla_state: &str) -> Direction {
 /// driver deliberately never special-cases, so those three fixtures keep showing a real
 /// mismatch from their own re-placement tick onward (an accepted, reported gap, not a bug in
 /// this wiring — do not "fix" it here).
-pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
+///
+/// Also constructs the region's own `Tier1ContainerSignalSource` (M3 fix-agent brief, "bring
+/// the three container fixtures into the replay") and wires it into the comparator exactly as
+/// the real composition root would (`ComparatorBehavior::new`'s own read side) — returned
+/// alongside the registry so the caller can hand the identical `Arc` to `replay_contraption`,
+/// whose own Stage-7 pass is this same instance's write side (`Tier1ContainerSignalSource`'s own
+/// doc comment: "two independent `Arc` clones... shared with both `ComparatorBehavior::new`...
+/// and Stage 7's own driver").
+pub fn tier1_registry(
+    spec: &ContraptionSpec,
+) -> (BlockBehaviorRegistry, Arc<Tier1ContainerSignalSource>) {
     let mut behaviors = BlockBehaviorRegistry::new();
     let mut signals = SignalSourceRegistry::new();
+    let container_signals = Arc::new(Tier1ContainerSignalSource::new());
 
     // `minecraft:redstone_block` (M3 field-report fix, Task 1): a stateless always-on source,
     // no `BlockBehavior`/registry-self-reference concerns (`register_redstone_block`'s own doc
@@ -381,11 +709,12 @@ pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
         Arc::clone(&repeater) as Arc<dyn RedstoneSignalSource>,
     );
 
-    // `NoContainers` (Context §B's own fallback): the replay world has no block-entity
-    // storage and never ticks Stage-7 (`comparator_container_fullness_chest.ron`'s own doc
-    // comment — "the replay side has no block-entity storage at M3-B07"), so the real
-    // `Tier1ContainerSignalSource` has nothing to read here yet.
-    let comparator = ComparatorBehavior::new(Arc::new(NoContainers));
+    // M3 fix-agent brief ("bring the three container fixtures into the replay"): the real
+    // `Tier1ContainerSignalSource` this same function returns, replacing the former
+    // `Arc::new(NoContainers)` placeholder now that `replay_contraption`'s own Stage-7 pass
+    // (module doc comment) actually populates it every tick.
+    let comparator =
+        ComparatorBehavior::new(Arc::clone(&container_signals) as Arc<dyn ContainerSignalSource>);
     for block in &spec.blocks {
         if in_range(block.state_id, COMPARATOR_RANGE) {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
@@ -434,7 +763,7 @@ pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
     let (lo, hi) = exclusive(STICKY_PISTON_RANGE);
     behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
 
-    behaviors
+    (behaviors, container_signals)
 }
 
 /// Immediate-settle: writes `new_state` at `pos` (fanning out both signals, per
