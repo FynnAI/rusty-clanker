@@ -384,7 +384,7 @@ fn block_event_subphase_runs_after_scheduled_phase_within_the_same_stage4_pass()
     assert_eq!(*log.lock().unwrap(), vec![(pos, 7)]);
 }
 
-// --- Test 5: block_event_emitted_during_subphase_is_deferred_to_next_call ---------------
+// --- Test 5: block_event_emitted_during_subphase_fires_within_the_same_call -------------
 
 struct ReemittingBehavior {
     log: Arc<Mutex<Vec<u8>>>,
@@ -399,8 +399,17 @@ impl BlockBehavior for ReemittingBehavior {
     }
 }
 
+/// MECH-D9 (corrected): an event `emit_block_event`-ed directly from inside another event's own
+/// `on_block_event` handler is picked up by that *same* `run_block_event_subphase` call's own
+/// re-entrant drain loop -- same tick, same pass. Replaces this file's own former (identically
+/// named up to `_is_deferred_to_next_call`) test, which asserted the opposite: that event 2
+/// would sit unprocessed (`log == vec![1]`) until a *second* top-level call. That assertion
+/// encoded M3's own since-disproven double-buffered design -- `05-game-mechanics.md`'s MECH-D9
+/// row (the reference-audited spec) states vanilla's real `ServerLevel.runBlockEvents()` fires
+/// such a same-pass re-queue in the very call that produced it, which this test now asserts
+/// directly (see this changeset's own commit body for the full justification).
 #[test]
-fn block_event_emitted_during_subphase_is_deferred_to_next_call() {
+fn block_event_emitted_during_subphase_fires_within_the_same_call() {
     let pos = BlockPos::new(0, 0, 0);
     let mut world = FakeWorld::new();
     world.set_block(pos, BlockStateId(1));
@@ -433,7 +442,96 @@ fn block_event_emitted_during_subphase_is_deferred_to_next_call() {
         &mut outbound,
         0,
     );
-    assert_eq!(*log.lock().unwrap(), vec![1]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![1, 2],
+        "event 2, re-emitted from inside event 1's own handler, must fire in this SAME call"
+    );
+    assert_eq!(events.pending(), 0);
+}
+
+// --- Test 6: two_adjacent_positions_cascade_within_the_same_block_event_pass ------------
+
+/// Stands in for one piston's own commit-then-notify-the-neighbor-piston cascade (Context:
+/// "one piston's state change causing a neighbor piston's checkIfExtend to queue its own
+/// event") without needing `redstone::piston::PistonBehavior`'s own real machinery -- a real
+/// two-`PistonBehavior` setup can never actually exercise a same-*block-event-pass* cascade at
+/// M3's own scope, because `PistonBehavior::on_block_event` only resolves and *schedules* a
+/// commit (`COMMIT_DELAY_TICKS` ticks later); the write that would fan out to a neighbor always
+/// happens later, from `on_scheduled_tick`, never synchronously from inside `on_block_event`
+/// itself. This minimal equivalent performs that real write (`ctx.set_block`) directly from
+/// `on_block_event`, which is exactly what MECH-D9's own re-entrancy guarantee has to hold for
+/// regardless of which concrete behavior triggers it.
+struct WriteOwnStateOnEventBehavior {
+    log: Arc<Mutex<Vec<(&'static str, u8)>>>,
+    written_state: BlockStateId,
+}
+
+impl BlockBehavior for WriteOwnStateOnEventBehavior {
+    fn on_block_event(&self, ctx: &mut UpdateContext, pos: BlockPos, event: &BlockEvent) {
+        self.log.lock().unwrap().push(("piston1", event.event_id));
+        // The real write a piston's own commit performs -- fans out neighbor-changed/
+        // shape-update to every side, synchronously, from inside this very on_block_event call
+        // (a no-op write still fans out, `UpdateContext::set_block`'s own documented contract).
+        ctx.set_block(pos, self.written_state);
+    }
+}
+
+/// The adjacent "piston2": reacts to the neighbor-changed fan-out `WriteOwnStateOnEventBehavior`
+/// above just produced by queuing its own event -- exactly `PistonBehavior::on_neighbor_changed`'s
+/// own real reaction (`ctx.emit_block_event`) when its cached activation target flips.
+struct EmitOnNeighborChangedBehavior {
+    log: Arc<Mutex<Vec<(&'static str, u8)>>>,
+    emitted_event_id: u8,
+}
+
+impl BlockBehavior for EmitOnNeighborChangedBehavior {
+    fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        let Some(state) = ctx.get_block(pos) else {
+            return;
+        };
+        ctx.emit_block_event(pos, self.emitted_event_id, 0, state);
+    }
+    fn on_block_event(&self, _ctx: &mut UpdateContext, _pos: BlockPos, event: &BlockEvent) {
+        self.log.lock().unwrap().push(("piston2", event.event_id));
+    }
+}
+
+#[test]
+fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
+    let piston1_pos = BlockPos::new(0, 0, 0);
+    let piston2_pos = Direction::East.apply(piston1_pos); // directly adjacent
+
+    let mut world = FakeWorld::new();
+    world.set_block(piston1_pos, BlockStateId(1));
+    world.set_block(piston2_pos, BlockStateId(50));
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = BlockBehaviorRegistry::new();
+    registry.register_range(
+        BlockStateId(0),
+        BlockStateId(2),
+        Arc::new(WriteOwnStateOnEventBehavior {
+            log: Arc::clone(&log),
+            written_state: BlockStateId(1),
+        }),
+    );
+    registry.register_range(
+        BlockStateId(50),
+        BlockStateId(51),
+        Arc::new(EmitOnNeighborChangedBehavior {
+            log: Arc::clone(&log),
+            emitted_event_id: 9,
+        }),
+    );
+
+    let (mut engine, mut scheduled, mut events, _halo, mut outbound, ownership) = harness();
+    events.emit(BlockEvent {
+        pos: piston1_pos,
+        event_id: 7,
+        event_param: 0,
+        block_state: BlockStateId(1),
+    });
 
     run_block_event_subphase(
         &mut world,
@@ -445,5 +543,13 @@ fn block_event_emitted_during_subphase_is_deferred_to_next_call() {
         &mut outbound,
         0,
     );
-    assert_eq!(*log.lock().unwrap(), vec![1, 2]);
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![("piston1", 7), ("piston2", 9)],
+        "piston2's own event, queued as a synchronous side effect of handling piston1's event, \
+         must fire within this SAME run_block_event_subphase call -- the same tick's own pass, \
+         not a second call"
+    );
+    assert_eq!(events.pending(), 0);
 }

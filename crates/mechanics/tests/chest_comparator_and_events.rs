@@ -49,7 +49,7 @@ fn open_count_transition_zero_to_one_emits_block_event() {
     let new_count = chest.add_viewer(pos, state, &mut queue);
     assert_eq!(new_count, 1);
 
-    let batch = queue.begin_subphase();
+    let batch = queue.drain_all();
     assert_eq!(batch.len(), 1);
     assert_eq!(batch[0].event_id, CHEST_OPEN_EVENT_ID);
     assert_eq!(batch[0].event_param, 1);
@@ -65,12 +65,12 @@ fn open_count_further_increments_do_not_re_emit() {
     let state = BlockStateId(10);
 
     chest.add_viewer(pos, state, &mut queue);
-    queue.begin_subphase(); // drain the first (0 -> 1) event
+    queue.drain_all(); // drain the first (0 -> 1) event
 
     let new_count = chest.add_viewer(pos, state, &mut queue);
     assert_eq!(new_count, 2);
 
-    let batch = queue.begin_subphase();
+    let batch = queue.drain_all();
     assert!(
         batch.is_empty(),
         "only the 0<->nonzero transition should emit an event"
@@ -88,7 +88,7 @@ fn open_count_transition_one_to_zero_emits_block_event() {
     let new_count = chest.remove_viewer(pos, state, &mut queue);
     assert_eq!(new_count, 0);
 
-    let batch = queue.begin_subphase();
+    let batch = queue.drain_all();
     assert_eq!(batch.len(), 1);
     assert_eq!(batch[0].event_id, CHEST_OPEN_EVENT_ID);
     assert_eq!(batch[0].event_param, 0);
@@ -104,6 +104,6 @@ fn remove_viewer_never_underflows_below_zero() {
     let new_count = chest.remove_viewer(pos, state, &mut queue);
     assert_eq!(new_count, 0);
 
-    let batch = queue.begin_subphase();
+    let batch = queue.drain_all();
     assert!(batch.is_empty(), "no real 1 -> 0 transition occurred");
 }
