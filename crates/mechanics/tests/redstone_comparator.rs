@@ -161,6 +161,35 @@ fn comparator_output_flows_out_the_side_opposite_facing() {
     );
 }
 
+/// M3 field-report fix (Task 1): unlike `RepeaterBehavior` (axis-restricted to `facing`/
+/// `facing.opposite()` only), a comparator visually connects a wire touching *any* of its four
+/// horizontal faces, including its perpendicular sides -- vanilla's own `RedStoneWireBlock.
+/// shouldConnectTo` special-cases only `Blocks.REPEATER` to the axis-restricted check; every
+/// other `isSignalSource()` block (comparator included) falls through to the direction-agnostic
+/// "any signal source connects from any direction" branch. Confirmed against a real oracle diff
+/// (`redstone/comparator/comparator_compare_vs_subtract`'s own `(-1,1,0)`, a wire on the
+/// comparator's side face, `docs/findings-for-planning.md`).
+#[test]
+fn comparator_connects_from_any_side_not_only_front_back() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::North, ComparatorMode::Compare);
+
+    for side in [
+        Direction::North,
+        Direction::South,
+        Direction::East,
+        Direction::West,
+    ] {
+        assert!(
+            comparator.connects_from(&FakeWorld::new(), pos, side),
+            "a comparator must visually connect a wire from every horizontal side, not only \
+             its own front/back axis (side {side:?})"
+        );
+    }
+}
+
 #[test]
 fn comparator_reads_container_directly_in_front() {
     let pos = BlockPos::new(0, 0, 0);
