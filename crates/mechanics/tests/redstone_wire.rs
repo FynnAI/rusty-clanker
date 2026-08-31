@@ -615,7 +615,11 @@ fn wire_destruction_clears_its_own_stored_state() {
         let mut ctx = h.ctx();
         wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
     }
-    assert_ne!(wire.power(pos), 0, "the wire must have picked up real power first");
+    assert_ne!(
+        wire.power(pos),
+        0,
+        "the wire must have picked up real power first"
+    );
 
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
