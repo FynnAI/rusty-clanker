@@ -286,7 +286,7 @@
     },
     {
       "path": "wire_cross_shape_connectivity.ron",
-      "sha256": "d7b288a198026ed546514e892e2fd9162ffe2aa017181a347d7f854be3966dbc",
+      "sha256": "d2df788e3c55e86a6ee686e9b5b005039110303b6ad56f26ed5901a439ede9c8",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },

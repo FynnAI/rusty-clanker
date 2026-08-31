@@ -47,6 +47,37 @@ Entries name the milestone that surfaced them and the code they concern.
   a real content decision, not a numeric or ordering fix. Left with the wire's
   state_id at its pre-existing placeholder value; `xtask fetch-corpus` will
   keep failing this one case until content-plan/blueprint authorship revisits
+
+- **`xtask fetch-corpus`'s own per-contraption capture loop shows a residual,
+  reproducible-within-one-run "first placement after `tp` reads as air" defect
+  for a small, unpredictable subset of contraptions — a narrower recurrence of
+  the packet-timing class of bug this same blueprint's Section C entry above
+  already fixed once.** After the M3 field-report state-id resolution wave
+  (the corpus's own `.ron` content is otherwise now fully correct — cross-
+  checked against `datagen-output/26.2/generated/reports/blocks.json` and,
+  where available, the live oracle), four consecutive `fetch-corpus` runs
+  against a freshly regenerated `target/fetch-corpus-oracle/` world plateaued
+  at 46/51 (`qc_piston_top_side_signal` is the separate, already-tracked entry
+  above). Three of the four remaining failures are a contraption's own very
+  *first* `blocks:` entry — plain `minecraft:stone` (id 1), `minecraft:piston[
+  facing=east,extended=false]` (id 2264), `minecraft:comparator[facing=north,
+  mode=compare,powered=false]` (id 11264) — each individually cross-validated
+  correct dozens of times elsewhere in this same corpus, reported as oracle-
+  observed air (id 0) immediately after this contraption's own `tp`. The
+  fourth (`wire_cross_shape_connectivity`) instead shows a wire tile's own
+  connectivity/power flipping between two different, both-plausible values
+  across separate runs with identical `.ron` content and an identical world.
+  `capture_contraption` (`crates/testing/paritybot/src/corpus_capture.rs`)
+  issues its first `/setblock` immediately after the `tp` console command with
+  no settle delay or chunk-load acknowledgement wait — plausibly the same
+  not-yet-tracked-chunk race the Section C fix addressed for the very first
+  packet of a whole run, recurring per-contraption for whichever `tp` target
+  chunk hasn't been visited yet by that point in a given run. Not something
+  this test-authoring changeset can fix (`crates/testing/paritybot/**` is a
+  path-guard-protected `fix`/`governance`-only path); a decision is needed on
+  whether to add a settle/ack wait after `tp` (mirroring `wait_for_state_id`'s
+  own poll-for-the-expected-value pattern) or accept this as inherent capture-
+  time flakiness that a re-run works around.
   the geometry.
 
 ## B. Shipped deviations and simplifications awaiting a decision
