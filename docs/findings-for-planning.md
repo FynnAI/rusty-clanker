@@ -136,6 +136,56 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
+- **M3 field-report fix attempted and reverted: `WireBehavior` own-state
+  writeback (power + connection shape) is blocked by
+  `rc_physics::tier1_shape_table()`'s own single-id `minecraft:redstone_wire`
+  registration, confirmed by empirical regression, not just analysis.**
+  `tier1_shape_table()` registers exactly one wire id (5171, the
+  zero-power/no-connections "dot" default state) as non-conductor; every
+  other reachable wire id — i.e. almost every wire tile in an active
+  circuit — falls through to `ShapeTable::lookup`'s own unconditional
+  `default_full_cube()` fallback, so `signal::is_conductor` wrongly reports
+  `true` for it. Once a wire's own writeback moves its stored id off 5171,
+  every later `emitted_toward` call at that position starts folding in
+  `direct_signal_to` (quasi-connectivity through a "conductor"), spuriously
+  leaking a neighbor's own *direct* signal through a wire tile that vanilla
+  never treats as a conductor at all. A local implementation attempt (both
+  power, in `on_neighbor_changed`, and the 3-way `up`/`side`/`none`
+  connection shape blocks.json's own properties encode, in
+  `on_shape_update`, reusing `WireBehavior`'s existing connection-tracking
+  logic per the M3 fix-agent brief) reproduced this exactly:
+  `cargo run -p xtask -- parity-check redstone` dropped from 17/51 to
+  15/51 — `redstone/pulse/wire_signal_decay_15_chain` (every wire tile
+  reads a near-zero power instead of its real decayed value, a second,
+  independent effect of the very next entry's own `redstone_block`
+  registration gap once wire's writeback stops masking it — see that
+  entry) and `redstone/comparator/comparator_side_input_max_of_two` (a
+  single wire connection bit flipped, `west` `Side` vs `None`) both flipped
+  from pass to fail. Per this fix's own governing instruction ("never trade
+  passes"), the attempt was reverted in full (`wire.rs` and its own test
+  files are untouched by this changeset) rather than shipped with a known
+  regression. A second, independent hazard surfaced and was fixed locally
+  before the revert, worth recording so the next attempt does not
+  rediscover it the hard way: naively returning `Some(new_id)`
+  unconditionally from `on_shape_update` whenever the trigger direction is
+  horizontal (mirroring `RedStoneWireBlock::updateShape`'s own "always
+  returns a value for non-`UP` directions" contract literally) makes
+  `dispatch_pending_update`'s own unconditional cascade-continuation
+  contract bounce a shape-update wave back and forth along an already-
+  settled wire run indefinitely (no visited-set anywhere in that
+  mechanism, so a straight wire line's own `remaining_depth` budget of 512
+  gets spent revisiting the same handful of positions) — `parity-check
+  redstone` did not return within 2 minutes with this shipped, against
+  every other own-state-writeback stage completing in well under a second
+  once it was gated on "does the recomputed id actually differ from what's
+  currently stored" (`None` when unchanged, matching vanilla's own real
+  fixed-point termination — an `updateShape` call that would return the
+  state it already holds is, observably, a no-op). Needs a decision on
+  priority for widening `tier1_shape_table()`'s own wire entry (to the
+  full reachable id range, or a property-independent "is this any
+  `redstone_wire` state" lookup) before wire's own-state writeback can be
+  attempted again.
+
 - **M3 field-report fix in progress: torch/repeater own-state writeback
   landed (this changeset), closing part of the next entry below.** Both
   components now write their real `BlockStateId` (torch's `LIT`, repeater's
