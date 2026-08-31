@@ -24,7 +24,7 @@ use rc_mechanics::redstone::comparator::NoContainers;
 use rc_mechanics::redstone::piston::PistonBehavior;
 use rc_mechanics::redstone::{
     ComparatorBehavior, ComparatorMode, RedstoneSignalSource, RepeaterBehavior,
-    SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
+    SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior, register_redstone_block,
 };
 use rc_mechanics::stage4;
 use rc_mechanics::{
@@ -313,6 +313,13 @@ fn facing_property(vanilla_state: &str) -> Direction {
 pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
     let mut behaviors = BlockBehaviorRegistry::new();
     let mut signals = SignalSourceRegistry::new();
+
+    // `minecraft:redstone_block` (M3 field-report fix, Task 1): a stateless always-on source,
+    // no `BlockBehavior`/registry-self-reference concerns (`register_redstone_block`'s own doc
+    // comment) — registered directly via the production function, unlike the four tier-1
+    // components below (which this replay driver must hand-reconstruct for their own
+    // pre-`Arc` placement-seeding needs, module doc comment).
+    register_redstone_block(&mut signals);
 
     let wire = Arc::new(WireBehavior::new());
     let (lo, hi) = exclusive(WIRE_RANGE);
