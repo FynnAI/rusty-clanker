@@ -7,7 +7,14 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
+        // M3 field-report test-authoring fix: the real oracle's own `/setblock`
+        // placement pipeline resolves this cell as fully isolated at its own
+        // placement moment (it is placed immediately after its own floor stone,
+        // before any of the four arm wires exist) -- confirmed against a fresh
+        // `fetch-corpus` capture. `east=none,north=none,power=0,south=none,
+        // west=none` = state 5171 (`datagen-output/26.2/generated/reports/
+        // blocks.json`, protocol 776).
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),

@@ -250,13 +250,13 @@
     },
     {
       "path": "update_order_classic_wire_full_replot.ron",
-      "sha256": "09c743fba6d742da2ab1440a68606cfc43bb80d9ebcebd4105ae0522d199e655",
+      "sha256": "19bafdfab7302fb2da33a3bb02d3793e0cb232983ed1e4f7cd5e47488a075a6d",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_mc11193_style_staleness.ron",
-      "sha256": "d3c9ae41edd5d8ea7e9524e0ea5ee86d4c10a4a0e4dd094d3fff709adadf8a2f",
+      "sha256": "3bda91527260fb71ab0149b102d2ad82424a2ce8b69702debd81c3c359ff8b1d",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
