@@ -629,3 +629,51 @@ fn wire_destruction_clears_its_own_stored_state() {
          inheriting the destroyed wire's own last power"
     );
 }
+
+/// M3 field-report fix (Task 4): the real 3-way `up`/`side`/`none` connection shape --
+/// `getConnectingSide`'s own "climb a step" case (`08-redstone-ticking.md` §3.1): a solid
+/// conductor at same height with a wire one block up on its own far side, and this position's
+/// own ceiling open, renders `east=up` (not `side`) -- blocks.json (protocol 776):
+/// `east=up,north=none,power=0,south=none,west=none` = state 4307.
+#[test]
+fn wire_own_state_writeback_reflects_up_climb_shape() {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, CONDUCTOR); // the step -- a solid, unregistered block
+    let east_up = Direction::Up.apply(east);
+    h.world.set_block(east_up, WIRE_ID); // the climbing wire, one block up on the far side
+    // `pos`'s own ceiling (Up.apply(pos)) is left entirely unset -- open, the conductor-
+    // occlusion gate the climb requires.
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
+
+    assert_eq!(result, Some(BlockStateId(4307)));
+}
+
+/// The mirror case: identical geometry, but `pos`'s own ceiling is now a real conductor
+/// (occluded) -- the climb must not register, and (since the same-height neighbor is a plain
+/// conductor, not itself a signal source) the side reads `none`, not `up` or `side`.
+#[test]
+fn wire_climb_shape_is_gated_by_the_conductor_occlusion_rule() {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::Up.apply(pos), CONDUCTOR); // occluded ceiling
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, CONDUCTOR);
+    h.world.set_block(Direction::Up.apply(east), WIRE_ID);
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
+
+    // The recomputed shape (`east=none, rest none, power=0`) is identical to `pos`'s own
+    // already-placed `WIRE_ID` -- the "gate on did-it-actually-change" fixed-point rule
+    // (`new_connections_state_id`'s own doc comment) correctly reports `None`, not a no-op
+    // `Some`, confirming no `up` (or even `side`) connection was ever registered.
+    assert_eq!(result, None);
+}
