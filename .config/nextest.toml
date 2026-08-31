@@ -23,5 +23,5 @@ path = "junit.xml"
 max-threads = 2
 
 [[profile.default.overrides]]
-filter = 'binary(play_block_break_place_full) | binary(play_block_action_broadcast_reaches_unspawned_actor) | binary(play_chunk_streaming_on_move) | binary(region_unavailable_after_shutdown) | binary(play_position_persistence_roundtrip) | binary(play_movement_application) | binary(play_reach_validation) | binary(play_sneak_reach) | binary(login_configuration_flow)'
+filter = 'binary(mining_stage4_wiring) | binary(play_block_action_broadcast_reaches_unspawned_actor) | binary(play_block_break_place_full) | binary(play_block_place_break) | binary(play_chunk_set) | binary(play_chunk_streaming_on_move) | binary(play_idle_soak) | binary(play_movement_application) | binary(play_movement_validation) | binary(play_position_persistence_roundtrip) | binary(play_reach_validation) | binary(play_sequence_ack_ordering) | binary(play_session_handoff) | binary(play_sneak_reach) | binary(region_unavailable_after_shutdown) | binary(stdin_eof_keeps_serving) | binary(login_configuration_flow)'
 test-group = 'heavy-server-integration'
