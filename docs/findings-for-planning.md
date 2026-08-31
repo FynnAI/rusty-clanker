@@ -241,6 +241,37 @@ Entries name the milestone that surfaced them and the code they concern.
   support-loss is in scope at all before this fixture (and any other
   diode-on-no-floor fixture) can reach a real pass.
 
+  **(Update, M3 field-report fix-agent wave, Task 3): root-caused and mostly
+  fixed — `DiodeBlock` genuinely does require a real conductor directly
+  beneath it, checked immediately at *placement* time (`ComparatorBehavior::
+  on_placed`/`RepeaterBehavior::on_placed` now both self-destruct to air on
+  an unsupported placement, mirroring `WireBehavior::should_pop`'s identical
+  shape but run unconditionally at placement rather than only reactively).**
+  Confirmed by cross-referencing every comparator corpus fixture against
+  whether its own comparator has a floor block ever declared beneath it:
+  every fixture missing one (this fixture, `comparator_2tick_fixed_delay`,
+  `comparator_wire_signal_read`, `comparator_priority_diode_behind`) showed
+  its comparator destroyed from tick 0 in the real oracle trace; every
+  fixture that does declare a floor did not — a clean, four-fixture-wide
+  correlation, not a one-off. Fixing it closed three of those four fixtures
+  completely (`comparator_container_fullness_chest` too, which shares the
+  same missing-floor geometry). This fixture alone remains open on a
+  *narrower*, more precise question than before: its own tick-4 action
+  re-places the comparator (`facing=north,mode=compare`) at the identical
+  position, with the identical missing floor, and the real oracle shows it
+  surviving from tick 4 onward — not re-destroyed — while this fix's
+  placement-time check (having no way to distinguish "first placement" from
+  "re-placement") destroys it there too, trading the fixture's own tick-0-3
+  mismatches for tick-4-10 ones instead (net still failing either way, so no
+  parity-check pass was traded). Every distinguishing factor this pass tried
+  between the two placements — nothing in the fixture's own geometry changes
+  between tick 0 and tick 4 at all — failed to explain the asymmetry. Needs
+  real-oracle packet-level research into what actually differs about a
+  *second* `/setblock` at an already-occupied position (does `canSurvive`'s
+  own destroy-on-place check only ever fire when the position was previously
+  *air*, not when it was already a placed block of some other kind?) before
+  this fixture can reach a full pass.
+
 - **Task 2's diode re-placement fix (`BlockBehavior::on_placed`, wired only
   into `crates/testing/gametest/src/replay.rs`'s own `place_and_settle`)
   needs no separate production-side fix once the already-tracked
