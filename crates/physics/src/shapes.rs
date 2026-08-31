@@ -256,18 +256,31 @@ fn build_tier1_table() -> ShapeTable {
         // own identical `+ 10` offset (chosen there to sit safely past every `direction_
         // offset` value `0..=5` any *other* row for this same base id uses).
         (11323, flat(hopper_shape)), // hopper, facing Down
-        // piston_head (M3-B05 Context §D) -- six placeholder ids, one per facing (no real
-        // per-property-combination registry exists yet, Context §I; kept in sync by hand with
-        // `crates/mechanics/src/redstone/piston.rs`'s own identical `PISTON_HEAD_IDS` table and
-        // with `piston_shape_table.rs`'s own local copy). An *extended* piston/sticky_piston
-        // base needs no entry of its own here (Context §D) -- it is an unchanged full cube,
-        // already correctly produced by `lookup`'s own default-full-cube fallback.
-        (900_001, flat(piston_head_shape(0, false))), // piston_head, facing = West
-        (900_002, flat(piston_head_shape(0, true))),  // piston_head, facing = East
-        (900_003, flat(piston_head_shape(2, false))), // piston_head, facing = North
-        (900_004, flat(piston_head_shape(2, true))),  // piston_head, facing = South
-        (900_005, flat(piston_head_shape(1, false))), // piston_head, facing = Down
-        (900_006, flat(piston_head_shape(1, true))),  // piston_head, facing = Up
+        // piston_head (M3 field-report fix, Task 3: own-state writeback now writes the real
+        // `minecraft:piston_head` id -- `crates/mechanics/src/redstone/piston.rs`'s own
+        // `piston_head_id`/`PISTON_HEAD_BASE` doc comment has the full arithmetic citation,
+        // read directly off `datagen-output/26.2/generated/reports/blocks.json`, protocol 776).
+        // Twelve entries: one per (facing, sticky) pair, `short=false` only -- this project's
+        // own writes never produce `short=true` (no intermediate `MOVING_PISTON` placeholder is
+        // modeled, Context §D/§E), so that half of the real 24-state range is deliberately not
+        // registered here (an unregistered id simply falls through to `default_full_cube()`,
+        // never actually reached by any real write this table needs to serve). `sticky` never
+        // changes the box (only `crates/mechanics/src/redstone/piston.rs`'s own `classify`
+        // needs the distinction, for `Immovable`) -- both ids per facing reuse the identical
+        // `piston_head_shape` call the facing alone determines, kept in sync by hand with that
+        // module's own `piston_head_id` and with `piston_shape_table.rs`'s own local copy.
+        (2271, flat(piston_head_shape(2, false))), // piston_head, normal, facing = North
+        (2272, flat(piston_head_shape(2, false))), // piston_head, sticky, facing = North
+        (2275, flat(piston_head_shape(0, true))),  // piston_head, normal, facing = East
+        (2276, flat(piston_head_shape(0, true))),  // piston_head, sticky, facing = East
+        (2279, flat(piston_head_shape(2, true))),  // piston_head, normal, facing = South
+        (2280, flat(piston_head_shape(2, true))),  // piston_head, sticky, facing = South
+        (2283, flat(piston_head_shape(0, false))), // piston_head, normal, facing = West
+        (2284, flat(piston_head_shape(0, false))), // piston_head, sticky, facing = West
+        (2287, flat(piston_head_shape(1, true))),  // piston_head, normal, facing = Up
+        (2288, flat(piston_head_shape(1, true))),  // piston_head, sticky, facing = Up
+        (2291, flat(piston_head_shape(1, false))), // piston_head, normal, facing = Down
+        (2292, flat(piston_head_shape(1, false))), // piston_head, sticky, facing = Down
         (5328, full.clone()),                         // furnace
         (20763, full.clone()),                        // blast_furnace
         (20755, full),                                // smoker

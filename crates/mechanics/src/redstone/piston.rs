@@ -15,15 +15,15 @@
 //!   externally observed via exact-equality assertions in `piston_structure_resolver.rs`) can
 //!   carry this without breaking those assertions, so it lives here instead.
 //! - A private `classify`-only literal-id table (`DESTROY_IDS`/`BLOCK_ENTITY_IMMOVABLE_IDS`/the
-//!   two `*_EXTENDED_PLACEHOLDER` constants/`PISTON_HEAD_IDS`) — `classify` has no injected
+//!   two `*_EXTENDED_PLACEHOLDER` constants/`PISTON_HEAD_RANGE`) — `classify` has no injected
 //!   registry parameter (Deliverables' own signature), and this crate has no `rc-registries`
 //!   dependency (WS-D3 rule 1), so the tier-1 push/destroy/block table (Context §C) is
 //!   hardcoded directly, exactly mirroring `rc_physics::tier1_shape_table()`'s own identical
-//!   convention. The two extended-piston placeholders and the six `piston_head` placeholders
-//!   have no real generated-registry id to read yet (Context §I) — flagged for reconciliation
-//!   once one exists, identical in kind to every other placeholder literal this project's own
-//!   tier-1 blueprints have already introduced. The six `piston_head` ids are kept in sync by
-//!   hand with `crates/physics/src/shapes.rs`'s own six new `tier1_shape_table()` entries
+//!   convention. The two extended-piston placeholders still have no real generated-registry id
+//!   to read (Context §I) — flagged for reconciliation once one exists; `piston_head`'s own
+//!   former placeholder range was closed (M3 field-report fix, Task 3: `piston_head_id`'s own
+//!   doc comment has the real arithmetic). The twelve real `piston_head` ids are kept in sync
+//!   by hand with `crates/physics/src/shapes.rs`'s own twelve `tier1_shape_table()` entries
 //!   (Context §D) and with `piston_shape_table.rs`'s own local copy — a cross-file consistency
 //!   note in all three places.
 //!
@@ -117,12 +117,21 @@ const BLOCK_ENTITY_IMMOVABLE_IDS: [u32; 5] = [3988, 5328, 20763, 20755, 11313];
 const PISTON_EXTENDED_PLACEHOLDER: u32 = 900_101;
 const STICKY_PISTON_EXTENDED_PLACEHOLDER: u32 = 900_102;
 
-/// The six `piston_head` placeholder literals (Context §D), one per facing, indexed by
-/// `direction_index` below (`West, East, North, South, Down, Up`) — the exact same six ids
-/// `rc_physics::shapes::tier1_shape_table()`'s own six new entries key their shape rows by
-/// (cross-file consistency note, this module's own top-of-file doc comment); `classify`
-/// (Context §C) treats every one of them as `Immovable`.
-const PISTON_HEAD_IDS: [u32; 6] = [900_001, 900_002, 900_003, 900_004, 900_005, 900_006];
+/// `minecraft:piston_head`'s own real id range (M3 field-report fix, Task 3: own-state
+/// writeback -- closes this module's own former placeholder-literal gap; ids read directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:piston_head` entry,
+/// protocol 776). Three properties: `type` (`[normal,sticky]`) fastest-varying, stride 1; then
+/// `short` (`[true,false]`), stride 2; then `facing` (`[north,east,south,west,up,down]`,
+/// `piston_facing_index`'s own identical order), stride 4 -- `id = PISTON_HEAD_BASE +
+/// piston_facing_index(facing)*4 + short_idx*2 + type_idx` (`short_idx`: `true` -> `0`,
+/// `false` -> `1`; `type_idx`: `normal` -> `0`, `sticky` -> `1`). `classify`'s own Immovable
+/// check matches the *whole* reachable range (`PISTON_HEAD_RANGE`, including `short=true`,
+/// never itself written by this module but still a real reachable id), matching every other
+/// tier-1 component's own "match the full reachable id space" convention; `piston_head_id`
+/// itself only ever produces a `short=false` id (this module's own writes never model an
+/// intermediate `MOVING_PISTON` placeholder, Context §D/§E).
+const PISTON_HEAD_BASE: u32 = 2269;
+const PISTON_HEAD_RANGE: std::ops::RangeInclusive<u32> = 2269..=2292;
 
 /// Own-state id arithmetic for `minecraft:piston`/`minecraft:sticky_piston` (M3 field-report
 /// fix: own-state writeback, closing this module's own top-of-file "further deviation" note --
@@ -130,9 +139,8 @@ const PISTON_HEAD_IDS: [u32; 6] = [900_001, 900_002, 900_003, 900_004, 900_005, 
 /// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
 /// `minecraft:piston`/`minecraft:sticky_piston` entries, protocol 776). `extended`
 /// (`[true,false]`, blocks.json order) is the slower-varying property, stride 6; then `facing`
-/// (`[north,east,south,west,up,down]`, blocks.json's own listed order -- **not** this module's
-/// own `direction_index`/`PISTON_HEAD_IDS` convention above, a separate, unrelated,
-/// hand-authored id space for a different purpose), stride 1.
+/// (`[north,east,south,west,up,down]`, blocks.json's own listed order -- the same
+/// `piston_facing_index` convention `piston_head_id` above now shares), stride 1.
 const PISTON_BASE: u32 = 2257; // extended=true, facing=north
 const STICKY_PISTON_BASE: u32 = 2235; // extended=true, facing=north
 
@@ -157,21 +165,15 @@ fn piston_state_id(sticky: bool, extended: bool, facing: Direction) -> BlockStat
     BlockStateId(base + extended_idx * 6 + piston_facing_index(facing))
 }
 
-fn direction_index(d: Direction) -> usize {
-    match d {
-        Direction::West => 0,
-        Direction::East => 1,
-        Direction::North => 2,
-        Direction::South => 3,
-        Direction::Down => 4,
-        Direction::Up => 5,
-    }
-}
-
-/// The settled `piston_head` block for `facing` (Context §D/§E) — the literal id a commit
-/// writes at the head's landing position.
-fn piston_head_id(facing: Direction) -> BlockStateId {
-    BlockStateId(PISTON_HEAD_IDS[direction_index(facing)])
+/// The settled `piston_head` block for `facing`/`sticky` (Context §D/§E) — the real id a commit
+/// writes at the head's landing position (`PISTON_HEAD_BASE`'s own doc comment has the full
+/// arithmetic citation). Always `short=false` (`short_idx = 1`) — this module's own writes never
+/// model an intermediate `MOVING_PISTON` placeholder.
+fn piston_head_id(facing: Direction, sticky: bool) -> BlockStateId {
+    const SHORT_FALSE_IDX: u32 = 1;
+    BlockStateId(
+        PISTON_HEAD_BASE + piston_facing_index(facing) * 4 + SHORT_FALSE_IDX * 2 + u32::from(sticky),
+    )
 }
 
 /// `true` iff `pos` holds no block at all (unloaded) or the literal `air` id (Context §C: "Air
@@ -243,7 +245,7 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
         || raw == STICKY_PISTON_EXTENDED_PLACEHOLDER
         || is_real_extended_piston
         || is_real_extended_sticky_piston
-        || PISTON_HEAD_IDS.contains(&raw)
+        || PISTON_HEAD_RANGE.contains(&raw)
         || BLOCK_ENTITY_IMMOVABLE_IDS.contains(&raw)
     {
         return PushClass::Immovable;
@@ -508,6 +510,28 @@ impl PistonBehavior {
         self.moving.lock().unwrap().contains_key(&pos)
     }
 
+    /// M3 field-report fix (Task 3): writes the base's own new `EXTENDED` id immediately (raw
+    /// world accessor, then this one position's own fan-out) — `on_block_event`'s own doc
+    /// comment above has the full real-vanilla-timing citation. A no-op (no write, no fan-out)
+    /// if `pos` is somehow already unloaded by the time the triggering block event resolves
+    /// (defensive only, mirrors `commit_extend`/`commit_retract`'s own identical "written a
+    /// position that was never actually there" tolerance).
+    fn write_base_extended(
+        &self,
+        ctx: &mut UpdateContext,
+        pos: BlockPos,
+        sticky: bool,
+        facing: Direction,
+        extended: bool,
+    ) {
+        if ctx.world.get_block(pos).is_none() {
+            return;
+        }
+        let id = piston_state_id(sticky, extended, facing);
+        ctx.world.set_block(pos, id);
+        border::fan_out_from_changed_block(ctx, pos, id);
+    }
+
     /// Context §E's own atomic commit for an extend. Every write goes through the raw
     /// `ctx.world.set_block` (no fan-out of its own); `border::fan_out_from_changed_block` is
     /// called once per actually-written position, in write order, only after every write has
@@ -568,7 +592,7 @@ impl PistonBehavior {
                 continue;
             }
             let content = if i == 0 {
-                piston_head_id(push_direction)
+                piston_head_id(push_direction, sticky)
             } else {
                 match ctx.world.get_block(plan.to_push[i - 1]) {
                     Some(c) => c,
@@ -709,6 +733,21 @@ impl BlockBehavior for PistonBehavior {
         match event.event_id {
             TRIGGER_EXTEND => {
                 if let Ok(plan) = resolve_extend(ctx.world, ctx.ownership, pos, facing) {
+                    // M3 field-report fix (Task 3): the base's own `EXTENDED` flip happens
+                    // immediately, synchronously with `triggerEvent`/`moveBlocks` -- real
+                    // vanilla's own `TICKS_TO_EXTEND=2` animation delay governs only the *moved*
+                    // structure (piston_head/pushed blocks settling from their own `MOVING_
+                    // PISTON` placeholder into final content, `08-redstone-ticking.md` §3.9's own
+                    // `finalTick()` note), never the base's own stored `BlockState`. Verified
+                    // directly against the real oracle: every push fixture's own base-position
+                    // trace shows the new `EXTENDED` id already at the very tick the triggering
+                    // block event resolves, two ticks before the pushed content itself settles
+                    // (`docs/findings-for-planning.md`'s own "piston QC trigger" diagnosis).
+                    // Written *before* `extend_snapshot` below, so Context §G case 1's own later
+                    // re-validation compares the base's own live id against this already-flipped
+                    // value (this write, not a third party, is the piston's own next expected
+                    // state) rather than spuriously whole-aborting the pending commit.
+                    self.write_base_extended(ctx, pos, sticky, facing, true);
                     let snapshot = extend_snapshot(ctx.world, pos, &plan);
                     self.moving.lock().unwrap().insert(
                         pos,
@@ -727,6 +766,11 @@ impl BlockBehavior for PistonBehavior {
             }
             TRIGGER_CONTRACT | TRIGGER_DROP => {
                 let plan = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
+                // M3 field-report fix (Task 3): mirrors the extend case above -- the base's own
+                // `EXTENDED=false` flip happens immediately, whether or not anything is actually
+                // pulled (`TRIGGER_DROP`'s own "arm retracts without pulling" case flips the base
+                // exactly the same way as an ordinary contract).
+                self.write_base_extended(ctx, pos, sticky, facing, false);
                 let snapshot = retract_snapshot(ctx.world, pos, &plan);
                 self.moving.lock().unwrap().insert(
                     pos,
