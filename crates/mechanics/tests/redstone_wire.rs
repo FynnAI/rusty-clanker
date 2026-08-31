@@ -315,3 +315,125 @@ fn wire_output_is_gated_by_connections_horizontally_only() {
         15
     );
 }
+
+/// M3 field-report fix (Task 2): own-state writeback — `on_neighbor_changed` now writes wire's
+/// real computed power back into the world, not only its own internal side table. Id cited
+/// directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
+/// `minecraft:redstone_wire` entry (protocol 776): `east=none,north=none,power=15,south=none,
+/// west=none` = state `5306` — `WIRE_ID` (`5171`)'s own identical all-`none` connectivity with
+/// `power=0` instead.
+#[test]
+fn wire_own_state_writeback_reflects_computed_power() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::West.apply(pos), SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+
+    assert_eq!(wire.power(pos), 15);
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
+}
+
+/// M3 field-report fix (Task 2): a position that already holds its own correctly-computed id
+/// must not be rewritten to a numerically-identical id on a later, no-op recompute — `power`
+/// unchanged means `on_neighbor_changed`'s own existing `changed` gate (unmodified by this fix)
+/// already short-circuits before ever reaching the writeback at all, so no write (and no 7-cell
+/// notify) happens on the second call.
+#[test]
+fn wire_own_state_writeback_is_a_no_op_when_power_is_unchanged() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::West.apply(pos), SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
+
+    // A second dispatch recomputes the identical power (still 15) -- the stored id must stay
+    // exactly what it already was, not be rewritten to the same numeric value again.
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
+}
+
+/// M3 field-report fix (Task 2): own-state writeback — `on_shape_update` now recomputes
+/// connectivity (`compute_connections`, unchanged) and requests the real resulting id via its
+/// own `Option<BlockStateId>` return (vanilla's `updateShape` return-value contract, the trait's
+/// own doc comment), reusing the existing boolean "does this side connect at all" model (this
+/// blueprint's own established scope narrowing, `WireConnections`'s own doc comment) to encode
+/// each side as blocks.json's own `side`/`none` (never `up` — a documented, bounded
+/// approximation; only `on_neighbor_changed`'s own power-only writeback ever preserves a
+/// pre-existing `up` bit, by construction, since it never touches the connection digits at
+/// all). Id cited off blocks.json (protocol 776): a source only to the East gives
+/// `east=side,north=none,power=0,south=none,west=none` = state `4739`.
+#[test]
+fn wire_own_state_writeback_reflects_computed_connections() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
+
+    assert_eq!(result, Some(BlockStateId(4739)));
+}
+
+/// M3 field-report fix (Task 2): the shape-update-cascade hang hazard the previous wave found
+/// and reverted (`docs/findings-for-planning.md`'s own "wire own-state writeback attempt
+/// reverted" entry) — an unconditional `Some(new_id)` return on every horizontal trigger makes
+/// `dispatch_pending_update`'s own unconditional cascade-continuation contract bounce a
+/// shape-update wave back and forth along an already-settled wire run indefinitely (no
+/// visited-set anywhere in that mechanism). The fix: gate the return on "does the recomputed id
+/// actually differ from what is currently stored" — `None` once a position's own live id
+/// already reflects its own real connectivity, mirroring vanilla's real fixed-point termination
+/// (an `updateShape` call that would return the state it already holds is, observably, a
+/// no-op). This test simulates the caller's own real write-back-then-recompute sequence
+/// (`dispatch_one`'s own contract) directly, since `on_shape_update` itself never writes.
+#[test]
+fn wire_own_state_writeback_returns_none_once_the_stored_id_already_matches() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    let first = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
+    assert_eq!(first, Some(BlockStateId(4739)));
+    // Simulate `dispatch_one`'s own real caller contract: the returned id is written back
+    // before the cascade would continue.
+    ctx.world.set_block(pos, first.unwrap());
+
+    let second = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
+    assert_eq!(
+        second, None,
+        "a settled wire tile's own on_shape_update must not keep returning Some once its \
+         stored id already matches its own recomputed connections -- otherwise the shape-update \
+         cascade never reaches a fixed point"
+    );
+}
