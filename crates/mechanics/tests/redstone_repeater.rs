@@ -87,7 +87,7 @@ fn setup_repeater(
     delay_setting: u8,
     extra: Vec<(BlockStateId, BlockStateId, Arc<dyn RedstoneSignalSource>)>,
 ) -> Arc<RepeaterBehavior> {
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(pos, facing, delay_setting);
     let repeater = Arc::new(repeater);
     let mut signals = SignalSourceRegistry::new();
@@ -101,7 +101,7 @@ fn setup_repeater(
 #[test]
 fn repeater_delay_matrix() {
     let pos = BlockPos::new(0, 0, 0);
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     for (delay_setting, expected) in [(1u8, 2u64), (2, 4), (3, 6), (4, 8)] {
         repeater.place(pos, Direction::East, delay_setting);
         assert_eq!(repeater.get_delay(pos), expected);
@@ -339,7 +339,7 @@ fn repeater_own_state_writeback_reflects_locked_immediately() {
     let pos = BlockPos::new(0, 0, 0);
     let side_pos = Direction::West.apply(pos); // perpendicular to facing = North
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(pos, Direction::North, 1);
     let repeater = Arc::new(repeater);
 
@@ -374,7 +374,7 @@ fn repeater_lock_is_boolean_not_magnitude() {
     let pos = BlockPos::new(0, 0, 0);
     let side_pos = Direction::North.apply(pos); // perpendicular to `facing = East`
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(pos, Direction::East, 1);
     let repeater = Arc::new(repeater);
 
@@ -398,7 +398,7 @@ fn repeater_side_wire_does_not_lock() {
     let pos = BlockPos::new(0, 0, 0);
     let side_pos = Direction::North.apply(pos);
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(pos, Direction::East, 1);
     let repeater = Arc::new(repeater);
 
@@ -443,9 +443,9 @@ fn setup_chain(
     let pos = BlockPos::new(0, 0, 0);
     let behind = Direction::West.apply(pos); // facing.opposite().apply(pos), facing = East
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(pos, Direction::East, 1);
-    let mut behind_repeater = RepeaterBehavior::new();
+    let behind_repeater = RepeaterBehavior::new();
     behind_repeater.place(behind, behind_facing, 1);
     let repeater = Arc::new(repeater);
     let behind_repeater = Arc::new(behind_repeater);
@@ -557,7 +557,7 @@ fn repeater_chain_relays_signal_end_to_end() {
     let r3_pos = Direction::West.apply(r2_pos);
     let source_pos = Direction::East.apply(r1_pos);
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     repeater.place(r1_pos, Direction::East, 1);
     repeater.place(r2_pos, Direction::East, 1);
     repeater.place(r3_pos, Direction::East, 1);
@@ -674,4 +674,77 @@ fn repeater_input_reads_wire_power_directly() {
         Direction::East,
     );
     assert_eq!(input, 7);
+}
+
+/// M3 field-report fix (Task 2): `on_placed` — placement-state seeding is now re-entrant.
+/// A repeater re-placed at an already-registered position (a real `/setblock`-shaped
+/// placement, never this component's own internal writeback) must have its own `facing`/delay
+/// reseeded straight off the freshly-written raw id, and every other per-position field reset
+/// to its own fresh-placement default (`docs/findings-for-planning.md`'s own "diode
+/// re-placement" entry). blocks.json (protocol 776): `facing=south,delay=3,locked=false,
+/// powered=false` = state 7073 (cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn repeater_on_placed_reseeds_facing_and_delay_from_the_raw_id() {
+    let pos = BlockPos::new(0, 0, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    let repeater = Arc::new(repeater);
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(7073)); // south, delay=3, locked=false, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    repeater.on_placed(&mut ctx, pos);
+
+    assert_eq!(repeater.facing(pos), Direction::South);
+    assert_eq!(repeater.delay_setting(pos), 3);
+    assert_eq!(repeater.get_delay(pos), 6);
+}
+
+/// `on_placed` is a full replace-on-replace, not a partial update — a repeater re-placed while
+/// previously `powered` resets to the fresh-placement default (`powered = false`), mirroring a
+/// genuinely new block replacing whatever previously occupied this position.
+#[test]
+fn repeater_on_placed_resets_powered_to_the_fresh_placement_default() {
+    let pos = BlockPos::new(0, 0, 0);
+    let input_pos = Direction::North.apply(pos);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    let repeater = Arc::new(repeater);
+
+    let input = Arc::new(TestSignalSource::fixed(15));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        INPUT_ID,
+        BlockStateId(INPUT_ID.0 + 1),
+        input as Arc<dyn RedstoneSignalSource>,
+    );
+    repeater.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
+    h.world.set_block(input_pos, INPUT_ID);
+
+    // Power the repeater on for real, via the ordinary two-phase tick machinery.
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::North);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        repeater.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(repeater.powered(pos));
+
+    // Re-placed (a real `/setblock`-shaped write, `powered=false` in the fresh raw id too).
+    h.world.set_block(pos, BlockStateId(7037));
+    let mut ctx = h.ctx_at(4);
+    repeater.on_placed(&mut ctx, pos);
+
+    assert!(
+        !repeater.powered(pos),
+        "on_placed must fully reset this position's own state, not just reseed facing/delay"
+    );
 }

@@ -122,7 +122,7 @@ fn comparator_output_flows_out_the_side_opposite_facing() {
     let front = Direction::East.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Compare);
     let comparator = Arc::new(comparator);
 
@@ -169,7 +169,7 @@ fn comparator_reads_container_directly_in_front() {
     let mut map = HashMap::new();
     map.insert(front, 8u8); // 1 slot, 32/64 -> floor(0.5*14)+1 = 8 (Context §G worked example).
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(map)));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Compare);
     let comparator = Arc::new(comparator);
 
@@ -200,7 +200,7 @@ fn comparator_falls_back_to_plain_signal_when_no_container() {
     let front = Direction::East.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new()))); // always None
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Compare);
     let comparator = Arc::new(comparator);
 
@@ -230,7 +230,7 @@ fn comparator_subtract_mode_analog_only_change_still_notifies() {
     let side_pos = Direction::North.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Subtract);
     let comparator = Arc::new(comparator);
 
@@ -285,7 +285,7 @@ fn comparator_compare_mode_always_notifies() {
     let front = Direction::East.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Compare);
     let comparator = Arc::new(comparator);
 
@@ -335,7 +335,7 @@ fn comparator_own_state_writeback_reflects_powered() {
     let front = Direction::East.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Subtract);
     let comparator = Arc::new(comparator);
 
@@ -388,7 +388,7 @@ fn comparator_checktick_compares_stored_output_not_just_powered() {
     let side_pos = Direction::North.apply(pos);
 
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
-    let mut comparator = ComparatorBehavior::new(containers);
+    let comparator = ComparatorBehavior::new(containers);
     comparator.place(pos, Direction::East, ComparatorMode::Subtract);
     let comparator = Arc::new(comparator);
 
@@ -426,4 +426,75 @@ fn comparator_checktick_compares_stored_output_not_just_powered() {
         comparator.on_neighbor_changed(&mut ctx, pos, Direction::North);
     }
     assert!(h.scheduled.is_block_tick_pending(pos));
+}
+
+/// M3 field-report fix (Task 2): `on_placed` — placement-state seeding is now re-entrant,
+/// mirroring `RepeaterBehavior::on_placed`'s identical fix. A comparator re-placed at an
+/// already-registered position must have its own `facing`/`mode` reseeded straight off the
+/// freshly-written raw id. blocks.json (protocol 776): `facing=west,mode=subtract,
+/// powered=false` = state 11274 (cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn comparator_on_placed_reseeds_facing_and_mode_from_the_raw_id() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::North, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+    comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(11274)); // west, subtract, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    comparator.on_placed(&mut ctx, pos);
+
+    assert_eq!(comparator.facing(pos), Direction::West);
+    assert_eq!(comparator.mode(pos), ComparatorMode::Subtract);
+}
+
+/// `on_placed` is a full replace-on-replace, not a partial update — a comparator re-placed
+/// while previously `powered`/holding a nonzero `output` resets both to their fresh-placement
+/// default, mirroring `RepeaterBehavior::on_placed_resets_powered_to_the_fresh_placement_
+/// default`'s identical case.
+#[test]
+fn comparator_on_placed_resets_powered_and_output_to_the_fresh_placement_default() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::North.apply(pos);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::North, ComparatorMode::Compare);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(11268)); // north, compare, powered=false
+    h.world.set_block(front, FRONT_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_neighbor_changed(&mut ctx, pos, Direction::North);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(comparator.powered(pos));
+    assert_eq!(comparator.output(pos), 10);
+
+    // Re-placed (a real `/setblock`-shaped write, `powered=false` in the fresh raw id too).
+    h.world.set_block(pos, BlockStateId(11268));
+    let mut ctx = h.ctx_at(4);
+    comparator.on_placed(&mut ctx, pos);
+
+    assert!(!comparator.powered(pos));
+    assert_eq!(comparator.output(pos), 0);
 }
