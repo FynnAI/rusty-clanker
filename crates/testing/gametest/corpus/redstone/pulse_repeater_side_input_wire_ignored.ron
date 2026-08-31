@@ -1,0 +1,21 @@
+// M3-B07 redstone parity corpus — content-plan entry #55 (PulseGenerator).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/pulse/pulse_repeater_side_input_wire_ignored",
+    category: PulseGenerator,
+    description: "A north-facing repeater with plain redstone wire (not a diode) on its counter-clockwise side, driven to full power, while the repeater's own front input is independently toggled afterward.",
+    quirk: "sideInputDiodesOnly=true restricts repeater locking to diode side-inputs only; a wire running past a repeater's side must not lock it — the negative control contrasting entries #5/#49/#50 (M3-B04 Context §F, restated by its own repeater_side_wire_does_not_lock acceptance test; content-plan entry #55).",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]", state_id: 220),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 2, pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 5, pos: (0, 1, -2), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

@@ -1,0 +1,17 @@
+// M3-B07 redstone parity corpus — content-plan entry #41 (QcShowcase).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/qc/qc_negative_control_non_conductor",
+    category: QcShowcase,
+    description: "A redstone torch resting on a glass block, with a redstone block later placed directly against that glass block's side.",
+    quirk: "A non-conductor (glass) never carries indirect power to a component resting on it — the negative control proving conductor-gated propagation is conductor-gated, not universal (08-redstone-ticking.md §3.7; content-plan entry #41, contrasting entry #37's conductor positive control).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:glass", state_id: 200),
+        (pos: (0, 2, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+    ],
+    actions: [
+        (tick: 3, pos: (1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

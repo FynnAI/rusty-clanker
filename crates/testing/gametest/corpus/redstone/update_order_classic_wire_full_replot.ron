@@ -1,0 +1,25 @@
+// M3-B07 redstone parity corpus — content-plan entry #47 (UpdateOrderProbe).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/update_order/update_order_classic_wire_full_replot",
+    category: UpdateOrderProbe,
+    description: "A central wire triggered from below via conduction, with four wire arms extending North/East/South/West, each resting on its own support.",
+    quirk: "DefaultRedstoneWireEvaluator's own on_neighbor_changed notifies its full 6-neighbor-plus-self radius unconditionally whenever its power value changes, not only the neighbors whose own value needed to change (08-redstone-ticking.md §3.1; M3-B04 Context §D/§8's 'Notes for Rusty Clanker' bullet 2; content-plan entry #47) — all four arms must recompute together off the one central power change.",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 3, pos: (0, -1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

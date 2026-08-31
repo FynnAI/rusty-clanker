@@ -1,0 +1,19 @@
+// M3-B07 redstone parity corpus — content-plan entry #52 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/piston_sticky_pull_entity_free",
+    category: PistonDoor,
+    description: "A sticky piston facing east pushes a single stone block out, then retracts and pulls it back, with no entity anywhere in the contraption.",
+    quirk: "Isolates the pure block-movement push/pull path from MECH-D20's entity-displacement path, since no entity is ever present in this build — a sticky piston's own extend/retract/pull sequence, block-only (08-redstone-ticking.md §3.9; content-plan entry #52).",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:sticky_piston[facing=east,extended=false]", state_id: 240),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+    actions: [
+        (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 8, pos: (0, 1, -1), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)
