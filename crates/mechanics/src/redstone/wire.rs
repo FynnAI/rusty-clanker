@@ -54,17 +54,28 @@ fn should_pop(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
     !signal::is_conductor(world, Direction::Down.apply(pos))
 }
 
-/// blocks.json's own per-direction `[up, side, none]` index (`up`=0, `side`=1, `none`=2) —
-/// this project's own `WireConnections` only ever tracks "does this side connect at all"
-/// (Context §D's documented scope narrowing, restated on that struct's own doc comment below),
-/// never the *visual* up-vs-side distinction real vanilla's own `RedstoneSide` enum carries, so
-/// a connected side is always encoded `side` (never `up`) here — a documented, bounded
-/// approximation (`docs/findings-for-planning.md` records the still-open follow-up). Only
-/// `on_neighbor_changed`'s own power-only writeback below ever preserves a pre-existing `up`
-/// bit a position's id already held, by construction, since it decodes and re-encodes every
+/// The real 3-way visual connection shape blocks.json's own `east`/`north`/`south`/`west`
+/// properties each carry (M3 field-report fix, Task 4 -- closes this module's own former
+/// "connected sides are always encoded `side`, never `up`" approximation,
+/// `docs/findings-for-planning.md`'s own "wire up/side" entry). Mirrors vanilla's own
+/// `RedstoneSide` enum (`08-redstone-ticking.md` §3.1).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum WireSideShape {
+    None,
+    Side,
+    Up,
+}
+
+/// blocks.json's own per-direction `[up, side, none]` index (`up`=0, `side`=1, `none`=2).
+/// `on_neighbor_changed`'s own power-only writeback below preserves a pre-existing `up` bit a
+/// position's id already held, by construction, since it decodes and re-encodes every
 /// connection digit unchanged and only ever replaces the power digit.
-fn side_index(connected: bool) -> u32 {
-    if connected { 1 } else { 2 }
+fn side_index(shape: WireSideShape) -> u32 {
+    match shape {
+        WireSideShape::Up => 0,
+        WireSideShape::Side => 1,
+        WireSideShape::None => 2,
+    }
 }
 
 fn wire_state_id(east: u32, north: u32, power: u8, south: u32, west: u32) -> BlockStateId {
@@ -103,19 +114,31 @@ fn new_power_state_id(current_raw: u32, power: u8) -> BlockStateId {
 }
 
 /// `on_shape_update`'s own writeback: replaces every connection digit with the freshly
-/// recomputed `WireConnections` (`side_index`'s own `side`/`none`-only encoding), preserving
-/// whatever `power` digit the position's own current raw id already holds.
-fn new_connections_state_id(current_raw: u32, connections: WireConnections) -> BlockStateId {
+/// recomputed 3-way shape (`side_index`'s own `up`/`side`/`none` encoding), preserving whatever
+/// `power` digit the position's own current raw id already holds.
+fn new_connections_state_id(
+    current_raw: u32,
+    east: WireSideShape,
+    north: WireSideShape,
+    south: WireSideShape,
+    west: WireSideShape,
+) -> BlockStateId {
     let (_east, _north, power, _south, _west) = wire_decode(current_raw);
     wire_state_id(
-        side_index(connections.east),
-        side_index(connections.north),
+        side_index(east),
+        side_index(north),
         power,
-        side_index(connections.south),
-        side_index(connections.west),
+        side_index(south),
+        side_index(west),
     )
 }
 
+/// "Does this side connect at all," per direction — `weak_signal_toward`'s own output-gating
+/// boolean (Context §D). The *visual* `NONE`/`SIDE`/`UP` three-way shape (M3 field-report fix,
+/// Task 4: `WireSideShape`) is a strict refinement of this same union (`shape != None`), computed
+/// once per side by `connection_shape_on_side` and never independently — this struct stays
+/// boolean-only since nothing that reads it (`weak_signal_toward`'s own connectivity gate) cares
+/// which of `Side`/`Up` a connected side actually is.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct WireConnections {
     pub west: bool,
@@ -255,51 +278,78 @@ impl WireBehavior {
         block_signal.max(self.incoming_wire_signal(world, registry, pos))
     }
 
-    /// `shouldConnectTo`/`getConnectionState` (Context §D), restated as a single "does this
-    /// side connect at all" boolean (this blueprint's own documented scope narrowing -- the
-    /// visual `NONE`/`SIDE`/`UP` three-way property is not modeled).
-    fn connects_on_side(
+    /// `shouldConnectTo`/`getConnectionState`/`getConnectingSide` (Context §D): the real 3-way
+    /// `NONE`/`SIDE`/`UP` visual connection shape for one horizontal `dir` (M3 field-report fix,
+    /// Task 4 -- closes this method's own former "restated as a single boolean" scope
+    /// narrowing, `docs/findings-for-planning.md`'s own "wire up/side" entry). Three geometric
+    /// cases, `08-redstone-ticking.md` §3.1's own citation ("a same-height check first, then a
+    /// check one block up... and one block down..., preferring UP over SIDE when the neighbor's
+    /// top face is sturdy"):
+    /// - **Up** (checked first, matching the documented priority): my own ceiling is open (not
+    ///   a conductor -- `08-redstone-ticking.md`'s own "conductor-occlusion rule," already an
+    ///   established gate elsewhere in this module, e.g. `incoming_wire_signal`) and a wire
+    ///   climbs one block up on the far side (`dir.apply(pos)`'s own `Up` neighbor) -- the
+    ///   classic "wire climbs a step" case; geometrically this and the `Side` case below are
+    ///   mutually exclusive in every legitimate build (a same-height wire/source occupies the
+    ///   space a solid climbable step would need), so checking `Up` unconditionally first never
+    ///   actually overrides a real `Side` connection in practice, only formalizes the documented
+    ///   priority.
+    /// - **Side**: the same-height neighbor itself connects back (a wire, or any other signal
+    ///   source facing this position), or -- the open-ledge case -- the same-height neighbor is
+    ///   itself non-conductor and a wire sits one block *below* it (a wire descending off a
+    ///   ledge renders `Side` from this ascending tile's own perspective; the *other* wire's own
+    ///   `Up` property, read from its own position looking back, is what renders the climb).
+    /// - **None**: neither of the above.
+    ///
+    /// The boolean "does this side connect at all" union (`compute_connections`'s own
+    /// `WireConnections`, still used by `weak_signal_toward`'s own output gating) is exactly
+    /// `shape != None` -- this method's own three cases are additive refinements of that same
+    /// former boolean, never a behavior change to which sides connect.
+    fn connection_shape_on_side(
         &self,
         world: &dyn BlockWorldAccess,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
         dir: Direction,
-    ) -> bool {
+    ) -> WireSideShape {
         let same_height = dir.apply(pos);
+        if !signal::is_conductor(world, Direction::Up.apply(pos)) {
+            let up = Direction::Up.apply(same_height);
+            if wire_power_at(world, registry, up).is_some() {
+                return WireSideShape::Up;
+            }
+        }
         if let Some(state) = world.get_block(same_height)
             && registry
                 .resolve(state)
                 .connects_from(world, same_height, dir.opposite())
         {
-            return true;
-        }
-        if !signal::is_conductor(world, Direction::Up.apply(pos)) {
-            let up = Direction::Up.apply(same_height);
-            if wire_power_at(world, registry, up).is_some() {
-                return true;
-            }
+            return WireSideShape::Side;
         }
         if !signal::is_conductor(world, same_height) {
             let down = Direction::Down.apply(same_height);
             if wire_power_at(world, registry, down).is_some() {
-                return true;
+                return WireSideShape::Side;
             }
         }
-        false
+        WireSideShape::None
     }
 
-    fn compute_connections(
+    /// The 3-way shape for all four horizontal sides, in `east/north/south/west` order (matching
+    /// `wire_state_id`'s own parameter order) -- the read side `on_shape_update` needs for its
+    /// own state-id writeback (M3 field-report fix, Task 4).
+    fn compute_connection_shapes(
         &self,
         world: &dyn BlockWorldAccess,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
-    ) -> WireConnections {
-        WireConnections {
-            west: self.connects_on_side(world, registry, pos, Direction::West),
-            east: self.connects_on_side(world, registry, pos, Direction::East),
-            north: self.connects_on_side(world, registry, pos, Direction::North),
-            south: self.connects_on_side(world, registry, pos, Direction::South),
-        }
+    ) -> (WireSideShape, WireSideShape, WireSideShape, WireSideShape) {
+        (
+            self.connection_shape_on_side(world, registry, pos, Direction::East),
+            self.connection_shape_on_side(world, registry, pos, Direction::North),
+            self.connection_shape_on_side(world, registry, pos, Direction::South),
+            self.connection_shape_on_side(world, registry, pos, Direction::West),
+        )
     }
 }
 
@@ -453,13 +503,19 @@ impl BlockBehavior for WireBehavior {
             return Some(AIR_ID);
         }
         let registry = Arc::clone(self.registry());
-        let connections = self.compute_connections(ctx.world, &registry, pos);
-        self.state
-            .lock()
-            .unwrap()
-            .entry(pos)
-            .or_default()
-            .connections = connections;
+        // M3 field-report fix (Task 4): the 3-way shape is now computed directly (`connection_
+        // shape_on_side`'s own doc comment) -- the boolean `WireConnections` `weak_signal_
+        // toward`'s own output gating still reads is exactly this shape's own `!= None`, derived
+        // here rather than recomputed independently, so there is only one geometric computation
+        // to keep correct.
+        let (east_shape, north_shape, south_shape, west_shape) =
+            self.compute_connection_shapes(ctx.world, &registry, pos);
+        self.state.lock().unwrap().entry(pos).or_default().connections = WireConnections {
+            east: east_shape != WireSideShape::None,
+            north: north_shape != WireSideShape::None,
+            south: south_shape != WireSideShape::None,
+            west: west_shape != WireSideShape::None,
+        };
         // M3 field-report fix: own-state writeback -- vanilla's `RedStoneWireBlock::updateShape`
         // always recomputes and returns its own connection-encoded state for a horizontal
         // trigger direction; this blueprint's own real caller contract (`dispatch_one`/
@@ -472,7 +528,8 @@ impl BlockBehavior for WireBehavior {
         // would return the state it already holds is, observably, a no-op.
         match ctx.get_block(pos) {
             Some(current) if is_wire_range(current.0) => {
-                let new_id = new_connections_state_id(current.0, connections);
+                let new_id =
+                    new_connections_state_id(current.0, east_shape, north_shape, south_shape, west_shape);
                 if new_id == current {
                     None
                 } else {
