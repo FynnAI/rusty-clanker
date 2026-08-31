@@ -134,6 +134,30 @@ Entries name the milestone that surfaced them and the code they concern.
   can never actually distinguish "stable" from "oscillating but unobservable"
   until that deviation is closed either.
 
+- **`redstone/update_order/wire_climbs_conductor_step_up_down`'s own `(1, 1, 0)`
+  entry declares a placement id the real oracle does not hold even at tick 0 —
+  a second instance of this same fixture's already-known placeholder-content
+  defect class (see Section C's own two entries for this fixture's sibling
+  positions), surfaced empirically this M3 field-report wave while validating
+  the wire own-state writeback fix via `cargo run -p xtask -- parity-check
+  redstone`'s own diff dump.** Declared `state_id: 4873`
+  (`east=side,north=none,power=15,south=none,west=side`, `blocks.json`); the
+  cached oracle trace instead expects `4441`
+  (`east=up,north=none,power=15,south=none,west=side`) at this position, at
+  *every* tick including tick 0 (i.e. the real server's own `/setblock`
+  placement pipeline, or an immediately-following `updateShape` pass, already
+  resolves this cell's own real `east` connectivity as `up` — climbing
+  diagonally toward `(2, 2, 0)`'s own wire, one block higher — not the flat
+  `side` this spec's own placement string declares). Left unfixed here for
+  the same reason as this section's first entry: `.ron` corpus specs are
+  fixture content a `fix`/`governance` changeset never touches — needs a
+  `test-authoring` changeset to re-derive `(1, 1, 0)`'s correct `state_id`
+  against the real oracle. Because this position's own `on_shape_update`
+  never fires again after tick 0 in this fixture's own geometry (no later
+  action ever changes one of its neighbors), this specific mismatch persists
+  unchanged across every tick regardless of any wire-logic fix — it is pure
+  fixture content, not an engine defect.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
@@ -185,6 +209,49 @@ Entries name the milestone that surfaced them and the code they concern.
   full reachable id range, or a property-independent "is this any
   `redstone_wire` state" lookup) before wire's own-state writeback can be
   attempted again.
+
+- **M3 field-report fix landed (later wave): wire own-state writeback is now
+  shipped, closing the entry directly above — `tier1_shape_table()`'s own
+  wire entry was widened to the full reachable id range (`4011..=5306`,
+  `crates/physics/src/shapes.rs`), and `WireBehavior` now writes both power
+  and connections back (`crates/mechanics/src/redstone/wire.rs`).** Two
+  further things surfaced landing it, recorded here since both are
+  deliberate, bounded approximations rather than closed gaps:
+  - **The 3-way `up`/`side`/`none` connection state blocks.json's own
+    properties encode is *not* modeled — a connected side is always written
+    `side`, never `up`, discarding real vanilla's own visual "does this side
+    climb diagonally over a step" distinction** (`WireConnections`'s own
+    long-standing boolean-only "does this side connect at all" scope
+    narrowing, now actually reachable/observable now that writeback ships,
+    where before it was inert). Confirmed by direct diff-dump inspection this
+    same wave (`redstone/update_order/wire_climbs_conductor_step_up_down`,
+    Section A's own new entry above): a real oracle-declared `up` state, once
+    any later action causes that position's own `on_shape_update` to
+    re-fire, will be overwritten to `side`/`none` by this approximation
+    instead of staying (or becoming) `up` — this fixture's own single
+    `on_shape_update`-reachable `up` position happens to also be the one
+    that gets legitimately *occluded* (real transition is `up` -> `none`,
+    which this approximation still reaches correctly), so no currently-
+    tracked contraption is known to actually exercise the wrong-direction
+    case (`up` needed but `side` written) — but nothing prevents one from
+    existing. Needs a decision on priority for modeling the real 3-way state
+    (`getConnectingSide`'s own "prefer `UP` when the neighbor's own top face
+    is sturdy" rule, `08-redstone-ticking.md` §3.1) versus leaving this as a
+    permanent, documented simplification.
+  - **`WireBehavior::compute_power`'s own call into the shared
+    `signal::best_neighbor_signal` let an adjacent, shape-connected wire
+    tile's own undecayed weak signal count as a "block signal," bypassing
+    `incoming_wire_signal`'s own `-1`-per-hop decay entirely and propagating
+    undecayed power down an entire wire run — found and fixed (not merely
+    documented) this same wave, since it is an ordinary defect rather than a
+    planning question: `compute_power` now calls a wire-local
+    `block_signal_excluding_wire` instead, mirroring real vanilla's own
+    `shouldSignal`-disabled-while-any-wire-computes-its-own-strength
+    mechanism (`08-redstone-ticking.md` §3.1, "to avoid self-counting").
+    Recorded here only as context for whoever reviews the entry above, not
+    as an open question — no other tier-1 component's own power computation
+    reads a same-class neighbor's raw output this way, so this narrow,
+    wire-specific exclusion is not believed to generalize.**
 
 - **M3 field-report fix in progress: torch/repeater own-state writeback
   landed (this changeset), closing part of the next entry below.** Both
