@@ -34,20 +34,52 @@ use crate::packet_capture::BlockSnapshotView;
 /// the azalea client task make progress between checks.
 const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// The whole-corpus-run bot's offline account name — a single source of truth shared
+/// by both `run_full_corpus_capture`'s own `connect_and_observe` call and
+/// `capture_contraption`'s per-contraption `tp` target, so the two can never drift
+/// apart. Kept at 13 characters, comfortably under vanilla's own 16-character
+/// username limit (`ServerboundHello::name`'s `#[limit(16)]`, azalea-protocol
+/// `packets/login/s_hello.rs`) — the previous `"rc_fetch_corpus_bot"` (19
+/// characters) silently over-ran that limit on write (azalea's own `#[limit]`
+/// enforces only on *read*, never on write), which the real oracle's own Hello
+/// decoder then rejected outright (`DecoderException: Failed to decode packet
+/// 'serverbound/minecraft:hello'`), disconnecting the bot before it ever reached
+/// `Play` state — see `docs/findings-for-planning.md` for the full writeup.
+const CORPUS_BOT_NAME: &str = "rc_corpus_bot";
 /// Real-wall-clock allowance per `tick step 1` (blueprint Context, "Rates and
 /// limits": "≤50 ms per step including the snapshot read" is the *budget*, not a
 /// hard wait — this is simply how long this module gives the oracle's own tick and
 /// the resulting packets time to land before reading the snapshot).
 const TICK_STEP_SETTLE: Duration = Duration::from_millis(50);
 
-async fn wait_for_state_id(view: &BlockSnapshotView, pos: (i32, i32, i32)) -> Option<u32> {
+/// Polls `view` for `pos`'s state id until it matches `expected` or `OBSERVATION_
+/// TIMEOUT` elapses, returning whatever was last observed either way (`None` only
+/// if `pos`'s containing chunk never loaded at all within the deadline).
+///
+/// Polling for a *match*, not merely for *any* reported value, is load-bearing now
+/// that `BlockSnapshotView::state_id_at` reads azalea's own live world model
+/// (`packet_capture`'s own module doc comment): a freshly-loaded chunk reports a
+/// real `Some` state immediately, which for a position observed *before* its
+/// placement has landed is still the pre-placement value, not an absence — stopping
+/// on the first `Some` (this function's own pre-fix behavior) would then report that
+/// stale value as if it were already the placement's result. Waiting for the exact
+/// expected id sidesteps ever needing to distinguish "stale" from "current" by
+/// timestamp; the caller (`capture_contraption`) still surfaces a plain mismatch,
+/// unchanged, if the expected id never arrives before the deadline.
+async fn wait_for_state_id(
+    view: &BlockSnapshotView,
+    pos: (i32, i32, i32),
+    expected: u32,
+) -> Option<u32> {
     let deadline = tokio::time::Instant::now() + OBSERVATION_TIMEOUT;
+    let mut last_seen;
     loop {
-        if let Some(id) = view.state_id_at(pos) {
-            return Some(id);
+        last_seen = view.state_id_at(pos);
+        if last_seen == Some(expected) {
+            return last_seen;
         }
         if tokio::time::Instant::now() >= deadline {
-            return None;
+            return last_seen;
         }
         tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
     }
@@ -138,7 +170,7 @@ pub async fn capture_contraption(
     send_console_command(
         handle,
         &format!(
-            "tp rc_fetch_corpus_bot {} {} {}",
+            "tp {CORPUS_BOT_NAME} {} {} {}",
             origin.0, origin.1, origin.2
         ),
     )?;
@@ -147,13 +179,12 @@ pub async fn capture_contraption(
     for block in &spec.blocks {
         let wp = world_pos(origin, block.pos);
         issue_setblock(handle, wp, &block.vanilla_state)?;
-        let observed =
-            wait_for_state_id(view, wp)
-                .await
-                .ok_or_else(|| CaptureError::ObservationTimeout {
-                    contraption_id: spec.id.clone(),
-                    pos: block.pos,
-                })?;
+        let observed = wait_for_state_id(view, wp, block.state_id)
+            .await
+            .ok_or_else(|| CaptureError::ObservationTimeout {
+                contraption_id: spec.id.clone(),
+                pos: block.pos,
+            })?;
         check_state_id_consistency(block, observed).map_err(|(declared, observed)| {
             CaptureError::StateIdMismatch {
                 contraption_id: spec.id.clone(),
@@ -247,7 +278,7 @@ pub async fn run_full_corpus_capture(
     let (view, _observer) = crate::packet_capture::connect_and_observe(
         "127.0.0.1",
         handle.port,
-        "rc_fetch_corpus_bot",
+        CORPUS_BOT_NAME,
         Duration::from_secs(30),
     )
     .await

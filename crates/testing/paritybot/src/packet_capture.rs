@@ -5,6 +5,31 @@
 //! project types" discipline). `corpus_capture` (this crate's own new module) and
 //! `rc-gametest`'s `capture` module are the only consumers.
 //!
+//! Block-state observation: `BlockSnapshotView::state_id_at` polls azalea's own
+//! live world model (`Client::world()` -> `azalea_world::World::get_block_state`)
+//! rather than duplicating azalea's own chunk-tracking logic by hand-matching
+//! `BlockUpdate`/`SectionBlocksUpdate` packets, per this blueprint's own real-oracle
+//! field report (Implementation step 11 fix, `docs/findings-for-planning.md` has the
+//! full writeup). The hand-matched version only ever saw a position's state if it
+//! changed *after* the bot was already tracking that chunk; the very first placement
+//! in freshly-teleported-into territory is instead delivered baked into the
+//! *initial* `LevelChunkWithLight` full-chunk snapshot — a packet the old code never
+//! parsed at all — which made every capture time out on its very first observed
+//! position. Azalea's own `WorldHolder` component already merges both delivery
+//! paths into one `chunks.get_block_state` lookup (`azalea-client/src/plugins/
+//! chunks.rs`'s `handle_receive_chunk_event` for the initial load, `azalea-client/
+//! src/plugins/block_update.rs`'s `handle_block_update_event` for deltas), so
+//! polling it is strictly more robust than re-deriving the same union by hand, and
+//! it stays byte-identical to `state.id()` the same self-validation
+//! (`check_state_id_consistency`) already trusted for the delta case.
+//!
+//! Comparator analog output has no equivalent azalea-side model (`azalea-world`
+//! tracks block state only, never block-entity NBT), so it still needs its own
+//! packet-derived map — but that map is filled from *both* delivery paths for the
+//! same reason state-id polling had to stop trusting only one: the delta
+//! `BlockEntityData` packet, and the block-entity list embedded in the initial
+//! `LevelChunkWithLight` full-chunk snapshot.
+//!
 //! NBT key note: the comparator analog-output field's NBT tag name
 //! (`extract_comparator_output` below) is taken from minecraft.wiki's own "Chunk
 //! format" documentation (ASSET-D18(f)/ASSET-D30's own primary-source hierarchy —
@@ -17,56 +42,71 @@
 //! class of problem. A wrong key name here affects only the `analog` field, never
 //! `state_id` (this trace format's own separation of concerns, Context: "Comparator
 //! analog value: forward-compatible, not solved here") — never gates this
-//! blueprint's own Tier-1 Done state.
+//! blueprint's own Tier-1 Done state. Block-entity packing (`packed_xz = (x << 4) |
+//! z`, local to the containing chunk section) is likewise minecraft.wiki's own
+//! documented "Chunk Data" wire format, not decompiled source.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use azalea::core::position::BlockPos;
 use azalea::prelude::*;
 
+/// Mirrors `idle_stability`'s own identically-named constant — fine-grained enough
+/// for this module's own bounded waits without over-polling.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PacketCaptureError {
-    #[error("connect/login timed out")]
-    LoginTimeout,
+    #[error("no Event::Spawn observed within the {0:?} login timeout")]
+    LoginTimeout(Duration),
+    #[error("disconnected before Event::Spawn: {reason:?}")]
+    DisconnectedBeforeSpawn { reason: Option<String> },
     #[error("azalea error: {0}")]
     Azalea(String),
 }
 
 type WorldPos = (i32, i32, i32);
-type StateMap = Arc<Mutex<HashMap<WorldPos, u32>>>;
 type AnalogMap = Arc<Mutex<HashMap<WorldPos, u8>>>;
+type ClientSlot = Arc<Mutex<Option<Client>>>;
 
-/// A live, continuously-updated view over one bot session's observed block state
-/// (module doc comment, "Packet observation"). Cheap to clone (`Arc`-backed); every
-/// clone observes the same underlying map.
+/// A live view over one bot session's observed world state (module doc comment,
+/// "Block-state observation"). Cheap to clone (`Arc`-backed); every clone observes
+/// the same underlying session.
 #[derive(Clone, Default)]
 pub struct BlockSnapshotView {
-    states: StateMap,
+    client: ClientSlot,
     analogs: AnalogMap,
 }
 
 impl BlockSnapshotView {
-    /// A freshly-constructed view with no packets recorded yet — this crate's own
-    /// test-only constructor (`packet_capture_types.rs`); `connect_and_observe`
-    /// below constructs one internally and never exposes this constructor to a real
-    /// caller's own choice of empty-vs-populated state.
+    /// A freshly-constructed view with no session attached yet — this crate's own
+    /// test-only constructor; `connect_and_observe` below constructs one internally
+    /// and never exposes this constructor to a real caller's own choice of
+    /// empty-vs-populated state.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// `None` until the bot has both logged in and this exact position's chunk has
+    /// reached azalea's own world model — by construction never a stale value, since
+    /// it is read fresh from that model on every call rather than replayed from a
+    /// packet log (module doc comment).
     pub fn state_id_at(&self, pos: (i32, i32, i32)) -> Option<u32> {
-        self.states.lock().unwrap().get(&pos).copied()
+        let client = self.client.lock().unwrap().clone()?;
+        let world = client.world().ok()?;
+        let block_pos = BlockPos {
+            x: pos.0,
+            y: pos.1,
+            z: pos.2,
+        };
+        let state = world.read().get_block_state(block_pos)?;
+        Some(state.id() as u32)
     }
 
     pub fn analog_at(&self, pos: (i32, i32, i32)) -> Option<u8> {
         self.analogs.lock().unwrap().get(&pos).copied()
-    }
-
-    fn record_state(&self, pos: (i32, i32, i32), state_id: u32) {
-        self.states.lock().unwrap().insert(pos, state_id);
     }
 
     fn record_analog(&self, pos: (i32, i32, i32), value: u8) {
@@ -77,7 +117,7 @@ impl BlockSnapshotView {
 /// Disconnects the bot cleanly on `Drop` (mirrors `idle_stability`'s own
 /// clean-disconnect discipline).
 pub struct ObserverHandle {
-    client: Arc<Mutex<Option<Client>>>,
+    client: ClientSlot,
 }
 
 impl Drop for ObserverHandle {
@@ -88,57 +128,63 @@ impl Drop for ObserverHandle {
     }
 }
 
+/// Handler-updated, poll-observed connection progress — mirrors `idle_stability::
+/// Progress` exactly (module doc comment): a disconnect observed at any point
+/// before `Event::Spawn` is reported immediately by `connect_and_observe`'s own
+/// poll loop rather than left to wait out the rest of `login_timeout` (azalea's own
+/// `ClientBuilder::start` retries forever on its own, per that module's own doc
+/// comment, but a disconnect this early — e.g. the real oracle's Login decoder
+/// rejecting the handshake outright — reproduces identically on every retry, so
+/// there is nothing a fresh wait would ever catch that the first disconnect didn't
+/// already show).
+#[derive(Default)]
+struct Progress {
+    reached_spawn: bool,
+    disconnected: bool,
+    disconnect_reason: Option<String>,
+}
+
 /// The per-bot azalea component (`ClientBuilder::set_handler`'s `S: Default + Send +
 /// Sync + Clone + Component` bound, mirroring `idle_stability::SharedState`'s own
 /// identical shape) — a thin, `Clone`-cheap handle onto this session's
-/// `BlockSnapshotView` plus the most recently seen `Client` (needed only so
-/// `ObserverHandle::drop` can issue a clean disconnect).
+/// `BlockSnapshotView` (whose own `client` slot is kept live here so `ObserverHandle
+/// ::drop` can issue a clean disconnect and so `BlockSnapshotView::state_id_at` can
+/// reach azalea's own world model) plus `Progress`.
 #[derive(Clone, Component, Default)]
 struct SharedView {
     view: BlockSnapshotView,
-    client: Arc<Mutex<Option<Client>>>,
-}
-
-fn record_block_state(
-    view: &BlockSnapshotView,
-    pos: azalea::core::position::BlockPos,
-    state: azalea::block::BlockState,
-) {
-    view.record_state((pos.x, pos.y, pos.z), state.id() as u32);
+    progress: Arc<Mutex<Progress>>,
 }
 
 async fn handle(bot: Client, event: Event, state: SharedView) {
-    *state.client.lock().unwrap() = Some(bot);
+    *state.view.client.lock().unwrap() = Some(bot);
+
+    match &event {
+        Event::Spawn => state.progress.lock().unwrap().reached_spawn = true,
+        Event::Disconnect(reason) => {
+            let mut progress = state.progress.lock().unwrap();
+            if !progress.disconnected {
+                progress.disconnected = true;
+                progress.disconnect_reason = reason.as_ref().map(|component| component.to_string());
+            }
+        }
+        _ => {}
+    }
 
     let Event::Packet(packet) = event else {
         return;
     };
 
     match &*packet {
-        azalea::protocol::packets::game::ClientboundGamePacket::BlockUpdate(update) => {
-            record_block_state(&state.view, update.pos, update.block_state);
-        }
-        azalea::protocol::packets::game::ClientboundGamePacket::SectionBlocksUpdate(update) => {
-            let base = (
-                update.section_pos.x * 16,
-                update.section_pos.y * 16,
-                update.section_pos.z * 16,
-            );
-            for entry in &update.states {
-                let pos = (
-                    base.0 + entry.pos.x as i32,
-                    base.1 + entry.pos.y as i32,
-                    base.2 + entry.pos.z as i32,
-                );
-                state.view.record_state(pos, entry.state.id() as u32);
-            }
-        }
         azalea::protocol::packets::game::ClientboundGamePacket::BlockEntityData(data) => {
             if let Some(output) = extract_comparator_output(&data.tag) {
                 state
                     .view
                     .record_analog((data.pos.x, data.pos.y, data.pos.z), output);
             }
+        }
+        azalea::protocol::packets::game::ClientboundGamePacket::LevelChunkWithLight(chunk) => {
+            record_chunk_block_entities(&state.view, chunk);
         }
         _ => {}
     }
@@ -151,16 +197,51 @@ fn extract_comparator_output(tag: &simdnbt::owned::Nbt) -> Option<u8> {
         .and_then(|value| u8::try_from(value).ok())
 }
 
+/// Extracts every comparator's `OutputSignal` from one `LevelChunkWithLight`'s own
+/// already-parsed `block_entities` list (module doc comment — the initial-load half
+/// of analog observation, mirroring `handle`'s `BlockEntityData` case for the delta
+/// half). `packed_xz`'s nibble order (`(x << 4) | z`, both chunk-section-local) and
+/// `y` being an absolute world coordinate are minecraft.wiki's own documented "Chunk
+/// Data" wire format (module doc comment's own provenance note applies here too).
+fn record_chunk_block_entities(
+    view: &BlockSnapshotView,
+    chunk: &azalea::protocol::packets::game::ClientboundLevelChunkWithLight,
+) {
+    for entity in &chunk.chunk_data.block_entities {
+        let Some(output) = extract_comparator_output(&entity.data) else {
+            continue;
+        };
+        let local_x = (entity.packed_xz >> 4) & 0x0F;
+        let local_z = entity.packed_xz & 0x0F;
+        let pos = (
+            chunk.x * 16 + local_x as i32,
+            entity.y as i32,
+            chunk.z * 16 + local_z as i32,
+        );
+        view.record_analog(pos, output);
+    }
+}
+
 /// Connects one offline-account bot (module doc comment, "Bot connection") and
-/// returns a live `BlockSnapshotView` updated from every clientbound
-/// block-state-affecting packet this session receives — mirrors `idle_stability::
-/// run_idle_stability_scenario`'s own connect-through-`vanilla_registry_defaults`-
-/// relay/`ClientBuilder::start`/`spawn_local` mechanism, but (unlike that module)
-/// does not itself bound the connection's whole lifetime: the returned
-/// `BlockSnapshotView`/`ObserverHandle` stay live for as long as the caller holds
-/// them, driven by the ambient `tokio::task::LocalSet` the caller is expected to be
-/// running inside (mirrored by `fetch_corpus_runner`'s own `main`, which wraps this
-/// whole crate's corpus-capture flow in exactly one `LocalSet::run_until`).
+/// returns a live `BlockSnapshotView` reflecting this session's own world model —
+/// mirrors `idle_stability::run_idle_stability_scenario`'s own
+/// connect-through-`vanilla_registry_defaults`-relay/`ClientBuilder::start`/
+/// `spawn_local` mechanism, but (unlike that module) does not itself bound the
+/// connection's whole lifetime: the returned `BlockSnapshotView`/`ObserverHandle`
+/// stay live for as long as the caller holds them, driven by the ambient
+/// `tokio::task::LocalSet` the caller is expected to be running inside (mirrored by
+/// `fetch_corpus_runner`'s own `main`, which wraps this whole crate's
+/// corpus-capture flow in exactly one `LocalSet::run_until`).
+///
+/// `account_name` must be at most 16 characters — vanilla's own `ServerboundHello.
+/// name` limit (`azalea-protocol`'s own `#[limit(16)]`, enforced only on *read*, so
+/// azalea will happily *write* a longer name and let the real oracle's Login
+/// decoder reject it instead, which is exactly the bug this blueprint's own field
+/// report traced the whole capture pipeline's systemic timeout back to —
+/// `docs/findings-for-planning.md` has the full writeup). Not itself re-validated
+/// here (the corpus-capture caller's own `CORPUS_BOT_NAME` constant is the single
+/// source of truth for its own account name), documented so no future caller
+/// reintroduces the same class of bug.
 pub async fn connect_and_observe(
     host: &str,
     port: u16,
@@ -169,7 +250,8 @@ pub async fn connect_and_observe(
 ) -> Result<(BlockSnapshotView, ObserverHandle), PacketCaptureError> {
     let state = SharedView::default();
     let view = state.view.clone();
-    let client_slot = state.client.clone();
+    let client_slot = state.view.client.clone();
+    let progress = state.progress.clone();
 
     let account = azalea::account::Account::offline(account_name);
 
@@ -195,16 +277,25 @@ pub async fn connect_and_observe(
 
     let deadline = Instant::now() + login_timeout;
     loop {
-        if client_slot.lock().unwrap().is_some() {
-            return Ok((
-                view,
-                ObserverHandle {
-                    client: client_slot,
-                },
-            ));
+        {
+            let progress = progress.lock().unwrap();
+            if progress.reached_spawn {
+                drop(progress);
+                return Ok((
+                    view,
+                    ObserverHandle {
+                        client: client_slot,
+                    },
+                ));
+            }
+            if progress.disconnected {
+                return Err(PacketCaptureError::DisconnectedBeforeSpawn {
+                    reason: progress.disconnect_reason.clone(),
+                });
+            }
         }
         if Instant::now() >= deadline {
-            return Err(PacketCaptureError::LoginTimeout);
+            return Err(PacketCaptureError::LoginTimeout(login_timeout));
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
