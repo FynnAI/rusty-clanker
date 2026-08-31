@@ -281,21 +281,24 @@ fn wire_climbs_one_block_up_through_open_ceiling() {
     wire.on_neighbor_changed(&mut ctx, b, Direction::Up);
     assert_eq!(wire.power(b), 15);
 
-    // Now settle `a`. Its `incoming_wire_signal` candidate set includes `b`'s power via the
-    // "conductor same-height neighbor, open ceiling above `a`" geometry (Context §D case 2) --
-    // but `c` being a genuine conductor with `b` resting directly on top of it *also*
-    // (correctly, independently) broadcasts `b`'s full, undecayed power to `a` via ordinary
-    // quasi-connectivity (`direct_signal_to(c)` picks up `b.direct_signal_toward(b, Down)`,
-    // Context §A's own worked QC example generalized from torch to wire) -- these two paths are
-    // both real and always coincide whenever the climb geometry's own same-height neighbor is a
-    // real conductor, so `compute_power`'s own `max` of the two can never observably isolate the
-    // climb-specific "-1" decay from ordinary QC's undecayed contribution in this configuration
-    // (QC always dominates or ties). This assertion verifies the correct *composed* outcome --
-    // `a` ends up fully powered, proving wire correctly climbs the staircase end-to-end --
-    // rather than a decayed value no reachable geometry could actually produce here.
+    // Now settle `a`. `a`'s own `incoming_wire_signal` candidate set includes `b`'s power via
+    // the "conductor same-height neighbor, open ceiling above `a`" geometry (Context §D case 2)
+    // -- decayed by 1, giving 14. `c` being a genuine conductor with `b` resting directly on top
+    // of it *also*, geometrically, has a QC path back to `a` (`direct_signal_to(c)` would pick
+    // up `b.direct_signal_toward(b, Down)`) -- but M3 field-report fix (Task 1, `wire.rs`'s own
+    // `block_signal`/`should_signal` doc comments): vanilla's real `shouldSignal` flag lives on
+    // the single `RedStoneWireBlock` instance shared by *every* wire tile, so it is `false` for
+    // `b` too while `a`'s own `compute_power` holds it down -- this is exactly what stops a
+    // wire from reading its own power back through a QC bounce off its own support (the bug this
+    // fix closes, confirmed against three real-oracle parity-check diffs), and it applies
+    // uniformly to *any* other wire's QC contribution during that same window, not only a
+    // self-reference. `b`'s QC path is therefore suppressed here too, leaving only the decayed
+    // `incoming_wire_signal` path live -- `a` settles at 14, not 15. (This assertion previously
+    // expected 15, reasoning that the QC path and the decay path "always coincide"; that
+    // reasoning predates this fix and never accounted for `shouldSignal`'s real blanket scope.)
     let mut ctx = h.ctx();
     wire.on_neighbor_changed(&mut ctx, a, Direction::East);
-    assert_eq!(wire.power(a), 15);
+    assert_eq!(wire.power(a), 14);
 }
 
 #[test]
@@ -464,8 +467,11 @@ fn wire_own_state_writeback_is_a_no_op_when_power_is_unchanged() {
 /// each side as blocks.json's own `side`/`none` (never `up` — a documented, bounded
 /// approximation; only `on_neighbor_changed`'s own power-only writeback ever preserves a
 /// pre-existing `up` bit, by construction, since it never touches the connection digits at
-/// all). Id cited off blocks.json (protocol 776): a source only to the East gives
-/// `east=side,north=none,power=0,south=none,west=none` = state `4739`.
+/// all). A source only to the East also leaves the perpendicular (north/south) axis fully open,
+/// so `compute_connection_shapes`'s own straight-line default (M3 field-report fix, Task 1)
+/// auto-connects the opposite (west) side too: `east=side,north=none,power=0,south=none,
+/// west=side` = state `4738` (blocks.json, protocol 776) — not `4739` (`west=none`), this
+/// test's own former expectation before that rule was implemented.
 #[test]
 fn wire_own_state_writeback_reflects_computed_connections() {
     let wire = setup_wire(vec![(
@@ -482,7 +488,7 @@ fn wire_own_state_writeback_reflects_computed_connections() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
 
-    assert_eq!(result, Some(BlockStateId(4739)));
+    assert_eq!(result, Some(BlockStateId(4738)));
 }
 
 /// M3 field-report fix (Task 2): the shape-update-cascade hang hazard the previous wave found
@@ -511,7 +517,9 @@ fn wire_own_state_writeback_returns_none_once_the_stored_id_already_matches() {
 
     let mut ctx = h.ctx();
     let first = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
-    assert_eq!(first, Some(BlockStateId(4739)));
+    // `4738`, not `4739` -- the same straight-line auto-connect (west=side) as
+    // `wire_own_state_writeback_reflects_computed_connections`'s own updated doc comment.
+    assert_eq!(first, Some(BlockStateId(4738)));
     // Simulate `dispatch_one`'s own real caller contract: the returned id is written back
     // before the cascade would continue.
     ctx.world.set_block(pos, first.unwrap());
@@ -593,7 +601,9 @@ fn wire_ignores_floor_support_on_a_horizontal_shape_update() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
 
-    assert_eq!(result, Some(BlockStateId(4739)));
+    // `4738`, not `4739` -- the same straight-line auto-connect (west=side) as
+    // `wire_own_state_writeback_reflects_computed_connections`'s own updated doc comment.
+    assert_eq!(result, Some(BlockStateId(4738)));
 }
 
 /// Destruction also clears this position's own side-table state (Context: a future
@@ -637,8 +647,13 @@ fn wire_destruction_clears_its_own_stored_state() {
 /// M3 field-report fix (Task 4): the real 3-way `up`/`side`/`none` connection shape --
 /// `getConnectingSide`'s own "climb a step" case (`08-redstone-ticking.md` §3.1): a solid
 /// conductor at same height with a wire one block up on its own far side, and this position's
-/// own ceiling open, renders `east=up` (not `side`) -- blocks.json (protocol 776):
-/// `east=up,north=none,power=0,south=none,west=none` = state 4307.
+/// own ceiling open, renders `east=up` (not `side`). North/south stay empty, but (M3 field-report
+/// fix, Task 1) the perpendicular axis being fully open auto-connects the opposite (west) side
+/// too, exactly as the flat-`side` case does -- confirmed against a real oracle diff showing this
+/// same interaction (`redstone/update_order/wire_climbs_conductor_step_up_down`'s own `(1,1,0)`,
+/// `docs/findings-for-planning.md`): `east=up,north=none,power=0,south=none,west=side` = state
+/// `4306` (blocks.json, protocol 776) -- not `4307` (`west=none`), this test's own former
+/// expectation before that rule was implemented.
 #[test]
 fn wire_own_state_writeback_reflects_up_climb_shape() {
     let wire = setup_wire(vec![]);
@@ -655,12 +670,13 @@ fn wire_own_state_writeback_reflects_up_climb_shape() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
 
-    assert_eq!(result, Some(BlockStateId(4307)));
+    assert_eq!(result, Some(BlockStateId(4306)));
 }
 
 /// The mirror case: identical geometry, but `pos`'s own ceiling is now a real conductor
 /// (occluded) -- the climb must not register, and (since the same-height neighbor is a plain
-/// conductor, not itself a signal source) the side reads `none`, not `up` or `side`.
+/// conductor, not itself a signal source) the side reads `none` before straight-line
+/// post-processing, not `up` or `side`.
 #[test]
 fn wire_climb_shape_is_gated_by_the_conductor_occlusion_rule() {
     let wire = setup_wire(vec![]);
@@ -675,9 +691,62 @@ fn wire_climb_shape_is_gated_by_the_conductor_occlusion_rule() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
 
-    // The recomputed shape (`east=none, rest none, power=0`) is identical to `pos`'s own
-    // already-placed `WIRE_ID` -- the "gate on did-it-actually-change" fixed-point rule
-    // (`new_connections_state_id`'s own doc comment) correctly reports `None`, not a no-op
-    // `Some`, confirming no `up` (or even `side`) connection was ever registered.
-    assert_eq!(result, None);
+    // With the climb occluded, `pos` has no real connection on any of its four sides -- a fully
+    // isolated wire tile. M3 field-report fix (Task 1): vanilla's own straight-line default
+    // (`compute_connection_shapes`'s own doc comment) auto-connects *all four* sides as `Side`
+    // in exactly this case (confirmed against a real oracle diff showing this same fully-isolated
+    // pattern, `redstone/update_order/wire_climbs_conductor_step_up_down`'s own `(4,1,0)`) --
+    // `east=side,north=side,power=0,south=side,west=side` = state `4591`, which differs from
+    // `pos`'s own already-placed bare `WIRE_ID` (`5171`, all-`none`), so this is a real `Some`,
+    // not the no-op `None` this test formerly expected (written before the straight-line default
+    // was implemented).
+    assert_eq!(result, Some(BlockStateId(4591)));
+}
+
+/// M3 field-report fix (Task 1): a wire must never read its own stored power back through a
+/// quasi-connectivity bounce off its own supporting conductor. `pos` sits on `floor` (a real
+/// conductor); nothing else touches `floor` except `pos` itself. `floor` is a conductor, so
+/// `emitted_toward(floor, Up)` -- reached while recomputing an *unrelated* neighbor direction --
+/// would (bug) fold in `direct_signal_to(floor)`, which scans all six of `floor`'s own faces,
+/// one of which is `pos` looking back down at it (`WireBehavior::direct_signal_toward`'s own
+/// `towards == Down` case) -- a genuine self-read, confirmed against a real oracle diff
+/// (`redstone/update_order/wire_cross_shape_connectivity`'s own tick-4 removal, `docs/findings-
+/// for-planning.md`). `block_signal`'s own `should_signal` flag (`getBlockSignal`'s doc comment)
+/// closes this: `pos` first settles to a real, nonzero power from a genuine West source: once
+/// that source is gone and `pos` is re-triggered, its power must drop all the way to 0, not
+/// stay stuck at its own last value via the floor bounce.
+#[test]
+fn wire_does_not_read_its_own_power_back_through_its_supporting_conductor() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 1, 0);
+    let floor = Direction::Down.apply(pos);
+    let west = Direction::West.apply(pos);
+    h.world.set_block(floor, CONDUCTOR);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(west, SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    assert_eq!(
+        wire.power(pos),
+        15,
+        "must pick up the real West source first"
+    );
+
+    // The source is gone (replaced by an inert conductor, not itself a signal source) -- only
+    // `floor`'s own QC bounce back through `pos`'s own last-written power could keep `pos` lit.
+    h.world.set_block(west, CONDUCTOR);
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    assert_eq!(
+        wire.power(pos),
+        0,
+        "a wire with no real signal source left anywhere nearby must settle to 0, not read its \
+         own previous power back through the conductor it stands on"
+    );
 }
