@@ -271,10 +271,48 @@ async fn capture_contraption_body(
     });
 
     // Step 9: scripted actions + tick-step loop.
+    //
+    // Governance fix (M3 field-report, one-tick capture lag): each action's own
+    // `/setblock` used to be fired-and-forgotten straight into `tick step 1` with no
+    // confirmation that the bot's own live world model (`BlockSnapshotView::
+    // state_id_at`, azalea-backed, module doc comment) had actually caught up with
+    // it yet — `state_id_at` is never *stale* (always read fresh off azalea's own
+    // model) but it can absolutely be *early*, if the placement's own resulting
+    // packet simply has not arrived and been processed before the snapshot below
+    // reads it. `spec.rs`'s own `ScriptedAction::tick` doc comment ("applied at the
+    // *start* of this tick, before that tick's Stage-4 pass") and `rc_gametest::
+    // replay`'s own implementation of that identical contract both settle the
+    // action *before* the tick it belongs to runs — so tick `t`'s own snapshot must
+    // already reflect it. Confirming the placement here, mirroring Step 7's own
+    // "wait for the exact declared id, not just any value" discipline exactly,
+    // before `tick step 1` even runs, closes that race: the previous code's only
+    // synchronization was a flat `TICK_STEP_SETTLE` sleep *after* stepping, which
+    // was long enough for the tick-step itself but not reliably long enough for an
+    // as-yet-unconfirmed action's own placement packet to have landed too, so its
+    // observable effect silently surfaced one whole snapshot late throughout this
+    // whole corpus (every single-mismatch case, plus a uniform "+1 tick" shift
+    // everywhere else). This also closes `comparator_subtract_zero_clamp.ron`'s own
+    // previously-flagged gap ("this action is never live-validated by fetch-corpus
+    // (only `blocks:` entries are)") for every fixture at once, not just that one.
     for t in 1..=spec.max_ticks as u64 {
         for action in spec.actions.iter().filter(|a| a.tick == t) {
             let wp = world_pos(origin, action.pos);
             issue_setblock(handle, wp, &action.vanilla_state)?;
+            let observed = wait_for_state_id(view, wp, action.state_id)
+                .await
+                .ok_or_else(|| CaptureError::ObservationTimeout {
+                    contraption_id: spec.id.clone(),
+                    pos: action.pos,
+                })?;
+            if observed != action.state_id {
+                return Err(CaptureError::StateIdMismatch {
+                    contraption_id: spec.id.clone(),
+                    pos: action.pos,
+                    declared: action.state_id,
+                    observed,
+                    vanilla_state: action.vanilla_state.clone(),
+                });
+            }
         }
         send_console_command(handle, "tick step 1")?;
         tokio::time::sleep(TICK_STEP_SETTLE).await;
