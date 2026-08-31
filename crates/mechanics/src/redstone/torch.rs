@@ -47,6 +47,12 @@ struct TorchState {
 const TORCH_FLOOR_BASE: u32 = 6885;
 const TORCH_WALL_BASE: u32 = 6887;
 
+/// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
+/// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
+/// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency
+/// (WS-D3 rule 1).
+const AIR_ID: BlockStateId = BlockStateId(0);
+
 /// Redstone torch (Context §E). One instance per region (Context §I).
 pub struct TorchBehavior {
     attachment: TorchAttachment,
@@ -257,13 +263,28 @@ impl BlockBehavior for TorchBehavior {
         self.set_burnt_out(pos, false);
         self.reeval_tick(ctx, pos);
     }
+    /// M3 field-report fix (Task 1): support-loss destruction — `BaseTorchBlock` survives only
+    /// if its support (floor torch: the block below; wall torch: its own attached block, both
+    /// `TorchAttachment::input_direction`) remains solid; a shape update arriving from that same
+    /// direction destroys the torch (returns air) if it is now gone
+    /// (`08-redstone-ticking.md` §3.7/Notes: "or `Blocks.AIR.defaultBlockState()` to
+    /// self-destruct, e.g. a torch losing its supporting wall"). `should_pop`'s own pre-existing
+    /// "no mutation" query already implements the exact support check this now actually wires
+    /// up; every other trigger direction is unaffected (Context §E: detection only elsewhere).
+    /// Also clears this position's own side-table state, so a future re-placement here starts
+    /// fresh rather than inheriting the destroyed torch's last `lit`/`burnt_out` values.
     fn on_shape_update(
         &self,
-        _ctx: &mut UpdateContext,
-        _pos: BlockPos,
-        _from: Direction,
+        ctx: &mut UpdateContext,
+        pos: BlockPos,
+        from: Direction,
         _neighbor_state: BlockStateId,
     ) -> Option<BlockStateId> {
-        None // Context §E: detection only, via `should_pop`; no mutation here.
+        if from == self.attachment.input_direction() && self.should_pop(ctx.world, pos) {
+            self.state.lock().unwrap().remove(&pos);
+            self.recent_toggles.lock().unwrap().remove(&pos);
+            return Some(AIR_ID);
+        }
+        None
     }
 }

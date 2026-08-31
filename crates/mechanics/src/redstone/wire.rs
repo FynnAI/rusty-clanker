@@ -42,6 +42,18 @@ fn is_wire_range(raw: u32) -> bool {
     (WIRE_BASE..=WIRE_MAX).contains(&raw)
 }
 
+/// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
+/// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
+/// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency
+/// (WS-D3 rule 1).
+const AIR_ID: BlockStateId = BlockStateId(0);
+
+/// `RedStoneWireBlock::canSurvive` (Context/research doc §3.1/Notes): a wire tile requires a
+/// conductor directly beneath it. Mirrors `TorchBehavior::should_pop`'s identical role/shape.
+fn should_pop(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
+    !signal::is_conductor(world, Direction::Down.apply(pos))
+}
+
 /// blocks.json's own per-direction `[up, side, none]` index (`up`=0, `side`=1, `none`=2) —
 /// this project's own `WireConnections` only ever tracks "does this side connect at all"
 /// (Context §D's documented scope narrowing, restated on that struct's own doc comment below),
@@ -422,13 +434,24 @@ impl BlockBehavior for WireBehavior {
             signal::notify_neighbor_changed_only(ctx, dir.apply(pos));
         }
     }
+    /// M3 field-report fix (Task 1): support-loss destruction — a `Down`-direction shape update
+    /// destroys the wire (returns air) if its own floor support (`should_pop`, this module's own
+    /// top-of-file helper) is gone, mirroring `TorchBehavior::on_shape_update`'s identical fix;
+    /// every other trigger direction is unaffected and falls straight through to the existing
+    /// connections recompute below. Also clears this position's own side-table state, so a
+    /// future re-placement here starts fresh rather than inheriting the destroyed wire's last
+    /// power/connections.
     fn on_shape_update(
         &self,
         ctx: &mut UpdateContext,
         pos: BlockPos,
-        _from: Direction,
+        from: Direction,
         _neighbor_state: BlockStateId,
     ) -> Option<BlockStateId> {
+        if from == Direction::Down && should_pop(ctx.world, pos) {
+            self.state.lock().unwrap().remove(&pos);
+            return Some(AIR_ID);
+        }
         let registry = Arc::clone(self.registry());
         let connections = self.compute_connections(ctx.world, &registry, pos);
         self.state
