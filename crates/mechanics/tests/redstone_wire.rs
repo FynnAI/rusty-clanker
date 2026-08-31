@@ -346,15 +346,29 @@ fn wire_write_back_fires_7_cell_plus_notify_only_on_change() {
     assert_eq!(wire.power(pos), 15);
 
     // Count total emitted `NeighborChanged` items across the 7-cell-plus (pos + its own 6
-    // neighbors, Context §D) -- 7 origins x 6 directions each = 42, and zero `ShapeUpdate`
-    // items anywhere (Context §D: "No shape update is fired").
+    // neighbors, Context §D) -- 7 origins x 6 directions each = 42 base notifications, and zero
+    // `ShapeUpdate` items anywhere (Context §D: "No shape update is fired"). Plus, M3
+    // field-report fix (Task 1): `notify_neighbor_changed_only`'s own QC relay (`signal.rs`'s
+    // own doc comment) adds one further hop wherever a directly-notified neighbor is itself a
+    // conductor -- `SOURCE_ID` here is never registered in `rc_physics::tier1_shape_table()`,
+    // so it resolves as a conductor via that table's own documented "unlisted id defaults to
+    // `default_full_cube()`" fallback (correct for this project's own real block ids, e.g. plain
+    // stone, even though a real lever/button -- what `SOURCE_ID` stands in for here -- is not
+    // actually a full cube; `tier1_shape_table()` is a shared, global, hand-authored table with
+    // no lever entry, not something a test can override). Only the outer `notify_neighbor_
+    // changed_only(pos)` call's own West direction hits this (`pos`'s only conductor neighbor,
+    // `SOURCE_ID` itself), adding one relay hop's worth (6 more) beyond the base 42: `7 * 6 + 6
+    // = 48`.
     let mut neighbor_changed_count = 0usize;
     let mut shape_update_count = 0usize;
     h.engine.drain(&mut |_eng, item| match item {
         PendingUpdate::NeighborChanged { .. } => neighbor_changed_count += 1,
         PendingUpdate::ShapeUpdate { .. } => shape_update_count += 1,
     });
-    assert_eq!(neighbor_changed_count, 7 * NEIGHBOR_CHANGED_ORDER.len());
+    assert_eq!(
+        neighbor_changed_count,
+        7 * NEIGHBOR_CHANGED_ORDER.len() + NEIGHBOR_CHANGED_ORDER.len()
+    );
     assert_eq!(shape_update_count, 0);
 
     // Second trigger: recomputed value is unchanged (source still 15) -> zero further

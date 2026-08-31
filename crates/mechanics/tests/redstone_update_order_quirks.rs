@@ -28,7 +28,15 @@ use rc_messaging::{Address, BorderUpdateKind, RegionId, RegionMessage};
 use support::{FakeWorld, TestSignalSource};
 
 const TORCH_ID: BlockStateId = BlockStateId(1);
-const WIRE_ID: BlockStateId = BlockStateId(2);
+/// `rc_physics::tier1_shape_table()`'s own real, registered non-conductor `redstone_wire` id
+/// (matching `redstone_wire.rs`'s own established `WIRE_ID` convention) -- M3 field-report fix
+/// (Task 1): unlike an arbitrary small placeholder, this specific value matters now that
+/// `notify_neighbor_changed_only`'s own QC relay (`signal.rs`'s own doc comment) checks
+/// `is_conductor` on every notified position; a wire tile that *itself* wrongly resolved as a
+/// conductor (any unregistered id's fallback) would relay through itself, an invariant this
+/// module's own `cross_region_redstone_signal_delivered_at_neighbors_next_stage4` test depends
+/// on not happening.
+const WIRE_ID: BlockStateId = BlockStateId(5171);
 const ORIGIN_ID: BlockStateId = BlockStateId(3);
 const ORIGIN_NEW_ID: BlockStateId = BlockStateId(4);
 const SOURCE_ID: BlockStateId = BlockStateId(5);
@@ -313,12 +321,14 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
     let ev = origin_events[0];
     assert_eq!(ev.chunk, east_chunk);
     assert_eq!(ev.pos, origin);
-    assert_eq!(
-        ev.kind,
-        BorderUpdateKind::BlockChanged {
-            new_state: WIRE_ID.0
-        }
-    );
+    // `WIRE_ID` (this module's own doc comment on that constant) is now a real, registered
+    // wire-range id, so `on_neighbor_changed`'s own writeback (unaffected by this test's own
+    // change, `wire.rs`'s established behavior) fires for real: `origin` settles at power 15
+    // (from `SOURCE_ID`, West) with no connections computed (no `on_shape_update` ever runs in
+    // this test) -- `east=none,north=none,power=15,south=none,west=none` = state `5306`
+    // (`redstone_wire.rs`'s own identical `wire_own_state_writeback_reflects_computed_power`
+    // precedent), not the bare placement id `WIRE_ID.0` this assertion formerly expected.
+    assert_eq!(ev.kind, BorderUpdateKind::BlockChanged { new_state: 5306 });
 
     // Region B's own inbound processing (mirrors `cross_region_border.rs`'s own established
     // pattern) -- applying the event locally only records the halo and fans out to B's own
@@ -341,7 +351,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
     };
     rc_mechanics::border::apply_inbound_border_event(&mut ctx_b, &mut halo_b, ev);
 
-    assert_eq!(halo_b.get(ev.pos), Some(WIRE_ID));
+    assert_eq!(halo_b.get(ev.pos), Some(BlockStateId(5306)));
     assert!(
         outbound_b.is_empty(),
         "region B must never re-forward an inbound border event"

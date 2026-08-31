@@ -12,6 +12,10 @@ use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::{
     self, RedstoneSignalSource, SignalSourceRegistry, TorchAttachment, TorchBehavior,
 };
+use rc_mechanics::{
+    BlockEventQueue, NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue,
+    UpdateContext,
+};
 
 use support::{FakeWorld, TestSignalSource};
 
@@ -95,5 +99,62 @@ fn weak_signal_gated_by_connects_from() {
     assert_eq!(
         redstone::emitted_toward(&world, &registry, pos, Direction::West),
         7
+    );
+}
+
+/// M3 field-report fix (Task 1): `notify_neighbor_changed_only`'s own QC relay --
+/// `SignalGetter.getSignal`'s conductor rule (research doc §3.1/Notes) means a conductor's own
+/// aggregate signal can change purely because one of its six faces changed, so a position
+/// reading *through* that conductor from a *different* face needs its own recompute retriggered
+/// too, not only the conductor's immediate neighbor in the direction the original change came
+/// from. Geometry: `at` -- East --> `conductor` (a plain, unregistered/full-cube block) -- East
+/// --> `far` (two hops from `at`, sharing no face with `at` at all). Confirmed against a real
+/// oracle diff (`redstone/qc/wire_strong_vs_weak_power_door`'s own `(1,1,1)`, `docs/findings-
+/// for-planning.md`).
+#[test]
+fn notify_relays_through_a_conductor_neighbor_to_its_own_far_side() {
+    let mut world = FakeWorld::new();
+    let at = BlockPos::new(0, 0, 0);
+    let conductor = Direction::East.apply(at);
+    let far = Direction::East.apply(conductor);
+    world.set_block(at, BlockStateId(1));
+    world.set_block(conductor, PLAIN);
+    world.set_block(far, BlockStateId(2));
+
+    let local = world.local;
+    let mut engine = NeighborUpdateEngine::new();
+    let mut scheduled = ScheduledTickQueue::new();
+    let mut events = BlockEventQueue::new();
+    let mut outbound = Vec::new();
+    let ownership = RegionOwnership::always_local(local);
+    let mut ctx = UpdateContext {
+        world: &mut world,
+        engine: &mut engine,
+        scheduled: &mut scheduled,
+        events: &mut events,
+        outbound: &mut outbound,
+        ownership: &ownership,
+        current_tick: 0,
+    };
+
+    redstone::notify_neighbor_changed_only(&mut ctx, at);
+
+    let mut reached_far = false;
+    engine.drain(&mut |_eng, item| {
+        if let PendingUpdate::NeighborChanged { pos, from } = item
+            && pos == far
+        {
+            assert_eq!(
+                from,
+                Direction::West,
+                "far must see the relay coming from its own West"
+            );
+            reached_far = true;
+        }
+    });
+    assert!(
+        reached_far,
+        "notify_neighbor_changed_only(at) must relay through its conductor neighbor to reach a \
+         position on that conductor's own far side, two hops from `at`"
     );
 }

@@ -112,13 +112,18 @@ fn torch_inverter_full_cycle() {
     }
     assert!(!torch.lit(t));
 
+    // 6 base notifications (`t`'s own 6 neighbors) plus, M3 field-report fix (Task 1):
+    // `notify_neighbor_changed_only`'s own QC relay hop (`signal.rs`'s own doc comment) --
+    // `SUPPORT_ID` is never registered in `rc_physics::tier1_shape_table()`, so it resolves as
+    // a conductor via that table's own "unlisted id defaults to `default_full_cube()`"
+    // fallback, adding one relay hop's worth (6 more) through the support's own 6 neighbors.
     let mut notify_count = 0usize;
     h.engine.drain(&mut |_eng, item| {
         if let PendingUpdate::NeighborChanged { .. } = item {
             notify_count += 1;
         }
     });
-    assert_eq!(notify_count, 6);
+    assert_eq!(notify_count, 12);
 
     // tick 2: S becomes unpowered again.
     support.set_power(0);
