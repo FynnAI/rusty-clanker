@@ -42,6 +42,8 @@ pub enum CaptureError {
     },
     #[error("{0}")]
     JavaNotFound(String),
+    #[error("oracle setup command(s) not acknowledged within {0:?}: {1}")]
+    SetupCommandsRejected(Duration, String),
 }
 
 /// Resolves the `java` executable used to launch the oracle server, trying (in
@@ -108,11 +110,82 @@ impl Drop for OracleServerHandle {
     }
 }
 
+/// Reads the oracle's own persistent console log (`<work_dir>/logs/latest.log`),
+/// which Log4j's own `RollingFile` appender writes fresh on every JVM startup
+/// (confirmed live: a prior run's own `latest.log` is rolled into a dated
+/// `logs/<date>-<n>.log.gz` archive before the new process's first line lands, so
+/// this never needs to skip past a previous run's own leftover content) and — unlike
+/// this handle's own `Stdio::null()`'d stdout/stderr (`launch_oracle_server`'s own
+/// spawn call) — regardless of how this process's own stdio is redirected. Returns
+/// an empty string, never an error, for a not-yet-created file: every caller polls
+/// this in a retry loop where "nothing there yet" is an ordinary, expected state, not
+/// a defect.
+pub fn read_server_log(work_dir: &Path) -> String {
+    std::fs::read_to_string(work_dir.join("logs").join("latest.log")).unwrap_or_default()
+}
+
+/// Polls `read_server_log(work_dir)` until every `(command, expected_ack)` pair in
+/// `commands_and_acks` has its own `expected_ack` substring present, or `timeout`
+/// elapses. Governance fix ("make console-command failures VISIBLE"): this handle's
+/// own stdout is `Stdio::null()`'d (`launch_oracle_server`'s own spawn call), so a
+/// console command vanilla silently rejects used to vanish without a trace —
+/// `docs/findings-for-planning.md` records a whole capture pipeline running
+/// unfrozen, with un-set gamerules, for this exact reason, undetected until a
+/// dedicated real-oracle investigation. `read_server_log` reads the one channel that
+/// still carries the feedback regardless of this process's own stdio redirection.
+///
+/// Deliberately checks only for the *positive* acknowledgement each accepted setup
+/// command is empirically confirmed to produce (`gamerule <name> <value>` logs
+/// `Gamerule <name> is now set to: <value>`; `tick freeze` logs `The game is
+/// frozen` — both verified live against the pinned 26.2 jar), never for the negative
+/// rejection text — a rejected command's own wording varies by failure kind (`An
+/// unexpected error occurred while trying to execute that command` for one observed
+/// live here, `Incorrect argument for command` plus the echoed command text for
+/// another, both also confirmed live) and a future vanilla build could easily add a
+/// third; absence of the one known-good acknowledgement is sufficient on its own and
+/// never needs this function to keep pace with every possible rejection wording.
+pub fn verify_setup_commands_accepted(
+    work_dir: &Path,
+    commands_and_acks: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<(), CaptureError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let log = read_server_log(work_dir);
+        let missing: Vec<&str> = commands_and_acks
+            .iter()
+            .filter(|(_, ack)| !log.contains(ack))
+            .map(|(cmd, _)| *cmd)
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(CaptureError::SetupCommandsRejected(
+                timeout,
+                missing.join(", "),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Writes `eula.txt`/`server.properties` into `work_dir` (blueprint Context, "Capture
 /// pipeline" step 2's exact property list), spawns `<resolved java> -jar <jar_path>
 /// nogui` (see `resolve_java_binary`) with piped stdin and `work_dir` as the current
-/// directory, polls a raw TCP connect against `port` until one succeeds or
-/// `startup_timeout` elapses.
+/// directory, polls a raw TCP connect against `port` until one succeeds, then —
+/// governance fix, empirically motivated — keeps polling `read_server_log` until it
+/// contains `]: Done (`, up to the same overall `startup_timeout` budget. A bare TCP
+/// accept is necessary but not sufficient: `ServerConnectionListener` starts
+/// accepting connections slightly *before* the console command dispatcher is fully
+/// live (both confirmed live, same boot log, roughly a second apart on this
+/// machine), and a command written to stdin inside that window is silently
+/// swallowed — logged only as `An unexpected error occurred while trying to execute
+/// that command`, with no echo of which command it was, unlike a genuine
+/// syntax/argument rejection. Gating readiness on `Done` closes that window instead
+/// of leaving every caller to discover it (`verify_setup_commands_accepted` still
+/// catches it if it somehow recurs, but preventing it here is strictly better than
+/// merely detecting it after an already-wasted capture attempt).
 pub fn launch_oracle_server(
     jar_path: &Path,
     work_dir: &Path,
@@ -146,7 +219,7 @@ pub fn launch_oracle_server(
     let deadline = Instant::now() + startup_timeout;
     loop {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Ok(OracleServerHandle { child, port });
+            break;
         }
         if let Ok(Some(_status)) = child.try_wait() {
             // The process already exited — never keep polling a dead child.
@@ -158,6 +231,25 @@ pub fn launch_oracle_server(
             return Err(CaptureError::OracleStartupTimeout(startup_timeout));
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // TCP accepting is necessary but not sufficient (this function's own doc
+    // comment) — keep polling the same overall `deadline` for the console command
+    // pipeline to actually be live before handing the caller a handle it will
+    // immediately start writing setup commands to.
+    loop {
+        if read_server_log(work_dir).contains("]: Done (") {
+            return Ok(OracleServerHandle { child, port });
+        }
+        if let Ok(Some(_status)) = child.try_wait() {
+            return Err(CaptureError::OracleStartupTimeout(startup_timeout));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CaptureError::OracleStartupTimeout(startup_timeout));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 

@@ -729,52 +729,6 @@ Entries name the milestone that surfaced them and the code they concern.
   packet-level timing data on the hopper's own per-tick fullness sequence to
   pin down safely); recorded as a residual rather than forced.
 
-- **`xtask fetch-corpus`'s own `tick freeze` and all four `gamerule ...`
-  console commands fail silently every single run — the oracle's own console
-  logs `An unexpected error occurred while trying to execute that command` /
-  `Incorrect argument for command` for every one of them, every session,
-  confirmed across every server log this milestone's own governance pass
-  captured — while `tick step 1` (issued later, same `tick` command family)
-  succeeds cleanly every time (`Stepping 1 tick(s)` feedback).** Net effect:
-  the oracle world is never actually frozen and `randomTickSpeed`/
-  `doMobSpawning`/`doDaylightCycle`/`doWeatherCycle` are never actually
-  changed from their vanilla defaults during capture — it ticks in real time
-  throughout the whole capture pipeline, `tick step 1` just adds *extra*
-  ticks on top of whatever real time already elapsed between commands.
-  Directly verified as the cause of genuine, reproducible non-determinism:
-  capturing each of `basic_piston_door_2x1`, `piston_retract_pull_sticky_vs_
-  normal`, and `piston_extend_block_event_same_tick_chain` three times back-
-  to-back (this milestone's own governance idempotency fix applied first, so
-  each capture is a real, independent attempt, not a cache hit) produced
-  three different `trace.postcard` file sizes and three different SHA-256
-  hashes for every one of the three fixtures — never bit-identical. A tick-
-  by-tick diff between repeat captures of the same fixture shows the *same
-  declared tick number* holding a *different piston animation phase* between
-  runs (e.g. `basic_piston_door_2x1` tick 2 at `(1, 1, 0)`: one capture shows
-  the piston head already extended, `state_id 2275`; another shows it still
-  retracted, `state_id 1`) — exactly the signature of real-wall-clock tick
-  drift, not a capture-order or placement race. `piston_retract_pull_sticky_
-  vs_normal` shows the same class of divergence at **tick 0**, before any
-  `tick step 1` has even been issued, meaning a piston can already be mid-
-  animation by the time the tick-0 snapshot is taken. Because the oracle
-  traces are themselves this unstable, `xtask parity-check redstone`'s own
-  diffs against them for these three fixtures (5, 12, and 13 mismatches
-  respectively, all clustered on piston extend/retract timing at the exact
-  positions the repeat-capture diff above already flags as unstable) cannot
-  be trusted as evidence of a real engine defect versus oracle-side capture
-  jitter — a meaningful piston-parity verdict needs `tick freeze` genuinely
-  working first. Root cause (why the exact syntax fails) not diagnosed
-  further here — needs either the correct `tick freeze`/`gamerule` invocation
-  syntax for this pinned build (`tick freeze` may need an explicit argument
-  in 26.2, unlike the historical no-argument form; the four `gamerule` calls'
-  own well-established two-token syntax failing identically suggests a
-  broader console-command-parsing regression in this specific build rather
-  than four independent syntax changes) or a different mechanism entirely for
-  pinning the oracle's own tick rate during capture. Out of this changeset's
-  own scope (a `fix`/`governance` changeset touching `corpus_capture.rs`
-  again for a capture-determinism concern unrelated to the slot-residue bug
-  it was scoped to) — left for a dedicated follow-up.
-
 - **A zombie oracle `server.jar` process from an earlier, externally-
   interrupted `fetch-corpus` invocation can keep listening on port 25566
   indefinitely, silently absorbing every subsequent run's bot connection
@@ -1183,3 +1137,35 @@ Entries name the milestone that surfaced them and the code they concern.
   never touches) — needs a `test-authoring` changeset to re-derive the
   correct `state_id` against the real oracle, the same way the
   `wire_climbs_conductor_step_up_down` entry above already was.
+
+- **`M3-B07-redstone-corpus.md`'s own Step 4 and its contraption-roster row
+  19 named the pre-26.x camelCase `gamerule` forms — `doDaylightCycle`,
+  `doWeatherCycle`, `randomTickSpeed`, `doMobSpawning` — which the pinned
+  26.2 build's own `gamerule` argument type rejects outright, verified live
+  against the real oracle jar (`Incorrect argument for command`, the
+  offending command echoed back with a trailing `<--[HERE]` marker in
+  `logs/latest.log`).** This is why `xtask fetch-corpus`'s own setup
+  gamerules previously had no effect every single run (formerly documented
+  above as an open question — a whole prior session's own real-oracle piston-
+  capture-jitter investigation, in fact caused by exactly this — now resolved
+  and removed, since the fix is a genuine one, not merely a diagnosis).
+  Corrected in place to the real 26.2 names — `advance_time`,
+  `advance_weather`, `random_tick_speed`, `spawn_mobs` — confirmed live to be
+  accepted, each producing its own `Gamerule <name> is now set to: <value>`
+  acknowledgement in the oracle's log. `corpus_capture.rs`'s own
+  `run_full_corpus_capture` now sends these corrected names and, as a second,
+  independent hardening, verifies each one's own acknowledgement actually
+  landed (`rc_gametest::capture::verify_setup_commands_accepted`, reading
+  `<work_dir>/logs/latest.log` — the one channel that still carries console
+  feedback even though this handle's own stdout is `Stdio::null()`'d) instead
+  of trusting a clean write to stdin as proof of oracle acceptance.
+  `launch_oracle_server`'s own readiness gate was also strengthened to wait
+  for the oracle's own `Done (` log line, not merely a successful TCP
+  connect — live probing found a real (if narrow, sub-second) window where a
+  command written to stdin immediately after the port starts accepting
+  connections but before the console dispatcher is fully live is silently
+  swallowed (`An unexpected error occurred while trying to execute that
+  command`, no command echoed) rather than genuinely rejected or accepted.
+  Planning reconciliation: none needed — `09-testing-quality.md`/M3-B07 never
+  named these gamerule strings at the decision-ID level, only in this one
+  blueprint's own Deliverables-level prose, now corrected to match.

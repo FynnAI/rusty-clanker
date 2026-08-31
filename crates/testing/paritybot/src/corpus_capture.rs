@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use rc_gametest::capture::{
     CaptureError, OracleServerHandle, check_state_id_consistency, send_console_command,
+    verify_setup_commands_accepted,
 };
 use rc_gametest::spec::{ContraptionSpec, bounding_box, world_origin_for};
 use rc_gametest::trace::{
@@ -536,17 +537,43 @@ pub async fn run_full_corpus_capture(
         Duration::from_secs(120),
     )?;
 
-    // Step 3: freeze immediately — the very first command written to stdin.
-    send_console_command(&mut handle, "tick freeze")?;
-    // Step 4: gamerules — eliminates every non-redstone source of block-state change.
-    for gamerule in [
-        "gamerule doDaylightCycle false",
-        "gamerule doWeatherCycle false",
-        "gamerule randomTickSpeed 0",
-        "gamerule doMobSpawning false",
-    ] {
-        send_console_command(&mut handle, gamerule)?;
+    // Step 3/4: freeze immediately — the very first commands written to stdin — then
+    // the gamerules that eliminate every non-redstone source of block-state change.
+    // Governance fix: the four gamerule names below used to be the pre-26.x
+    // camelCase forms (`doDaylightCycle`/`doWeatherCycle`/`randomTickSpeed`/
+    // `doMobSpawning`), which the pinned 26.2 build's own `gamerule` argument type
+    // rejects outright (`Incorrect argument for command`, confirmed live) — every
+    // one of these four silently never took effect, every run, until now. Each
+    // command is paired with the exact positive-acknowledgement substring the
+    // pinned oracle logs for it once actually accepted (confirmed live against the
+    // real jar), verified below via `verify_setup_commands_accepted` instead of
+    // trusting `send_console_command`'s own success (which only means the write to
+    // stdin succeeded, never that the oracle accepted the command — this same
+    // silent-rejection failure mode is exactly what let the stale names above go
+    // unnoticed for as long as they did, `docs/findings-for-planning.md`).
+    const SETUP_COMMANDS: [(&str, &str); 5] = [
+        ("tick freeze", "The game is frozen"),
+        (
+            "gamerule advance_time false",
+            "Gamerule advance_time is now set to: false",
+        ),
+        (
+            "gamerule advance_weather false",
+            "Gamerule advance_weather is now set to: false",
+        ),
+        (
+            "gamerule random_tick_speed 0",
+            "Gamerule random_tick_speed is now set to: 0",
+        ),
+        (
+            "gamerule spawn_mobs false",
+            "Gamerule spawn_mobs is now set to: false",
+        ),
+    ];
+    for (command, _expected_ack) in SETUP_COMMANDS {
+        send_console_command(&mut handle, command)?;
     }
+    verify_setup_commands_accepted(work_dir, &SETUP_COMMANDS, Duration::from_secs(10))?;
 
     // Step 6: one bot connection for the whole corpus run.
     let (view, _observer) = crate::packet_capture::connect_and_observe(
