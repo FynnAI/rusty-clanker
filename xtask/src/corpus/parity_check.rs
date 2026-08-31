@@ -1,10 +1,10 @@
 //! `xtask parity-check redstone` (blueprint Deliverables): first verifies the
 //! committed corpus manifest, then replays every loaded `ContraptionSpec` through
-//! `rc_gametest::replay` (unmodified M3-B01 Stage-4 core, `tier1_registry` — zero
-//! real component behaviors) and diffs against the cached, live-oracle-captured
+//! `rc_gametest::replay` (unmodified M3-B01 Stage-4 core, `tier1_registry` — governance
+//! fix: now wires the real M3-B04/M3-B05 tier-1 component registrations, `tier1_registry`'s
+//! own doc comment has the full citation) and diffs against the cached, live-oracle-captured
 //! trace. Never runs in Tier 1 (Context, "CI tier placement") — a scheduled/nightly
-//! job only, wired but not required to be meaningfully green until every sibling
-//! M3 component-behavior blueprint has also landed.
+//! job only.
 
 use std::path::PathBuf;
 
@@ -179,7 +179,7 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
             }
         };
 
-        let registry = tier1_registry();
+        let registry = tier1_registry(&spec);
         let actual = replay_contraption(&spec, &registry, None);
 
         match diff_traces(&expected, &actual) {

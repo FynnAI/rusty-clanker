@@ -14,11 +14,27 @@ fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("corpus/redstone")
 }
 
+/// A spec with no blocks at all — sufficient for the two `tier1_registry` tests below, which
+/// only probe `BlockBehaviorRegistry::resolve` and never dispatch, so no repeater/comparator/
+/// piston placement seeding is ever needed.
+fn empty_spec() -> ContraptionSpec {
+    ContraptionSpec {
+        id: "test/synthetic/empty".to_string(),
+        category: Category::UpdateOrderProbe,
+        description: "synthetic".to_string(),
+        quirk: "synthetic — no blocks, used only to probe tier1_registry's own resolve() contract"
+            .to_string(),
+        max_ticks: 0,
+        blocks: vec![],
+        actions: vec![],
+    }
+}
+
 #[test]
 fn replay_contraption_never_produces_a_nonempty_outbound() {
     let path = corpus_dir().join("torch_inverter_basic.ron");
     let spec = load_spec(&path).expect("load torch_inverter_basic.ron");
-    let registry = tier1_registry();
+    let registry = tier1_registry(&spec);
 
     // A single always_local region can never route a message cross-region
     // (Deliverables, `replay_contraption`'s own doc comment) — `replay_contraption`
@@ -29,19 +45,48 @@ fn replay_contraption_never_produces_a_nonempty_outbound() {
 }
 
 #[test]
-fn tier1_registry_resolves_every_state_to_noop() {
-    let registry = tier1_registry();
+fn tier1_registry_resolves_unregistered_ids_to_the_shared_noop_default() {
+    let registry = tier1_registry(&empty_spec());
 
-    // No range is ever registered (Context, "Scope boundary" — this blueprint ships
-    // zero real component behaviors), so every arbitrary state id must resolve to
-    // the identical shared default handler — proven by pointer identity across
-    // widely different ids, never merely "some handler that happens to do nothing".
+    // Governance fix (M3 field-report): `tier1_registry` now wires the real M3-B04/M3-B05
+    // tier-1 registrations (`tier1_registry`'s own doc comment has the full citation), so this
+    // contract narrows from "every id" to "every id outside a registered tier-1 range" — still
+    // proven by pointer identity across widely different unregistered ids, never merely "some
+    // handler that happens to do nothing". `0`/`12_345`/`u32::MAX` are all deliberately outside
+    // every tier-1 range this module registers (wire/torch/repeater/comparator/piston).
     let low = registry.resolve(BlockStateId(0));
     let mid = registry.resolve(BlockStateId(12_345));
     let high = registry.resolve(BlockStateId(u32::MAX));
 
     assert!(Arc::ptr_eq(low, mid));
     assert!(Arc::ptr_eq(low, high));
+}
+
+#[test]
+fn tier1_registry_resolves_registered_redstone_ids_to_real_behaviors() {
+    let registry = tier1_registry(&empty_spec());
+    let noop = registry.resolve(BlockStateId(0));
+
+    // One representative id per registered range (the same literals
+    // `crates/mechanics/tests/piston_structure_resolver.rs` and
+    // `crates/physics/src/shapes.rs` already use for these same blocks) — each must resolve to
+    // something other than the shared `NoOpBehavior` default now that `tier1_registry` wires
+    // the real components.
+    for id in [
+        4591,  // redstone_wire
+        6885,  // redstone_torch (floor)
+        6891,  // redstone_wall_torch
+        7037,  // repeater
+        11264, // comparator
+        2258,  // piston
+        2236,  // sticky_piston
+    ] {
+        let resolved = registry.resolve(BlockStateId(id));
+        assert!(
+            !Arc::ptr_eq(resolved, noop),
+            "state id {id} should resolve to a real tier-1 behavior, not the NoOp default"
+        );
+    }
 }
 
 /// `snapshot_volume` (Deliverables) is a private helper of `replay.rs` — this test
@@ -82,7 +127,7 @@ fn snapshot_volume_covers_the_full_bounding_box_in_canonical_order() {
         actions: vec![],
     };
 
-    let registry = tier1_registry();
+    let registry = tier1_registry(&spec);
     let trace = replay_contraption(&spec, &registry, None);
     let tick0 = &trace.ticks[0];
 
