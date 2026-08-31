@@ -52,6 +52,17 @@ const PISTON_HEAD: BlockStateId = BlockStateId(900_001);
 const CHEST: BlockStateId = BlockStateId(3988);
 const FURNACE: BlockStateId = BlockStateId(5328);
 const HOPPER: BlockStateId = BlockStateId(11313);
+/// M3 field-report fix: real vanilla `PistonBaseBlock.isPushable`'s own hardcoded-identity
+/// exception list (checked ahead of, and independent of, the `getDestroySpeed == -1` rule
+/// `BEDROCK` above already exercises) — all four have positive hardness (breakable), so only
+/// this explicit identity check makes them `Immovable`, not the bedrock rule. Ids read directly
+/// off `datagen-output/26.2/generated/reports/blocks.json`, protocol 776 (single-state blocks
+/// except `RESPAWN_ANCHOR`, whose `charges` property never affects pushability — the default,
+/// `charges=0`, state id is used here).
+const OBSIDIAN: BlockStateId = BlockStateId(3369);
+const CRYING_OBSIDIAN: BlockStateId = BlockStateId(21820);
+const RESPAWN_ANCHOR: BlockStateId = BlockStateId(21821);
+const REINFORCED_DEEPSLATE: BlockStateId = BlockStateId(32085);
 
 fn local_ownership() -> RegionOwnership {
     RegionOwnership::always_local(Address::Region(RegionId(0)))
@@ -73,6 +84,10 @@ fn classify_matches_tier1_table() {
 
     let immovable_rows = [
         BEDROCK,
+        OBSIDIAN,
+        CRYING_OBSIDIAN,
+        RESPAWN_ANCHOR,
+        REINFORCED_DEEPSLATE,
         PISTON_EXTENDED,
         PISTON_EXTENDED_REAL,
         PISTON_HEAD,
