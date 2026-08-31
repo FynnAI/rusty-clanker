@@ -28,12 +28,16 @@ fn shipped_ron_files() -> Vec<PathBuf> {
 }
 
 #[test]
-fn loads_all_five_shipped_ron_files() {
+fn loads_every_shipped_ron_file_and_meets_the_ac1_floor() {
     let files = shipped_ron_files();
-    assert_eq!(
-        files.len(),
-        5,
-        "expected exactly 5 committed .ron fixtures, found {files:?}"
+    // M3 roadmap AC1's own corpus floor (11-roadmap-milestones.md): >= 50 committed
+    // contraptions. A floor, not an exact count -- TEST-D42 licenses incremental,
+    // code-authored corpus growth, so an exact-count assertion would turn every
+    // legitimate addition into a test edit.
+    assert!(
+        files.len() >= 50,
+        "expected at least 50 committed .ron fixtures (AC1 floor), found {}",
+        files.len()
     );
 
     for path in &files {
