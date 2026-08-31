@@ -123,6 +123,13 @@ async fn recv_packet_of_type(
     }
 }
 
+/// Stage budgets are pure HANG GUARDS, deliberately sized for a starved shared CI
+/// runner (a 2-core host running the rest of the suite concurrently) -- the same
+/// reasoning as login_configuration_flow's outer budgets. Two structural races this
+/// test used to carry (bystander keep-alive starvation; the join/action mpsc race
+/// itself) are fixed and pinned by the assertions below, which are load-independent;
+/// after those fixes the only remaining CI failures were plain budget exhaustion
+/// under runner contention, never wrong packets.
 /// Per-stage timeout wrapper: a hang names its exact stage instead of collapsing into
 /// one opaque whole-test deadline. Added after CI's `windows-2025` runner hit that
 /// opaque deadline twice (runs 33022662264 / 33023447974) while the same code stayed
@@ -149,7 +156,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
     // other already-connected player" shape of the real production race.
     let (mut bystander, mut bystander_acc) = staged(
         "bystander-join",
-        Duration::from_secs(30),
+        Duration::from_secs(60),
         spawn_actor(&world, "bystander", 1),
     )
     .await;
@@ -199,7 +206,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // forever).
             let ack = staged(
                 "phantom-ack",
-                Duration::from_secs(15),
+                Duration::from_secs(45),
                 recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID),
             )
             .await;
@@ -215,7 +222,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // was lost again.
             let update = staged(
                 "phantom-block-update",
-                Duration::from_secs(15),
+                Duration::from_secs(45),
                 recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID),
             )
             .await;
@@ -229,7 +236,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // is never left silently unread for however long those actually take.
             let bystander_update = staged(
                 "bystander-block-update",
-                Duration::from_secs(15),
+                Duration::from_secs(45),
                 recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID),
             )
             .await;
