@@ -9,7 +9,14 @@ ContraptionSpec(
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4873),
+        // M3 field-report test-authoring fix (Task 5): the real oracle's own `/setblock`
+        // placement pipeline already resolves this cell's own `east` connectivity as `up`
+        // (climbing diagonally toward (2, 2, 0)'s own wire, one block higher), not the flat
+        // `side` this entry's own declared id previously encoded -- confirmed against a fresh
+        // `fetch-corpus` capture, `docs/findings-for-planning.md`'s own "wire_climbs_conductor_
+        // step_up_down (1, 1, 0)" entry. `east=up,north=none,power=15,south=none,west=side` =
+        // state 4441 (`datagen-output/26.2/generated/reports/blocks.json`, protocol 776).
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4441),
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (2, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (2, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4864),

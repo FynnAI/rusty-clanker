@@ -280,7 +280,7 @@
     },
     {
       "path": "wire_climbs_conductor_step_up_down.ron",
-      "sha256": "16332bfd35ad5eb3e02e3ac49c81a03b511b6f22aa937d35f6110b4763613ffb",
+      "sha256": "700ac8e0dde78500b0431ecaec1c14b168d5731596201fb4c21c1cd44e838ee5",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
