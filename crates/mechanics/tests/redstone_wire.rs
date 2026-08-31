@@ -32,18 +32,31 @@ const NON_CONDUCTOR: BlockStateId = WIRE_ID;
 /// resolves to `default_full_cube()` (a plain conductor, Context §B).
 const CONDUCTOR: BlockStateId = BlockStateId(9_999_003);
 
-/// One `WireBehavior` plus a `SignalSourceRegistry` carrying it (at `WIRE_ID`) and every
-/// `extra` entry, bound together (Context §I½) in a single, consistent construction — avoiding
-/// the registry-self-reference two-phase dance's own "never rebind" constraint by building the
-/// final registry once, before `bind_registry` is ever called.
+/// blocks.json's own real `minecraft:redstone_wire` id range (protocol 776, matching
+/// `wire.rs`'s own private `WIRE_BASE`/`WIRE_MAX`) — `setup_wire` registers this whole range
+/// (M3 field-report fix: own-state writeback), not only `WIRE_ID` alone, since a dispatch that
+/// writes a position's own real computed id (this fix's whole point) moves that position's
+/// stored id off `WIRE_ID` the moment it first changes; a later dispatch elsewhere that reads
+/// *that* position's own power via `raw_wire_power` (e.g. a neighbor's own `incoming_wire_
+/// signal`) must still resolve it as wire, or the signal is silently lost at exactly the id
+/// that changed (mirrors `redstone_repeater.rs`'s own established "widen the registered range once
+/// a component's own writeback moves its id" precedent).
+const WIRE_RANGE_LO: BlockStateId = BlockStateId(4011);
+const WIRE_RANGE_HI: BlockStateId = BlockStateId(5307); // exclusive
+
+/// One `WireBehavior` plus a `SignalSourceRegistry` carrying it (at every real wire id,
+/// `WIRE_RANGE_LO..WIRE_RANGE_HI`) and every `extra` entry, bound together (Context §I½) in a
+/// single, consistent construction — avoiding the registry-self-reference two-phase dance's own
+/// "never rebind" constraint by building the final registry once, before `bind_registry` is
+/// ever called.
 fn setup_wire(
     extra: Vec<(BlockStateId, BlockStateId, Arc<dyn RedstoneSignalSource>)>,
 ) -> Arc<WireBehavior> {
     let wire = Arc::new(WireBehavior::new());
     let mut signals = SignalSourceRegistry::new();
     signals.register_range(
-        WIRE_ID,
-        BlockStateId(WIRE_ID.0 + 1),
+        WIRE_RANGE_LO,
+        WIRE_RANGE_HI,
         Arc::clone(&wire) as Arc<dyn RedstoneSignalSource>,
     );
     for (start, end, source) in extra {
@@ -143,6 +156,80 @@ fn wire_signal_falloff_along_a_straight_line() {
     let expected: Vec<u8> = (0..20u8).map(|i| 15u8.saturating_sub(i)).collect();
     let actual: Vec<u8> = positions.iter().map(|&p| wire.power(p)).collect();
     assert_eq!(actual, expected);
+}
+
+/// M3 field-report fix (Task 2 follow-up, surfaced empirically via `cargo run -p xtask --
+/// parity-check redstone` regressing `redstone/pulse/wire_signal_decay_15_chain` once own-state
+/// writeback made real connections observable): once real east/west connectivity is
+/// established between adjacent wire tiles (`on_shape_update`'s own real job — simulated here
+/// via `set_connections`, this file's own established "bypass on_shape_update" convenience,
+/// `wire_output_is_gated_by_connections_horizontally_only`'s own precedent), `compute_power`'s
+/// own `best_neighbor_signal` call must not let a connected neighbor wire's own undecayed
+/// `weak_signal_toward` output count as a "block signal" — real vanilla's own
+/// `getBlockSignal`/`level.getBestNeighborSignal` disables wire's own `isSignalSource` for
+/// exactly this reason (research doc §3.1: "to avoid self-counting"), forcing all wire-to-wire
+/// power transfer through `incoming_wire_signal`'s own dedicated `-1`-per-hop walk instead.
+/// Without this, position 1's own undecayed `power=15` would short-circuit position 2's own
+/// `block_signal == 15` check directly, propagating power=15 with zero decay down the entire
+/// run — exactly the bug this test pins.
+#[test]
+fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+
+    let positions: Vec<BlockPos> = (0..5).map(|i| BlockPos::new(i, 0, 0)).collect();
+    for &p in &positions {
+        h.world.set_block(p, WIRE_ID);
+    }
+    h.world.set_block(BlockPos::new(-1, 0, 0), SOURCE_ID);
+
+    for (i, &p) in positions.iter().enumerate() {
+        wire.set_connections(
+            p,
+            WireConnections {
+                west: true,
+                east: i + 1 < positions.len(),
+                north: false,
+                south: false,
+            },
+        );
+    }
+
+    h.engine.emit_single(PendingUpdate::NeighborChanged {
+        pos: positions[0],
+        from: Direction::West,
+    });
+    let Harness {
+        world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+    } = &mut h;
+    engine.drain(&mut |eng, item| {
+        if let PendingUpdate::NeighborChanged { pos, from } = item
+            && world.get_block(pos).is_some()
+        {
+            let mut ctx = UpdateContext {
+                world: &mut *world,
+                engine: eng,
+                scheduled,
+                events,
+                outbound,
+                ownership,
+                current_tick: 0,
+            };
+            wire.on_neighbor_changed(&mut ctx, pos, from);
+        }
+    });
+
+    let actual: Vec<u8> = positions.iter().map(|&p| wire.power(p)).collect();
+    assert_eq!(actual, vec![15, 14, 13, 12, 11]);
 }
 
 #[test]
