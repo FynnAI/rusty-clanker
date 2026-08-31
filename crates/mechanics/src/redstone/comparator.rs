@@ -78,7 +78,11 @@ fn comparator_state_id(facing: Direction, mode: ComparatorMode, powered: bool) -
 
 /// Comparator (Context §G). One instance per region (Context §I).
 pub struct ComparatorBehavior {
-    facing: HashMap<BlockPos, Direction>,
+    /// M3 field-report fix (Task 2): interior-mutable, mirroring `RepeaterBehavior::facing`'s
+    /// own identical rationale — `place` must be `&self`-callable so a comparator's own facing
+    /// can be updated after this behavior has already been wrapped in an `Arc` and registered
+    /// (`docs/findings-for-planning.md`'s own "diode re-placement" entry).
+    facing: Mutex<HashMap<BlockPos, Direction>>,
     state: Mutex<HashMap<BlockPos, ComparatorState>>,
     containers: Arc<dyn ContainerSignalSource>,
     /// Bound once via `bind_registry`, read by every `BlockBehavior` body (Context §I½).
@@ -88,16 +92,21 @@ pub struct ComparatorBehavior {
 impl ComparatorBehavior {
     pub fn new(containers: Arc<dyn ContainerSignalSource>) -> Self {
         Self {
-            facing: HashMap::new(),
+            facing: Mutex::new(HashMap::new()),
             state: Mutex::new(HashMap::new()),
             containers,
             registry: OnceLock::new(),
         }
     }
 
-    pub fn place(&mut self, pos: BlockPos, facing: Direction, mode: ComparatorMode) {
-        self.facing.insert(pos, facing);
-        self.state.get_mut().unwrap().insert(
+    /// Establishes (or, called again for an already-registered position, *replaces*) a
+    /// comparator's facing and mode — a full replace-on-replace, resetting every other
+    /// per-position field to its own fresh-placement default, mirroring `RepeaterBehavior::
+    /// place`'s identical M3 field-report fix (Task 2: placement-state seeding is now
+    /// re-entrant).
+    pub fn place(&self, pos: BlockPos, facing: Direction, mode: ComparatorMode) {
+        self.facing.lock().unwrap().insert(pos, facing);
+        self.state.lock().unwrap().insert(
             pos,
             ComparatorState {
                 powered: false,
@@ -127,6 +136,8 @@ impl ComparatorBehavior {
     pub fn facing(&self, pos: BlockPos) -> Direction {
         *self
             .facing
+            .lock()
+            .unwrap()
             .get(&pos)
             .expect("ComparatorBehavior::facing: position was never placed")
     }
@@ -362,5 +373,29 @@ impl BlockBehavior for ComparatorBehavior {
             ctx.world.set_block(pos, id);
             signal::notify_neighbor_changed_only(ctx, pos);
         }
+    }
+
+    /// M3 field-report fix (Task 2): reseeds `facing`/`mode` (a full replace-on-replace via
+    /// `place`, `place`'s own doc comment) directly off `pos`'s own current raw id — the exact
+    /// inverse of `comparator_state_id`'s own arithmetic, mirroring `RepeaterBehavior::on_placed`
+    /// and `seed_powered_from_world`'s established decode-from-raw-id pattern. A caller with its
+    /// own freshly-written `BlockStateId` at `pos` (a real `/setblock`-shaped placement, never
+    /// this behavior's own internal writeback) calls `on_placed` instead of a losing, ordering-
+    /// sensitive direct `place()` call of its own.
+    fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        let rel = current.0.wrapping_sub(COMPARATOR_BASE);
+        if rel >= 16 {
+            return; // not a real comparator id -- defensive only, dispatch never reaches here otherwise
+        }
+        let facing = signal::diode_facing_from_index(rel / 4);
+        let mode = if (rel % 4) / 2 == 0 {
+            ComparatorMode::Compare
+        } else {
+            ComparatorMode::Subtract
+        };
+        self.place(pos, facing, mode);
     }
 }

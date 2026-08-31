@@ -129,6 +129,21 @@ pub trait BlockBehavior: Send + Sync {
     }
     fn on_scheduled_tick(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     fn on_block_event(&self, _ctx: &mut UpdateContext, _pos: BlockPos, _event: &BlockEvent) {}
+    /// M3 field-report fix (Task 2): called whenever a caller that owns both a live placement
+    /// pipeline and this position's own freshly-written `BlockStateId` wants to (re-)seed a
+    /// behavior's own per-position placement state (facing/delay/mode — whatever a concrete
+    /// implementor's own `place()`-equivalent setup needs) directly off that id, without a
+    /// separate, position-losing `place()` call of its own. Default no-op — most behaviors need
+    /// no such bookkeeping at all (wire/torch/piston already self-heal or take placement
+    /// properties as constructor/`place()` arguments that do not vary per re-placement in this
+    /// project's own current scope). `RepeaterBehavior`/`ComparatorBehavior` override this to
+    /// decode their own facing/delay/mode straight from `pos`'s own current raw id — the same
+    /// arithmetic their own `write_state_id`/`seed_powered_from_world` already use in the other
+    /// direction — closing the "a diode re-placed at an already-registered position has no way
+    /// to update its own facing" gap (`docs/findings-for-planning.md`'s own "diode
+    /// re-placement" entry) without requiring every caller that ever writes a fresh block to
+    /// know which concrete behavior type it just placed.
+    fn on_placed(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     /// New (M3-B06): called once per drawn random-tick candidate position (Context:
     /// "Random-tick position selection"). Default no-op — `NoOpBehavior` and every
     /// already-shipped M3-B01 implementor need zero changes (additive, backward-compatible).

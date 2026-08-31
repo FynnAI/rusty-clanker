@@ -295,6 +295,23 @@ pub(crate) fn diode_facing_index(facing: Direction) -> u32 {
     }
 }
 
+/// Inverse of `diode_facing_index` (M3 field-report fix, Task 2) — recovers a diode's own
+/// `facing` from its own stored `BlockStateId`'s facing digit, the read-side companion
+/// `RepeaterBehavior::on_placed`/`ComparatorBehavior::on_placed` need to reseed their own
+/// facing side-table directly off a freshly-(re)placed position's real id, without requiring an
+/// explicit `place()` call from the caller. Panics on an out-of-range index (`0..=3` only,
+/// mirroring `diode_facing_index`'s own panic contract) — every real caller derives `index` via
+/// `% 4` arithmetic on a position already known to be a diode, so this can never actually fire.
+pub(crate) fn diode_facing_from_index(index: u32) -> Direction {
+    match index {
+        0 => Direction::North,
+        1 => Direction::South,
+        2 => Direction::West,
+        3 => Direction::East,
+        other => panic!("diode_facing_from_index: index must be 0..=3, got {other}"),
+    }
+}
+
 /// The two horizontal directions perpendicular to `facing`'s own axis, in a fixed (but
 /// otherwise arbitrary — every caller takes the `max` of both) order (Context §F: repeater's
 /// `alternate_signal`; Context §G: comparator's side-input reading). Shared between

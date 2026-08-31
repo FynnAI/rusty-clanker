@@ -58,7 +58,14 @@ fn repeater_state_id(
 
 /// Repeater (Context §F). One instance per region (Context §I).
 pub struct RepeaterBehavior {
-    facing: HashMap<BlockPos, Direction>, // set once, at placement time — this blueprint's tests seed it directly
+    /// M3 field-report fix (Task 2): interior-mutable (`&self`-callable `place`, matching
+    /// `state`'s own pre-existing `Mutex` shape) — a real composition root has no way to update
+    /// a repeater's own facing after this behavior has ever been registered into a shared
+    /// `BlockBehaviorRegistry`/`SignalSourceRegistry` (both wrap it in an `Arc` immediately
+    /// after construction), so `place` must be re-callable through a shared reference for a
+    /// player (or a replay's own scripted action) breaking and re-placing a repeater to ever
+    /// observe a new facing (`docs/findings-for-planning.md`'s own "diode re-placement" entry).
+    facing: Mutex<HashMap<BlockPos, Direction>>,
     state: Mutex<HashMap<BlockPos, RepeaterState>>,
     /// Bound once via `bind_registry`, read by every `BlockBehavior` body and by `is_locked`
     /// (Context §I½).
@@ -68,17 +75,22 @@ pub struct RepeaterBehavior {
 impl RepeaterBehavior {
     pub fn new() -> Self {
         Self {
-            facing: HashMap::new(),
+            facing: Mutex::new(HashMap::new()),
             state: Mutex::new(HashMap::new()),
             registry: OnceLock::new(),
         }
     }
 
-    /// Test/composition-root-only: establishes a repeater's fixed facing and delay setting
-    /// (placement is out of this blueprint's scope, Context §F).
-    pub fn place(&mut self, pos: BlockPos, facing: Direction, delay_setting: u8) {
-        self.facing.insert(pos, facing);
-        self.state.get_mut().unwrap().insert(
+    /// Establishes (or, called again for an already-registered position, *replaces*) a
+    /// repeater's facing and delay setting — a full replace-on-replace, resetting every other
+    /// per-position field to its own fresh-placement default (`powered: false`, `seeded:
+    /// false`, mirroring a genuinely new block replacing whatever previously occupied this
+    /// position), not a partial update (M3 field-report fix, Task 2: placement-state seeding is
+    /// now re-entrant — callable any number of times for the same position, including after this
+    /// behavior has been wrapped in an `Arc` and registered).
+    pub fn place(&self, pos: BlockPos, facing: Direction, delay_setting: u8) {
+        self.facing.lock().unwrap().insert(pos, facing);
+        self.state.lock().unwrap().insert(
             pos,
             RepeaterState {
                 powered: false,
@@ -91,6 +103,8 @@ impl RepeaterBehavior {
     pub fn facing(&self, pos: BlockPos) -> Direction {
         *self
             .facing
+            .lock()
+            .unwrap()
             .get(&pos)
             .expect("RepeaterBehavior::facing: position was never placed")
     }
@@ -350,5 +364,26 @@ impl BlockBehavior for RepeaterBehavior {
                 ctx.schedule_block_tick(pos, self.get_delay(pos), TickPriority::VeryHigh);
             }
         }
+    }
+
+    /// M3 field-report fix (Task 2): reseeds `facing`/`delay_setting` (a full replace-on-replace
+    /// via `place`, `place`'s own doc comment) directly off `pos`'s own current raw id — the
+    /// exact inverse of `repeater_state_id`'s own arithmetic, mirroring `seed_powered_from_
+    /// world`'s established decode-from-raw-id pattern. A caller with its own freshly-written
+    /// `BlockStateId` at `pos` (a real `/setblock`-shaped placement, never this behavior's own
+    /// internal writeback, which goes through the raw world accessor and never reaches this
+    /// hook) calls `on_placed` instead of a losing, ordering-sensitive direct `place()` call of
+    /// its own.
+    fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        let rel = current.0.wrapping_sub(REPEATER_BASE);
+        if rel >= 64 {
+            return; // not a real repeater id -- defensive only, dispatch never reaches here otherwise
+        }
+        let delay_setting = (rel / 16) as u8 + 1;
+        let facing = signal::diode_facing_from_index((rel % 16) / 4);
+        self.place(pos, facing, delay_setting);
     }
 }
