@@ -470,11 +470,16 @@ Entries name the milestone that surfaced them and the code they concern.
 
   **(Update, M3 field-report fix wave, Section B): the 1-vs-2-tick
   inconsistency itself is resolved — retract's own base-flip is always
-  deferred, uniformly `COMMIT_DELAY_TICKS` (2), never special-cased; the
-  disagreeing single-tick traces this entry's own Task 2 paragraph reports
-  are attributed to Section E's own recapture-stability finding below
-  (real-wall-clock drift during capture, not a genuine vanilla asymmetry).**
-  Deleted the immediate `write_base_extended(..., false)` call this
+  deferred, uniformly `COMMIT_DELAY_TICKS` (2), never special-cased, per this
+  wave's own explicit brief instruction (the disagreeing single-tick traces
+  this entry's own Task 2 paragraph reports were suspected capture
+  artifacts — real-wall-clock drift during capture letting an in-flight
+  piston animation age invisibly between `tick step` commands, not a
+  genuine vanilla asymmetry). That suspicion is NOT independently confirmed
+  by this pass — see the new "Section E recapture attempt" entry below for
+  why (the live-oracle recapture needed to actually test it could not be
+  completed in this environment).** Deleted the immediate
+  `write_base_extended(..., false)` call this
   blueprint's own Task 3 fix added to `on_block_event`'s
   `TRIGGER_CONTRACT`/`TRIGGER_DROP` arm — `commit_retract`'s own deferred
   writeback (already present, at the 2-tick commit) is now the only base
@@ -506,6 +511,41 @@ Entries name the milestone that surfaced them and the code they concern.
   own multi-block/sticky-pull geometry, the still-undocumented intermediate
   `MOVING_PISTON` placeholder gap this blueprint's own Context §E already
   names (Section 152 above) remains the most likely real explanation.
+
+- **Section E recapture attempt (M3 field-report fix wave): the live-oracle
+  recapture this wave's own brief asked for, to test whether the piston
+  1-vs-2-tick base-flip contradiction (this entry's own Task 2 paragraph)
+  is a real vanilla asymmetry or a capture-time wall-clock-drift artifact,
+  could not be completed in this environment — recorded honestly rather
+  than fabricating a stability verdict either way.** The code-level
+  mitigation itself landed (`crates/testing/paritybot/src/corpus_capture.rs`:
+  `TICK_STEP_SETTLE` tightened `50ms -> 20ms`, minimizing the real-wall-clock
+  gap between consecutive `tick step 1` commands during the simulation
+  phase). But `launch_oracle_server`'s own TCP-readiness poll against the
+  cached oracle jar (`crates/testing/gametest/src/capture.rs`, untouched by
+  this wave) timed out at 120s with no server ever reaching a ready state,
+  reproducibly, across two attempts via the real `xtask fetch-corpus`
+  pipeline; a direct manual launch of the identical jar in the identical
+  work directory also exited within seconds of its own logged "Done" with
+  no external command ever sent (a graceful save-and-stop sequence, not a
+  crash or hang) — inconsistent with the same harness having successfully
+  captured the currently-committed `corpus/redstone/` trace cache at some
+  earlier point. This looks like an environment-specific regression
+  (Windows/JVM/antivirus interaction with the vanilla server jar
+  specifically, or a stale cached work-directory artifact under
+  `target/fetch-corpus-oracle/26.2/`) rather than anything this wave's own
+  code touches — `rc-paritybot`'s own local self-tests (which spawn a real
+  `rusty-clanker-server` and connect a real `azalea` bot,
+  `crates/testing/paritybot/tests/chunk_decode_diagnostic.rs`) all pass in
+  this same environment, narrowing the issue to the vanilla oracle jar/work-
+  directory specifically, not azalea or the harness in general. Not
+  investigated further (out of scope for a redstone-mechanics fix pass).
+  Needs either a working live-oracle capture environment (possibly a clean
+  `target/fetch-corpus-oracle/` directory, or a different host) to actually
+  run the requested 3x-per-fixture stability check, or a decision to accept
+  Section B's uniform-2-tick model on the brief's own stated authoritative
+  research finding alone, without the additional empirical confirmation
+  this recapture was meant to provide.
 
 - **Stage 7 (block-entity ticking) has no path to trigger a Stage-4 redstone
   re-evaluation when a tier-1 container's contents change — the real vanilla
