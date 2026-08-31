@@ -561,6 +561,24 @@ impl PistonBehavior {
             .iter()
             .map(|&p| state_matches_snapshot(&*ctx.world, snapshot, p))
             .collect();
+        // M3 field-report fix (Task 4): every `to_push[i]`'s own *pre-move* content, read once,
+        // up front, before any write in this commit touches the world at all -- mirrors real
+        // vanilla's own `moveBlocks` reading each block's content before converting it to a
+        // `MOVING_PISTON` placeholder. The loop below used to read each source position's
+        // content live, *after* an earlier iteration had already overwritten that very position
+        // (`i == 0` writes `piston_head` to `to_push[0]`'s own position, then `i == 1` read
+        // `to_push[0]` again for its own content -- reading back the `piston_head` it had just
+        // become, not the real block that used to be there), so every pushed block beyond the
+        // first got replaced by a duplicate of the position ahead of it instead of shifting
+        // forward -- confirmed against a real oracle diff
+        // (`redstone/pulse/zero_tick_pulse_dropper_piston`'s own pushed `redstone_block`,
+        // `docs/findings-for-planning.md`). Reading every source *before* any target write
+        // fixes this for a push chain of any length, not just this one-block case.
+        let pre_move_contents: Vec<Option<BlockStateId>> = plan
+            .to_push
+            .iter()
+            .map(|&p| ctx.world.get_block(p))
+            .collect();
 
         let mut written: Vec<BlockPos> = Vec::new();
 
@@ -597,7 +615,7 @@ impl PistonBehavior {
             let content = if i == 0 {
                 piston_head_id(push_direction, sticky)
             } else {
-                match ctx.world.get_block(plan.to_push[i - 1]) {
+                match pre_move_contents[i - 1] {
                     Some(c) => c,
                     None => continue,
                 }
