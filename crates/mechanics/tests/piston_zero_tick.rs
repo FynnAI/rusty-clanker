@@ -175,8 +175,20 @@ fn setup() -> SetupResult {
     (h, piston, source, event_ids, piston_pos, front_pos)
 }
 
+/// Section B4 (M3 field-report fix): verified correction of `blueprints/M3/M3-B05-piston.md`'s
+/// own former "absorption" interpretation (that blueprint itself flagged this as mechanically-
+/// derived and unverified). A second trigger arriving while the first's own `MovingPistonState`
+/// is still in flight FORCE-FINALIZES it synchronously, right there in `on_block_event` -- its
+/// real content actually lands -- rather than being silently superseded/dropped; the new trigger
+/// then starts fresh from that now-settled state. Replaces this file's own former `pulse_
+/// shorter_than_commit_window_is_absorbed`, which asserted only the two ticks' own *end* states
+/// (both of which happen to come out identical either way for this particular zero-net pulse) --
+/// too weak to distinguish "absorbed, never visibly extends" from "force-finalized, visibly
+/// extends, then retracts," so it never actually pinned which of the two was real. This test
+/// checks the *intermediate* state, right after tick 0's own block-event pass and before tick
+/// 2's own commit, which is exactly where the two interpretations diverge.
 #[test]
-fn pulse_shorter_than_commit_window_is_absorbed() {
+fn pulse_shorter_than_commit_window_force_finalizes_then_retracts() {
     let (mut h, piston, source, event_ids, piston_pos, front_pos) = setup();
 
     // Within one tick: the signal reads true, then false, both before the block-event
@@ -203,23 +215,38 @@ fn pulse_shorter_than_commit_window_is_absorbed() {
         "both events queued and processed in emission order, same tick"
     );
 
-    // Both events scheduled a commit at trigger_tick == 2 (both emitted at tick 0); the second
-    // (retracting) plan overwrote the first (extending) one before either ever committed.
+    // The force-finalization proof: TRIGGER_CONTRACT's own handling force-finalized the still-
+    // in-flight TRIGGER_EXTEND commit *synchronously*, right here in tick 0 -- its real content
+    // (piston_head at front_pos, `extended=true`) has already landed, well before either
+    // trigger's own COMMIT_DELAY_TICKS-later scheduled tick ever fires.
+    assert!(
+        piston.is_extended(piston_pos),
+        "the force-finalized extend's real content must actually land, not be silently dropped"
+    );
+    assert_eq!(
+        h.world.get_block(front_pos),
+        Some(PISTON_HEAD_EAST),
+        "the force-finalized extend's own piston_head write must be visible before the retract \
+         that immediately follows it commits"
+    );
+    // The retract that force-finalization made way for is itself still in flight, scheduled for
+    // tick 2 -- not yet committed.
+    assert!(piston.has_pending_move(piston_pos));
+
+    // Both TRIGGER_EXTEND's and TRIGGER_CONTRACT's own `schedule_block_tick` calls target
+    // trigger_tick == 2 (both emitted at tick 0); the first fire commits the still-pending
+    // retract (`on_scheduled_tick`'s own "already consumed" no-op guard silently absorbs
+    // whichever due entry, if any, arrives second for the same position).
     h.run_scheduled(2);
 
     assert!(
         !piston.is_extended(piston_pos),
-        "the piston never visibly reaches the extended state -- it settles back at its start"
+        "the retract that followed the force-finalized extend settles back to retracted"
     );
-    // Only the surviving (retracting) plan's own commit ever fires -- it re-affirms `front_pos`
-    // as AIR (a legitimate, real write/fan-out for the *surviving* commit, matching vanilla's
-    // own unconditional post-`setBlock` notify convention even when nothing observably changes,
-    // `UpdateContext::set_block`'s own documented behavior). The superseded extension's own
-    // distinct content (`piston_head`) is what must never appear -- it never does.
-    assert_ne!(
+    assert_eq!(
         h.world.get_block(front_pos),
-        Some(PISTON_HEAD_EAST),
-        "the superseded extension's own piston_head write must never land"
+        Some(AIR),
+        "the retract's own commit clears the piston_head the force-finalized extend left behind"
     );
     assert!(!piston.has_pending_move(piston_pos));
 }

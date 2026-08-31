@@ -79,3 +79,72 @@ fn drain_all_takes_everything_queued_right_now_in_fifo_order() {
     assert_eq!(q.drain_all(), vec![event(1), event(2)]);
     assert_eq!(q.pending(), 0);
 }
+
+/// M3 field-report fix (Section B3): `emit` called while `begin_scheduled_phase_dispatch` is in
+/// effect (`run_scheduled_phase`'s own dispatch span -- exactly where a piston's real
+/// finalization lives) lands in a held-back buffer, invisible to `pop_next` not just until the
+/// *next* `begin_pass`, but until the one *after* that (`BlockEventQueue`'s own doc comment has
+/// the full two-generation rationale: "next begin_pass" alone would still fire the very same
+/// tick, since `system_scheduled_phase` and `system_block_event_subphase` run back to back). The
+/// primitive-level half of the "piston finalization cascade waits for the next tick" fix
+/// (`docs/findings-for-planning.md`'s own entry; `stage4_ordering.rs`'s own `block_event_from_
+/// scheduled_phase_waits_for_the_next_block_event_pass` exercises the real cross-phase scenario
+/// this primitive serves).
+#[test]
+fn emit_during_scheduled_phase_dispatch_is_held_back_for_a_full_extra_begin_pass_cycle() {
+    let mut q = BlockEventQueue::new();
+
+    q.begin_scheduled_phase_dispatch();
+    q.emit(event(1));
+    q.end_scheduled_phase_dispatch();
+    assert_eq!(
+        q.pop_next(),
+        None,
+        "an event emitted during scheduled-phase dispatch must not be visible to pop_next yet"
+    );
+    assert_eq!(
+        q.pending(),
+        1,
+        "it must still count as pending, just deferred"
+    );
+
+    // The very next begin_pass (standing in for THIS SAME tick's own run_block_event_subphase
+    // call) must not surface it yet.
+    q.begin_pass();
+    assert_eq!(
+        q.pop_next(),
+        None,
+        "the immediately-next pass must not see an event deferred before it started"
+    );
+
+    // The pass after that (standing in for the NEXT tick's own call) does.
+    q.begin_pass();
+    assert_eq!(
+        q.pop_next(),
+        Some(event(1)),
+        "the second begin_pass must fold the deferred event into the live queue"
+    );
+    assert_eq!(q.pop_next(), None);
+}
+
+/// Outside `begin_scheduled_phase_dispatch`'s own span, a bare `emit`+`pop_next` call behaves
+/// exactly as before this fix -- no `begin_pass` involvement needed at all. Every other test in
+/// this file already relies on this implicitly; this one pins it directly (`BlockEventQueue`'s
+/// own doc comment: `emit` lands straight in the live queue "by default").
+#[test]
+fn a_fresh_queue_lets_a_bare_emit_be_immediately_visible() {
+    let mut q = BlockEventQueue::new();
+    q.emit(event(1));
+    assert_eq!(q.pop_next(), Some(event(1)));
+}
+
+/// `emit` called re-entrantly while `run_block_event_subphase`'s own drain loop is running (i.e.
+/// after a `begin_pass` call, never inside `begin_scheduled_phase_dispatch`'s own span) still
+/// lands in the live queue, same-pass, exactly as MECH-D9 requires.
+#[test]
+fn emit_during_a_block_event_pass_still_lands_in_the_live_queue() {
+    let mut q = BlockEventQueue::new();
+    q.begin_pass();
+    q.emit(event(1));
+    assert_eq!(q.pop_next(), Some(event(1)));
+}

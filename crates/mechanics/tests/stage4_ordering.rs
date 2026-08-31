@@ -319,7 +319,7 @@ fn block_before_fluid_ordering() {
     assert_eq!(*log.lock().unwrap(), vec![block_pos, fluid_pos]);
 }
 
-// --- Test 4: block_event_subphase_runs_after_scheduled_phase_within_the_same_stage4_pass -
+// --- Test 4: block_event_from_scheduled_tick_waits_for_the_next_stage4_pass ------------
 
 struct EmitThenLogBehavior {
     log: Arc<Mutex<Vec<(BlockPos, u8)>>>,
@@ -334,8 +334,18 @@ impl BlockBehavior for EmitThenLogBehavior {
     }
 }
 
+/// M3 field-report fix (Section B3, test-authoring correction): replaces this file's own former
+/// `block_event_subphase_runs_after_scheduled_phase_within_the_same_stage4_pass`, which asserted
+/// that an event emitted directly from `on_scheduled_tick` fires within that *same* tick's own
+/// `run_block_event_subphase` call. That was the pre-Section-B3 behavior; it is now verified
+/// wrong (a piston's own real finalization does exactly this same "emit from `on_scheduled_tick`"
+/// thing, and the real oracle shows its own resulting cascade landing one tick later, `docs/
+/// findings-for-planning.md`'s own "piston finalization block-event cascade" entry). This test
+/// (a single self-emitting position, the minimal case) and `block_event_from_scheduled_phase_
+/// waits_for_the_next_block_event_pass` above (the real two-piston cascade shape) now both pin
+/// the corrected "next tick" semantics.
 #[test]
-fn block_event_subphase_runs_after_scheduled_phase_within_the_same_stage4_pass() {
+fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
     let pos = BlockPos::new(0, 0, 0);
     let mut world = FakeWorld::new();
     world.set_block(pos, BlockStateId(1));
@@ -380,8 +390,27 @@ fn block_event_subphase_runs_after_scheduled_phase_within_the_same_stage4_pass()
         &mut outbound,
         0,
     );
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "an event emitted from on_scheduled_tick must not fire within this same tick's own \
+         run_block_event_subphase call (Section B3)"
+    );
 
-    assert_eq!(*log.lock().unwrap(), vec![(pos, 7)]);
+    run_block_event_subphase(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &registry,
+        &mut outbound,
+        1,
+    );
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![(pos, 7)],
+        "the next tick's own block-event pass must fire it"
+    );
 }
 
 // --- Test 5: block_event_emitted_during_subphase_fires_within_the_same_call -------------
@@ -550,6 +579,145 @@ fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
         "piston2's own event, queued as a synchronous side effect of handling piston1's event, \
          must fire within this SAME run_block_event_subphase call -- the same tick's own pass, \
          not a second call"
+    );
+    assert_eq!(events.pending(), 0);
+}
+
+// --- Test 7: block_event_from_scheduled_phase_waits_for_the_next_pass (Section B3) ------
+
+/// Stands in for one piston's own real *finalization* (`commit_extend`/`commit_retract`,
+/// dispatched from `on_scheduled_tick`, never `on_block_event`) writing its own settled content
+/// and fanning out to a neighbor piston -- the cross-*phase* counterpart to
+/// `WriteOwnStateOnEventBehavior` above, which stands in for the *immediate*, same-pass part of
+/// a trigger instead.
+struct WriteOwnStateOnScheduledTickBehavior {
+    log: Arc<Mutex<Vec<(&'static str, u8)>>>,
+    written_state: BlockStateId,
+}
+
+impl BlockBehavior for WriteOwnStateOnScheduledTickBehavior {
+    fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        self.log.lock().unwrap().push(("piston1", 0));
+        // The real write a piston's own finalization performs -- fans out neighbor-changed/
+        // shape-update synchronously, from inside `run_scheduled_phase`'s own block-tick
+        // dispatch, never from inside `run_block_event_subphase`.
+        ctx.set_block(pos, self.written_state);
+    }
+}
+
+/// Section B3 (M3 field-report fix): a block event triggered as a side effect of `run_scheduled_
+/// phase`'s own block-tick dispatch -- exactly what a piston's real `commit_extend`/
+/// `commit_retract` finalization does when it fans out to a neighbor piston's own `on_neighbor_
+/// changed` (`finalize_moving`'s own doc comment, `crates/mechanics/src/redstone/piston.rs`) --
+/// must NOT fire within that same tick's own `run_block_event_subphase` call. It waits for the
+/// *next* tick's own call instead, reproducing vanilla's real tick ordering (finalization ticks
+/// after that same tick's own `runBlockEvents()` call already ran). Reuses `EmitOnNeighborChangedBehavior`
+/// (piston2) unchanged from Test 6 above -- only the *phase* piston1's own write happens in
+/// differs between the two tests, which is exactly the variable Section B3 is about.
+#[test]
+fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
+    let piston1_pos = BlockPos::new(0, 0, 0);
+    let piston2_pos = Direction::East.apply(piston1_pos); // directly adjacent
+
+    let mut world = FakeWorld::new();
+    world.set_block(piston1_pos, BlockStateId(1));
+    world.set_block(piston2_pos, BlockStateId(50));
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = BlockBehaviorRegistry::new();
+    registry.register_range(
+        BlockStateId(0),
+        BlockStateId(2),
+        Arc::new(WriteOwnStateOnScheduledTickBehavior {
+            log: Arc::clone(&log),
+            written_state: BlockStateId(1),
+        }),
+    );
+    registry.register_range(
+        BlockStateId(50),
+        BlockStateId(51),
+        Arc::new(EmitOnNeighborChangedBehavior {
+            log: Arc::clone(&log),
+            emitted_event_id: 9,
+        }),
+    );
+
+    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, ownership) = harness();
+    // Simulates steady-state, mid-driver-loop conditions (`BlockEventQueue::active`'s own doc
+    // comment): a freshly constructed queue starts `active` so bare `emit`+`pop_next` unit tests
+    // keep working unmodified, but every *real* tick loop has already called `run_block_event_
+    // subphase` (setting `active = false` at its own tail) many times over before any piston
+    // could ever reach a real in-flight commit -- one empty pass reproduces that same steady
+    // state here.
+    run_block_event_subphase(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &registry,
+        &mut outbound,
+        0,
+    );
+    assert!(log.lock().unwrap().is_empty());
+
+    scheduled.schedule_block_tick(piston1_pos, 0, TickPriority::Normal, 1);
+    run_scheduled_phase(
+        &mut world,
+        &[],
+        &mut halo,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &registry,
+        &mut outbound,
+        1,
+    );
+
+    // piston1's own write already fanned out to piston2's own on_neighbor_changed (drain_engine
+    // runs inside run_scheduled_phase's own block-tick loop, same call) -- piston2 queued its
+    // own event, but nothing has dispatched it yet.
+    assert_eq!(*log.lock().unwrap(), vec![("piston1", 0)]);
+    assert_eq!(
+        events.pending(),
+        1,
+        "piston2's own event must be held back (deferred), not sitting in the live queue"
+    );
+
+    // This same tick's own block-event pass must NOT see it.
+    run_block_event_subphase(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &registry,
+        &mut outbound,
+        1,
+    );
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![("piston1", 0)],
+        "an event triggered from run_scheduled_phase's own dispatch must not fire within this \
+         same tick's own run_block_event_subphase call"
+    );
+
+    // The *next* tick's own pass picks it up.
+    run_block_event_subphase(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &registry,
+        &mut outbound,
+        2,
+    );
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![("piston1", 0), ("piston2", 9)],
+        "the next tick's own block-event pass must fire it"
     );
     assert_eq!(events.pending(), 0);
 }
