@@ -319,6 +319,68 @@ fn comparator_compare_mode_always_notifies() {
     }
 }
 
+/// Own-state writeback (M3 field-report fix): the comparator's own `POWERED` bit is expressed
+/// in its own stored `BlockStateId`, not only in `ComparatorBehavior::powered`'s internal
+/// side-table (blocks.json's own `minecraft:comparator` entry, protocol 776: `facing=east,
+/// mode=subtract,powered=false` = state 11278, `...powered=true` = state 11277, both cited
+/// directly off `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56). `Subtract` mode
+/// (rather than `Compare`) deliberately avoids `should_turn_on`'s own documented tie rule
+/// (`input == side && mode == Compare` turns on even at `input=side=0` -- Subtract mode's own
+/// tie never turns on), so `powered` stays cleanly tied to whether `input` is actually nonzero.
+/// The analog `output` value has no `BlockStateId` representation at all (out of scope,
+/// block-entity storage) -- only `POWERED` is ever encoded.
+#[test]
+fn comparator_own_state_writeback_reflects_powered() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let mut comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Subtract);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(0));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        Arc::clone(&front_source) as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(11278)); // east, subtract, powered=false
+    h.world.set_block(front, FRONT_ID);
+
+    // input=0 -> stays off.
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(!comparator.powered(pos));
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(11278)));
+
+    front_source.set_power(10);
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(comparator.powered(pos));
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(11277)),
+        "comparator's own stored BlockStateId must flip to the real powered=true id"
+    );
+
+    front_source.set_power(0);
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(!comparator.powered(pos));
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(11278)));
+}
+
 #[test]
 fn comparator_checktick_compares_stored_output_not_just_powered() {
     let pos = BlockPos::new(0, 0, 0);
