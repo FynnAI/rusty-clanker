@@ -278,6 +278,23 @@ pub fn notify_neighbor_changed_only(ctx: &mut UpdateContext, at: BlockPos) {
     }
 }
 
+/// A diode's own `facing` property, as blocks.json's own `minecraft:repeater`/
+/// `minecraft:comparator` entries list it (`[north, south, west, east]`) -- shared between
+/// `repeater.rs`'s and `comparator.rs`'s own own-state id arithmetic (M3 field-report fix; WS-D15's
+/// generated per-property registry is future work), since both components' `facing` property
+/// uses this identical order/stride.
+pub(crate) fn diode_facing_index(facing: Direction) -> u32 {
+    match facing {
+        Direction::North => 0,
+        Direction::South => 1,
+        Direction::West => 2,
+        Direction::East => 3,
+        Direction::Up | Direction::Down => {
+            panic!("diode_facing_index: a diode's own facing is always horizontal, got {facing:?}")
+        }
+    }
+}
+
 /// The two horizontal directions perpendicular to `facing`'s own axis, in a fixed (but
 /// otherwise arbitrary — every caller takes the `max` of both) order (Context §F: repeater's
 /// `alternate_signal`; Context §G: comparator's side-input reading). Shared between

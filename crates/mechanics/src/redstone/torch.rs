@@ -35,6 +35,18 @@ struct TorchState {
     burnt_out: bool,
 }
 
+/// Own-state id arithmetic (M3 field-report fix: own-state writeback; WS-D15's generated
+/// per-property registry is future work, so these constants are read directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:redstone_torch`/
+/// `minecraft:redstone_wall_torch` entries, protocol 776). Floor torch has a single `lit`
+/// property (`[true, false]`, blocks.json order): `id = TORCH_FLOOR_BASE + lit_idx`
+/// (`lit_idx`: `true` -> `0`, `false` -> `1`; state 6885 = `lit=true`, 6886 = `lit=false`).
+/// Wall torch adds `facing` (`[north, south, west, east]`, blocks.json's own listed order) as
+/// the slower-varying property, stride 2: `id = TORCH_WALL_BASE + facing_idx*2 + lit_idx`
+/// (6887 = north/lit=true .. 6894 = east/lit=false).
+const TORCH_FLOOR_BASE: u32 = 6885;
+const TORCH_WALL_BASE: u32 = 6887;
+
 /// Redstone torch (Context §E). One instance per region (Context §I).
 pub struct TorchBehavior {
     attachment: TorchAttachment,
@@ -90,6 +102,27 @@ impl TorchBehavior {
         self.registry
             .get()
             .expect("TorchBehavior: bind_registry must run before dispatch")
+    }
+
+    /// This own-state writeback's new `BlockStateId` for `lit` (M3 field-report fix). Floor: a
+    /// pure `lit` encoding, no facing dimension. Wall: this behavior's own shared `attachment`
+    /// field does not track each individual wall torch's real per-position facing
+    /// (`registration.rs`'s own "one representative orientation for the whole registered range"
+    /// scope limitation, Context §I -- no generated per-block-state-property registry exists
+    /// yet) -- so the facing bits are instead recovered from `current_raw`, the position's own
+    /// live raw id immediately before this write (guaranteed already a `TORCH_WALL_BASE`-range
+    /// id, since dispatch only ever reaches this behavior through that same registered range),
+    /// and carried through unchanged; only the `lit` bits are ever replaced here, exactly
+    /// mirroring vanilla's own `state.setValue(LIT, val)` (leaves `FACING` untouched).
+    fn new_state_id(&self, current_raw: u32, lit: bool) -> BlockStateId {
+        let lit_idx = u32::from(!lit);
+        match self.attachment {
+            TorchAttachment::Floor => BlockStateId(TORCH_FLOOR_BASE + lit_idx),
+            TorchAttachment::Wall(_) => {
+                let facing_idx = (current_raw - TORCH_WALL_BASE) / 2;
+                BlockStateId(TORCH_WALL_BASE + facing_idx * 2 + lit_idx)
+            }
+        }
     }
 
     fn has_neighbor_signal(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
@@ -153,6 +186,15 @@ impl TorchBehavior {
             return;
         }
         self.set_lit(pos, target_lit);
+        // M3 field-report fix: own-state writeback -- vanilla's `RedstoneTorchBlock::tick`
+        // flips `LIT` via `level.setBlock(pos, state.setValue(LIT, val), 2)` (flag 2 =
+        // clients-only, no cascading neighbor/shape update of its own -- the actual neighbor
+        // notify is `notify_neighbor_changed_only` below, unchanged), so this write goes
+        // through the raw world accessor, never `ctx.set_block`.
+        if let Some(current) = ctx.get_block(pos) {
+            let new_id = self.new_state_id(current.0, target_lit);
+            ctx.world.set_block(pos, new_id);
+        }
         if !target_lit {
             let count = self.record_and_prune_toggle(pos, ctx.current_tick);
             if count >= Self::MAX_RECENT_TOGGLES {

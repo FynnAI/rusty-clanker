@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 
 use crate::behavior::{BlockBehavior, UpdateContext};
@@ -16,6 +17,43 @@ use super::signal::{self, RedstoneSignalSource, SignalSourceRegistry};
 struct RepeaterState {
     powered: bool,
     delay_setting: u8, // 1..=4
+    /// `true` once `seed_powered_from_world` has run for this position at least once (M3
+    /// field-report fix, own-state writeback's own read-side companion). `place()`'s own
+    /// "placement is out of this blueprint's scope" gap (Context §F) means `powered` always
+    /// starts seeded `false` here, regardless of a fixture's real initial `POWERED` value --
+    /// left uncorrected, that stale default would feed `is_locked`/`base_input_positive`
+    /// (`weak_signal_toward`) for a locking *neighbor* repeater placed already-`powered=true`,
+    /// producing a spurious few-tick-late "just turned on" transition purely from this gap
+    /// rather than any real signal change. `seed_powered_from_world` reconciles it against the
+    /// position's own live raw id the first time this behavior ever dispatches for `pos` --
+    /// exactly once, before any signal computation reads it -- and never again afterward, so
+    /// every later `powered` value stays this behavior's own genuine computed transition.
+    seeded: bool,
+}
+
+/// Own-state id arithmetic for `minecraft:repeater` (M3 field-report fix: own-state writeback;
+/// WS-D15's generated per-property registry is future work, so this constant is read directly
+/// off `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:repeater` entry,
+/// protocol 776, states 7034..=7097). `delay` (`[1,2,3,4]`, blocks.json order) is the
+/// slowest-varying property, stride 16; then `facing` (`signal::diode_facing_index`), stride 4;
+/// then `locked` (`[true,false]`), stride 2; then `powered` (`[true,false]`), stride 1:
+/// `id = 7034 + (delay-1)*16 + facing_idx*4 + locked_idx*2 + powered_idx` (`locked_idx`/
+/// `powered_idx`: `true` -> `0`, `false` -> `1`, blocks.json's own listed value order).
+const REPEATER_BASE: u32 = 7034;
+
+fn repeater_state_id(
+    delay_setting: u8,
+    facing: Direction,
+    locked: bool,
+    powered: bool,
+) -> BlockStateId {
+    BlockStateId(
+        REPEATER_BASE
+            + (delay_setting as u32 - 1) * 16
+            + signal::diode_facing_index(facing) * 4
+            + u32::from(!locked) * 2
+            + u32::from(!powered),
+    )
 }
 
 /// Repeater (Context §F). One instance per region (Context §I).
@@ -45,6 +83,7 @@ impl RepeaterBehavior {
             RepeaterState {
                 powered: false,
                 delay_setting,
+                seeded: false,
             },
         );
     }
@@ -83,8 +122,32 @@ impl RepeaterBehavior {
         let entry = state.entry(pos).or_insert(RepeaterState {
             powered: false,
             delay_setting: 1,
+            seeded: false,
         });
         entry.powered = value;
+    }
+
+    /// Own-state writeback's read-side companion (M3 field-report fix) -- `RepeaterState::
+    /// seeded`'s own doc comment. Reads `pos`'s own currently-stored raw id (if any) and
+    /// decodes its `powered` bit into the side-table, exactly once. Called at the top of every
+    /// `BlockBehavior` entry point, before any signal computation reads `powered` (`is_locked`'s
+    /// own `alternate_signal` -> `control_input_signal` -> `weak_signal_toward` chain, when
+    /// `pos` is itself a *neighbor* another repeater's lock check reads).
+    fn seed_powered_from_world(&self, world: &dyn BlockWorldAccess, pos: BlockPos) {
+        let mut state = self.state.lock().unwrap();
+        let entry = state.entry(pos).or_insert(RepeaterState {
+            powered: false,
+            delay_setting: 1,
+            seeded: false,
+        });
+        if entry.seeded {
+            return;
+        }
+        entry.seeded = true;
+        if let Some(current) = world.get_block(pos) {
+            let bits = current.0.wrapping_sub(REPEATER_BASE) % 4;
+            entry.powered = bits % 2 == 0;
+        }
     }
 
     /// Reads the registry via `self.registry()` (Context §I½) — no longer takes a `registry`
@@ -126,6 +189,46 @@ impl RepeaterBehavior {
             .get()
             .expect("RepeaterBehavior: bind_registry must run before dispatch")
     }
+
+    /// Own-state writeback (M3 field-report fix): writes `pos`'s own new `BlockStateId` via the
+    /// raw world accessor, replacing only `locked_new`/`powered_new` (`None` = "leave this one
+    /// bit exactly as `pos`'s own currently-stored raw id already has it") -- vanilla's own
+    /// `RepeaterBlock`/`DiodeBlock` writes each touch exactly one property at a time
+    /// (`state.setValue(LOCKED, ..)` from `neighborChanged`, `state.setValue(POWERED, ..)` from
+    /// `tick`, never both together), both via `level.setBlock(pos, .., 2)` (flag 2 =
+    /// clients-only, no cascading neighbor/shape update of their own -- this never goes through
+    /// `ctx.set_block`, the real neighbor notify stays exactly whatever the caller already does
+    /// via `signal::notify_neighbor_changed_only`). Reading the untouched bit back off the
+    /// current raw id, rather than off this behavior's own `RepeaterState.powered` side-table,
+    /// matters specifically for `powered`: `place()`'s own "placement is out of this
+    /// blueprint's scope" gap (Context §F) means that side-table field is seeded `false`
+    /// unconditionally, never from a block's real placed `POWERED` value -- blindly writing it
+    /// back would silently clobber a fixture's genuinely-already-`powered=true` initial
+    /// placement the moment this component's own settle-time `on_neighbor_changed` first fires.
+    /// A position with no currently-stored raw id (not yet placed) is left untouched.
+    fn write_state_id(
+        &self,
+        ctx: &mut UpdateContext,
+        pos: BlockPos,
+        locked_new: Option<bool>,
+        powered_new: Option<bool>,
+    ) {
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        let bits = (current.0.wrapping_sub(REPEATER_BASE)) % 4;
+        let current_locked = bits / 2 == 0;
+        let current_powered = bits % 2 == 0;
+        let facing = self.facing(pos);
+        let delay = self.delay_setting(pos);
+        let id = repeater_state_id(
+            delay,
+            facing,
+            locked_new.unwrap_or(current_locked),
+            powered_new.unwrap_or(current_powered),
+        );
+        ctx.world.set_block(pos, id);
+    }
 }
 
 /// `control_input_signal` (Context §F): `sideInputDiodesOnly` -- `0` unless the neighbor at
@@ -155,10 +258,17 @@ impl Default for RepeaterBehavior {
 impl RedstoneSignalSource for RepeaterBehavior {
     fn weak_signal_toward(
         &self,
-        _world: &dyn BlockWorldAccess,
+        world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
+        // Own-state writeback's read-side companion (M3 field-report fix, `RepeaterState::
+        // seeded`'s own doc comment): a *neighbor* repeater's own `is_locked` check reaches
+        // this repeater's signal through here, possibly before this repeater's own `on_
+        // neighbor_changed`/`on_scheduled_tick` has ever dispatched -- seed unconditionally,
+        // right here, so every reader always sees this position's real placed `POWERED` value
+        // rather than `place()`'s own unconditional `false` default.
+        self.seed_powered_from_world(world, pos);
         // `FACING` points toward this repeater's own INPUT side (Context §F, ASSET-D18(f)
         // research verdict); output flows out the opposite side ("a repeater fires away from
         // you" -- placement sets `FACING = playerLookDirection.opposite()`).
@@ -191,23 +301,29 @@ impl RedstoneSignalSource for RepeaterBehavior {
 }
 
 impl BlockBehavior for RepeaterBehavior {
-    /// `checkTickOnNeighbor` (Context §F).
+    /// `checkTickOnNeighbor` (Context §F), plus `RepeaterBlock::neighborChanged`'s own
+    /// additional immediate `LOCKED` writeback (M3 field-report fix, Context §F/`is_locked`'s
+    /// own doc comment) -- vanilla's `RepeaterBlock` overrides `neighborChanged` beyond
+    /// `DiodeBlock`'s base specifically to recompute+write `LOCKED` on every call, independent
+    /// of (and not gated by) whether a `POWERED`-toggle tick also gets scheduled below.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        if self.is_locked(ctx.world, pos) {
-            return;
+        self.seed_powered_from_world(ctx.world, pos);
+        let locked = self.is_locked(ctx.world, pos);
+        if !locked {
+            let should = self.base_input_positive(ctx.world, pos);
+            let powered = self.powered(pos);
+            if powered != should && !ctx.scheduled.is_block_tick_pending(pos) {
+                let priority = if self.should_prioritize(ctx.world, pos) {
+                    TickPriority::ExtremelyHigh
+                } else if powered {
+                    TickPriority::VeryHigh
+                } else {
+                    TickPriority::High
+                };
+                ctx.schedule_block_tick(pos, self.get_delay(pos), priority);
+            }
         }
-        let should = self.base_input_positive(ctx.world, pos);
-        let powered = self.powered(pos);
-        if powered != should && !ctx.scheduled.is_block_tick_pending(pos) {
-            let priority = if self.should_prioritize(ctx.world, pos) {
-                TickPriority::ExtremelyHigh
-            } else if powered {
-                TickPriority::VeryHigh
-            } else {
-                TickPriority::High
-            };
-            ctx.schedule_block_tick(pos, self.get_delay(pos), priority);
-        }
+        self.write_state_id(ctx, pos, Some(locked), None);
     }
 
     /// `tick` (Context §F), restated as an explicit two-phase state machine: turning off is
@@ -223,10 +339,12 @@ impl BlockBehavior for RepeaterBehavior {
         if self.powered(pos) {
             if !self.base_input_positive(ctx.world, pos) {
                 self.set_powered(pos, false);
+                self.write_state_id(ctx, pos, None, Some(false));
                 signal::notify_neighbor_changed_only(ctx, pos);
             }
         } else {
             self.set_powered(pos, true);
+            self.write_state_id(ctx, pos, None, Some(true));
             signal::notify_neighbor_changed_only(ctx, pos);
             if !self.base_input_positive(ctx.world, pos) {
                 ctx.schedule_block_tick(pos, self.get_delay(pos), TickPriority::VeryHigh);
