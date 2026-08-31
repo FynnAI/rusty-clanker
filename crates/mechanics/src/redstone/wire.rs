@@ -1,6 +1,7 @@
 //! Redstone wire — classic (default) power evaluator (MECH-D11/D12, Context §D).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rc_chunk_storage::BlockStateId;
@@ -159,6 +160,15 @@ pub struct WireBehavior {
     state: Mutex<HashMap<BlockPos, WireState>>,
     /// Bound once via `bind_registry`, read by every `BlockBehavior` body (Context §I½).
     registry: OnceLock<Arc<SignalSourceRegistry>>,
+    /// `RedStoneWireBlock`'s own `shouldSignal` field (research doc §3.1) restated directly:
+    /// one mutable flag shared by every wire tile this single per-region instance handles
+    /// (mirrors vanilla's own block-singleton-per-type instance, `getBlockSignal`'s own doc
+    /// comment below). `true` except for the brief window `compute_power` holds it `false`
+    /// while it queries every *other* signal source's contribution toward the one position
+    /// currently being recomputed -- safe without finer-grained (per-position) scoping because
+    /// Stage-4 dispatch is strictly sequential, never reentrant, within one region (binding
+    /// principle: "redstone... always fully sequential and single-worker per region").
+    should_signal: AtomicBool,
 }
 
 impl WireBehavior {
@@ -166,6 +176,7 @@ impl WireBehavior {
         Self {
             state: Mutex::new(HashMap::new()),
             registry: OnceLock::new(),
+            should_signal: AtomicBool::new(true),
         }
     }
 
@@ -262,20 +273,48 @@ impl WireBehavior {
 
     /// `updatePowerStrength` (Context §D): `block_signal.max(incoming_wire_signal)`, with the
     /// `block_signal == 15` short-circuit (pure perf optimization, no observable difference).
-    /// `block_signal` uses `block_signal_excluding_wire`, not the shared `signal::best_neighbor_
-    /// signal` every other component calls (M3 field-report fix: own-state writeback follow-up
-    /// -- own doc comment below).
+    /// `block_signal` is `getBlockSignal`/`level.getBestNeighborSignal` (research doc §3.1)
+    /// computed via the shared `signal::best_neighbor_signal` every other component calls, with
+    /// `should_signal` held `false` for the duration of the call (`getBlockSignal`'s own doc
+    /// comment below) -- the single global exclusion this position's own recompute needs, not a
+    /// per-neighbor special case.
     fn compute_power(
         &self,
         world: &dyn BlockWorldAccess,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
     ) -> u8 {
-        let block_signal = block_signal_excluding_wire(world, registry, pos);
+        let block_signal = self.block_signal(world, registry, pos);
         if block_signal == 15 {
             return 15;
         }
         block_signal.max(self.incoming_wire_signal(world, registry, pos))
+    }
+
+    /// `getBlockSignal` (Context §D, research doc §3.1: "wire's own `isSignalSource` temporarily
+    /// disabled via the `shouldSignal` flag to avoid self-counting"). Vanilla disables *every*
+    /// wire's signal contribution — not merely an immediately-adjacent one — for the duration of
+    /// this one call, which is what actually prevents a wire from reading its own power back
+    /// through a quasi-connectivity bounce off its own supporting conductor (that conductor's
+    /// own `direct_signal_to` scans *all six* of its faces, one of which is the very wire tile
+    /// currently mid-recompute — a shallow "is my immediate neighbor a wire" check, this
+    /// project's own former approach, cannot see that indirect path at all) while still keeping
+    /// wire-to-wire power transfer flowing exclusively through `incoming_wire_signal`'s own
+    /// dedicated, decay-aware (`-1` per hop) walk (`raw_wire_power` is deliberately never gated
+    /// on `should_signal` — that hook is what `incoming_wire_signal` reads instead). Restoring
+    /// the flag before returning (rather than a scope guard) is safe here: this function makes
+    /// no further calls once querying is done, and Stage-4 dispatch never re-enters this
+    /// instance mid-call (struct doc comment).
+    fn block_signal(
+        &self,
+        world: &dyn BlockWorldAccess,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+    ) -> u8 {
+        self.should_signal.store(false, Ordering::Relaxed);
+        let result = signal::best_neighbor_signal(world, registry, pos);
+        self.should_signal.store(true, Ordering::Relaxed);
+        result
     }
 
     /// `shouldConnectTo`/`getConnectionState`/`getConnectingSide` (Context §D): the real 3-way
@@ -337,19 +376,57 @@ impl WireBehavior {
 
     /// The 3-way shape for all four horizontal sides, in `east/north/south/west` order (matching
     /// `wire_state_id`'s own parameter order) -- the read side `on_shape_update` needs for its
-    /// own state-id writeback (M3 field-report fix, Task 4).
+    /// own state-id writeback (M3 field-report fix, Task 4). Finishes with vanilla's own
+    /// `RedStoneWireBlock.getConnectionState` post-processing pass (M3 field-report fix, Task 1
+    /// -- closes the "isolated wire auto-extends to a straight line" gap
+    /// `docs/findings-for-planning.md` names for this exact fixture): per axis, a side that is
+    /// still `None` after `connection_shape_on_side` gets auto-set to `Side` when the *other*
+    /// axis is fully disconnected (`None` on both of its own sides) -- a lone connection on one
+    /// axis, with nothing at all on the perpendicular axis, renders the whole tile as a straight
+    /// line through it rather than a dead end. Computed from the four freshly-read raw shapes
+    /// only (never a shape this same pass just mutated): each of the four checks below reads
+    /// only the *opposite* axis's pair, which this pass never rewrites, so evaluation order
+    /// across the four checks cannot matter.
     fn compute_connection_shapes(
         &self,
         world: &dyn BlockWorldAccess,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
     ) -> (WireSideShape, WireSideShape, WireSideShape, WireSideShape) {
-        (
-            self.connection_shape_on_side(world, registry, pos, Direction::East),
-            self.connection_shape_on_side(world, registry, pos, Direction::North),
-            self.connection_shape_on_side(world, registry, pos, Direction::South),
-            self.connection_shape_on_side(world, registry, pos, Direction::West),
-        )
+        let east = self.connection_shape_on_side(world, registry, pos, Direction::East);
+        let north = self.connection_shape_on_side(world, registry, pos, Direction::North);
+        let south = self.connection_shape_on_side(world, registry, pos, Direction::South);
+        let west = self.connection_shape_on_side(world, registry, pos, Direction::West);
+
+        let no_east = east == WireSideShape::None;
+        let no_west = west == WireSideShape::None;
+        let no_north = north == WireSideShape::None;
+        let no_south = south == WireSideShape::None;
+        let no_east_west = no_east && no_west;
+        let no_north_south = no_north && no_south;
+
+        let north = if no_north && no_east_west {
+            WireSideShape::Side
+        } else {
+            north
+        };
+        let south = if no_south && no_east_west {
+            WireSideShape::Side
+        } else {
+            south
+        };
+        let east = if no_east && no_north_south {
+            WireSideShape::Side
+        } else {
+            east
+        };
+        let west = if no_west && no_north_south {
+            WireSideShape::Side
+        } else {
+            west
+        };
+
+        (east, north, south, west)
     }
 }
 
@@ -362,44 +439,6 @@ fn wire_power_at(
 ) -> Option<u8> {
     let state = world.get_block(pos)?;
     registry.resolve(state).raw_wire_power(world, pos)
-}
-
-/// `getBlockSignal`/`level.getBestNeighborSignal` (Context §D), computed with wire's own
-/// `shouldSignal` flag effectively disabled (M3 field-report fix: own-state writeback
-/// follow-up, research doc §3.1: "wire's own `isSignalSource` temporarily disabled via the
-/// `shouldSignal` flag to avoid self-counting"). Mirrors `signal::best_neighbor_signal` exactly
-/// except: any neighbor that is itself a wire tile (`wire_power_at` returns `Some`, the same
-/// `raw_wire_power` hook `incoming_wire_signal` already uses to identify "is this a wire")
-/// contributes `0` here, regardless of its own real power or connectivity. Real vanilla applies
-/// this exclusion globally while *any* wire computes its own target strength — not only to
-/// avoid a wire reading back its own power through a QC bounce off its own supporting block,
-/// but, just as importantly, to keep wire-to-wire power transfer flowing *exclusively* through
-/// `incoming_wire_signal`'s own dedicated, decay-aware (`-1` per hop) walk. Without this
-/// exclusion, once `on_shape_update` establishes real connectivity between two adjacent wire
-/// tiles, a source-adjacent tile's own undecayed `weak_signal_toward` output would reach this
-/// function's own `== 15` short-circuit directly, propagating power=15 with zero decay down an
-/// entire wire run (confirmed empirically: `redstone/pulse/wire_signal_decay_15_chain`'s own
-/// parity-check regression once own-state writeback made real connections observable,
-/// `redstone_wire.rs`'s own `wire_chain_decays_correctly_once_neighbors_are_shape_connected`
-/// regression test). Every *non*-wire signal source (torch, redstone_block, diode) still
-/// contributes normally, exactly as `signal::best_neighbor_signal` already would.
-fn block_signal_excluding_wire(
-    world: &dyn BlockWorldAccess,
-    registry: &SignalSourceRegistry,
-    pos: BlockPos,
-) -> u8 {
-    crate::direction::NEIGHBOR_CHANGED_ORDER
-        .into_iter()
-        .map(|dir| {
-            let npos = dir.apply(pos);
-            if wire_power_at(world, registry, npos).is_some() {
-                0
-            } else {
-                signal::signal_into(world, registry, pos, dir)
-            }
-        })
-        .max()
-        .unwrap_or(0)
 }
 
 impl Default for WireBehavior {
@@ -416,6 +455,9 @@ impl RedstoneSignalSource for WireBehavior {
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
+        if !self.should_signal.load(Ordering::Relaxed) {
+            return 0;
+        }
         let power = self.power(pos);
         let connections = self.connections(pos);
         let connected = match towards {
@@ -427,13 +469,20 @@ impl RedstoneSignalSource for WireBehavior {
         };
         if connected { power } else { 0 }
     }
-    /// `Down` only, unconditional on power (Context §A's worked QC example).
+    /// `Down` only, unconditional on power (Context §A's worked QC example) -- except while
+    /// `should_signal` is `false` (`block_signal`'s own doc comment): this is exactly the path
+    /// that let a wire's own supporting conductor bounce its power back to it via quasi-
+    /// connectivity (`direct_signal_to` scans all six of that conductor's faces, `Up` among
+    /// them), so it must be gated identically to `weak_signal_toward` above.
     fn direct_signal_toward(
         &self,
         _world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
+        if !self.should_signal.load(Ordering::Relaxed) {
+            return 0;
+        }
         if towards == Direction::Down {
             self.power(pos)
         } else {
