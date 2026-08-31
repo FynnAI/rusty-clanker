@@ -1,0 +1,18 @@
+// M3-B07 redstone parity corpus — content-plan entry #27 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/piston_quasi_connectivity_trigger",
+    category: PistonDoor,
+    description: "A piston resting directly on a plain conductor block; a floor torch beneath that conductor strongly powers it from below, only introduced once the conductor itself is placed.",
+    quirk: "Piston's own getNeighborSignal supporting-block QC read — piston_neighbor_signal's Down-face check (M3-B05 Context A) rides the same shared emitted_toward/direct_signal_to QC primitive (M3-B04 Context A) every other component uses, with zero piston-specific special-casing (08-redstone-ticking.md §3.9).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, -2, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, -1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 140),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+    ],
+)

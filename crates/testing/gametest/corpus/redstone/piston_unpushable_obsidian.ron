@@ -1,0 +1,17 @@
+// M3-B07 redstone parity corpus — content-plan entry #25 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/piston_unpushable_obsidian",
+    category: PistonDoor,
+    description: "A piston facing a single obsidian block, triggered from its own back face.",
+    quirk: "Obsidian's getDestroySpeed==-1 hard refusal — an immovable block unconditionally blocks the whole push, mirroring bedrock's own tier-1 Immovable classification (M3-B05 Context C, 08-redstone-ticking.md §3.9).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 140),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:obsidian", state_id: 141),
+    ],
+    actions: [
+        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

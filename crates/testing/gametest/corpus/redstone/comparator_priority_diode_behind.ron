@@ -1,0 +1,17 @@
+// M3-B07 redstone parity corpus — content-plan entry #36 (ComparatorCircuit).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/comparator/comparator_priority_diode_behind",
+    category: ComparatorCircuit,
+    description: "A comparator with a same-facing repeater directly behind it (in its own output direction, forming an ordinary daisy chain), triggered by a redstone_block at its input face.",
+    quirk: "shouldPrioritize's EXTREMELY_HIGH scheduling — comparator shares repeater's own DiodeBlock-base priority selection (M3-B04 Context F/G), and a diode directly behind (here, a same-facing repeater) is prioritized (08-redstone-ticking.md §3.6).",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 121, has_analog_state: true),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]", state_id: 132),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

@@ -1,0 +1,17 @@
+// M3-B07 redstone parity corpus — content-plan entry #37 (QcShowcase).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/qc/qc_torch_on_side_of_conductor",
+    category: QcShowcase,
+    description: "A floor torch on a plain conductor block; a redstone_block appears against that conductor's own side face (not the torch's own input direction) part-way through the run.",
+    quirk: "A torch's has_neighbor_signal reads its support block's own emitted_toward, which folds in the shared direct_signal_to QC primitive over all 6 of that support block's faces — power touching ANY face of the support inverts the torch, not just power arriving directly below it (M3-B04 Context A/E, 08-redstone-ticking.md §3.7).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+    ],
+    actions: [
+        (tick: 2, pos: (-1, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

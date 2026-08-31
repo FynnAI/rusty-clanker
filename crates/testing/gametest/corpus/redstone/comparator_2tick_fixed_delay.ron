@@ -1,0 +1,16 @@
+// M3-B07 redstone parity corpus — content-plan entry #34 (ComparatorCircuit).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/comparator/comparator_2tick_fixed_delay",
+    category: ComparatorCircuit,
+    description: "A single comparator (compare mode) with a redstone_block trigger appearing directly at its input face.",
+    quirk: "Comparator's fixed 2-tick refresh_output_state delay regardless of mode — contrast with the repeater's own variable delay*2 setting (08-redstone-ticking.md §3.6).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 121, has_analog_state: true),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)
