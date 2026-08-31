@@ -245,35 +245,73 @@ pub fn base_diode_input_signal(
     }
 }
 
+/// One direction's worth of `notify_neighbor_changed_only`'s own per-neighbor dispatch,
+/// factored out so the QC relay hop below can reuse the identical local-vs-cross-region logic
+/// with a different `origin`/`dir` pair.
+fn notify_one(
+    ctx: &mut UpdateContext,
+    dimension: rc_core::DimensionId,
+    origin: BlockPos,
+    dir: Direction,
+) {
+    let npos = dir.apply(origin);
+    let chunk = npos.chunk_key(dimension);
+    let owner = (ctx.ownership.resolve)(chunk);
+    if owner == ctx.ownership.local {
+        ctx.engine.emit_single(PendingUpdate::NeighborChanged {
+            pos: npos,
+            from: dir.opposite(),
+        });
+    } else {
+        let new_state = ctx
+            .world
+            .get_block(origin)
+            .expect("`origin` is always locally-loaded when this fires");
+        ctx.outbound.push((
+            Address::Chunk(chunk),
+            RegionMessage::BorderUpdateEvent(BorderUpdateEvent {
+                chunk,
+                pos: origin,
+                kind: BorderUpdateKind::BlockChanged {
+                    new_state: new_state.to_raw(),
+                },
+            }),
+        ));
+    }
+}
+
 /// Cross-region-aware neighbor-changed-ONLY notify (Context §I) — every tier-1 component's
 /// own state-change propagation goes through this, never a bare `ctx.engine.emit_*` call and
 /// never `UpdateContext::set_block` (which would also fire an unwanted shape-update pass).
+///
+/// M3 field-report fix (Task 1): also relays through a **conductor** neighbor to that
+/// conductor's own further neighbors, one hop -- `SignalGetter.getSignal`'s conductor rule
+/// (research doc §3.1/Notes: "any block that is a conductor and reads `level.getSignal`... on
+/// itself or a neighbor inherits [quasi-connectivity] automatically") means a conductor's own
+/// aggregate signal can change purely because *one of its six faces* changed, even though the
+/// conductor's own stored `BlockState` never does -- so a position reading *through* that
+/// conductor (a wire resting on it, a torch mounted on it, anything on its far side) needs its
+/// own recompute retriggered too, exactly as if the conductor itself had changed. Confirmed
+/// against a real oracle diff: a repeater's own output face touches a plain conductor, which a
+/// wire tile rests against on a *different* face two hops from the repeater
+/// (`redstone/qc/wire_strong_vs_weak_power_door`'s own `(1,1,1)`, `docs/findings-for-planning.md`)
+/// -- without this relay, that wire's own power silently never updates once the repeater's own
+/// single-hop notify only reaches the conductor itself (`NoOpBehavior`, nothing to recompute).
+/// Bounded to exactly one relay hop (never chained through a second conductor) -- vanilla's own
+/// conductor rule is itself one hop (`getDirectSignalTo` scans the *immediate* conductor's six
+/// faces only, `direct_signal_to`'s own doc comment), so a chain of multiple conductors needs no
+/// further relay: each position along such a chain still gets its own real trigger the normal
+/// way, since a plain conductor is never itself a redstone consumer that could silently swallow
+/// an intermediate signal change the way a `NoOpBehavior` neighbor otherwise would.
 pub fn notify_neighbor_changed_only(ctx: &mut UpdateContext, at: BlockPos) {
     let dimension = ctx.world.dimension();
     for dir in NEIGHBOR_CHANGED_ORDER {
+        notify_one(ctx, dimension, at, dir);
         let npos = dir.apply(at);
-        let chunk = npos.chunk_key(dimension);
-        let owner = (ctx.ownership.resolve)(chunk);
-        if owner == ctx.ownership.local {
-            ctx.engine.emit_single(PendingUpdate::NeighborChanged {
-                pos: npos,
-                from: dir.opposite(),
-            });
-        } else {
-            let new_state = ctx
-                .world
-                .get_block(at)
-                .expect("`at` is always locally-loaded when this fires");
-            ctx.outbound.push((
-                Address::Chunk(chunk),
-                RegionMessage::BorderUpdateEvent(BorderUpdateEvent {
-                    chunk,
-                    pos: at,
-                    kind: BorderUpdateKind::BlockChanged {
-                        new_state: new_state.to_raw(),
-                    },
-                }),
-            ));
+        if is_conductor(ctx.world, npos) {
+            for relay_dir in NEIGHBOR_CHANGED_ORDER {
+                notify_one(ctx, dimension, npos, relay_dir);
+            }
         }
     }
 }
