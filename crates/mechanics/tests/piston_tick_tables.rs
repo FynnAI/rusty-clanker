@@ -270,6 +270,78 @@ fn simple_extension() {
     assert!(logged.contains(&(watch_pos, Direction::West, FanoutKind::ShapeUpdate)));
 }
 
+/// M3 field-report fix (Task 4): `commit_extend`'s own push-chain loop used to read each
+/// `to_push[i]`'s own content live, *after* an earlier iteration had already overwritten that
+/// same position (index 0 writes `piston_head` to `to_push[0]`'s own position; index 1 then read
+/// `to_push[0]` again for *its own* content, seeing the just-written `piston_head` instead of the
+/// real block that used to be there) -- every pushed block beyond the first became a duplicate of
+/// the position ahead of it instead of shifting forward one cell. Pushes two real, distinct
+/// blocks (not two of the same id, so a duplication bug is directly observable) and asserts each
+/// lands at its own correctly shifted-forward position, not overwritten with its neighbor's
+/// content. Confirmed against a real oracle diff
+/// (`redstone/pulse/zero_tick_pulse_dropper_piston`'s own pushed `redstone_block`, `docs/
+/// findings-for-planning.md`).
+#[test]
+fn multi_block_push_shifts_each_block_forward_not_duplicated() {
+    const PISTON_ID: BlockStateId = BlockStateId(100);
+    const STONE: BlockStateId = BlockStateId(1000);
+    const DIRT: BlockStateId = BlockStateId(1001);
+
+    let piston_pos = BlockPos::new(0, 0, 0);
+    let facing = Direction::East;
+    let near_pos = facing.apply(piston_pos); // STONE, directly in front -- becomes piston_head.
+    let far_pos = facing.apply(near_pos); // DIRT, two cells out -- shifts to three cells out.
+    let far_shifted_pos = facing.apply(far_pos);
+
+    let (source, signals, source_id) = make_signal(0);
+    let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
+    piston.place(piston_pos, facing, false);
+
+    let mut behaviors = BlockBehaviorRegistry::new();
+    behaviors.register_range(
+        PISTON_ID,
+        BlockStateId(PISTON_ID.0 + 1),
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
+    behaviors.register_range(
+        BlockStateId(2257),
+        BlockStateId(2269),
+        Arc::clone(&piston) as Arc<dyn BlockBehavior>,
+    );
+
+    let mut h = Harness::new(behaviors);
+    h.world.set_block(piston_pos, PISTON_ID);
+    h.world
+        .set_block(Direction::Down.apply(piston_pos), source_id);
+    h.world.set_block(near_pos, STONE);
+    h.world.set_block(far_pos, DIRT);
+
+    source.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        piston.on_neighbor_changed(&mut ctx, piston_pos, Direction::Down);
+    }
+    h.run_block_events(0);
+    h.run_scheduled(2);
+
+    assert_eq!(
+        h.world.get_block(near_pos),
+        Some(PISTON_HEAD_EAST),
+        "the piston's own head lands where STONE used to be"
+    );
+    assert_eq!(
+        h.world.get_block(far_pos),
+        Some(STONE),
+        "STONE shifts forward one cell into DIRT's own old position -- not overwritten with \
+         DIRT's own content, and not left as piston_head"
+    );
+    assert_eq!(
+        h.world.get_block(far_shifted_pos),
+        Some(DIRT),
+        "DIRT shifts forward one cell past its own old position, carrying its own real content"
+    );
+}
+
 #[test]
 fn qc_double_piston() {
     const PISTON1_ID: BlockStateId = BlockStateId(100);
