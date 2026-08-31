@@ -393,6 +393,26 @@ Entries name the milestone that surfaced them and the code they concern.
     synchronous retract-content commit with the existing same-tick-events
     supersession model before this task can be attempted safely.
 
+  **(Update, M3 field-report fix-agent wave, Task 4): a fourth data point,
+  this time on the *extend* side, further confirms the base-flip-timing
+  question above is not retract-specific.** After Task 4's own multi-block-
+  push fix, `redstone/piston/piston_extend_block_event_same_tick_chain`
+  dropped from 13 mismatches to exactly 1: piston B (triggered not by a
+  direct redstone_block touch but by a same-tick quasi-connectivity cascade
+  arriving from piston A's own commit, this fixture's whole documented
+  point) shows its own base still unextended (`2265`) at the very tick its
+  triggering cascade arrives, contradicting the "base flips immediately at
+  block-event time" model Task 3 already verified correct for every
+  *directly*-triggered extend examined. This is a second, independent case
+  (extend, not retract) where a piston's own base-flip timing seems to
+  depend on *how* the trigger arrived (direct signal touch vs. a same-tick
+  cascade from another piston's own commit) rather than being a fixed,
+  context-independent 0-tick delay — real-oracle research into this
+  question should treat both this entry and Task 2's own retract-side
+  entry above as the same underlying open question, not two separate ones.
+  Not attempted (no fix possible without guessing which of the many
+  candidate trigger-context rules is correct).
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
