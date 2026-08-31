@@ -34,6 +34,13 @@ use crate::packet_capture::BlockSnapshotView;
 /// the azalea client task make progress between checks.
 const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// Vanilla's own air state id — every corpus site is guaranteed air immediately
+/// after `tp` and before this contraption's own first `/setblock` (either never
+/// touched before, or left that way by the *previous* attempt at this same
+/// `world_origin_for` slot's own Step 10 cleanup, which now runs unconditionally —
+/// see `capture_contraption`). Used as the known-good target for the post-`tp`
+/// settle wait below, not merely a magic number.
+const AIR_STATE_ID: u32 = 0;
 /// The whole-corpus-run bot's offline account name — a single source of truth shared
 /// by both `run_full_corpus_capture`'s own `connect_and_observe` call and
 /// `capture_contraption`'s per-contraption `tp` target, so the two can never drift
@@ -54,7 +61,12 @@ const TICK_STEP_SETTLE: Duration = Duration::from_millis(50);
 
 /// Polls `view` for `pos`'s state id until it matches `expected` or `OBSERVATION_
 /// TIMEOUT` elapses, returning whatever was last observed either way (`None` only
-/// if `pos`'s containing chunk never loaded at all within the deadline).
+/// if `pos`'s containing chunk never loaded at all within the deadline). Two
+/// callers rely on this: `capture_contraption`'s own post-`tp` settle wait (waiting
+/// for `AIR_STATE_ID`, before anything has been placed) and its per-block placement
+/// validation (waiting for that block's own declared `state_id`, after
+/// `/setblock`) — the same "poll for the exact value, not merely for any value"
+/// discipline applies to both.
 ///
 /// Polling for a *match*, not merely for *any* reported value, is load-bearing now
 /// that `BlockSnapshotView::state_id_at` reads azalea's own live world model
@@ -64,8 +76,8 @@ const TICK_STEP_SETTLE: Duration = Duration::from_millis(50);
 /// on the first `Some` (this function's own pre-fix behavior) would then report that
 /// stale value as if it were already the placement's result. Waiting for the exact
 /// expected id sidesteps ever needing to distinguish "stale" from "current" by
-/// timestamp; the caller (`capture_contraption`) still surfaces a plain mismatch,
-/// unchanged, if the expected id never arrives before the deadline.
+/// timestamp; the caller still surfaces a plain mismatch, unchanged, if the
+/// expected id never arrives before the deadline.
 async fn wait_for_state_id(
     view: &BlockSnapshotView,
     pos: (i32, i32, i32),
@@ -141,23 +153,73 @@ fn snapshot_volume_from_view(
     out
 }
 
-/// Full end-to-end capture for one contraption at `world_origin_for(index)` against
-/// an already-launched `handle` and an already-connected `view` (blueprint Context,
-/// capture pipeline steps 3–10, restated as this function's exact algorithm —
-/// freeze, gamerules, teleport, place-with-validation, snapshot tick 0,
-/// scripted-action + step loop, snapshot per tick, `fill air` cleanup).
-/// `source_jar_sha1` is threaded straight into the resulting `RedstoneTrace`. Step
-/// 3 (freeze) and step 4 (gamerules) are one-time, whole-corpus setup performed by
-/// `run_full_corpus_capture`, not repeated here.
-pub async fn capture_contraption(
+/// Post-`tp` readiness wait (governance fix, replacing the old no-wait-at-all
+/// behavior `docs/findings-for-planning.md` tracked as an open question): polls
+/// every position in `[bounds_min, bounds_max]` (relative to `origin`) until it
+/// reports `AIR_STATE_ID` or `OBSERVATION_TIMEOUT` elapses, failing loudly on the
+/// first position that never settles instead of letting `capture_contraption`'s own
+/// placement loop silently race an as-yet-untracked or not-yet-resynced chunk.
+///
+/// Deterministic, not sleep-based: rather than a fixed delay after `tp` (which would
+/// either under-wait on a slow run or waste time on every fast one), this polls
+/// `view` — the bot's own live azalea world model — for the *specific* known-good
+/// value every corpus site is guaranteed to hold at this point (`AIR_STATE_ID`'s own
+/// doc comment), the same "wait for the exact expected value" discipline
+/// `wait_for_state_id` already applies to placement validation. A position that
+/// never reports air within the deadline means either the chunk never finished
+/// loading/tracking for this bot session, or this site was left dirty by some
+/// earlier attempt — both are real defects this function must never paper over by
+/// proceeding to place new blocks on top of unknown existing state.
+async fn wait_for_site_settled(
+    view: &BlockSnapshotView,
+    contraption_id: &str,
+    origin: (i32, i32, i32),
+    bounds_min: (i32, i32, i32),
+    bounds_max: (i32, i32, i32),
+) -> Result<(), CaptureError> {
+    for y in bounds_min.1..=bounds_max.1 {
+        for z in bounds_min.2..=bounds_max.2 {
+            for x in bounds_min.0..=bounds_max.0 {
+                let rel = (x, y, z);
+                let wp = world_pos(origin, rel);
+                match wait_for_state_id(view, wp, AIR_STATE_ID).await {
+                    Some(AIR_STATE_ID) => {}
+                    Some(observed) => {
+                        return Err(CaptureError::StateIdMismatch {
+                            contraption_id: contraption_id.to_string(),
+                            pos: rel,
+                            declared: AIR_STATE_ID,
+                            observed,
+                            vanilla_state: "minecraft:air".to_string(),
+                        });
+                    }
+                    None => {
+                        return Err(CaptureError::ObservationTimeout {
+                            contraption_id: contraption_id.to_string(),
+                            pos: rel,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Steps 6–9 of `capture_contraption`'s own algorithm (teleport, settle wait,
+/// place-with-validation, snapshot tick 0, scripted-action + step loop, snapshot per
+/// tick) — factored out of `capture_contraption` so that function's own Step 10
+/// cleanup can run unconditionally, whether this returns `Ok` or `Err` (see that
+/// function's own doc comment for why).
+async fn capture_contraption_body(
     handle: &mut OracleServerHandle,
     view: &BlockSnapshotView,
     spec: &ContraptionSpec,
-    index: usize,
     source_jar_sha1: &str,
+    origin: (i32, i32, i32),
+    bounds_min: (i32, i32, i32),
+    bounds_max: (i32, i32, i32),
 ) -> Result<RedstoneTrace, CaptureError> {
-    let origin = world_origin_for(index);
-    let (bounds_min, bounds_max) = bounding_box(spec);
     let has_analog: std::collections::HashSet<(i32, i32, i32)> = spec
         .blocks
         .iter()
@@ -174,6 +236,11 @@ pub async fn capture_contraption(
             origin.0, origin.1, origin.2
         ),
     )?;
+
+    // Step 6.5 (settle wait): confirm the bot's own world model actually reports
+    // this site as clean before touching it — see `wait_for_site_settled`'s own doc
+    // comment.
+    wait_for_site_settled(view, &spec.id, origin, bounds_min, bounds_max).await?;
 
     // Step 7: placement, self-validating against the oracle's own observed state id.
     for block in &spec.blocks {
@@ -217,19 +284,6 @@ pub async fn capture_contraption(
         });
     }
 
-    // Step 10 (cleanup half): clear this contraption's footprint before the next
-    // `world_origin_for` slot is used — write-and-persist is `run_full_corpus_
-    // capture`'s own job, not this function's.
-    let min_wp = world_pos(origin, bounds_min);
-    let max_wp = world_pos(origin, bounds_max);
-    send_console_command(
-        handle,
-        &format!(
-            "fill {} {} {} {} {} {} air",
-            min_wp.0, min_wp.1, min_wp.2, max_wp.0, max_wp.1, max_wp.2
-        ),
-    )?;
-
     Ok(RedstoneTrace {
         format_version: rc_gametest::trace::TRACE_FORMAT_VERSION,
         contraption_id: spec.id.clone(),
@@ -239,6 +293,79 @@ pub async fn capture_contraption(
         bounds_max,
         ticks,
     })
+}
+
+/// Full end-to-end capture for one contraption at `world_origin_for(index)` against
+/// an already-launched `handle` and an already-connected `view` (blueprint Context,
+/// capture pipeline steps 3–10, restated across this function and
+/// `capture_contraption_body` as their exact algorithm — freeze, gamerules,
+/// teleport, settle wait, place-with-validation, snapshot tick 0, scripted-action +
+/// step loop, snapshot per tick, `fill air` cleanup). `source_jar_sha1` is threaded
+/// straight into the resulting `RedstoneTrace`. Step 3 (freeze) and step 4
+/// (gamerules) are one-time, whole-corpus setup performed by
+/// `run_full_corpus_capture`, not repeated here.
+///
+/// Step 10 (cleanup) now runs unconditionally, on both the `Ok` and `Err` paths —
+/// governance fix for the previously-tracked "stale world residue accumulating
+/// across failed runs" finding (`docs/findings-for-planning.md`): the old code only
+/// reached its `fill ... air` cleanup via the function's own final `Ok` return, so
+/// any error from `capture_contraption_body` (a `StateIdMismatch`, an
+/// `ObservationTimeout`, or an `Io` failure writing a console command) short-
+/// circuited past it entirely, leaving whatever had already been placed sitting at
+/// this `world_origin_for` slot for the *next* attempt at the same contraption
+/// (`--only <id>` re-runs during debugging, or a later `run_full_corpus_capture`
+/// pass, both reuse the same on-disk oracle world — `xtask fetch-corpus`'s own
+/// fixed `target/fetch-corpus-oracle/<version>` work dir, never wiped between
+/// invocations) to find dirty instead of clean, which `wait_for_site_settled` above
+/// would then correctly — but confusingly, on a contraption that was never actually
+/// the site of a genuine capture defect — refuse to proceed past.
+pub async fn capture_contraption(
+    handle: &mut OracleServerHandle,
+    view: &BlockSnapshotView,
+    spec: &ContraptionSpec,
+    index: usize,
+    source_jar_sha1: &str,
+) -> Result<RedstoneTrace, CaptureError> {
+    let origin = world_origin_for(index);
+    let (bounds_min, bounds_max) = bounding_box(spec);
+
+    let body_result = capture_contraption_body(
+        handle,
+        view,
+        spec,
+        source_jar_sha1,
+        origin,
+        bounds_min,
+        bounds_max,
+    )
+    .await;
+
+    // Step 10 (cleanup half): clear this contraption's footprint before the next
+    // `world_origin_for` slot is used — write-and-persist is `run_full_corpus_
+    // capture`'s own job, not this function's. Runs regardless of `body_result`
+    // (this function's own doc comment).
+    let min_wp = world_pos(origin, bounds_min);
+    let max_wp = world_pos(origin, bounds_max);
+    let cleanup_result = send_console_command(
+        handle,
+        &format!(
+            "fill {} {} {} {} {} {} air",
+            min_wp.0, min_wp.1, min_wp.2, max_wp.0, max_wp.1, max_wp.2
+        ),
+    );
+
+    match body_result {
+        Ok(trace) => cleanup_result.map(|()| trace),
+        Err(err) => {
+            // The capture itself already failed with a more specific, actionable
+            // error; a cleanup command failing on top of that (e.g. a broken pipe
+            // because the oracle process itself died) is never more useful to the
+            // caller than the original failure, so it is a best-effort attempt here,
+            // not a second error source.
+            let _ = cleanup_result;
+            Err(err)
+        }
+    }
 }
 
 /// Orchestrates the whole corpus: launches one oracle, connects one bot, applies the

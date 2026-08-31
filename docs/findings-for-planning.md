@@ -47,37 +47,6 @@ Entries name the milestone that surfaced them and the code they concern.
   a real content decision, not a numeric or ordering fix. Left with the wire's
   state_id at its pre-existing placeholder value; `xtask fetch-corpus` will
   keep failing this one case until content-plan/blueprint authorship revisits
-
-- **`xtask fetch-corpus`'s own per-contraption capture loop shows a residual,
-  reproducible-within-one-run "first placement after `tp` reads as air" defect
-  for a small, unpredictable subset of contraptions — a narrower recurrence of
-  the packet-timing class of bug this same blueprint's Section C entry above
-  already fixed once.** After the M3 field-report state-id resolution wave
-  (the corpus's own `.ron` content is otherwise now fully correct — cross-
-  checked against `datagen-output/26.2/generated/reports/blocks.json` and,
-  where available, the live oracle), four consecutive `fetch-corpus` runs
-  against a freshly regenerated `target/fetch-corpus-oracle/` world plateaued
-  at 46/51 (`qc_piston_top_side_signal` is the separate, already-tracked entry
-  above). Three of the four remaining failures are a contraption's own very
-  *first* `blocks:` entry — plain `minecraft:stone` (id 1), `minecraft:piston[
-  facing=east,extended=false]` (id 2264), `minecraft:comparator[facing=north,
-  mode=compare,powered=false]` (id 11264) — each individually cross-validated
-  correct dozens of times elsewhere in this same corpus, reported as oracle-
-  observed air (id 0) immediately after this contraption's own `tp`. The
-  fourth (`wire_cross_shape_connectivity`) instead shows a wire tile's own
-  connectivity/power flipping between two different, both-plausible values
-  across separate runs with identical `.ron` content and an identical world.
-  `capture_contraption` (`crates/testing/paritybot/src/corpus_capture.rs`)
-  issues its first `/setblock` immediately after the `tp` console command with
-  no settle delay or chunk-load acknowledgement wait — plausibly the same
-  not-yet-tracked-chunk race the Section C fix addressed for the very first
-  packet of a whole run, recurring per-contraption for whichever `tp` target
-  chunk hasn't been visited yet by that point in a given run. Not something
-  this test-authoring changeset can fix (`crates/testing/paritybot/**` is a
-  path-guard-protected `fix`/`governance`-only path); a decision is needed on
-  whether to add a settle/ack wait after `tp` (mirroring `wait_for_state_id`'s
-  own poll-for-the-expected-value pattern) or accept this as inherent capture-
-  time flakiness that a re-run works around.
   the geometry.
 
 ## B. Shipped deviations and simplifications awaiting a decision
@@ -136,3 +105,35 @@ Entries name the milestone that surfaced them and the code they concern.
   — left for a `test-authoring` changeset to resolve, not fixed here (out of a
   `fix`/`governance` changeset's own scope, and `.ron` corpus specs are
   fixture content this changeset type never touches).
+
+- **`redstone/update_order/wire_climbs_conductor_step_up_down`'s `(3, 2, 0)`
+  entry declares an unresolved `redstone_wire[power=0]` placeholder
+  (`state_id: 5171`) that the real oracle never produces at that point in this
+  spec's own placement order.** Surfaced by this milestone's governance fix to
+  `capture_contraption`'s post-`tp` settle wait (`crates/testing/paritybot/src/
+  corpus_capture.rs`): before that fix this position's own capture-race
+  flakiness (`xtask fetch-corpus`'s own reproducible "first placement reads as
+  air" defect, formerly documented above as an open question, now resolved and
+  removed) made its true state unobservable; with the race fixed, `fetch-corpus
+  --only redstone/update_order/wire_climbs_conductor_step_up_down` instead fails
+  stably and identically across repeat runs with `RON declares 5171, oracle
+  observed 4855`. `4855` decodes (`datagen-output/26.2/generated/reports/
+  blocks.json`) to `east=side, west=side, power=13` — exactly the vanilla
+  wire-decay progression this same spec's own two earlier, already-correct wire
+  entries establish (`(1, 1, 0)` at power 15 directly off the torch, `(2, 2, 0)`
+  at power 14), with both `side` connections consistent with vanilla's own
+  "isolated wire auto-extends to a straight line" rendering default at this
+  point in the list (`(2, 2, 0)` already placed and adjacent; `(4, 1, 0)`/
+  `(4, 2, 0)` not yet placed). The declared `5171` (`east=none, west=none,
+  power=0`) instead matches neither this spec's own stated intent ("the cell
+  directly above the descended (lower) landing tile starts open (diagonal
+  connection intact, tile powered)") nor any neighboring already-verified
+  entry, i.e. a genuine unresolved-placeholder content defect independent of
+  the capture-race governance fix, not a further harness symptom. Left
+  unfixed here for the same reason as this section's first entry: `.ron`
+  corpus specs are fixture content a `fix`/`governance` changeset never
+  touches — needs a `test-authoring` changeset to re-derive `(3, 2, 0)`'s (and
+  possibly `(4, 1, 0)`'s, which shares the identical placeholder `5171` and was
+  never reached in the failing run) correct `state_id` against the real oracle.
+  Until then, `fetch-corpus` stands at 49/51 (the pre-existing, separately
+  tracked `qc_piston_top_side_signal` geometry defect above, plus this entry).
