@@ -755,6 +755,86 @@ Entries name the milestone that surfaced them and the code they concern.
   the Unix equivalent) before trusting any `fetch-corpus` failure as a real
   capture-pipeline defect.
 
+- **Completing the "Section E recapture attempt" this file used to record
+  (now resolved and removed — see the gamerule-name entry in Section C):
+  with `tick freeze`/gamerules now genuinely verified active on every setup,
+  repeat oracle captures of the same piston fixture are still not
+  byte-stable — but the root cause is the opposite of what the pre-fix
+  `TICK_STEP_SETTLE` mitigation assumed, and it demonstrably corrupts
+  `xtask parity-check redstone`'s own reported numbers for every affected
+  fixture.** Capturing each of `basic_piston_door_2x1`,
+  `piston_retract_pull_sticky_vs_normal`, and `piston_extend_block_event_
+  same_tick_chain` three times back-to-back (`xtask fetch-corpus --only
+  <id>`, cached trace deleted before each attempt so every run is a genuine
+  fresh capture, not a cache hit) produced three different SHA-256 hashes
+  for every one of the three fixtures, every time — never bit-identical —
+  even though this same wave's own new `verify_setup_commands_accepted`
+  confirms every setup command's own positive acknowledgement landed on
+  every one of the nine runs (freeze and all four gamerules were genuinely
+  active throughout, not merely assumed).
+
+  **Direct evidence the server-side animation itself does *not* drift under
+  a genuine freeze**, contradicting `corpus_capture.rs`'s own pre-existing
+  `TICK_STEP_SETTLE` doc comment ("the oracle's own block-entity ticking...
+  advances on real wall-clock even under `tick freeze`"): a dedicated manual
+  probe against the pinned jar — `tick freeze`, the four corrected
+  gamerules, place a piston + pushed block, trigger extend, `tick step 1`,
+  then `/data get block` the in-flight `piston_head`/`moving_piston` cell
+  three times at roughly 0s/6s/12s real-wall-clock apart with **no further
+  `tick step` issued** — shows the block entity's own `progress` NBT field
+  reading exactly `0.0f` all three times, unchanged across the full 12-second
+  gap. The server-side animation is provably pinned by a genuine freeze; it
+  never advances on real time on its own.
+
+  **The real cause is a client-side observation race in `capture_
+  contraption_body`'s own tick loop**: `send_console_command(handle, "tick
+  step 1")` is followed by a *fixed* `tokio::time::sleep(TICK_STEP_SETTLE)`
+  (20ms) and then exactly one, unconfirmed `view.state_id_at` read per
+  position — unlike `wait_for_state_id`'s own "poll until the *expected*
+  value arrives" discipline used elsewhere in this same file for placement
+  validation and the settle wait, this read has no way to know whether the
+  stepped tick's own resulting packets have actually reached and been
+  decoded by the bot's azalea connection yet. Whether 20ms is enough is
+  apparently not deterministic on this machine (JIT warmup, GC pauses, OS
+  scheduling, concurrent cargo/JVM load all plausible contributors, none
+  isolated further here) — a data point on the wrong side of that race reads
+  the *previous* tick's state as if it were the current one, or vice versa.
+  The repeat-capture diffs are the exact signature of this, not random
+  noise: `basic_piston_door_2x1`'s own base position `(0, 1, 0)` reads state
+  `2264` (`piston[facing=east,extended=false]`) at declared tick 2 in one
+  capture and `2258` (`extended=true`) at the *same* declared tick 2 in
+  another — the base-flip-is-immediate-and-synchronous model this project's
+  own piston implementation and the real oracle both already agree on, just
+  captured one tick off depending on which side of the packet race the
+  20ms sleep landed on that run. Every mismatch across all three fixtures'
+  own three-way repeat-capture diffs fits this same one-tick-boundary-
+  misattribution shape (piston base/head states landing on the wrong
+  declared tick, e.g. `piston_extend_block_event_same_tick_chain` tick
+  6–8 positions `(1,1,0)`/`(2,1,0)` reading `2275`/`11311` in one capture and
+  `11311`/`0` in another — the same underlying event, one tick apart).
+
+  **Consequence, directly demonstrated, not merely inferred**: swapping
+  which of the three legitimate repeat captures of `piston_extend_block_
+  event_same_tick_chain` is the one cached under `corpus/redstone/` and
+  re-running `xtask parity-check redstone --only
+  redstone/piston/piston_extend_block_event_same_tick_chain` — same,
+  completely unchanged engine code throughout — reports **6**, **13**, and
+  **20** mismatches for the three captures respectively. A prior wave's own
+  commit recorded this exact fixture as passing in full (0 mismatches);
+  that may simply have been a fourth, luckier draw from the same unstable
+  distribution, not evidence the underlying piston-timing question this
+  file's own Task 2/Section B entries already track was actually settled.
+  **None of the current piston-fixture `parity-check` mismatch counts (this
+  wave's own full-corpus run: `basic_piston_door_2x1` 10, `piston_retract_
+  pull_sticky_vs_normal` 19, `piston_extend_block_event_same_tick_chain` 13,
+  plus every other still-failing piston fixture) can be trusted as evidence
+  of a real engine defect versus capture-timing luck** — needs a decision on
+  how to make the post-`tick step` observation itself deterministic (e.g.
+  polling for a positive confirmation signal the way `wait_for_state_id`
+  already does elsewhere, rather than a fixed sleep) before any piston
+  parity number in this corpus is trustworthy. Not attempted here — task
+  scope was measurement only, no mechanics or harness-timing changes.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
