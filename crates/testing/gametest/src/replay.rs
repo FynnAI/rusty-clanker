@@ -225,25 +225,32 @@ fn snapshot_volume(
     out
 }
 
-/// The tight `[min, max_inclusive]` of every real numeric id this corpus's own committed
-/// `.ron` fixtures place for each tier-1 block (`redstone/` corpus, every `blocks:`/`actions:`
-/// entry, cross-checked against `crates/physics/src/shapes.rs`'s own identical literals for
-/// the single-state cases) — this project's own still-open "no generated per-block-state-
-/// property registry" gap (`Tier1RedstoneStateIds`'s own doc comment) applied honestly here
-/// too, rather than guessing a formula. Safe because none of the four tier-1 components nor a
-/// piston's own base ever rewrites its own `BlockStateId` (`WireBehavior`/`TorchBehavior`/
-/// `RepeaterBehavior`/`ComparatorBehavior` track power/lit/locked/output purely as internal
-/// per-position state; `piston.rs`'s own top-of-file note documents the identical stance for
-/// `PistonState.extended`), so a position placed at one of these ids is guaranteed to still
-/// hold that same id at every later lookup this replay ever performs. Flagged for
-/// reconciliation once a real generated range table exists.
-const WIRE_RANGE: (u32, u32) = (4591, 5171);
-const TORCH_FLOOR_RANGE: (u32, u32) = (6885, 6885);
-const TORCH_WALL_RANGE: (u32, u32) = (6891, 6893);
-const REPEATER_RANGE: (u32, u32) = (7037, 7093);
-const COMPARATOR_RANGE: (u32, u32) = (11264, 11276);
-const PISTON_RANGE: (u32, u32) = (2258, 2268);
-const STICKY_PISTON_RANGE: (u32, u32) = (2236, 2242);
+/// The `[min, max_inclusive]` of every real reachable state id blocks.json declares for each
+/// tier-1 block (`datagen-output/26.2/generated/reports/blocks.json`, protocol 776) — M3
+/// field-report fix (Task 3): widened from this file's own former "tight range of only what
+/// this corpus's own committed fixtures place" convention, which broke the instant a
+/// component's own writeback (torch/repeater/comparator/piston: M3 field-report fix; wire: this
+/// same wave) moved a position's stored id anywhere outside that narrow placement-only window —
+/// dispatch would then silently fall through to `NoOpBehavior`/no signal source for the rest of
+/// the replay, even though the identical write is correct against the real, generated-registry-
+/// based composition root this replay path stands in for (`docs/findings-for-planning.md`'s own
+/// "own-state writeback residual gaps" entry — confirmed there by direct arithmetic:
+/// `TORCH_FLOOR_RANGE`'s old `(6885, 6885)` excluded `lit=false`'s own 6886; `REPEATER_RANGE`'s
+/// old floor of 7037 excluded the `locked=true` ids 7034/7035 `pulse_repeater_facing_side_lock_
+/// ccw`/`_cw` dispatch outside it; `COMPARATOR_RANGE`'s old floor of 11264 excluded 11263,
+/// breaking every `facing=north, mode=compare` comparator the instant it turned on). Every
+/// component still gets exactly one registered range each (this project's own still-open "no
+/// generated per-block-state-property registry" gap, `Tier1RedstoneStateIds`'s own doc comment,
+/// applied honestly here too — a real per-property registry, not a wider hand-picked bound, is
+/// the eventual fix, WS-D15) — only the bounds changed, from "narrowest window covering this
+/// corpus's own placements" to "every id blocks.json actually declares for this block."
+const WIRE_RANGE: (u32, u32) = (4011, 5306); // power 0..=15 x 4 sides (up/side/none each)
+const TORCH_FLOOR_RANGE: (u32, u32) = (6885, 6886); // lit true/false
+const TORCH_WALL_RANGE: (u32, u32) = (6887, 6894); // facing x lit
+const REPEATER_RANGE: (u32, u32) = (7034, 7097); // facing x delay x locked x powered
+const COMPARATOR_RANGE: (u32, u32) = (11263, 11278); // facing x mode x powered
+const PISTON_RANGE: (u32, u32) = (2257, 2268); // extended x facing
+const STICKY_PISTON_RANGE: (u32, u32) = (2235, 2246); // extended x facing
 
 fn in_range(id: u32, range: (u32, u32)) -> bool {
     id >= range.0 && id <= range.1
