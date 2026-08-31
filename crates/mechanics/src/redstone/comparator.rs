@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 
 use crate::behavior::{BlockBehavior, UpdateContext};
@@ -41,6 +42,38 @@ struct ComparatorState {
     powered: bool,
     output: u8,
     mode: ComparatorMode,
+    /// `true` once `seed_powered_from_world` has run for this position at least once (M3
+    /// field-report fix: own-state writeback's read-side companion, mirrors `RepeaterState::
+    /// seeded`'s own identical rationale) -- `place()`'s own "placement is out of this
+    /// blueprint's scope" gap means `powered` always starts seeded `false`, regardless of a
+    /// fixture's real initial `POWERED` value.
+    seeded: bool,
+}
+
+/// Own-state id arithmetic for `minecraft:comparator` (M3 field-report fix: own-state
+/// writeback; WS-D15's generated per-property registry is future work, so this constant is
+/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
+/// `minecraft:comparator` entry, protocol 776, states 11263..=11278). `facing` (`signal::
+/// diode_facing_index`, the same `[north,south,west,east]` order/stride repeater.rs's own id
+/// arithmetic shares) is the slowest-varying property, stride 4; then `mode` (`[compare,
+/// subtract]`), stride 2; then `powered` (`[true,false]`), stride 1. The analog `output` value
+/// (comparator's own held `0..=15` signal strength) has no `BlockStateId` representation at all
+/// -- blocks.json's own `minecraft:comparator` entry lists only `facing`/`mode`/`powered`; real
+/// vanilla stores it in a separate `ComparatorBlockEntity`, out of this changeset's own scope
+/// (Stage-7/block-entity wiring, per the M3 fix-agent brief's own container-case carve-out).
+const COMPARATOR_BASE: u32 = 11263;
+
+fn comparator_state_id(facing: Direction, mode: ComparatorMode, powered: bool) -> BlockStateId {
+    let mode_idx = match mode {
+        ComparatorMode::Compare => 0,
+        ComparatorMode::Subtract => 1,
+    };
+    BlockStateId(
+        COMPARATOR_BASE
+            + signal::diode_facing_index(facing) * 4
+            + mode_idx * 2
+            + u32::from(!powered),
+    )
 }
 
 /// Comparator (Context §G). One instance per region (Context §I).
@@ -70,6 +103,7 @@ impl ComparatorBehavior {
                 powered: false,
                 output: 0,
                 mode,
+                seeded: false,
             },
         );
     }
@@ -85,6 +119,7 @@ impl ComparatorBehavior {
                 powered: false,
                 output: 0,
                 mode: ComparatorMode::Compare,
+                seeded: false,
             })
             .mode = mode;
     }
@@ -129,6 +164,7 @@ impl ComparatorBehavior {
             powered: false,
             output: 0,
             mode: ComparatorMode::Compare,
+            seeded: false,
         });
         entry.output = output;
     }
@@ -139,8 +175,30 @@ impl ComparatorBehavior {
             powered: false,
             output: 0,
             mode: ComparatorMode::Compare,
+            seeded: false,
         });
         entry.powered = powered;
+    }
+
+    /// Own-state writeback's read-side companion (M3 field-report fix) -- `ComparatorState::
+    /// seeded`'s own doc comment, mirrors `RepeaterBehavior::seed_powered_from_world`'s
+    /// identical rationale/shape. Reads `pos`'s own currently-stored raw id (if any) and
+    /// decodes its `powered` bit into the side-table, exactly once.
+    fn seed_powered_from_world(&self, world: &dyn BlockWorldAccess, pos: BlockPos) {
+        let mut state = self.state.lock().unwrap();
+        let entry = state.entry(pos).or_insert(ComparatorState {
+            powered: false,
+            output: 0,
+            mode: ComparatorMode::Compare,
+            seeded: false,
+        });
+        if entry.seeded {
+            return;
+        }
+        entry.seeded = true;
+        if let Some(current) = world.get_block(pos) {
+            entry.powered = (current.0.wrapping_sub(COMPARATOR_BASE)) % 2 == 0;
+        }
     }
 
     /// Sets this behavior's own registry handle (Context §I½). Called exactly once, by
@@ -214,10 +272,15 @@ impl ComparatorBehavior {
 impl RedstoneSignalSource for ComparatorBehavior {
     fn weak_signal_toward(
         &self,
-        _world: &dyn BlockWorldAccess,
+        world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
+        // Own-state writeback's read-side companion (M3 field-report fix, `ComparatorState::
+        // seeded`'s own doc comment): mirrors `RepeaterBehavior::weak_signal_toward`'s identical
+        // seed-on-read rationale -- a reader may reach this comparator's signal before its own
+        // on_neighbor_changed/on_scheduled_tick has ever dispatched.
+        self.seed_powered_from_world(world, pos);
         // `FACING` points toward this comparator's own INPUT side (Context §G, ASSET-D18(f)
         // research verdict); output flows out the opposite side, matching repeater's own
         // symmetric behavior.
@@ -254,6 +317,7 @@ impl BlockBehavior for ComparatorBehavior {
     /// value* in addition to the boolean -- otherwise the same shared `DiodeBlock`-base
     /// priority-selection logic as repeater's own override.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        self.seed_powered_from_world(ctx.world, pos);
         let registry = Arc::clone(self.registry());
         let facing = self.facing(pos);
         let input = self.get_input_signal(ctx.world, &registry, pos);
@@ -286,6 +350,16 @@ impl BlockBehavior for ComparatorBehavior {
         self.set_output(pos, new_output);
         if new_output != stored_output || mode == ComparatorMode::Compare {
             self.set_powered(pos, new_should);
+            // Own-state writeback (M3 field-report fix): vanilla's `ComparatorBlock::
+            // refreshOutputState` writes `POWERED` back via `level.setBlock(pos, .., 2)` (flag 2
+            // = clients-only, no cascading neighbor/shape update of its own) whenever this same
+            // branch flips it -- the real neighbor notify is `notify_neighbor_changed_only`
+            // below, unchanged, so this never goes through `ctx.set_block`. The analog `output`
+            // value has no `BlockStateId` representation (`comparator_state_id`'s own doc
+            // comment) -- only `POWERED` is ever encoded here.
+            let facing = self.facing(pos);
+            let id = comparator_state_id(facing, mode, new_should);
+            ctx.world.set_block(pos, id);
             signal::notify_neighbor_changed_only(ctx, pos);
         }
     }
