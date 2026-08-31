@@ -524,3 +524,108 @@ fn wire_own_state_writeback_returns_none_once_the_stored_id_already_matches() {
          cascade never reaches a fixed point"
     );
 }
+
+/// M3 field-report fix (Task 1): wire support-loss destruction — `RedStoneWireBlock` requires a
+/// conductor directly below it; a `DOWN`-direction shape update destroys the wire (self-
+/// destructs to air) if that support is gone, the same `updateShape`-returns-air contract
+/// `07-blocks-blockstates.md` documents generally and `TorchBehavior::should_pop`'s own sibling
+/// fix wires up for torches (`08-redstone-ticking.md` §3.1/Notes).
+#[test]
+fn wire_self_destructs_when_its_floor_support_vanishes() {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    // The floor is left entirely unset -- no block at all, `is_conductor`'s own documented
+    // `None` case, mirroring the vanished-support trigger this whole test simulates.
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
+
+    assert_eq!(
+        result,
+        Some(BlockStateId(0)),
+        "a wire tile whose floor support vanished must request its own destruction (air)"
+    );
+}
+
+/// The mirror case: a real conductor floor (an *unregistered* id, `default_full_cube()`,
+/// Context §B) is still present — the wire must survive and instead recompute its own
+/// connections exactly as any other `Down`-direction shape update would.
+#[test]
+fn wire_survives_a_down_shape_update_while_its_floor_support_remains() {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::Down.apply(pos), CONDUCTOR);
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, CONDUCTOR);
+
+    assert_ne!(
+        result,
+        Some(BlockStateId(0)),
+        "a wire tile with a real conductor floor must never self-destruct off a Down shape \
+         update"
+    );
+}
+
+/// A horizontal shape update must never trigger support-loss destruction, even with no floor
+/// support at all (Context: only the `Down`-direction trigger ever checks support) — it still
+/// recomputes connections normally, exactly as `wire_own_state_writeback_reflects_computed_
+/// connections` already establishes.
+#[test]
+fn wire_ignores_floor_support_on_a_horizontal_shape_update() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, SOURCE_ID);
+    // No floor support placed at all -- if this behavior wrongly checked support on every
+    // direction (not only `Down`), this would incorrectly destroy the wire too.
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
+
+    assert_eq!(result, Some(BlockStateId(4739)));
+}
+
+/// Destruction also clears this position's own side-table state (Context: a future
+/// re-placement at the same position must start fresh) — observable via `power`'s own
+/// documented "never observed -> 0" fallback.
+#[test]
+fn wire_destruction_clears_its_own_stored_state() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::West.apply(pos), SOURCE_ID);
+
+    {
+        let mut ctx = h.ctx();
+        wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    }
+    assert_ne!(wire.power(pos), 0, "the wire must have picked up real power first");
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
+    assert_eq!(result, Some(BlockStateId(0)));
+
+    assert_eq!(
+        wire.power(pos),
+        0,
+        "a destroyed position's side-table entry must be cleared, so a future re-placement at \
+         the same position starts from the documented fresh default (power = 0) rather than \
+         inheriting the destroyed wire's own last power"
+    );
+}

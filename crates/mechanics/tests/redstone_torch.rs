@@ -400,6 +400,139 @@ fn wall_torch_own_state_writeback_preserves_facing() {
     );
 }
 
+/// M3 field-report fix (Task 1): torch support-loss destruction — `BaseTorchBlock` survives
+/// only if `canSupportCenter(level, pos.below(), UP)`; a `DOWN`-direction shape update destroys
+/// the torch if that support is gone (`08-redstone-ticking.md` §3.7/Notes: "or
+/// `Blocks.AIR.defaultBlockState()` to self-destruct, e.g. a torch losing its supporting
+/// wall"). `on_shape_update`'s own `from` parameter is a floor torch's own support direction
+/// (`Down`, `TorchAttachment::input_direction`'s own doc comment) exactly when the block below
+/// it just changed — `should_pop`'s own pre-existing "no mutation" query is what this behavior
+/// now actually wires up.
+#[test]
+fn floor_torch_self_destructs_when_its_support_vanishes() {
+    let (torch, _support) = setup_torch_floor();
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    let s = Direction::Down.apply(t);
+    h.world.set_block(t, BlockStateId(6885)); // lit=true
+    // The support block just became air (this test's own trigger condition) — `should_pop`
+    // reads the live world, not a snapshot, so leaving `s` entirely unset (never written)
+    // reproduces "no block at all," `is_conductor`'s own documented `None` case.
+    let _ = s;
+
+    let mut ctx = h.ctx_at(0);
+    let result = torch.on_shape_update(&mut ctx, t, Direction::Down, BlockStateId(0));
+
+    assert_eq!(
+        result,
+        Some(BlockStateId(0)),
+        "a floor torch whose support vanished must request its own destruction (air)"
+    );
+}
+
+/// The mirror case: support still present, `should_pop` stays `false`, no destruction.
+#[test]
+fn floor_torch_survives_a_shape_update_while_its_support_remains() {
+    let (torch, _support) = setup_torch_floor();
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    let s = Direction::Down.apply(t);
+    h.world.set_block(t, BlockStateId(6885));
+    h.world.set_block(s, SUPPORT_ID); // registered, but non-conductor (Context §B default)
+
+    let mut ctx = h.ctx_at(0);
+    let result = torch.on_shape_update(&mut ctx, t, Direction::Down, SUPPORT_ID);
+
+    // `SUPPORT_ID` resolves via `TestSignalSource`, never registered in `rc_physics::
+    // tier1_shape_table()` -- an *unregistered* id defaults to `default_full_cube()` (Context
+    // §B), i.e. a conductor, so the torch's support check must find it solid and survive.
+    assert_eq!(result, None);
+}
+
+/// A shape update from a direction *other than* the support direction must never trigger
+/// destruction, even with no support at all (Context: `BaseTorchBlock` only ever destroys
+/// itself off its own `DOWN`-direction shape update).
+#[test]
+fn floor_torch_ignores_shape_updates_from_non_support_directions() {
+    let (torch, _support) = setup_torch_floor();
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    h.world.set_block(t, BlockStateId(6885));
+    // No support block placed at all -- if this behavior wrongly checked support
+    // unconditionally (any `from`), this would incorrectly destroy the torch too.
+
+    let mut ctx = h.ctx_at(0);
+    let result = torch.on_shape_update(&mut ctx, t, Direction::North, BlockStateId(0));
+
+    assert_eq!(result, None);
+}
+
+/// Wall torch mirror: support-loss destruction fires off `input_direction()` (the direction of
+/// its own attached wall), not `Down` (`RedstoneWallTorchBlock` reads/destroys off `FACING.
+/// getOpposite()`, `08-redstone-ticking.md` §3.7).
+#[test]
+fn wall_torch_self_destructs_when_its_attached_wall_vanishes() {
+    let torch = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::West)));
+    let support = Arc::new(TestSignalSource::fixed(0));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        SUPPORT_ID,
+        BlockStateId(SUPPORT_ID.0 + 1),
+        Arc::clone(&support) as Arc<dyn RedstoneSignalSource>,
+    );
+    torch.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    h.world.set_block(t, BlockStateId(6891)); // facing=west, lit=true
+    // The attached wall (East, per `Wall(West).input_direction() == East`) is left unset --
+    // vanished / never there, the same "no block at all" trigger the floor case above uses.
+
+    let mut ctx = h.ctx_at(0);
+    let result = torch.on_shape_update(&mut ctx, t, Direction::East, BlockStateId(0));
+
+    assert_eq!(result, Some(BlockStateId(0)));
+}
+
+/// Destruction also clears this position's own side-table state (Context: a future
+/// re-placement at the same position must start fresh, matching vanilla's own "no residual
+/// state" default) — observable via `lit`'s own documented "never observed -> true" fallback.
+#[test]
+fn floor_torch_destruction_clears_its_own_stored_state() {
+    let (torch, support) = setup_torch_floor();
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    let s = Direction::Down.apply(t);
+    h.world.set_block(t, BlockStateId(6885));
+    h.world.set_block(s, SUPPORT_ID);
+
+    // Turn the torch off first, so its side-table holds a non-default `lit = false`.
+    support.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        torch.on_neighbor_changed(&mut ctx, t, Direction::Down);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        torch.on_scheduled_tick(&mut ctx, t);
+    }
+    assert!(!torch.lit(t));
+
+    // Now the support vanishes.
+    h.world.set_block(t, BlockStateId(6886)); // lit=false, matching the state just written
+    h.world.set_block(s, BlockStateId(0)); // air -- not a conductor
+    let mut ctx = h.ctx_at(2);
+    let result = torch.on_shape_update(&mut ctx, t, Direction::Down, BlockStateId(0));
+    assert_eq!(result, Some(BlockStateId(0)));
+
+    assert!(
+        torch.lit(t),
+        "a destroyed position's side-table entry must be cleared, so a future re-placement at \
+         the same position starts from the documented fresh default (lit = true) rather than \
+         inheriting the destroyed torch's own last state"
+    );
+}
+
 #[test]
 fn wall_torch_reads_from_its_attach_direction() {
     assert_eq!(
