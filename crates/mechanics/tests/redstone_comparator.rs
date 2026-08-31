@@ -437,6 +437,10 @@ fn comparator_checktick_compares_stored_output_not_just_powered() {
     comparator.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
+    // A real floor -- `on_neighbor_changed`'s own relocated support check (Section A) would
+    // otherwise destroy this comparator the moment it fires below.
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(front, FRONT_ID);
     h.world.set_block(side_pos, SIDE_ID);
 
@@ -473,10 +477,6 @@ fn comparator_on_placed_reseeds_facing_and_mode_from_the_raw_id() {
     comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
 
     let mut h = Harness::new();
-    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
-    // this test is about facing/mode reseeding, not support, so give it a real floor.
-    h.world
-        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(11274)); // west, subtract, powered=false
 
     let mut ctx = h.ctx_at(0);
@@ -486,15 +486,15 @@ fn comparator_on_placed_reseeds_facing_and_mode_from_the_raw_id() {
     assert_eq!(comparator.mode(pos), ComparatorMode::Subtract);
 }
 
-/// M3 field-report fix (Task 3): `DiodeBlock` (the shared repeater/comparator base) requires a
-/// real conductor directly beneath it, checked immediately at placement time -- a comparator
-/// `/setblock`'d with no floor support at all self-destructs to air on the spot, mirroring
-/// `WireBehavior`'s own identical `should_pop` contract but run reactively at *placement* rather
-/// than only off a later `Down`-direction shape update (confirmed against a real oracle diff,
-/// `redstone/comparator/comparator_2tick_fixed_delay`'s own comparator, destroyed from tick 0
-/// with no floor ever placed anywhere in that fixture, `docs/findings-for-planning.md`).
+/// M3 field-report fix (regression correction, Section A): `on_placed` no longer self-destructs
+/// an unsupported diode -- vanilla never self-validates a command-placed block; a `/setblock`'d
+/// comparator with no floor support survives untouched until some neighbor changes (confirmed
+/// against a real oracle diff: `redstone/comparator/comparator_2tick_fixed_delay`'s own isolated
+/// floor-less comparator stays alive in the oracle trace with no floor ever placed anywhere in
+/// that fixture, while the old `on_placed` check destroyed it at tick 0,
+/// `docs/findings-for-planning.md`).
 #[test]
-fn comparator_self_destructs_when_placed_with_no_floor_support() {
+fn comparator_on_placed_survives_with_no_floor_support() {
     let pos = BlockPos::new(0, 0, 0);
     let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
     let comparator = ComparatorBehavior::new(containers);
@@ -509,9 +509,58 @@ fn comparator_self_destructs_when_placed_with_no_floor_support() {
 
     assert_eq!(
         h.world.get_block(pos),
-        Some(BlockStateId(0)),
-        "an unsupported comparator must self-destruct to air on placement"
+        Some(BlockStateId(11264)),
+        "on_placed must never self-validate support -- the comparator survives untouched"
     );
+}
+
+/// The relocated check (Section A): `on_neighbor_changed` now re-validates support on *every*
+/// trigger, direction-agnostically -- support always looks straight down, regardless of which of
+/// the six neighbors changed. Triggered here from `East` (a horizontal neighbor, never `Down`)
+/// specifically to pin the direction-agnostic claim -- mirrors `RepeaterBehavior`'s own identical
+/// regression test.
+#[test]
+fn comparator_self_destructs_on_neighbor_changed_with_no_floor_support() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::North, ComparatorMode::Compare);
+    comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(11264)); // north, compare, powered=false
+    // No floor placed at all.
+
+    let mut ctx = h.ctx_at(0);
+    comparator.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "an unsupported comparator must self-destruct on any neighbor-changed trigger, not just \
+         a Down-direction one"
+    );
+}
+
+/// The mirror case: a real conductor floor is present -- `on_neighbor_changed` must not destroy
+/// the comparator, continuing straight into its ordinary output/tick-scheduling logic instead.
+#[test]
+fn comparator_survives_neighbor_changed_with_a_real_floor() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::North, ComparatorMode::Compare);
+    comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
+    h.world.set_block(pos, BlockStateId(11264)); // north, compare, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    comparator.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(11264)));
 }
 
 /// The mirror case: a real conductor floor is present -- the comparator survives and seeds
@@ -559,8 +608,8 @@ fn comparator_on_placed_resets_powered_and_output_to_the_fresh_placement_default
     comparator.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
-    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
-    // this test is about powered/output reset, not support, so give it a real floor.
+    // A real floor -- `on_neighbor_changed`'s own relocated support check (Section A) would
+    // otherwise destroy this comparator the moment it fires below.
     h.world
         .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(11268)); // north, compare, powered=false

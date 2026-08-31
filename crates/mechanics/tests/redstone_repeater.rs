@@ -44,6 +44,11 @@ const CHAIN_REPEATER_ID: BlockStateId = BlockStateId(7037);
 /// those real reachable post-writeback ids, mirroring `registration.rs`'s own established "one
 /// wide range per component, regardless of which specific state a position is in" convention.
 const CHAIN_REPEATER_RANGE_END: BlockStateId = BlockStateId(7050);
+/// An unregistered id defaulting to `default_full_cube` (a real conductor, `signal::
+/// is_conductor`'s own doc comment) -- Section A's relocated `on_neighbor_changed` support check
+/// now needs a real floor under every repeater this file exercises via that entry point, mirrors
+/// `redstone_comparator.rs`'s own identical convention.
+const FLOOR_ID: BlockStateId = BlockStateId(9_999_500);
 
 struct Harness {
     world: FakeWorld,
@@ -124,6 +129,7 @@ fn repeater_turns_on_and_off_at_its_own_delay() {
         )],
     );
     let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
     h.world.set_block(pos, REPEATER_ID);
     h.world.set_block(front, INPUT_ID);
 
@@ -177,6 +183,7 @@ fn repeater_catches_a_short_pulse() {
         )],
     );
     let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
     h.world.set_block(front, INPUT_ID);
 
     // Rising edge at tick 0 -> schedule turn-on at tick 4 (get_delay(2) = 4), High.
@@ -353,6 +360,7 @@ fn repeater_own_state_writeback_reflects_locked_immediately() {
     repeater.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
     h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
     h.world.set_block(side_pos, SIDE_ID);
 
@@ -472,6 +480,7 @@ fn setup_chain(
     behind_repeater.bind_registry(Arc::clone(&signals));
 
     let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
     h.world.set_block(pos, REPEATER_ID);
     h.world.set_block(behind, BEHIND_ID);
     h.world.set_block(Direction::East.apply(pos), INPUT_ID);
@@ -587,6 +596,9 @@ fn repeater_chain_relays_signal_end_to_end() {
     );
 
     let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(r1_pos), FLOOR_ID);
+    h.world.set_block(Direction::Down.apply(r2_pos), FLOOR_ID);
+    h.world.set_block(Direction::Down.apply(r3_pos), FLOOR_ID);
     h.world.set_block(r1_pos, CHAIN_REPEATER_ID);
     h.world.set_block(r2_pos, CHAIN_REPEATER_ID);
     h.world.set_block(r3_pos, CHAIN_REPEATER_ID);
@@ -693,10 +705,6 @@ fn repeater_on_placed_reseeds_facing_and_delay_from_the_raw_id() {
     repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
 
     let mut h = Harness::new();
-    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
-    // this test is about facing/delay reseeding, not support, so give it a real floor.
-    h.world
-        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(7073)); // south, delay=3, locked=false, powered=false
 
     let mut ctx = h.ctx_at(0);
@@ -707,12 +715,14 @@ fn repeater_on_placed_reseeds_facing_and_delay_from_the_raw_id() {
     assert_eq!(repeater.get_delay(pos), 6);
 }
 
-/// M3 field-report fix (Task 3): `DiodeBlock` (the shared repeater/comparator base) requires a
-/// real conductor directly beneath it, checked immediately at placement time -- mirrors
-/// `ComparatorBehavior`'s own identical `comparator_self_destructs_when_placed_with_no_floor_
-/// support` regression test.
+/// M3 field-report fix (regression correction, Section A): `on_placed` no longer self-destructs
+/// an unsupported diode -- vanilla never self-validates a command-placed block; a `/setblock`'d
+/// repeater with no floor support survives untouched until some neighbor changes (confirmed
+/// against a real oracle diff: `comparator_2tick_fixed_delay`'s own isolated floor-less
+/// comparator stays alive in the oracle trace while the old `on_placed` check destroyed it at
+/// tick 0, `docs/findings-for-planning.md`).
 #[test]
-fn repeater_self_destructs_when_placed_with_no_floor_support() {
+fn repeater_on_placed_survives_with_no_floor_support() {
     let pos = BlockPos::new(0, 0, 0);
     let repeater = RepeaterBehavior::new();
     repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
@@ -726,9 +736,55 @@ fn repeater_self_destructs_when_placed_with_no_floor_support() {
 
     assert_eq!(
         h.world.get_block(pos),
-        Some(BlockStateId(0)),
-        "an unsupported repeater must self-destruct to air on placement"
+        Some(BlockStateId(7037)),
+        "on_placed must never self-validate support -- the repeater survives untouched"
     );
+}
+
+/// The relocated check (Section A): `on_neighbor_changed` now re-validates support on *every*
+/// trigger, direction-agnostically -- support always looks straight down, regardless of which of
+/// the six neighbors changed. Triggered here from `East` (a horizontal neighbor, never `Down`)
+/// specifically to pin the direction-agnostic claim.
+#[test]
+fn repeater_self_destructs_on_neighbor_changed_with_no_floor_support() {
+    let pos = BlockPos::new(0, 0, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
+    // No floor placed at all.
+
+    let mut ctx = h.ctx_at(0);
+    repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "an unsupported repeater must self-destruct on any neighbor-changed trigger, not just a \
+         Down-direction one"
+    );
+}
+
+/// The mirror case: a real conductor floor is present -- `on_neighbor_changed` must not destroy
+/// the repeater, continuing straight into its ordinary lock/tick-scheduling logic instead.
+#[test]
+fn repeater_survives_neighbor_changed_with_a_real_floor() {
+    let pos = BlockPos::new(0, 0, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
+    h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(7037)));
 }
 
 /// `on_placed` is a full replace-on-replace, not a partial update — a repeater re-placed while
@@ -752,8 +808,6 @@ fn repeater_on_placed_resets_powered_to_the_fresh_placement_default() {
     repeater.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
-    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
-    // this test is about powered reset, not support, so give it a real floor.
     h.world
         .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
