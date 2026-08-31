@@ -150,6 +150,13 @@ fn dispatch_scheduled_tick(
 /// (MECH-D1's own order — Context), dispatching each to `behaviors.resolve(state).on_scheduled_tick`
 /// and draining the neighbor-update engine to a fixed point after **each individual** due entry
 /// (not batched) — reproducing vanilla's synchronous per-tick settling.
+///
+/// M3 field-report fix (Section B3): brackets the whole call with `events.begin_scheduled_phase_
+/// dispatch()`/`end_scheduled_phase_dispatch()` (`block_event.rs`'s own doc comment has the full
+/// rationale) — any `ctx.emit_block_event` reached from inside this function (typically a
+/// piston's own finalization, `commit_extend`/`commit_retract`, fanning out to a neighbor
+/// piston's own `on_neighbor_changed`) is held back a full extra `run_block_event_subphase`
+/// call, landing on the *next* tick's own block-event pass rather than this same tick's.
 #[allow(clippy::too_many_arguments)]
 pub fn run_scheduled_phase(
     world: &mut dyn BlockWorldAccess,
@@ -163,6 +170,7 @@ pub fn run_scheduled_phase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     current_tick: u64,
 ) {
+    events.begin_scheduled_phase_dispatch();
     for ev in inbound {
         let mut ctx = make_ctx(
             world,
@@ -235,6 +243,7 @@ pub fn run_scheduled_phase(
             behaviors,
         );
     }
+    events.end_scheduled_phase_dispatch();
 }
 
 /// Defensive per-pass cap on how many block events one `run_block_event_subphase` call will
@@ -255,8 +264,15 @@ const BLOCK_EVENT_PASS_CAP: u32 = 1_000_000;
 /// picking up anything a handler's own `ctx.emit_block_event` call queues mid-loop, whether
 /// directly or via a `ctx.set_block` fan-out that reaches another position's own
 /// `on_neighbor_changed` -- until `events` is empty or `BLOCK_EVENT_PASS_CAP` trips, reproducing
-/// vanilla's own same-tick, same-pass re-entrant cascade exactly: nothing emitted during this
-/// call is ever deferred to a later tick purely because it was emitted *during* this call.
+/// vanilla's own same-tick, same-pass re-entrant cascade exactly: nothing emitted *during this
+/// call* is ever deferred to a later tick purely because it was emitted during this call.
+///
+/// M3 field-report fix (Section B3): calls `events.begin_pass()` before the draining loop below
+/// starts (`block_event.rs`'s own doc comment has the full rationale) -- advances the two-
+/// generation rotation that holds back anything `run_scheduled_phase`'s own dispatch emitted
+/// (typically a piston's own finalization fanning out to a neighbor piston) for a full extra
+/// `run_block_event_subphase` call, so it lands on the *next* tick's own pass rather than this
+/// same tick's.
 #[allow(clippy::too_many_arguments)]
 pub fn run_block_event_subphase(
     world: &mut dyn BlockWorldAccess,
@@ -268,6 +284,7 @@ pub fn run_block_event_subphase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     current_tick: u64,
 ) {
+    events.begin_pass();
     let mut processed: u32 = 0;
     loop {
         if processed >= BLOCK_EVENT_PASS_CAP {

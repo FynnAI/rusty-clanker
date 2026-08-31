@@ -391,8 +391,9 @@ struct PistonState {
     should_be_extended: bool,
 }
 
-/// One in-flight extend or retract (Context §E) — cleared on commit or on a superseding event
-/// (Context §F).
+/// One in-flight extend or retract (Context §E) — cleared on commit (`on_scheduled_tick`'s own
+/// ordinary path) or force-finalized by a superseding trigger (`finalize_moving`, Section B4:
+/// forced early, never silently dropped).
 #[derive(Clone, Debug)]
 enum MovingPlan {
     Extending(PushPlan),
@@ -691,6 +692,42 @@ impl PistonBehavior {
             }
         }
     }
+
+    /// Section B4 (M3 field-report fix): one `MovingPistonState`'s complete finalization --
+    /// re-validate (Context §G case 1's whole-abort check), commit (`commit_extend`/
+    /// `commit_retract`), then write back `PistonState.extended`. Shared by two call sites:
+    /// `on_scheduled_tick`, the ordinary path (the commit's own `COMMIT_DELAY_TICKS`-later
+    /// scheduled tick actually fires), and `on_block_event`, the FORCED path -- a new trigger
+    /// arriving for `pos` while a previous commit is still in flight force-finalizes it right
+    /// here, synchronously, rather than the it being silently superseded/dropped. This corrects
+    /// `blueprints/M3/M3-B05-piston.md`'s own former "absorption" interpretation (that blueprint
+    /// itself flagged this as mechanically-derived and unverified) -- verified WRONG against a
+    /// real oracle trace: a second trigger arriving mid-flight does not silently discard the
+    /// first commit's own real content; it forces that content to actually land first, then
+    /// starts the new action from that now-settled state (`docs/findings-for-planning.md`'s own
+    /// "piston zero-tick force-finalization" entry has the full writeup).
+    fn finalize_moving(&self, ctx: &mut UpdateContext, pos: BlockPos, moving: MovingPistonState) {
+        // Context §G case 1: re-validate the base itself before touching anything.
+        if !state_matches_snapshot(ctx.world, &moving.snapshot, pos) {
+            return; // whole-abort: nothing written, no fan-out.
+        }
+
+        let extended_after = match moving.plan {
+            MovingPlan::Extending(plan) => {
+                self.commit_extend(ctx, pos, moving.direction, plan, &moving.snapshot);
+                true
+            }
+            MovingPlan::Retracting(plan) => {
+                self.commit_retract(ctx, pos, moving.direction, plan, &moving.snapshot);
+                false
+            }
+        };
+
+        let mut state = self.state.lock().unwrap();
+        if let Some(st) = state.get_mut(&pos) {
+            st.extended = extended_after;
+        }
+    }
 }
 
 impl BlockBehavior for PistonBehavior {
@@ -751,6 +788,16 @@ impl BlockBehavior for PistonBehavior {
             (st.facing, st.sticky)
         };
 
+        // Section B4 (M3 field-report fix, verified correction to blueprints/M3/M3-B05-
+        // piston.md's own "absorption" interpretation -- `finalize_moving`'s own doc comment has
+        // the full citation): a new trigger arriving while a `MovingPistonState` is already in
+        // flight for `pos` FORCE-FINALIZES it first, so the new trigger's own `resolve_extend`/
+        // `resolve_retract` below resolves against the now-settled world, never a stale
+        // pre-move one. Must run before either match arm below ever reads world state.
+        if let Some(prev) = self.moving.lock().unwrap().remove(&pos) {
+            self.finalize_moving(ctx, pos, prev);
+        }
+
         match event.event_id {
             TRIGGER_EXTEND => {
                 if let Ok(plan) = resolve_extend(ctx.world, ctx.ownership, pos, facing) {
@@ -787,11 +834,17 @@ impl BlockBehavior for PistonBehavior {
             }
             TRIGGER_CONTRACT | TRIGGER_DROP => {
                 let plan = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
-                // M3 field-report fix (Task 3): mirrors the extend case above -- the base's own
-                // `EXTENDED=false` flip happens immediately, whether or not anything is actually
-                // pulled (`TRIGGER_DROP`'s own "arm retracts without pulling" case flips the base
-                // exactly the same way as an ordinary contract).
-                self.write_base_extended(ctx, pos, sticky, facing, false);
+                // M3 field-report fix (Section B2, regression correction): unlike extend, a
+                // retract's own base `EXTENDED=false` flip is ALWAYS deferred -- never
+                // synchronous, whether or not anything is actually pulled (`TRIGGER_DROP`'s own
+                // "arm retracts without pulling" case is no exception). The base position itself
+                // becomes an in-flight animation and only shows `EXTENDED=false` at
+                // finalization, `COMMIT_DELAY_TICKS` ticks later -- `commit_retract`'s own
+                // writeback (`piston.rs`'s doc comment there) is the only base writer for a
+                // retract; this arm used to also flip it here immediately (the former `self.
+                // write_base_extended(ctx, pos, sticky, facing, false)` call, confirmed wrong
+                // against a real oracle diff, `docs/findings-for-planning.md`'s own "piston
+                // retract base-flip timing" entry).
                 let snapshot = retract_snapshot(ctx.world, pos, &plan);
                 self.moving.lock().unwrap().insert(
                     pos,
@@ -810,30 +863,11 @@ impl BlockBehavior for PistonBehavior {
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
         let Some(moving) = self.moving.lock().unwrap().remove(&pos) else {
             // No pending move -- either already consumed by an earlier fire this same tick
-            // (Context §F's own double-fire consequence) or never existed. A silent no-op.
+            // (Context §F's own double-fire consequence), force-finalized early by a superseding
+            // trigger (Section B4), or never existed. A silent no-op.
             return;
         };
-
-        // Context §G case 1: re-validate the base itself before touching anything.
-        if !state_matches_snapshot(ctx.world, &moving.snapshot, pos) {
-            return; // whole-abort: nothing written, no fan-out, moving entry already cleared.
-        }
-
-        let extended_after = match moving.plan {
-            MovingPlan::Extending(plan) => {
-                self.commit_extend(ctx, pos, moving.direction, plan, &moving.snapshot);
-                true
-            }
-            MovingPlan::Retracting(plan) => {
-                self.commit_retract(ctx, pos, moving.direction, plan, &moving.snapshot);
-                false
-            }
-        };
-
-        let mut state = self.state.lock().unwrap();
-        if let Some(st) = state.get_mut(&pos) {
-            st.extended = extended_after;
-        }
+        self.finalize_moving(ctx, pos, moving);
     }
 }
 
