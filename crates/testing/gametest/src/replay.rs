@@ -355,7 +355,7 @@ pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
         Arc::clone(&torch_wall) as Arc<dyn RedstoneSignalSource>,
     );
 
-    let mut repeater = RepeaterBehavior::new();
+    let repeater = RepeaterBehavior::new();
     for block in &spec.blocks {
         if in_range(block.state_id, REPEATER_RANGE) {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
@@ -385,7 +385,7 @@ pub fn tier1_registry(spec: &ContraptionSpec) -> BlockBehaviorRegistry {
     // storage and never ticks Stage-7 (`comparator_container_fullness_chest.ron`'s own doc
     // comment — "the replay side has no block-entity storage at M3-B07"), so the real
     // `Tier1ContainerSignalSource` has nothing to read here yet.
-    let mut comparator = ComparatorBehavior::new(Arc::new(NoContainers));
+    let comparator = ComparatorBehavior::new(Arc::new(NoContainers));
     for block in &spec.blocks {
         if in_range(block.state_id, COMPARATOR_RANGE) {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
@@ -464,6 +464,16 @@ fn place_and_settle(
             current_tick,
         };
         ctx.set_block(pos, state);
+        // M3 field-report fix (Task 2): every `place_and_settle` call is a real placement (both
+        // `spec.blocks`' own initial setup and a later scripted `spec.actions` re-placement at
+        // an already-occupied position) — `on_placed` lets a diode (or any future behavior with
+        // its own placement-state side-table) reseed itself straight off the id just written,
+        // closing the gap `RepeaterBehavior::place`/`ComparatorBehavior::place`'s own former
+        // `&mut self`-only signature left (`docs/findings-for-planning.md`'s own "diode
+        // re-placement" entry) without this generic, redstone-behavior-agnostic driver needing
+        // to know which concrete behavior type it just placed. Called before `engine.drain`
+        // below so every dispatch this same placement triggers already sees the reseeded state.
+        behaviors.resolve(state).on_placed(&mut ctx, pos);
     }
     engine.drain(&mut |eng, item| {
         let mut ctx = UpdateContext {
