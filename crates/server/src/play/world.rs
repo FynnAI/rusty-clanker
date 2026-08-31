@@ -2249,7 +2249,7 @@ impl HardcodedWorld {
                         neighbor_engine_idle: engine.is_idle(),
                         block_ticks_pending: scheduled.block_len(),
                         fluid_ticks_pending: scheduled.fluid_len(),
-                        block_events_pending_next_tick: events.pending_next_tick(),
+                        block_events_pending_next_tick: events.pending(),
                     });
                 }
 
@@ -2445,7 +2445,7 @@ impl HardcodedWorld {
     }
 
     /// Test/diagnostic only -- reads `NeighborUpdateEngine::is_idle()`/`ScheduledTickQueue::
-    /// block_len()`/`fluid_len()`/`BlockEventQueue::pending_next_tick()` straight off
+    /// block_len()`/`fluid_len()`/`BlockEventQueue::pending()` straight off
     /// `region.world`'s own M3-B01 resources (Acceptance tests, `mining_stage4_wiring.rs`).
     /// Awaits the next tick's drain, mirroring `debug_query_block`. `None` iff the tick-loop
     /// thread is already gone -- `queue_join`'s own doc comment has the full `RegionUnavailable`
@@ -2465,6 +2465,10 @@ pub struct Stage4Counters {
     pub neighbor_engine_idle: bool,
     pub block_ticks_pending: usize,
     pub fluid_ticks_pending: usize,
+    /// `BlockEventQueue::pending()` (MECH-D9's re-entrant single-buffered queue, corrected --
+    /// field name kept as-is for `mining_stage4_wiring.rs`'s own already-shipped assertion; the
+    /// value itself is no longer "queued for next tick" specifically, just "queued right now,"
+    /// which reads `0` in every steady state this field is actually asserted against).
     pub block_events_pending_next_tick: usize,
 }
 

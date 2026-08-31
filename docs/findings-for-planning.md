@@ -38,4 +38,15 @@ WS-D15, TEST-D54–D57 and PLAN-D9)*
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
-*(none pending)*
+- **MECH-D9's own "known parity deviation" sentence is now stale (M3, landed ahead of the
+  M3.5/PLAN-D9 schedule).** `05-game-mechanics.md`'s MECH-D9 row already states the correct
+  spec (a single, live, re-entrant block-event queue, same-tick cascade) but its final two
+  sentences still say the M3-implemented queue used the disproven double-buffered design and
+  that fixing it is scheduled for the M3.5 hardening milestone. That fix has now landed inside
+  M3 itself (`crates/mechanics/src/block_event.rs`/`stage4.rs`, `BlockEventQueue` rebuilt as a
+  `VecDeque`-backed re-entrant FIFO with a defensive `BLOCK_EVENT_PASS_CAP`), so those two
+  sentences describe a state that no longer exists. `blueprints/M3/M3-B01-block-update-engine.md`
+  has been corrected to match (its own MECH-D9 restatement, `block_event.rs`/`stage4.rs`
+  Deliverables, and its Acceptance tests section). Planning reconciliation: drop MECH-D9's own
+  trailing "known parity deviation... M3.5 hardening milestone (PLAN-D9)" sentences (the fix is
+  no longer pending) and close/retire PLAN-D9 accordingly in `11-roadmap-milestones.md`.

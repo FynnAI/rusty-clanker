@@ -237,11 +237,26 @@ pub fn run_scheduled_phase(
     }
 }
 
-/// `system_block_event_subphase`'s ECS-agnostic core: `events.begin_subphase()`, dispatch each
-/// to `behaviors.resolve(event.block_state).on_block_event`, draining the neighbor-update
-/// engine to a fixed point after each event (mirrors `run_scheduled_phase`'s per-item
-/// settling). Anything emitted via `events.emit` during this call lands in the queue's fresh
-/// `next` buffer, deferred to next tick's call (MECH-D9).
+/// Defensive per-pass cap on how many block events one `run_block_event_subphase` call will
+/// pop and dispatch (Context: mirrors `NeighborUpdateEngine::DEFAULT_CHAIN_LIMIT`'s identical
+/// defensive role, at the same order of magnitude). Vanilla's own `while (!queue.is_empty())`
+/// loop is naturally bounded by ordinary game logic -- no legal contraption re-queues a block
+/// event forever -- so this cap is purely this project's own non-vanilla safety net against a
+/// hypothetical runaway self-feeding loop; no legal contraption should ever reach it. Tripping
+/// it stops the loop for *this* call only: whatever is still queued in `events` when that
+/// happens is left exactly where it is (`BlockEventQueue` has no separate discard path) and is
+/// simply picked up by the *next* tick's own `run_block_event_subphase` call instead.
+const BLOCK_EVENT_PASS_CAP: u32 = 1_000_000;
+
+/// `system_block_event_subphase`'s ECS-agnostic core (MECH-D9): pops and dispatches one event
+/// at a time from `events`' own live queue, via `behaviors.resolve(event.block_state).
+/// on_block_event`, draining the neighbor-update engine to a fixed point after each one
+/// (mirrors `run_scheduled_phase`'s per-item settling). The loop keeps popping -- re-entrantly
+/// picking up anything a handler's own `ctx.emit_block_event` call queues mid-loop, whether
+/// directly or via a `ctx.set_block` fan-out that reaches another position's own
+/// `on_neighbor_changed` -- until `events` is empty or `BLOCK_EVENT_PASS_CAP` trips, reproducing
+/// vanilla's own same-tick, same-pass re-entrant cascade exactly: nothing emitted during this
+/// call is ever deferred to a later tick purely because it was emitted *during* this call.
 #[allow(clippy::too_many_arguments)]
 pub fn run_block_event_subphase(
     world: &mut dyn BlockWorldAccess,
@@ -253,8 +268,22 @@ pub fn run_block_event_subphase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     current_tick: u64,
 ) {
-    let batch = events.begin_subphase();
-    for event in batch {
+    let mut processed: u32 = 0;
+    loop {
+        if processed >= BLOCK_EVENT_PASS_CAP {
+            tracing::warn!(
+                cap = BLOCK_EVENT_PASS_CAP,
+                still_queued = events.pending(),
+                "run_block_event_subphase: per-pass block-event cap reached -- the remaining \
+                 events queued this pass are left for next tick's own call (non-vanilla safety \
+                 net; no legal contraption should ever hit this)"
+            );
+            break;
+        }
+        let Some(event) = events.pop_next() else {
+            break;
+        };
+        processed += 1;
         {
             let behavior = behaviors.resolve(event.block_state);
             let mut ctx = make_ctx(
