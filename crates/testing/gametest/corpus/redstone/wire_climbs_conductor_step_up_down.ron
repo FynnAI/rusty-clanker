@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — replacement entry R7 (UpdateOrderProbe).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/update_order/wire_climbs_conductor_step_up_down",
     category: UpdateOrderProbe,
@@ -9,17 +7,17 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (2, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (3, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (3, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (3, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (4, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (4, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (4, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
         (tick: 4, pos: (4, 2, 0), vanilla_state: "minecraft:stone", state_id: 1),

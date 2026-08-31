@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #5 (PulseGenerator).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/pulse/repeater_lock_t_flip_flop",
     category: PulseGenerator,
@@ -9,12 +7,12 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=false]", state_id: 130),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=false]", state_id: 7049),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 131),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 7045),
     ],
     actions: [
-        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:air", state_id: 0),
     ],
 )

@@ -1,8 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #1 (PulseGenerator).
-// `state_id` values below are placeholders (Implementation step 4): resolved to the
-// real `reports/blocks.json`-derived ids by whoever performs this blueprint's own
-// manual verification step against a legally obtained pinned-version server.jar
-// (never committed, NET-D9/ASSET-D15) — see Verification commands.
 ContraptionSpec(
     id: "redstone/pulse/torch_inverter_basic",
     category: PulseGenerator,
@@ -11,10 +7,10 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (0, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [
-        (tick: 3, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 3, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

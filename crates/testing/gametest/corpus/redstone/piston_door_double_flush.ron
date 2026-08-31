@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #29 (PistonDoor).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/piston/piston_door_double_flush",
     category: PistonDoor,
@@ -8,13 +6,13 @@ ContraptionSpec(
     quirk: "Two simultaneously-triggered pistons each get their own independent block-event queue entry and 2-tick commit window, with no cross-talk between them (MECH-D9, M3-B05 Context E).",
     max_ticks: 8,
     blocks: [
-        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 140),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
         (pos: (1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 3), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 140),
+        (pos: (0, 1, 3), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
         (pos: (1, 1, 3), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [
-        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
-        (tick: 2, pos: (-1, 1, 3), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 2, pos: (-1, 1, 3), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

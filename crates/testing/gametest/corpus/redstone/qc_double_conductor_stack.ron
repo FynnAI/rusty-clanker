@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #42 (QcShowcase).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/qc/qc_double_conductor_stack",
     category: QcShowcase,
@@ -8,11 +6,11 @@ ContraptionSpec(
     quirk: "Piston quasi-connectivity examines only the 4 horizontal faces of the block directly above the piston, never a second conductor stacked one further away (08-redstone-ticking.md §3.9; M3-B05 Context §A step 3; content-plan entry #42) — plain conductor-to-conductor adjacency does not itself cascade power, so the piston must never extend.",
     max_ticks: 8,
     blocks: [
-        (pos: (0, 0, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 210),
+        (pos: (0, 0, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
         (pos: (0, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 2, 0), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [
-        (tick: 3, pos: (1, 2, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 3, pos: (1, 2, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

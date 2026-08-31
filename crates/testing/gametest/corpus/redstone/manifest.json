@@ -4,307 +4,307 @@
   "entries": [
     {
       "path": "basic_piston_door_2x1.ron",
-      "sha256": "59db3a2454369657fa1a67f4b8799b06fbf4eed73f768c4e9b20f819e63f8798",
+      "sha256": "4c28e6455c94242aa4c8917977da4a25e42983fdd9f6b8ddaa26292d36bbddef",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "bud_switch_piston_wire.ron",
-      "sha256": "a6b3c089c15e8cd021eecb4d25343c9ca64347dd148f19d6ac2abfcc33725ac6",
+      "sha256": "0c74a3dcc5a1cbf966e05f5acdd57a8a348e88bb51d3495d9473f992eceaeba8",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_2tick_fixed_delay.ron",
-      "sha256": "2fafefb10a3c9c52cfd43734010209098da43a68b84ca4bf8f0bd5779045bfad",
+      "sha256": "3cb8754748a1f85a788aed5817c67657beddfd08060b4a57276bce8f41cb4f70",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_clock_container_fill.ron",
-      "sha256": "f912fd775758a2901676d18f40d068ffd3e3a3ffb4bd318638f0cbfa3c0d1314",
+      "sha256": "0b39493ab5151781d4078dc19bf3ba2fa1d53ff2bcd4984c32f8cc6870197fc2",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_compare_vs_subtract.ron",
-      "sha256": "82e9579a1b2e2524e099cede40088402b6ea4201f2023841b8fe82018148572d",
+      "sha256": "1456a09ce151cc5ab7ebb2064a07cf3f89fe6c25eac46190ff25eecae2f15983",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_container_fullness_chest.ron",
-      "sha256": "9ffe0a06f06ad05987a316cc52676a3de3ad78e30532e8c6c828c9d17138822b",
+      "sha256": "de1dd252b5fcfb76b18bd8bc397826832b378c1c1bdf2ea85e53b9a45abc59f0",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_facing_probe_all_four.ron",
-      "sha256": "0ff6e38b1d5ae8896a3462477601beb74c5f84621ea19a9bd646d5908a61cd26",
+      "sha256": "d2e8421452f635ff429a8636dd27dda734a941cdd389b3da8bc6cd6ff09145de",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_priority_diode_behind.ron",
-      "sha256": "83906326c83d6fad25fb7ed771beef3358924f3228f7b51fcdc3369882d2a95e",
+      "sha256": "d8648e4fd4c190d50661936911584d97c2dbf9337c0ff43789e13b0c1849884e",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_side_input_max_of_two.ron",
-      "sha256": "83d1f34c73cfc3eb2a28110ad63fec8b05164f2f5828aad9fe704a7434876f51",
+      "sha256": "9f4bddcf9b8e863d2e3600a3dead6695c055cb363c67fbccc98942c4d66b28fa",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_subtract_analog_probe.ron",
-      "sha256": "de7877646731bf72b15780eed993cd9b2bb3344e1aa220b8f826cf94f3f642b7",
-      "generator_tool_version": "manual/M3-B07",
+      "sha256": "fe9ac7e2b671dd7085f8c3b01cce5566e5ae2eef3f12647bb5a49faf5dfcca75",
+      "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_subtract_zero_clamp.ron",
-      "sha256": "7f581c697c3ed1c89ea1102ab57c858c18a72d9bfc0845b4ae1c87d68ce5aba5",
+      "sha256": "8c7020913dbb24a406eb67d1b871e2da18f828cc7f3b4acbef2df76ee7a09194",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_tie_no_turn_on.ron",
-      "sha256": "4d979898fc7c0d80701e33a536947e9b907b4509cd34a81c71fd24a24cd58178",
+      "sha256": "7dd8d88b8feeee7f1455ecbf26b5390bda75ba2bdfc038e67e659854b84869d3",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_wire_signal_read.ron",
-      "sha256": "02db20c5330dfd5dadb18c70d387649da59bd40df3820330523a419dbd68298a",
+      "sha256": "c4fbe4b3649ac197a679b9b3b9a2178dbde6dce6989d4f704bd8293a7de299f2",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "dual_clock_phase_offset.ron",
-      "sha256": "6f0f9edf6c3eabeb592be328ae4b4b2108df8bb82fc5388366911bd9c837cab8",
+      "sha256": "e3f2e1c1ebc79a01f65f1c7739103a06c66f455874a35372a069eb5dda2d5a0a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "hopper_clock_basic.ron",
-      "sha256": "82032d3de1dee4f3ecff984570be3dd0559d1f20a24b6cc973078e0ea1d1d942",
+      "sha256": "a00683d5c87624c79a16fd42525a2cabd2801401e71301d148959c2af22af328",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_door_double_flush.ron",
-      "sha256": "fd3ad7ad4c9dd22e66b72b8660d48fd0f865bce362fa96f17e4a27fac58210c0",
+      "sha256": "38e696761e8262d2307fa01b86f4cbcd9a9008dc642219d6fc02f232cec549ee",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_extend_block_event_same_tick_chain.ron",
-      "sha256": "ff6f7402a3318818141c0db15e4e5dcfe552fe61497cb4fe4d2b4dda7fb5434f",
+      "sha256": "154028c4bbc7e7fe4a046f6c679fe3ccc5200c018537329798361c95f2c82db1",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_max_push_depth_12.ron",
-      "sha256": "960abbf549fada0d9ed38dd47db0276b232c3229eb880e4f8fd7e3c54ac919f6",
+      "sha256": "2db8f35d13c639339f03bb2acbc86d4eb1b2d28cd546ce38ca45c8f182cd418d",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_quasi_connectivity_trigger.ron",
-      "sha256": "c4e91e22f7fa278f48c84330f5604d28e1b8485aaa62bfca3afb307d1d0f6e60",
+      "sha256": "5d3a9731f78df6b0c1e9590c32f3eaeeb0a2dbcd0fd2f2a006844131afd89631",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_retract_pull_sticky_vs_normal.ron",
-      "sha256": "e145f102e5a837bc60cc94bbb89a0cab4af53ad7818d3f893b93f1962fc6aea3",
+      "sha256": "48d613c0d5a5e7f9cc5da059c858f1e32a54604e4736d50d6e2deab81e5d281f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_sticky_pull_entity_free.ron",
-      "sha256": "d0149b304f10b30601eda602b78564ce550ef357b893fa06f0f3c4594bf65e08",
+      "sha256": "e3e5e6284631e4b7b26d66d596677117c616d0bab34ecefddbe8e43b71242c17",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "piston_unpushable_obsidian.ron",
-      "sha256": "85b534703ed8804d918321d25a40304ea11697ca44665cdcd177b30fe9ed8791",
+      "sha256": "3d8de767f378d09407dbb7ea66473d6fa0c3c1035e96f23f7efa0517ecd14bde",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "pulse_repeater_facing_side_lock_ccw.ron",
-      "sha256": "2da1b83de53185ce197e9d3cbf7dabdb01f03ae8f4d41e28676db3a7616a5d36",
+      "sha256": "2fe5e4b329f00cc4da9070047a98daaffbbde14bcc7216e0dcf52325ebe4fbc7",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "pulse_repeater_facing_side_lock_cw.ron",
-      "sha256": "f7b21f579b8e7ecf3cbf5d8e62a98478c061116877d4a5b4fe67f91ce47f9c1e",
+      "sha256": "5f782559de6727bc74baf16ec6a4a4ae0ae5f5f5289479b44c7f79766fa02a71",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "pulse_repeater_side_input_wire_ignored.ron",
-      "sha256": "7d68aedf5ef467bd8a85376be38137a68df95462691853318db7c220c8b774d3",
+      "sha256": "fa59c3120ded3ce56d33f83ee0ce13ad8d20ec2ca94522604b4276e612eff004",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "qc_double_conductor_stack.ron",
-      "sha256": "bcefb049d26850906b0d65be03d56991414de3936d6db1530080e4d3b2e51793",
+      "sha256": "d984ef11b38b113fbf710f0054ca7c67fa56a734e053385c76ebda74ce3f52dc",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "qc_negative_control_non_conductor.ron",
-      "sha256": "a88668ec98aaeea52aa0433e84a47f70e87f7edd92148a71133c755396138338",
+      "sha256": "553113c5ec6bef1b5890c917e7c233e3b3c1b75691abb3fed89b58b496e113ef",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "qc_piston_top_side_signal.ron",
-      "sha256": "736e04b69be72fd317aa802f59b59e16fd014d1930876542e2c6c55535bce79c",
+      "sha256": "c7eea0287a62aa893a20511ae56f881abd571c780f93b627b2a345e3f34ec632",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "qc_torch_on_side_of_conductor.ron",
-      "sha256": "e2a9cabaa7df379980be21e9f7e55b2b42060dcadc54043f0378e0e0468e3c41",
+      "sha256": "8c201a3aafb3dfdd7a9e536ee3aafcda047bb90575e75daa9558913055e3d223",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "qc_torch_wall_variant.ron",
-      "sha256": "60d6f2ffa55d6b559519bb64c98c77fa7e79e1fea008671e052338ea364ddb79",
+      "sha256": "542c6bb9fbdbb91a7faa19f98f554c46ad55e3871f8c3035b7f1725fa9fa072f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "repeater_chain_delay_sum_2_4_6_8.ron",
-      "sha256": "8622899189f2b84930f838cf0a8750faf3a597db503eb12dc9c374e2236885e6",
+      "sha256": "38502f20e54c7de2357e149922d48a96987a4bad24a5f86752fbb1b09d1a516f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "repeater_lock_release_repropagates.ron",
-      "sha256": "add2e293ba7dbbac7f598d67a95d1dde8f021f321f77c9c4c1061d5dcd2db23d",
+      "sha256": "39f31fe59ebdf0567cbd8d79e6a9d58ce14671e8ed7f948f520a7aa84d9565ca",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "repeater_lock_t_flip_flop.ron",
-      "sha256": "7abf35ff03f53c0fd516714178a3032b177636161ba0e92cac8d209434699339",
-      "generator_tool_version": "manual/M3-B07",
+      "sha256": "e24d216de8e757e6306202be304d3d9dcceb50600af9261e87a32c3813eab166",
+      "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "repeater_pulse_stretch_2tick.ron",
-      "sha256": "1084bc0a543fba783c8bcd1f3eee9a7336e3b1028edf92b184c1fc492ef25db0",
-      "generator_tool_version": "manual/M3-B07",
+      "sha256": "cb90edcf435089fe5fb99ba351f0a3d14705d0a06269b8fdd08559bcbf141e1c",
+      "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "sticky_piston_retractor_door_2x2.ron",
-      "sha256": "b0bdab7c223a397ceed62f7ef060a015e092ead3d15f6e32d8445f3bb06ffb0f",
+      "sha256": "6db2e3a2125c01e44ee049f6de18b9177a409074fdb112f7d9066d326c1760af",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "torch_burnout_fast_clock.ron",
-      "sha256": "7aa6b107d51f194a5e22e913e51a88e588ea51aa91f440b04bf810e748066a09",
+      "sha256": "e44895bc65ca9f16ff3bb212172fb8148f2a8bf43d4066c02d0dd9fe59ba601c",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "torch_burnout_restart_delay.ron",
-      "sha256": "0ca8fd0bae8be969733beda19fa374c64febb56319e7e74a02330f8d63b99e48",
+      "sha256": "ec58973a8b32f2f601f57473634cb04c5eb1e9b6e7b18def2bed839a7f15ef8f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "torch_clock_classic.ron",
-      "sha256": "61fa7f97f2e3ab6879f5e48058deb5dc586021c8fc66646aa0efa5d199d7f88a",
+      "sha256": "f1c3ef301f9b7feed28fae56deaaa099c71e6a0093322690ba3fb380d956ca79",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "torch_inverter_basic.ron",
-      "sha256": "57782f490eb3603d913ce8e47569148be20ccbeedf4cb70a083fc1f10c19a30d",
-      "generator_tool_version": "manual/M3-B07",
+      "sha256": "2c5f0e9a889749ff77b8b9731886f677623e901f75e061142dde5026aa63b03a",
+      "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "torch_rapid_toggle_burnout_threshold.ron",
-      "sha256": "6a7d7d4991330afbd758bed7cc21581cbafe13125a6186ce27379a76bd6d8a11",
+      "sha256": "c73545ec7695cac2a578c01a50081102e81096746c11200558807c8262c68b19",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "two_torch_and_gate.ron",
-      "sha256": "a3975f94ea05143917b695dde7459f22230c70a095a342bfb688842324a91a4b",
-      "generator_tool_version": "manual/M3-B07",
+      "sha256": "cc80f552cbbf239945d51583487f71fc925b4c4b12e364aec7f36e6439fb4289",
+      "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_classic_wire_full_replot.ron",
-      "sha256": "637f806c8d37fcc8bda27326a8e486861df3ee098823b3233491c38980a92ab5",
+      "sha256": "f41a43735a050fddf98a323a5c3d73193863e9c2bccbd9794ae9aa27533b97bb",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_mc11193_style_staleness.ron",
-      "sha256": "f892692e6ce9737b4333c8ce9f7cec9db1b8651cbe8a1a1ed0d7575c9fd21c7e",
+      "sha256": "3505d20e52d04de756460d10a0450838e0d074f9323f66c84cbf96a8ecae3199",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_shape_update_destroys_torch.ron",
-      "sha256": "fab57cdea0031ec09bc8b30f850af5114a7b806292a45cf97b14af1e2cddf93c",
+      "sha256": "cc5b7381bea31dd85c03dc6cd3d8e709598fceaa7d28527e68c702e9aa9b9ec8",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_shape_vs_neighbor_asymmetry.ron",
-      "sha256": "686d56bfff65488362218f9f2569e305af544423ab07f20086aab6035d1d561e",
+      "sha256": "469284a32077df4577d5889edbc90ba625be525d6f7d6bf02730a8b26228e05a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_six_simultaneous_torches.ron",
-      "sha256": "cefb82637fe75a43feb8368b733d2c7db34490685ebee840f370ccf9826a0c3c",
+      "sha256": "db98ab7617d739acd3111fe6a2a988530d488e7eed02c094f8f619ada3a561f2",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_climbs_conductor_step_up_down.ron",
-      "sha256": "baf405fa4dde8a9f5fb59fbb8bb223a606dd40036190f59f52fc172dc222ef4e",
+      "sha256": "203999f6a745d560ffb6a96961b7cba5b78af58acbb9abb8b09db44d1c479e6f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_cross_shape_connectivity.ron",
-      "sha256": "5ea7543692f03aaf8687b45522e27354c076bc2faaefe647b03f5b801eb572ce",
+      "sha256": "ba739a3195e58cbd74fcb426a425285452510a54fdfb7afb2cfd0aa9dcf0054a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_signal_decay_15_chain.ron",
-      "sha256": "c284efd856d146b6dfee0f7ca2c4ab60251e4b852bdc6afea88f25ec386498d8",
+      "sha256": "67d595aeac044673c611ea5eff62a76f784651c56392cf69f98d54526d3866e9",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_strong_vs_weak_power_door.ron",
-      "sha256": "960fe449d2f540e29a37f57442c3dad037e407b898c6ff983cc4a035fe68be2a",
+      "sha256": "177ad9b8721fa5675fb6fe9c7c63c7ea56e14ae7d90f681f7e0e950032d5f30a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "zero_tick_pulse_dropper_piston.ron",
-      "sha256": "82067138bd72f3e9f6f80a088b928b98bfd63ce584a1cc64af133fe7b73e47e3",
+      "sha256": "0a34d3f679ee79fc9a1a889d30660171b15bc3c67739233482807d6ea2af0021",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     }

@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #44 (UpdateOrderProbe).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/update_order/update_order_six_simultaneous_torches",
     category: UpdateOrderProbe,
@@ -9,22 +7,22 @@ ContraptionSpec(
     max_ticks: 12,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (0, 3, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (-1, 2, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (-1, 2, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 2, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (1, 2, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (0, 1, -1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 2, -1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, 2, -1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (0, 1, 1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 2, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, 2, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
     ],
     actions: [
-        (tick: 5, pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
-        (tick: 5, pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
-        (tick: 5, pos: (0, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
-        (tick: 5, pos: (0, 1, -2), vanilla_state: "minecraft:redstone_block", state_id: 101),
-        (tick: 5, pos: (0, 1, 2), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 5, pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 5, pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 5, pos: (0, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 5, pos: (0, 1, -2), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 5, pos: (0, 1, 2), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

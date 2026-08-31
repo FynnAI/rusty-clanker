@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #48 (UpdateOrderProbe).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/update_order/update_order_mc11193_style_staleness",
     category: UpdateOrderProbe,
@@ -9,13 +7,13 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
-        (tick: 3, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 3, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #11 (PulseGenerator).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/pulse/repeater_chain_delay_sum_2_4_6_8",
     category: PulseGenerator,
@@ -9,17 +7,17 @@ ContraptionSpec(
     max_ticks: 30,
     blocks: [
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 200),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 7045),
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=2,locked=false,powered=false]", state_id: 201),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=2,locked=false,powered=false]", state_id: 7061),
         (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (3, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=3,locked=false,powered=false]", state_id: 202),
+        (pos: (3, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=3,locked=false,powered=false]", state_id: 7077),
         (pos: (4, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (4, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=4,locked=false,powered=false]", state_id: 203),
+        (pos: (4, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=4,locked=false,powered=false]", state_id: 7093),
         (pos: (5, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (5, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (5, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
-        (tick: 2, pos: (0, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (0, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

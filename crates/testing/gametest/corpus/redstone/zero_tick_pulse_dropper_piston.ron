@@ -1,6 +1,5 @@
 // M3-B07 redstone parity corpus — content-plan entry #7 (PulseGenerator).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment. Despite the content-plan id slug's
+// Despite the content-plan id slug's
 // "dropper" fragment (inherited community naming for this contraption family), this
 // build uses no dropper block at all — droppers are excluded from tier-1 (agent
 // design rules); the cited mechanism is exercised entirely with a piston.
@@ -11,12 +10,12 @@ ContraptionSpec(
     quirk: "ARCH-D13/MECH-D10's same-tick-visible Stage-4 mutation — the entire '0-tick pulse' contraption family only exists because of this: a piston-moved power source's effect on a neighbor is observable in the identical tick the move commits, never one tick later.",
     max_ticks: 10,
     blocks: [
-        (pos: (0, 0, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 204),
-        (pos: (1, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (0, 0, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (3, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (3, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
     ],
     actions: [
-        (tick: 2, pos: (-1, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (-1, 0, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

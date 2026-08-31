@@ -1,12 +1,10 @@
 // M3-B07 redstone parity corpus — content-plan entry #33 (ComparatorCircuit).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment. The chest's `vanilla_state` carries
-// inline NBT (legal /setblock grammar, consumed verbatim per spec.rs's own doc
-// comment) since this format has no separate container-fill hook — capture-side only;
-// the replay side has no block-entity storage at M3-B07 (blueprint Context,
-// "Comparator analog value: forward-compatible, not solved here" — this entry is one
-// of the M3-B06-dependent cases the corpus content plan itself already flags, per
-// entries #15/#17's identical caveat).
+// The chest's `vanilla_state` carries inline NBT (legal /setblock grammar, consumed
+// verbatim per spec.rs's own doc comment) since this format has no separate container-
+// fill hook — capture-side only; the replay side has no block-entity storage at M3-B07
+// (blueprint Context, "Comparator analog value: forward-compatible, not solved here" —
+// this entry is one of the M3-B06-dependent cases the corpus content plan itself
+// already flags, per entries #15/#17's identical caveat).
 ContraptionSpec(
     id: "redstone/comparator/comparator_container_fullness_chest",
     category: ComparatorCircuit,
@@ -14,8 +12,8 @@ ContraptionSpec(
     quirk: "Container-fullness-to-signal-strength read (MECH-D48, M3-B04 Context G) — a comparator's analog input replaced entirely by ContainerSignalSource::container_signal when a tier-1 container sits directly in front.",
     max_ticks: 6,
     blocks: [
-        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 121, has_analog_state: true),
-        (pos: (0, 1, -1), vanilla_state: "minecraft:chest[facing=south,type=single,waterlogged=false]{Items:[{Slot:0b,id:\"minecraft:redstone\",Count:32b}]}", state_id: 150),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:chest[facing=south,type=single,waterlogged=false]{Items:[{Slot:0b,id:\"minecraft:redstone\",Count:32b}]}", state_id: 3994),
     ],
     actions: [],
 )

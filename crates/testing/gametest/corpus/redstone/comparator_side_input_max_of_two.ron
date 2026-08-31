@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — replacement entry R6 (ComparatorCircuit).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/comparator/comparator_side_input_max_of_two",
     category: ComparatorCircuit,
@@ -9,16 +7,16 @@ ContraptionSpec(
     max_ticks: 8,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 213, has_analog_state: true),
-        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 11266, has_analog_state: true),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (3, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (3, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
-        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
 )

@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — content-plan entry #51 (ComparatorCircuit).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/comparator/comparator_facing_probe_all_four",
     category: ComparatorCircuit,
@@ -9,11 +7,11 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 230, has_analog_state: true),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
     ],
     actions: [
-        (tick: 2, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=east,mode=compare,powered=false]", state_id: 231),
-        (tick: 4, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=south,mode=compare,powered=false]", state_id: 232),
-        (tick: 6, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=west,mode=compare,powered=false]", state_id: 233),
+        (tick: 2, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=east,mode=compare,powered=false]", state_id: 11276),
+        (tick: 4, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=south,mode=compare,powered=false]", state_id: 11268),
+        (tick: 6, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=west,mode=compare,powered=false]", state_id: 11272),
     ],
 )

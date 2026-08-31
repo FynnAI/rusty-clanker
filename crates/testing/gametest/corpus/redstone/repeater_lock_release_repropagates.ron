@@ -1,6 +1,4 @@
 // M3-B07 redstone parity corpus — field-report replacement entry R9 (PulseGenerator).
-// `state_id` values below are placeholders (Implementation step 4) — see
-// torch_inverter_basic.ron's own header comment.
 ContraptionSpec(
     id: "redstone/pulse/repeater_lock_release_repropagates",
     category: PulseGenerator,
@@ -9,15 +7,15 @@ ContraptionSpec(
     max_ticks: 20,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=3,locked=true,powered=false]", state_id: 251),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=3,locked=true,powered=false]", state_id: 7067),
         (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=true]", state_id: 222),
-        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=true]", state_id: 7048),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
-        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (tick: 6, pos: (2, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
     ],
 )
