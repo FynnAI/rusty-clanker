@@ -136,6 +136,71 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
+- **M3 field-report fix in progress: torch/repeater own-state writeback
+  landed (this changeset), closing part of the next entry below.** Both
+  components now write their real `BlockStateId` (torch's `LIT`, repeater's
+  `LOCKED`/`POWERED`) back into the world on every state transition, using
+  arithmetic read directly off `datagen-output/26.2/generated/reports/
+  blocks.json`. `parity-check redstone` still reports 17/51 (no regression),
+  and several previously-far-off pulse/repeater contraptions' own diff dumps
+  shrank substantially without yet reaching a full pass — while auditing
+  those residuals, two further gaps surfaced, both blocking full closure of
+  the next entry and outside `crates/mechanics/src`'s own reach:
+  - **`minecraft:redstone_block` is not registered as a `RedstoneSignalSource`
+    anywhere in this project** — not in `registration.rs`'s own
+    `register_tier1_redstone` (which only constructs the four tier-1
+    components), and not in `crates/testing/gametest/src/replay.rs`'s own
+    hand-duplicated `tier1_registry` (the composition path `xtask
+    parity-check redstone` actually drives). Verified empirically (temporary
+    `eprintln!` in `WireBehavior::on_neighbor_changed`, reverted before
+    commit): every wire tile in `redstone/pulse/wire_signal_decay_15_chain`
+    (a redstone_block-fed straight decay chain) computes `power=0`
+    internally, even though that contraption currently reports a bit-identical
+    pass — because nothing yet writes a wire's own computed power back into
+    the world, the pass is a trivial echo of that fixture's own already-
+    correctly-decayed placement ids, not evidence the internal signal
+    computation is right. This is exactly why wire's own power writeback
+    (unlike torch's/repeater's, both closed) was deliberately deferred rather
+    than shipped in this changeset: writing an internally-wrong `power=0`
+    back into the world would flip this currently-passing contraption to a
+    real regression. `redstone_block` (and any other "always-on, no delay"
+    source not yet modeled as a tier-1 component) needs its own registration
+    — likely its own small `RedstoneSignalSource` impl plus a
+    `register_tier1_redstone`/replay-harness wiring update — before wire's
+    (and probably comparator's/piston's, wherever a fixture uses
+    redstone_block as its sole trigger) own-state writeback can reach real
+    parity rather than just reflecting placement echoes.
+  - **`crates/testing/gametest/src/replay.rs`'s own hardcoded
+    `BlockBehaviorRegistry`/`SignalSourceRegistry` dispatch ranges (`WIRE_RANGE`,
+    `TORCH_FLOOR_RANGE`, `TORCH_WALL_RANGE`, `REPEATER_RANGE`,
+    `COMPARATOR_RANGE`, `PISTON_RANGE`, `STICKY_PISTON_RANGE`) and
+    `crates/physics/src/shapes.rs`'s own tier1 shape-table entries are both
+    calibrated only to each corpus fixture's own *placement* id, never to the
+    full reachable post-transition id space own-state writeback now
+    produces.** E.g. `TORCH_FLOOR_RANGE = (6885, 6885)` (inclusive) registers
+    only the `lit=true` id — the instant a floor torch's own writeback moves
+    it to `lit=false` (6886), every later dispatch at that position silently
+    falls through to `NoOpBehavior` (out of the registered range) in the
+    replay harness specifically, even though the same write is correct
+    against the real, generated-registry-based composition root this
+    replay path stands in for. Confirmed by direct arithmetic against every
+    corpus fixture's own placed facing/delay/mode: repeater is affected only
+    for `pulse_repeater_facing_side_lock_ccw`/`_cw`'s own `(facing=north,
+    delay=1)` repeater becoming locked (its `locked=true` ids, 7034/7035,
+    sit just below `REPEATER_RANGE`'s floor of 7037); comparator is affected
+    far more broadly — every `facing=north, mode=compare` comparator
+    (`comparator_2tick_fixed_delay`, `_compare_vs_subtract`,
+    `_container_fullness_chest`, `_priority_diode_behind`, `_tie_no_turn_on`,
+    `_wire_signal_read`, `hopper_clock_basic`) becomes unregistered
+    (`COMPARATOR_RANGE` floor 11264 excludes 11263 = `north/compare/
+    powered=true`) the instant it turns on; piston/sticky_piston happen to be
+    unaffected (every corpus piston fixture's own facing/extended combination
+    stays within range). Needs a decision on whether to widen these ranges
+    (mechanical, low-risk) as a `governance`-class fix once own-state
+    writeback for all five components has landed, or fold it into the same
+    generated-per-property-registry work (WS-D15) the next entry already
+    names as the eventual real fix for both gaps at once.
+
 - **None of the four M3-B04 tier-1 redstone components, nor a piston's own
   base block, ever rewrite their own `BlockStateId` when their internal
   power/lit/locked/mode/extended state changes — already individually
