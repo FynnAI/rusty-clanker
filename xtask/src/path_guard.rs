@@ -124,13 +124,24 @@ pub fn parse_changeset_type(commit_message: &str) -> Result<Option<ChangesetType
     Ok(found)
 }
 
+/// Governance fix (M3 field-report): the previous unconditional `line.split_at(prefix.
+/// len())` panicked whenever `prefix.len()` landed inside a multi-byte UTF-8 character
+/// of some *other*, non-matching line in the commit message (`str::split_at` requires
+/// both halves to fall on a char boundary) — every line of the message is checked
+/// against this exact prefix length regardless of content, and this project's own
+/// commit bodies routinely contain multi-byte characters (e.g. em dashes) at arbitrary
+/// byte offsets. `line.get(..prefix.len())` returns `None` instead of panicking when
+/// that offset isn't a valid char boundary, which this function already treats as
+/// "prefix doesn't match" (byte-length mismatch was already `None` for the too-short
+/// case above) — a `None` from a non-boundary split is exactly the same "not a match"
+/// outcome, never a false positive.
 fn strip_prefix_ci<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
     if line.len() < prefix.len() {
         return None;
     }
-    let (head, tail) = line.split_at(prefix.len());
+    let head = line.get(..prefix.len())?;
     if head.eq_ignore_ascii_case(prefix) {
-        Some(tail)
+        line.get(prefix.len()..)
     } else {
         None
     }

@@ -194,3 +194,25 @@ fn parse_changeset_type_unrecognized_value_errors() {
     let msg = "Subject\n\nChangeset-Type: bogus\n";
     assert!(parse_changeset_type(msg).is_err());
 }
+
+/// Governance fix (M3 field-report): every line of the commit message is checked
+/// against the `"changeset-type:"` prefix length (15 bytes) regardless of content, so
+/// a multi-byte UTF-8 character (e.g. an em dash) landing at that exact byte offset in
+/// some *other*, non-trailer line used to panic (`str::split_at` requires a char
+/// boundary) instead of simply not matching. `—` (U+2014) is 3 bytes, so it straddles
+/// byte offset 15 whenever it starts at byte 13 or 14 of a line — tried at every ASCII
+/// prefix length from 0 to 16 so this test doesn't depend on hand-counting the exact
+/// straddle point, reproducing the panic this regression test guards against
+/// regardless of which offset the previous unconditional `split_at` actually broke on.
+#[test]
+fn parse_changeset_type_tolerates_multibyte_utf8_at_every_prefix_boundary() {
+    for pad in 0..=16 {
+        let line = format!("{}—line\n", "x".repeat(pad));
+        let msg = format!("Subject\n\n{line}\nChangeset-Type: governance\n");
+        assert_eq!(
+            parse_changeset_type(&msg),
+            Ok(Some(ChangesetType::Governance)),
+            "panicked or misparsed with a {pad}-byte ASCII pad before the em dash"
+        );
+    }
+}
