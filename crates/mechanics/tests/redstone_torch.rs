@@ -312,6 +312,94 @@ fn torch_toggles_outside_the_60_tick_window_do_not_accumulate() {
     assert!(h.scheduled.is_block_tick_pending(t));
 }
 
+/// Own-state writeback (M3 field-report fix): floor torch's own `LIT` bit is expressed in its
+/// own stored `BlockStateId`, not only in `TorchBehavior::lit`'s internal side-table
+/// (blocks.json's own `minecraft:redstone_torch` entry, protocol 776: `lit=true` = state 6885,
+/// `lit=false` = state 6886, both cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn torch_own_state_writeback_reflects_lit() {
+    let (torch, support) = setup_torch_floor();
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    h.world.set_block(t, BlockStateId(6885)); // lit=true, the real default state
+    h.world.set_block(Direction::Down.apply(t), SUPPORT_ID);
+
+    support.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        torch.on_neighbor_changed(&mut ctx, t, Direction::Down);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        torch.on_scheduled_tick(&mut ctx, t);
+    }
+    assert!(!torch.lit(t));
+    assert_eq!(
+        h.world.get_block(t),
+        Some(BlockStateId(6886)),
+        "torch's own stored BlockStateId must flip to the real lit=false id"
+    );
+
+    support.set_power(0);
+    {
+        let mut ctx = h.ctx_at(2);
+        torch.on_neighbor_changed(&mut ctx, t, Direction::Down);
+    }
+    {
+        let mut ctx = h.ctx_at(4);
+        torch.on_scheduled_tick(&mut ctx, t);
+    }
+    assert!(torch.lit(t));
+    assert_eq!(h.world.get_block(t), Some(BlockStateId(6885)));
+}
+
+/// Own-state writeback (M3 field-report fix), wall torch: `TorchBehavior`'s own shared
+/// `attachment` field cannot track each individual wall torch's real per-position facing
+/// (`registration.rs`'s own documented scope limitation), so `FACING` is instead recovered from
+/// the position's own live raw id and carried through unchanged -- only `LIT` is ever replaced
+/// (`TorchBehavior::new_state_id`'s own doc comment). blocks.json: `facing=west,lit=true` =
+/// state 6891, `facing=west,lit=false` = state 6892 (both cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56) -- the same `west` orientation
+/// the redstone-corpus fixtures actually place (`crates/testing/gametest/corpus/redstone/
+/// wire_strong_vs_weak_power_door.ron`).
+#[test]
+fn wall_torch_own_state_writeback_preserves_facing() {
+    let torch = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::West)));
+    let support = Arc::new(TestSignalSource::fixed(0));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        SUPPORT_ID,
+        BlockStateId(SUPPORT_ID.0 + 1),
+        Arc::clone(&support) as Arc<dyn RedstoneSignalSource>,
+    );
+    torch.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    let t = BlockPos::new(0, 1, 0);
+    // `Wall(West)`'s own `input_direction()` is `West.opposite() = East` (mirrors
+    // `wall_torch_reads_from_its_attach_direction`'s identical `Wall(East) -> West` pairing).
+    let input_side = Direction::East.apply(t);
+    h.world.set_block(t, BlockStateId(6891)); // facing=west, lit=true
+    h.world.set_block(input_side, SUPPORT_ID);
+
+    support.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        torch.on_neighbor_changed(&mut ctx, t, Direction::East);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        torch.on_scheduled_tick(&mut ctx, t);
+    }
+    assert!(!torch.lit(t));
+    assert_eq!(
+        h.world.get_block(t),
+        Some(BlockStateId(6892)),
+        "facing must stay west (unchanged) while only lit flips"
+    );
+}
+
 #[test]
 fn wall_torch_reads_from_its_attach_direction() {
     assert_eq!(

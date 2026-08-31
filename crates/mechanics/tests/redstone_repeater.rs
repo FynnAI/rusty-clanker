@@ -32,6 +32,18 @@ const BEHIND_ID: BlockStateId = BlockStateId(6);
 /// source's own power straight through a repeater regardless of whether that repeater's own
 /// `weak_signal_toward` is even correct -- silently defeating that regression's whole purpose.
 const CHAIN_REPEATER_ID: BlockStateId = BlockStateId(7037);
+/// Own-state writeback (M3 field-report fix) exclusive upper bound for this test's own
+/// `BlockBehaviorRegistry`/`SignalSourceRegistry` dispatch range: every chain repeater here is
+/// placed `facing=East, delay=1` (Deliverables below), so once `RepeaterBehavior::
+/// write_state_id` starts writing this component's real own `BlockStateId` back into the world,
+/// each position's stored id moves to blocks.json's real `facing=east,delay=1` block
+/// (`7046..=7049`, covering every `locked`x`powered` combination) -- outside the single-id
+/// `[CHAIN_REPEATER_ID, CHAIN_REPEATER_ID + 1)` range this test used before that write existed.
+/// `7050` covers both the placement id (`CHAIN_REPEATER_ID` = 7037, kept unchanged so `is_
+/// conductor` still resolves correctly at tick 0, before the first writeback) and every one of
+/// those real reachable post-writeback ids, mirroring `registration.rs`'s own established "one
+/// wide range per component, regardless of which specific state a position is in" convention.
+const CHAIN_REPEATER_RANGE_END: BlockStateId = BlockStateId(7050);
 
 struct Harness {
     world: FakeWorld,
@@ -263,6 +275,100 @@ fn repeater_output_flows_out_the_side_opposite_facing() {
     );
 }
 
+/// Own-state writeback (M3 field-report fix): the repeater's own `POWERED` bit is expressed in
+/// its own stored `BlockStateId`, not only in `RepeaterBehavior::powered`'s internal side-table
+/// (blocks.json's own `minecraft:repeater` entry, protocol 776: `facing=east,delay=1,
+/// locked=false,powered=false` = state 7049, `...powered=true` = state 7048, both cited
+/// directly off `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn repeater_own_state_writeback_reflects_powered() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let input = Arc::new(TestSignalSource::fixed(0));
+    let repeater = setup_repeater(
+        pos,
+        Direction::East,
+        1,
+        vec![(
+            INPUT_ID,
+            BlockStateId(INPUT_ID.0 + 1),
+            Arc::clone(&input) as Arc<dyn RedstoneSignalSource>,
+        )],
+    );
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(7049)); // east, delay=1, locked=false, powered=false
+    h.world.set_block(front, INPUT_ID);
+
+    input.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+    {
+        let mut ctx = h.ctx_at(2);
+        repeater.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(repeater.powered(pos));
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(7048)),
+        "repeater's own stored BlockStateId must flip to the real powered=true id"
+    );
+
+    input.set_power(0);
+    {
+        let mut ctx = h.ctx_at(2);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+    {
+        let mut ctx = h.ctx_at(4);
+        repeater.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(!repeater.powered(pos));
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(7049)));
+}
+
+/// Own-state writeback (M3 field-report fix), `LOCKED`: written immediately from
+/// `on_neighbor_changed`, never deferred to a scheduled tick (`RepeaterBlock::neighborChanged`'s
+/// own additional writeback beyond `DiodeBlock`'s base, Context). blocks.json:
+/// `facing=north,delay=1,locked=false,powered=false` = state 7037, `...locked=true,
+/// powered=false` = state 7035 (both cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn repeater_own_state_writeback_reflects_locked_immediately() {
+    let pos = BlockPos::new(0, 0, 0);
+    let side_pos = Direction::West.apply(pos); // perpendicular to facing = North
+
+    let mut repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    let repeater = Arc::new(repeater);
+
+    let side = Arc::new(TestSignalSource::with_diode_flag(1));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        SIDE_ID,
+        BlockStateId(SIDE_ID.0 + 1),
+        side as Arc<dyn RedstoneSignalSource>,
+    );
+    repeater.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
+    h.world.set_block(side_pos, SIDE_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    }
+
+    assert!(repeater.is_locked(&h.world, pos));
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(7035)),
+        "LOCKED must be written immediately, without waiting for a scheduled tick"
+    );
+}
+
 #[test]
 fn repeater_lock_is_boolean_not_magnitude() {
     let pos = BlockPos::new(0, 0, 0);
@@ -462,7 +568,7 @@ fn repeater_chain_relays_signal_end_to_end() {
     let mut signals = SignalSourceRegistry::new();
     signals.register_range(
         CHAIN_REPEATER_ID,
-        BlockStateId(CHAIN_REPEATER_ID.0 + 1),
+        CHAIN_REPEATER_RANGE_END,
         Arc::clone(&repeater) as Arc<dyn RedstoneSignalSource>,
     );
     signals.register_range(
@@ -476,7 +582,7 @@ fn repeater_chain_relays_signal_end_to_end() {
     let mut behaviors = BlockBehaviorRegistry::new();
     behaviors.register_range(
         CHAIN_REPEATER_ID,
-        BlockStateId(CHAIN_REPEATER_ID.0 + 1),
+        CHAIN_REPEATER_RANGE_END,
         Arc::clone(&repeater) as Arc<dyn BlockBehavior>,
     );
 
