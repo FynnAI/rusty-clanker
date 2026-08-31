@@ -3,6 +3,7 @@
 
 pub mod comparator;
 pub mod piston;
+pub mod redstone_block;
 pub mod registration;
 pub mod repeater;
 pub mod signal;
@@ -11,7 +12,10 @@ pub mod wire;
 
 pub use comparator::{ComparatorBehavior, ComparatorMode, ContainerSignalSource};
 pub use piston::{PistonBehavior, register_piston};
-pub use registration::{Tier1RedstoneHandles, Tier1RedstoneStateIds, register_tier1_redstone};
+pub use redstone_block::RedstoneBlockSource;
+pub use registration::{
+    Tier1RedstoneHandles, Tier1RedstoneStateIds, register_redstone_block, register_tier1_redstone,
+};
 pub use repeater::RepeaterBehavior;
 pub use signal::{
     NoSignalSource, RedstoneSignalSource, SignalSourceRegistry, best_neighbor_signal,

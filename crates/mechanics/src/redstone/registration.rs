@@ -10,6 +10,7 @@ use crate::behavior::{BlockBehavior, BlockBehaviorRegistry};
 use crate::direction::Direction;
 
 use super::comparator::{ComparatorBehavior, ContainerSignalSource};
+use super::redstone_block::RedstoneBlockSource;
 use super::repeater::RepeaterBehavior;
 use super::signal::{RedstoneSignalSource, SignalSourceRegistry};
 use super::torch::{TorchAttachment, TorchBehavior};
@@ -148,4 +149,26 @@ pub fn register_tier1_redstone(
         repeater,
         comparator,
     }
+}
+
+/// `minecraft:redstone_block`'s own single reachable state id (`redstone_block.rs`'s own module
+/// doc comment: blocks.json, protocol 776, `type: "minecraft:powered"`, no properties — the one
+/// `default: true` state, never rewritten).
+pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(11311);
+
+/// Registers `minecraft:redstone_block` as an always-on `RedstoneSignalSource` (M3 field-report
+/// fix: "nearly every remaining failing contraption is triggered by a redstone_block that
+/// currently emits nothing"). Deliberately separate from `register_tier1_redstone`: unlike the
+/// four tier-1 components, `RedstoneBlockSource` is never a `BlockBehavior` (nothing ever
+/// varies, so Stage-4 dispatch never needs to reach it) and carries no per-region mutable state
+/// or registry self-reference to bind — a single stateless instance is registered directly, so
+/// this may be called in any order relative to `register_tier1_redstone`/`register_piston`
+/// (Context §I's ordering constraint is specific to piston's own dependency on the four tier-1
+/// components' `SignalSourceRegistry` entries; this component has none).
+pub fn register_redstone_block(signals: &mut SignalSourceRegistry) {
+    signals.register_range(
+        REDSTONE_BLOCK_STATE_ID,
+        BlockStateId(REDSTONE_BLOCK_STATE_ID.0 + 1),
+        Arc::new(RedstoneBlockSource) as Arc<dyn RedstoneSignalSource>,
+    );
 }

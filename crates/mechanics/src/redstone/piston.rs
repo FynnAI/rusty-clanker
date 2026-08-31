@@ -78,6 +78,24 @@ const AIR_ID: BlockStateId = BlockStateId(0);
 /// BEDROCK`'s real value (85), reused directly (no `rc-registries` dependency, Constraints (b)).
 const BEDROCK_ID: u32 = 85;
 
+/// Real vanilla `PistonBaseBlock.isPushable`'s own explicit hardcoded-block-identity exception
+/// list, checked *before* (and independently of) the `getDestroySpeed == -1` rule Context §C's
+/// own table restates for bedrock: obsidian, crying obsidian, and respawn anchor are all
+/// perfectly breakable (positive hardness), so `getDestroySpeed == -1` alone would wrongly
+/// classify them `Normal` — vanilla instead names these blocks directly as unconditionally
+/// unpushable. Surfaced as a genuine, pre-existing `classify` gap (M3-B05's own Context §C table
+/// only names bedrock, since obsidian was not yet part of any M3-B02/M3-B03-placed block set at
+/// that blueprint's own authoring time) once the M3 field-report `redstone_block` registration
+/// fix let `redstone/piston/piston_unpushable_obsidian` actually trigger its own piston for the
+/// first time — ids read directly off `datagen-output/26.2/generated/reports/blocks.json`,
+/// protocol 776 (`minecraft:obsidian` 3369, `minecraft:crying_obsidian` 21820,
+/// `minecraft:reinforced_deepslate` 32085, single states each; `minecraft:respawn_anchor`
+/// 21821..=21825, its own five `charges` states, none of which changes pushability).
+const OBSIDIAN_ID: u32 = 3369;
+const CRYING_OBSIDIAN_ID: u32 = 21820;
+const REINFORCED_DEEPSLATE_ID: u32 = 32085;
+const RESPAWN_ANCHOR_RANGE: std::ops::RangeInclusive<u32> = 21821..=21825;
+
 /// The tier-1 `Destroy`-class ids (Context §C): redstone wire/torch/wall-torch/repeater/
 /// comparator — the same literals `rc_physics::tier1_shape_table()` already hardcodes for
 /// these same five blocks.
@@ -217,6 +235,10 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
     let is_real_extended_sticky_piston =
         (STICKY_PISTON_BASE..STICKY_PISTON_BASE + 6).contains(&raw);
     if raw == BEDROCK_ID
+        || raw == OBSIDIAN_ID
+        || raw == CRYING_OBSIDIAN_ID
+        || raw == REINFORCED_DEEPSLATE_ID
+        || RESPAWN_ANCHOR_RANGE.contains(&raw)
         || raw == PISTON_EXTENDED_PLACEHOLDER
         || raw == STICKY_PISTON_EXTENDED_PLACEHOLDER
         || is_real_extended_piston
