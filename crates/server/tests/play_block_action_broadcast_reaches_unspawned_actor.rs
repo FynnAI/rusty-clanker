@@ -174,44 +174,71 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
         sequence: 42,
     });
 
-    // A hang here means the action never resolved at all (e.g. chunk (0, 0) not
-    // resident, or lost residency, so the action is carried tick over tick forever).
-    let ack = staged(
-        "phantom-ack",
-        Duration::from_secs(15),
-        recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID),
-    )
-    .await;
-    assert_eq!(
-        decode_one::<AcknowledgeBlockChange>(ack).unwrap().sequence,
-        42
-    );
+    // M3 field-report test-authoring fix: the phantom's own ack and block-update, and the
+    // bystander's own copy of the same broadcast, are all paced by the region's own real,
+    // non-drift-compounding tick clock (`TickClock::await_next_tick` -- proven load-
+    // stretchable under host contention in this repo already, commit 2fadab1's own doc
+    // comment on `play_block_break_place_full.rs`'s `delayed_destroy_auto_finalize_
+    // excludes_the_breaker_from_the_level_event`, the identical root-cause class). This
+    // test's own former shape read `phantom` to completion across two whole stages before
+    // ever touching `bystander`'s socket again, leaving `bystander` unread -- so unable to
+    // auto-answer any `KeepAliveClientbound` challenge, `recv_clientbound`'s own per-call
+    // side effect -- for however long that stretch actually took in real time; under load,
+    // `KeepAliveDriver`'s own ~30s nominal disconnect schedule (running on `bystander`'s own
+    // connection task, independently of the region tick thread's speed) can fire mid-wait,
+    // and the later `bystander` read then panics on the server's own already-closed
+    // connection instead of ever seeing the broadcast. Fixed the same way as 2fadab1: `
+    // tokio::join!` reads `phantom`'s own two-stage sequence and `bystander`'s own single
+    // stage concurrently, so neither socket is ever left unread for a load-sensitive
+    // stretch, while each of the three stages below keeps its own named timeout budget
+    // (unchanged) so a genuine hang still names exactly which wait stalled.
+    tokio::join!(
+        async {
+            // A hang here means the action never resolved at all (e.g. chunk (0, 0) not
+            // resident, or lost residency, so the action is carried tick over tick
+            // forever).
+            let ack = staged(
+                "phantom-ack",
+                Duration::from_secs(15),
+                recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID),
+            )
+            .await;
+            assert_eq!(
+                decode_one::<AcknowledgeBlockChange>(ack).unwrap().sequence,
+                42
+            );
 
-    // The regression under test: before the fix, this would never arrive (the phantom
-    // actor's own `PlayerMarker` never existed for `respond_to_action`'s broadcast loop
-    // to find), and the wait would hang. A hang here with the ack already received
-    // means the action resolved but its actor-directed broadcast was lost again.
-    let update = staged(
-        "phantom-block-update",
-        Duration::from_secs(15),
-        recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID),
-    )
-    .await;
-    let update = decode_one::<BlockUpdate>(update).unwrap();
-    assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
-    assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
-
-    // The already-connected bystander is a normal broadcast recipient too.
-    let bystander_update = staged(
-        "bystander-block-update",
-        Duration::from_secs(15),
-        recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID),
-    )
-    .await;
-    let bystander_update = decode_one::<BlockUpdate>(bystander_update).unwrap();
-    assert_eq!(
-        bystander_update.location,
-        pack_position(BlockPos::new(0, -60, 0))
+            // The regression under test: before the fix, this would never arrive (the
+            // phantom actor's own `PlayerMarker` never existed for `respond_to_action`'s
+            // broadcast loop to find), and the wait would hang. A hang here with the ack
+            // already received means the action resolved but its actor-directed broadcast
+            // was lost again.
+            let update = staged(
+                "phantom-block-update",
+                Duration::from_secs(15),
+                recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID),
+            )
+            .await;
+            let update = decode_one::<BlockUpdate>(update).unwrap();
+            assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+            assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
+        },
+        async {
+            // The already-connected bystander is a normal broadcast recipient too, read
+            // concurrently with `phantom`'s own two stages above (not after) so its socket
+            // is never left silently unread for however long those actually take.
+            let bystander_update = staged(
+                "bystander-block-update",
+                Duration::from_secs(15),
+                recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID),
+            )
+            .await;
+            let bystander_update = decode_one::<BlockUpdate>(bystander_update).unwrap();
+            assert_eq!(
+                bystander_update.location,
+                pack_position(BlockPos::new(0, -60, 0))
+            );
+            assert_eq!(bystander_update.block_state_id, blocks::AIR.0 as i32);
+        },
     );
-    assert_eq!(bystander_update.block_state_id, blocks::AIR.0 as i32);
 }
