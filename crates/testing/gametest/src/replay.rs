@@ -24,7 +24,7 @@ use rc_mechanics::redstone::piston::PistonBehavior;
 use rc_mechanics::redstone::{
     ComparatorBehavior, ComparatorMode, ContainerSignalSource, RedstoneSignalSource,
     RepeaterBehavior, SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
-    register_redstone_block,
+    notify_neighbor_changed_only, register_redstone_block,
 };
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEntityKind, BlockEntityWorldAccess, BlockEventQueue,
@@ -309,6 +309,43 @@ pub fn replay_contraption(
             None,
             container_signals,
         );
+
+        // Section C (M3 fix-agent brief, "Stage7->Stage4 container notify"): rc-mechanics has
+        // no production wiring yet for vanilla's own `BlockEntity.setChanged ->
+        // updateNeighbourForOutputSignal` push (a real architectural gap, recorded in
+        // docs/findings-for-planning.md rather than fixed at the production ECS level here --
+        // Stage 7's own system has no access to `NeighborUpdateEngine`/`BlockWorldAccess` at
+        // all, `crates/mechanics/src/stage7/ecs.rs`). This replay driver supplies the minimal
+        // parity-faithful equivalent directly: every position `container_signals.take_changed()`
+        // reports this tick gets a `notify_neighbor_changed_only` call (its own one-hop
+        // conductor relay already covers both "a comparator reads straight off the container"
+        // and "a comparator reads through a conductor the container also touches" identically),
+        // then the resulting `NeighborChanged`/`ShapeUpdate` cascade is drained to a fixed point
+        // exactly like every other trigger this loop settles.
+        for pos in container_signals.take_changed() {
+            let mut ctx = UpdateContext {
+                world: &mut world,
+                engine: &mut engine,
+                scheduled: &mut scheduled,
+                events: &mut events,
+                outbound: &mut outbound,
+                ownership: &ownership,
+                current_tick: t,
+            };
+            notify_neighbor_changed_only(&mut ctx, pos);
+        }
+        engine.drain(&mut |eng, item| {
+            let mut ctx = UpdateContext {
+                world: &mut world,
+                engine: eng,
+                scheduled: &mut scheduled,
+                events: &mut events,
+                outbound: &mut outbound,
+                ownership: &ownership,
+                current_tick: t,
+            };
+            dispatch_one(&mut ctx, behaviors, item);
+        });
 
         ticks.push(TickSnapshot {
             tick: t,
