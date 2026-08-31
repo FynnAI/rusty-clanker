@@ -8,7 +8,7 @@
 //! rationale M3-B04's own Context §I/§I½ already gives for its comparable per-region
 //! `Mutex`/`OnceLock` fields.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::Resource;
@@ -18,12 +18,21 @@ use crate::redstone::ContainerSignalSource;
 
 pub struct Tier1ContainerSignalSource {
     signals: Mutex<HashMap<BlockPos, u8>>,
+    /// Section C (M3 field-report fix): positions whose `record`ed signal actually changed
+    /// (including a position's first-ever `record`) since the last `take_changed` call -- the
+    /// minimal parity-faithful stand-in for vanilla's `BlockEntity.setChanged ->
+    /// updateNeighbourForOutputSignal` push (docs/findings-for-planning.md's own "Stage7->
+    /// Stage4 container notify" entry). A plain `HashSet`, not a queue -- `record` is called at
+    /// most once per position per Stage-7 pass, so a position needs at most one re-evaluation
+    /// per pass regardless.
+    changed: Mutex<HashSet<BlockPos>>,
 }
 
 impl Tier1ContainerSignalSource {
     pub fn new() -> Self {
         Self {
             signals: Mutex::new(HashMap::new()),
+            changed: Mutex::new(HashSet::new()),
         }
     }
 
@@ -34,8 +43,15 @@ impl Tier1ContainerSignalSource {
     /// combined with `container_signal`'s own `None`-for-absent contract below, a position
     /// stays unread by any comparator until the first Stage-7 pass after it is created (a
     /// documented, bounded, at-most-one-tick latency — Context).
+    ///
+    /// Section C (M3 field-report fix): also records `pos` into `changed` whenever the new
+    /// `signal` actually differs from whatever was previously stored there (or nothing was
+    /// stored yet at all) — `take_changed`'s own doc comment has the read side.
     pub fn record(&self, pos: BlockPos, signal: u8) {
-        self.signals.lock().unwrap().insert(pos, signal);
+        let previous = self.signals.lock().unwrap().insert(pos, signal);
+        if previous != Some(signal) {
+            self.changed.lock().unwrap().insert(pos);
+        }
     }
 
     /// Removes a position's cached entry. Not called by anything in this blueprint (no
@@ -44,6 +60,21 @@ impl Tier1ContainerSignalSource {
     /// block-entity despawn, so a stale signal never outlives the container it described.
     pub fn forget(&self, pos: BlockPos) {
         self.signals.lock().unwrap().remove(&pos);
+    }
+
+    /// Section C (M3 field-report fix): drains and returns every position `record` has marked
+    /// changed since the last call to this method — the minimal parity-faithful stand-in for
+    /// vanilla's `BlockEntity.setChanged -> updateNeighbourForOutputSignal` push (docs/findings-
+    /// for-planning.md's own "Stage7->Stage4 container notify" entry). The caller (the replay
+    /// driver's own per-tick loop, `crates/testing/gametest/src/replay.rs`) calls this once,
+    /// right after `run_block_entity_tick`, and fires `signal::notify_neighbor_changed_only` at
+    /// each returned position — that helper's own one-hop conductor relay already covers "a
+    /// comparator reads straight off the container" and "a comparator reads through a conductor
+    /// the container also touches" identically, so no separate QC-relay logic is needed here.
+    /// Order is unspecified (a plain `HashSet` drain) — Stage-4 dispatch settles every notified
+    /// position to a fixed point regardless of the order notifications arrive in.
+    pub fn take_changed(&self) -> Vec<BlockPos> {
+        self.changed.lock().unwrap().drain().collect()
     }
 }
 
