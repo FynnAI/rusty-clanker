@@ -12,6 +12,98 @@ use crate::world_access::BlockWorldAccess;
 
 use super::signal::{self, RedstoneSignalSource, SignalSourceRegistry};
 
+/// Own-state id arithmetic for `minecraft:redstone_wire` (M3 field-report fix: own-state
+/// writeback; WS-D15's generated per-property registry is future work, so these constants are
+/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
+/// `minecraft:redstone_wire` entry, protocol 776). Five properties, blocks.json's own listed
+/// per-property value order (`east`/`north`/`south`/`west`: `[up, side, none]`; `power`:
+/// `0..=15`), enumerated alphabetically-by-property-name with the *last* property varying
+/// fastest (`west`), matching the real generated state list exactly (verified directly against
+/// every id this fixture corpus places, `redstone_wire.rs`'s own test module):
+/// `id = WIRE_BASE + east_idx*432 + north_idx*144 + power*9 + south_idx*3 + west_idx`.
+const WIRE_BASE: u32 = 4011;
+const WIRE_MAX: u32 = 5306; // inclusive -- east=none,north=none,power=15,south=none,west=none
+const WIRE_STRIDE_WEST: u32 = 1;
+const WIRE_STRIDE_SOUTH: u32 = 3;
+const WIRE_STRIDE_POWER: u32 = 9;
+const WIRE_STRIDE_NORTH: u32 = 144;
+const WIRE_STRIDE_EAST: u32 = 432;
+
+/// `true` iff `raw` is a real `minecraft:redstone_wire` id (`WIRE_BASE..=WIRE_MAX`) —
+/// `new_power_state_id`/`new_connections_state_id` may only ever be called with a `raw` this
+/// returns `true` for, since `wire_decode`'s own unchecked subtraction underflows otherwise.
+/// This project's own established acceptance-test convention registers `WireBehavior` at small
+/// arbitrary placeholder ids unrelated to blocks.json's real range (e.g. `redstone_repeater.rs`'s
+/// own `WIRE_ID = BlockStateId(4)`, standing in for "some wire neighbor" without needing a real
+/// id) — dispatch through a real `SignalSourceRegistry`/`BlockBehaviorRegistry` range is always
+/// in-range by construction, but this guard keeps every such test double safe too, leaving its
+/// placeholder id untouched rather than attempting arithmetic that assumes a real one.
+fn is_wire_range(raw: u32) -> bool {
+    (WIRE_BASE..=WIRE_MAX).contains(&raw)
+}
+
+/// blocks.json's own per-direction `[up, side, none]` index (`up`=0, `side`=1, `none`=2) —
+/// this project's own `WireConnections` only ever tracks "does this side connect at all"
+/// (Context §D's documented scope narrowing, restated on that struct's own doc comment below),
+/// never the *visual* up-vs-side distinction real vanilla's own `RedstoneSide` enum carries, so
+/// a connected side is always encoded `side` (never `up`) here — a documented, bounded
+/// approximation (`docs/findings-for-planning.md` records the still-open follow-up). Only
+/// `on_neighbor_changed`'s own power-only writeback below ever preserves a pre-existing `up`
+/// bit a position's id already held, by construction, since it decodes and re-encodes every
+/// connection digit unchanged and only ever replaces the power digit.
+fn side_index(connected: bool) -> u32 {
+    if connected { 1 } else { 2 }
+}
+
+fn wire_state_id(east: u32, north: u32, power: u8, south: u32, west: u32) -> BlockStateId {
+    BlockStateId(
+        WIRE_BASE
+            + east * WIRE_STRIDE_EAST
+            + north * WIRE_STRIDE_NORTH
+            + u32::from(power) * WIRE_STRIDE_POWER
+            + south * WIRE_STRIDE_SOUTH
+            + west * WIRE_STRIDE_WEST,
+    )
+}
+
+/// Inverse of `wire_state_id` — `raw` must already be known to lie in wire's own real range
+/// (dispatch only ever reaches this behavior through that registered range), so every
+/// intermediate index below is guaranteed in-bounds without needing to check.
+fn wire_decode(raw: u32) -> (u32, u32, u8, u32, u32) {
+    let rel = raw - WIRE_BASE;
+    let east = rel / WIRE_STRIDE_EAST;
+    let rel = rel % WIRE_STRIDE_EAST;
+    let north = rel / WIRE_STRIDE_NORTH;
+    let rel = rel % WIRE_STRIDE_NORTH;
+    let power = (rel / WIRE_STRIDE_POWER) as u8;
+    let rel = rel % WIRE_STRIDE_POWER;
+    let south = rel / WIRE_STRIDE_SOUTH;
+    let west = rel % WIRE_STRIDE_SOUTH;
+    (east, north, power, south, west)
+}
+
+/// `on_neighbor_changed`'s own writeback: replaces only the `power` digit, decoding and
+/// re-encoding every connection digit unchanged (preserves a pre-existing `up` bit exactly,
+/// `side_index`'s own doc comment).
+fn new_power_state_id(current_raw: u32, power: u8) -> BlockStateId {
+    let (east, north, _old_power, south, west) = wire_decode(current_raw);
+    wire_state_id(east, north, power, south, west)
+}
+
+/// `on_shape_update`'s own writeback: replaces every connection digit with the freshly
+/// recomputed `WireConnections` (`side_index`'s own `side`/`none`-only encoding), preserving
+/// whatever `power` digit the position's own current raw id already holds.
+fn new_connections_state_id(current_raw: u32, connections: WireConnections) -> BlockStateId {
+    let (_east, _north, power, _south, _west) = wire_decode(current_raw);
+    wire_state_id(
+        side_index(connections.east),
+        side_index(connections.north),
+        power,
+        side_index(connections.south),
+        side_index(connections.west),
+    )
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct WireConnections {
     pub west: bool,
@@ -135,13 +227,16 @@ impl WireBehavior {
 
     /// `updatePowerStrength` (Context §D): `block_signal.max(incoming_wire_signal)`, with the
     /// `block_signal == 15` short-circuit (pure perf optimization, no observable difference).
+    /// `block_signal` uses `block_signal_excluding_wire`, not the shared `signal::best_neighbor_
+    /// signal` every other component calls (M3 field-report fix: own-state writeback follow-up
+    /// -- own doc comment below).
     fn compute_power(
         &self,
         world: &dyn BlockWorldAccess,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
     ) -> u8 {
-        let block_signal = signal::best_neighbor_signal(world, registry, pos);
+        let block_signal = block_signal_excluding_wire(world, registry, pos);
         if block_signal == 15 {
             return 15;
         }
@@ -207,6 +302,44 @@ fn wire_power_at(
     registry.resolve(state).raw_wire_power(world, pos)
 }
 
+/// `getBlockSignal`/`level.getBestNeighborSignal` (Context §D), computed with wire's own
+/// `shouldSignal` flag effectively disabled (M3 field-report fix: own-state writeback
+/// follow-up, research doc §3.1: "wire's own `isSignalSource` temporarily disabled via the
+/// `shouldSignal` flag to avoid self-counting"). Mirrors `signal::best_neighbor_signal` exactly
+/// except: any neighbor that is itself a wire tile (`wire_power_at` returns `Some`, the same
+/// `raw_wire_power` hook `incoming_wire_signal` already uses to identify "is this a wire")
+/// contributes `0` here, regardless of its own real power or connectivity. Real vanilla applies
+/// this exclusion globally while *any* wire computes its own target strength — not only to
+/// avoid a wire reading back its own power through a QC bounce off its own supporting block,
+/// but, just as importantly, to keep wire-to-wire power transfer flowing *exclusively* through
+/// `incoming_wire_signal`'s own dedicated, decay-aware (`-1` per hop) walk. Without this
+/// exclusion, once `on_shape_update` establishes real connectivity between two adjacent wire
+/// tiles, a source-adjacent tile's own undecayed `weak_signal_toward` output would reach this
+/// function's own `== 15` short-circuit directly, propagating power=15 with zero decay down an
+/// entire wire run (confirmed empirically: `redstone/pulse/wire_signal_decay_15_chain`'s own
+/// parity-check regression once own-state writeback made real connections observable,
+/// `redstone_wire.rs`'s own `wire_chain_decays_correctly_once_neighbors_are_shape_connected`
+/// regression test). Every *non*-wire signal source (torch, redstone_block, diode) still
+/// contributes normally, exactly as `signal::best_neighbor_signal` already would.
+fn block_signal_excluding_wire(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+) -> u8 {
+    crate::direction::NEIGHBOR_CHANGED_ORDER
+        .into_iter()
+        .map(|dir| {
+            let npos = dir.apply(pos);
+            if wire_power_at(world, registry, npos).is_some() {
+                0
+            } else {
+                signal::signal_into(world, registry, pos, dir)
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 impl Default for WireBehavior {
     fn default() -> Self {
         Self::new()
@@ -270,6 +403,18 @@ impl BlockBehavior for WireBehavior {
         if !changed {
             return;
         }
+        // M3 field-report fix: own-state writeback -- vanilla's `DefaultRedstoneWireEvaluator`
+        // writes the recomputed power straight back into the `BlockState` (update flag `2` =
+        // clients-only, no cascading shape update of its own -- the actual neighbor notify is
+        // `notify_neighbor_changed_only` below, unchanged), so this write goes through the raw
+        // world accessor, never `ctx.set_block`. `new_power_state_id` preserves every
+        // connection digit already stored (`side_index`'s own doc comment).
+        if let Some(current) = ctx.get_block(pos)
+            && is_wire_range(current.0)
+        {
+            let new_id = new_power_state_id(current.0, new_power);
+            ctx.world.set_block(pos, new_id);
+        }
         // The unconditional 7-cell-plus notify (Context §D): `pos` itself first, then its own
         // 6 neighbors in `NEIGHBOR_CHANGED_ORDER` -- no shape update is fired.
         signal::notify_neighbor_changed_only(ctx, pos);
@@ -292,6 +437,26 @@ impl BlockBehavior for WireBehavior {
             .entry(pos)
             .or_default()
             .connections = connections;
-        None
+        // M3 field-report fix: own-state writeback -- vanilla's `RedStoneWireBlock::updateShape`
+        // always recomputes and returns its own connection-encoded state for a horizontal
+        // trigger direction; this blueprint's own real caller contract (`dispatch_one`/
+        // `stage4.rs`'s private equivalent) writes the returned id and, if non-`None`, continues
+        // the shape-update cascade one hop further -- so returning unconditionally here would
+        // bounce that cascade back and forth along an already-settled wire run indefinitely (no
+        // visited-set anywhere in that mechanism, the previous wave's own documented hazard,
+        // `docs/findings-for-planning.md`). Gating on "did the recomputed id actually change"
+        // instead mirrors vanilla's own real fixed-point termination: an `updateShape` call that
+        // would return the state it already holds is, observably, a no-op.
+        match ctx.get_block(pos) {
+            Some(current) if is_wire_range(current.0) => {
+                let new_id = new_connections_state_id(current.0, connections);
+                if new_id == current {
+                    None
+                } else {
+                    Some(new_id)
+                }
+            }
+            _ => None,
+        }
     }
 }
