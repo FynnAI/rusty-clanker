@@ -29,6 +29,38 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## A. Open questions needing a decision
 
+- **Two committed corpus fixtures (`redstone/comparator/comparator_compare_vs_
+  subtract`, `redstone/comparator/comparator_priority_diode_behind`) carry a
+  placement-ordering comment that is factually wrong and should be corrected
+  once a legitimate content-authoring pass can update the hash-manifested
+  `.ron` file (and `manifest.json`) together — not done here, since a
+  `fix`/`governance` changeset never touches hash-manifested fixture content
+  (TEST-D45/D46's own integrity rule; confirmed the hard way: a comment-only
+  edit to these two files broke `spec_loading`'s own manifest-hash check
+  immediately).** `comparator_compare_vs_subtract.ron`'s own comment claims
+  "redstone_wire self-validates its own floor support immediately on
+  /setblock placement (unlike comparator/torch, which don't)," and
+  `comparator_priority_diode_behind.ron`'s own comment makes the analogous
+  claim for repeater — both requiring their own floor tile to precede the
+  wire/repeater in list order "or placement silently reverts to air." Neither
+  claim is true. Audited directly against the code (M3 field-report fix wave,
+  Section A): `WireBehavior` has no `on_placed` override at all (falls
+  through to the default no-op) and its only support check
+  (`on_shape_update`, `Down`-direction only) is triggered exclusively by a
+  later shape update reaching it from a *neighbor's* own placement/change,
+  never by its own placement (`border::fan_out_from_changed_block` only
+  notifies a newly-placed block's own six *neighbors*, never the block
+  itself) — so ordering floor-before-wire in these two fixtures' own `blocks:`
+  lists is harmless but was never actually load-bearing. `RepeaterBehavior`/
+  `ComparatorBehavior::on_placed` used to have exactly this wrong "self-check
+  at placement" bug (this file's own Section A entries below have the full
+  fix writeup) — that prior-wave regression is presumably the actual origin
+  of the now-corrected claim about repeater specifically; the wire claim
+  appears to have simply generalized it incorrectly. Low priority (the
+  fixtures still capture/replay correctly regardless of order) — recorded so
+  a future content-authoring pass fixes both comments without needing to
+  re-derive this from scratch.
+
 - **`redstone/qc/qc_piston_top_side_signal` (M3-B07 corpus, content-plan entry
   #38) has a geometry defect its own documented intent can't be resolved
   without a real redesign.** Its probe wire at `(0, 2, -1)` sits directly on
@@ -272,6 +304,29 @@ Entries name the milestone that surfaced them and the code they concern.
   *air*, not when it was already a placed block of some other kind?) before
   this fixture can reach a full pass.
 
+  **(Update, M3 field-report fix wave, Section A): root-caused correctly and
+  now fully resolved — the destroy-on-place hook itself was always wrong, not
+  merely missing a "first vs. re-placement" distinction.** Vanilla never
+  self-validates a command-placed block at all; `on_placed`'s own destroy
+  check (added by the prior wave's Task 3 fix this entry's earlier paragraph
+  describes) was the wrong hook entirely, confirmed by a second, independent
+  oracle diff: `comparator_2tick_fixed_delay`'s own isolated floor-less
+  comparator (never touched by anything after placement) stays alive in the
+  oracle trace throughout, while the `on_placed` check destroyed it at tick 0
+  every time. The real destruction mechanism is `on_neighbor_changed`,
+  direction-agnostically — every one of the six trigger directions re-checks
+  support (always straight down), destroying the diode synchronously if
+  unsupported. This exactly explains this fixture's own asymmetry without any
+  special-casing: the comparator is destroyed when its *neighbors* are placed
+  one by one after it (each placement fires `on_neighbor_changed` on the
+  already-loaded comparator), but its own tick-4 re-placement at the same
+  position doesn't self-check (placement fans out to a block's own
+  neighbors, never to itself) and nothing else touches it afterward, so it
+  survives untouched from tick 4 onward — matching the oracle exactly. Both
+  `RepeaterBehavior`/`ComparatorBehavior::on_placed` no longer check support
+  at all; the check moved to the top of `on_neighbor_changed` instead.
+  `comparator_tie_no_turn_on` now passes.
+
 - **Task 2's diode re-placement fix (`BlockBehavior::on_placed`, wired only
   into `crates/testing/gametest/src/replay.rs`'s own `place_and_settle`)
   needs no separate production-side fix once the already-tracked
@@ -413,6 +468,45 @@ Entries name the milestone that surfaced them and the code they concern.
   Not attempted (no fix possible without guessing which of the many
   candidate trigger-context rules is correct).
 
+  **(Update, M3 field-report fix wave, Section B): the 1-vs-2-tick
+  inconsistency itself is resolved — retract's own base-flip is always
+  deferred, uniformly `COMMIT_DELAY_TICKS` (2), never special-cased; the
+  disagreeing single-tick traces this entry's own Task 2 paragraph reports
+  are attributed to Section E's own recapture-stability finding below
+  (real-wall-clock drift during capture, not a genuine vanilla asymmetry).**
+  Deleted the immediate `write_base_extended(..., false)` call this
+  blueprint's own Task 3 fix added to `on_block_event`'s
+  `TRIGGER_CONTRACT`/`TRIGGER_DROP` arm — `commit_retract`'s own deferred
+  writeback (already present, at the 2-tick commit) is now the only base
+  writer for a retract, symmetric with `commit_extend`'s own immediate flip
+  being *extend*-only. Also fixed a second, related bug in the same area:
+  `on_block_event` previously let a second trigger silently overwrite
+  (`self.moving.insert`) an already-in-flight `MovingPistonState` without
+  ever committing its real content — this blueprint's own former
+  "absorption"/"commit-collision" interpretation (Context §F), explicitly
+  flagged there as mechanically-derived and unverified. Verified WRONG: a
+  new trigger now force-finalizes the in-flight commit synchronously first
+  (`PistonBehavior::finalize_moving`), then resolves the new trigger against
+  that now-settled world — `blueprints/M3/M3-B05-piston.md` corrected in
+  place (Context §F, the `MovingPistonState`/`on_block_event` sketches, and
+  `piston_zero_tick.rs`'s own Acceptance test description); the real test
+  (`pulse_shorter_than_commit_window_force_finalizes_then_retracts`, renamed
+  and rewritten) confirms the piston now genuinely, visibly extends before
+  retracting again, exactly one block-event pass later. Net effect on the
+  corpus: `redstone/piston/piston_extend_block_event_same_tick_chain` (the
+  cascade-timing fixture this same entry's own Task 4 update names) now
+  passes in full. The piston fixtures this entry originally diagnosed
+  (`basic_piston_door_2x1`, `piston_retract_pull_sticky_vs_normal`,
+  `piston_door_double_flush`, `piston_sticky_pull_entity_free`,
+  `sticky_piston_retractor_door_2x2`) still fail post-fix, but their own
+  mismatch shapes changed from simple base-timing offsets to content/
+  position mismatches (e.g. a `piston_head` present where the oracle shows
+  air, or vice versa) — not re-diagnosed further within this pass's own
+  scope; recorded as a residual rather than forced. Given these fixtures'
+  own multi-block/sticky-pull geometry, the still-undocumented intermediate
+  `MOVING_PISTON` placeholder gap this blueprint's own Context §E already
+  names (Section 152 above) remains the most likely real explanation.
+
 - **Stage 7 (block-entity ticking) has no path to trigger a Stage-4 redstone
   re-evaluation when a tier-1 container's contents change — the real vanilla
   mechanism a container mutation uses to refresh an adjacent comparator
@@ -466,6 +560,33 @@ Entries name the milestone that surfaced them and the code they concern.
   only`'s own cross-region-aware shape) — a real `rc-mechanics` feature
   addition, out of this replay-only governance fix's own scope.
 
+  **(Update, M3 field-report fix wave, Section C): the replay-level half of
+  this gap is now closed, exactly as the candidate fix above sketched, and
+  is confirmed genuinely functioning.** `Tier1ContainerSignalSource::record`
+  now tracks which positions actually changed (including a position's
+  first-ever `record`) in a `changed: HashSet<BlockPos>`, drained by a new
+  `take_changed()`; `replay_contraption`'s own per-tick loop calls it
+  immediately after `run_block_entity_tick` and fires `signal::
+  notify_neighbor_changed_only` (its own existing one-hop conductor relay
+  already covers both "reads the container directly" and "reads through a
+  conductor the container also touches") at every changed position, then
+  drains the resulting cascade to a fixed point. `redstone/comparator/
+  comparator_container_fullness_chest` now passes on a genuine, exercised
+  basis (its own comparator floor-support-loss regression closed by
+  Section A above, so this notify path is what it actually needs and gets)
+  — not merely "unaffected" as this entry's earlier paragraph described.
+  `comparator_clock_container_fill` and `hopper_clock_basic` both still
+  fail post-fix; see the next entry's own update for `comparator_clock_
+  container_fill` and a new, separate residual for `hopper_clock_basic`
+  (this entry's own prediction that it "should resolve on its own" once the
+  notify gap closed did not hold). The *production* ECS half of this gap
+  (`crates/mechanics/src/stage7/ecs.rs`'s own `system_block_entity_tick` has
+  no access to `NeighborUpdateEngine`/`BlockWorldAccess` at all, so it
+  cannot perform the same notify) remains genuinely open — a real
+  cross-stage architectural addition (a new Stage-4-after-Stage-7 pass, or a
+  cross-stage event queue), correctly out of scope for this replay-only fix,
+  left as the decision this entry's own preceding paragraph already names.
+
 - **`redstone/clock/comparator_clock_container_fill`'s own oracle trace shows
   its subtract-mode comparator permanently powered from tick 1 onward — a
   result that looks irreconcilable with this project's own container-fullness
@@ -500,6 +621,34 @@ Entries name the milestone that surfaced them and the code they concern.
   has no such second issue (its comparator's side reads a plain `0` — no
   adjacent signal source in that fixture at all) — once the notify gap above
   is closed, that fixture should resolve on its own; this one may not.
+
+  **(Update, M3 field-report fix wave, Section C): the Stage7->Stage4 notify
+  gap is now closed (previous entry's own update) — this fixture's own
+  puzzle is confirmed exactly as predicted, unaffected by the notify fix,
+  still needing real-oracle research.** `comparator_clock_container_fill`
+  still fails, 40/40 mismatches, still the identical pattern (`state_id
+  11265` expected — subtract-mode `powered=true` — at every tick 1 through
+  40, `11266` actual): the notify now genuinely fires every tick the
+  container's fullness changes, so the comparator IS re-evaluating on
+  schedule, and still legitimately computes `powered=false` under this
+  project's own `input > side` reading (`1 > 15` false) every time. This
+  fixture's own puzzle (torch side input vs. container formula, both
+  independently re-verified against the code) remains open exactly as
+  stated above.
+
+  `redstone/clock/hopper_clock_basic` did **not** resolve on its own as this
+  entry's own earlier paragraph predicted — it still fails, but with a
+  materially different shape than before the notify fix: no longer a
+  uniformly-stuck comparator, but 19 mismatches scattered across specific
+  tick ranges (e.g. ticks 3-4, 11-16, 23-27, 34-39 — a periodic-looking
+  pattern, plausibly tied to the hopper's own 8-tick transfer cadence), each
+  showing the comparator `powered=true` (`11263`) where the oracle expects
+  `powered=false` (`11264`). This looks like a genuine phase/timing
+  discrepancy in exactly *when* within the hopper's fill/drain cycle the
+  notify-triggered re-evaluation lands, not a wiring or formula defect — not
+  diagnosed further within this pass's own scope (would need real-oracle
+  packet-level timing data on the hopper's own per-tick fullness sequence to
+  pin down safely); recorded as a residual rather than forced.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
@@ -709,6 +858,32 @@ Entries name the milestone that surfaced them and the code they concern.
   obvious candidate) and which blueprint owns it.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
+
+- **`M3-B05-piston.md`'s own "commit-collision"/"absorption" interpretation of
+  a second trigger arriving while a `MovingPistonState` is still in flight —
+  explicitly flagged there as "this blueprint's own considered, mechanically-
+  derived interpretation... not an independently-verified fact about real
+  vanilla" — is verified WRONG (M3 field-report fix wave, Section B4).** The
+  blueprint's own text (Context §F) claimed the second trigger silently
+  overwrites the first's still-pending `MovingPistonState`, so the piston
+  "never visibly reaches the extended state at all" and no fan-out ever fires
+  for the superseded action. Against a real oracle trace this is wrong: the
+  in-flight commit is instead force-finalized synchronously the moment the
+  second trigger arrives — its real content (piston_head, moved blocks, the
+  base's own `EXTENDED` bit) genuinely lands, visibly, within that same
+  block-event pass — and only then does the new trigger's own plan resolve,
+  against that now-settled world, starting a fresh commit countdown.
+  Corrected in place: Context §F's whole "commit-collision rule" paragraph
+  (now "force-finalization rule"), the `MovingPistonState`/`on_block_event`
+  Deliverables sketches, and the Acceptance-test description for what is now
+  `pulse_shorter_than_commit_window_force_finalizes_then_retracts` (renamed
+  from `_is_absorbed`). Real implementation: `PistonBehavior::finalize_
+  moving` (`crates/mechanics/src/redstone/piston.rs`), called from both
+  `on_scheduled_tick` (the ordinary, delay-elapsed path) and the top of
+  `on_block_event` (the new, forced-early path). Planning reconciliation:
+  none needed — this is a Deliverables/Context-level pseudocode correction,
+  never promoted to a decision ID in `05-game-mechanics.md`/`11-roadmap-
+  milestones.md`, so nothing at the planning-document level is now stale.
 
 - **M3-B07's own capture-pipeline design assumed a freshly-tracked chunk's first
   state always arrives as a delta packet — false, verified against the real

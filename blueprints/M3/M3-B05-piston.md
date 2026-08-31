@@ -151,7 +151,7 @@ M3-B02's own Open Questions reserved exactly this extension point: *"piston_head
 
 ### F. Zero-tick pulse stance — an emergent consequence of MECH-D7/D11, not a special case
 
-MECH-D7/MECH-D11 already commit this project, project-wide, to reproducing the classic redstone evaluator's exact update-order/count behavior bug-for-bug, explicitly declining to "fix" the staleness that produces exactly this class of quirk (MECH-D11's own rationale: "any 'fix' to the staleness... changes observable update count and timing and therefore fails the parity bar for the default backend"). This blueprint does not attempt to independently verify, or special-case, whatever real vanilla 26.2 does with a "0-tick" pulse — it states the one binding rule that determines the outcome and lets the outcome fall out of that rule mechanically, exactly as the project's own parity model requires: **`PistonBehavior::on_neighbor_changed` may be invoked more than once at the same position within a single tick** (B01's `NeighborUpdateEngine::drain` can dispatch a chain of updates that revisits the same position more than once in one tick, e.g. via a redstone wire's own unconditional 7-cell-plus notify firing twice from two converging changes) — **each invocation independently recomputes `piston_neighbor_signal` and compares it against the piston's own `should_be_extended`'s current, live value**; if it differs, a fresh block event is emitted immediately (Context §E's "same-tick, not next-tick" timing) and `should_be_extended` is updated eagerly, in place, before the call returns. Two such invocations within one tick, with the second reversing the first's own conclusion, therefore emit **two** block events into the *same* tick's single live block-event queue (extend, then contract, or vice versa) — both drained, in that order, within that same tick's block-event sub-phase. This blueprint's own **commit-collision rule** resolves the natural consequence explicitly: `on_block_event`'s own `MovingPistonState` write (Context §E) is an ordinary map insert — a *second* block event arriving for a position that *already* has a `MovingPistonState` in flight (its 2-tick commit not yet reached) **overwrites** the existing entry with the new one and re-schedules a fresh 2-tick countdown for the *new* target, rather than queuing two separate sequential animations. Applied to the extend-then-contract case above: the pending "commit as extended" is superseded, before it ever fires, by "commit as retracted" — the piston never visibly reaches the extended state at all, and the whole two-tick window ends with the piston settled back at its starting state, having emitted no observable neighbor/shape-update fan-out for the superseded extension (only the final, surviving commit's own fan-out fires, at its own two-tick mark from whichever event scheduled it last). This is this blueprint's own considered, mechanically-derived interpretation of "what MECH-D7/D11's binding commitment produces here," not an independently-verified fact about real vanilla 26.2's own piston implementation — flagged accordingly, and directly exercised by Acceptance test `pulse_shorter_than_commit_window_is_absorbed` below.
+MECH-D7/MECH-D11 already commit this project, project-wide, to reproducing the classic redstone evaluator's exact update-order/count behavior bug-for-bug, explicitly declining to "fix" the staleness that produces exactly this class of quirk (MECH-D11's own rationale: "any 'fix' to the staleness... changes observable update count and timing and therefore fails the parity bar for the default backend"). **`PistonBehavior::on_neighbor_changed` may be invoked more than once at the same position within a single tick** (B01's `NeighborUpdateEngine::drain` can dispatch a chain of updates that revisits the same position more than once in one tick, e.g. via a redstone wire's own unconditional 7-cell-plus notify firing twice from two converging changes) — **each invocation independently recomputes `piston_neighbor_signal` and compares it against the piston's own `should_be_extended`'s current, live value**; if it differs, a fresh block event is emitted immediately (Context §E's "same-tick, not next-tick" timing) and `should_be_extended` is updated eagerly, in place, before the call returns. Two such invocations within one tick, with the second reversing the first's own conclusion, therefore emit **two** block events into the *same* tick's single live block-event queue (extend, then contract, or vice versa) — both drained, in that order, within that same tick's block-event sub-phase. **Force-finalization rule (M3 field-report fix, corrected from this blueprint's own former "commit-collision"/"absorption" interpretation, which was explicitly flagged there as mechanically-derived and unverified — now verified WRONG against a real oracle trace):** a *second* block event arriving for a position that *already* has a `MovingPistonState` in flight (its 2-tick commit not yet reached) does **not** silently overwrite the pending entry. `on_block_event` instead force-finalizes the in-flight commit synchronously, right there — re-validating it (Context §G case 1) and, if still consistent, running its real `commit_extend`/`commit_retract` immediately, so its actual content (piston_head, moved blocks, the base's own `EXTENDED` bit) genuinely lands — before resolving the new trigger's own plan against that now-settled world and starting a fresh 2-tick countdown for it. Applied to the extend-then-contract case above: the pending "commit as extended" is force-finalized — the piston briefly, visibly, actually extends, synchronously within the same block-event pass — and only then does the retract begin, settling the piston back to retracted two ticks later. Directly exercised by Acceptance test `pulse_shorter_than_commit_window_force_finalizes_then_retracts` below.
 
 ### G. Interaction with M3-B03 — breaking a moving piston
 
@@ -281,8 +281,8 @@ struct PistonState {
     should_be_extended: bool,
 }
 
-/// One in-flight extend or retract (Context §E) — cleared on commit or on a superseding event
-/// (Context §F).
+/// One in-flight extend or retract (Context §E) — cleared on commit, or force-finalized early by
+/// a superseding trigger (Context §F's own force-finalization rule).
 #[derive(Clone, Debug)]
 enum MovingPlan {
     Extending(PushPlan),
@@ -321,7 +321,7 @@ impl PistonBehavior {
     /// exercising the "does not re-check until notified" staleness property directly.
     pub fn should_be_extended(&self, pos: BlockPos) -> bool;
     /// `true` iff a `MovingPistonState` entry currently exists for `pos` (a commit has been
-    /// scheduled but has not yet fired or been superseded).
+    /// scheduled but has not yet fired or been force-finalized early).
     pub fn has_pending_move(&self, pos: BlockPos) -> bool;
 }
 
@@ -336,10 +336,13 @@ impl BlockBehavior for PistonBehavior {
     }
 
     fn on_block_event(&self, ctx: &mut UpdateContext, pos: BlockPos, event: &BlockEvent) {
-        /* Context §E: re-resolve resolve_extend/resolve_retract fresh against live world
-           state; on success, insert/overwrite this position's MovingPistonState (Context §F's
-           own overwrite-supersedes rule) and ctx.schedule_block_tick(pos, COMMIT_DELAY_TICKS,
-           TickPriority::Normal); on failure (extend only), do nothing further this cycle. */
+        /* Context §E/§F: if pos already has a MovingPistonState in flight, force-finalize it
+           first (Context §F's own force-finalization rule) — synchronously re-validate and
+           commit its real content before touching anything else. Then re-resolve resolve_
+           extend/resolve_retract fresh against that now-settled world state; on success, insert
+           this position's fresh MovingPistonState and ctx.schedule_block_tick(pos,
+           COMMIT_DELAY_TICKS, TickPriority::Normal); on failure (extend only), do nothing
+           further this cycle. */
     }
 
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
@@ -432,8 +435,8 @@ Each case is a full `PistonBehavior` + `BlockBehaviorRegistry` + a `LoggingBehav
 
 ### `crates/mechanics/tests/piston_zero_tick.rs` (the "zero-tick stance" acceptance test, Context §F)
 
-1. `pulse_shorter_than_commit_window_is_absorbed` — a single piston; within **one** tick's `NeighborUpdateEngine::drain` pass, test code drives two sequential `on_neighbor_changed` calls at the piston's own position with the underlying signal read as `true` on the first call and `false` on the second (simulating a same-tick reversal, Context §F). Assert: exactly two block events are queued this tick (`TRIGGER_EXTEND` then `TRIGGER_CONTRACT`/`TRIGGER_DROP`, in that call order); both are processed in that same tick's block-event sub-phase; the resulting `MovingPistonState` reflects only the **second** (retracting) plan, not the first; at the eventual commit tick (`trigger_tick = 2`, counted from the *second* event's own emission tick, which is the same tick as the first's — Context §F: "re-schedule a fresh 2-tick countdown"), the piston's own `EXTENDED` flag is unchanged from its starting value, and **no** fan-out fires for the superseded extension at any point.
-2. `two_events_in_different_ticks_do_not_supersede` — the same reversal, but the second `on_neighbor_changed` call happens on a **later** tick (after the first event's own commit already fired at tick 2); assert both commits happen independently, in full, each with its own fan-out — proving the overwrite-supersedes rule applies only to a genuinely still-in-flight `MovingPistonState`, never to an already-completed one.
+1. `pulse_shorter_than_commit_window_force_finalizes_then_retracts` (M3 field-report fix, renamed and corrected from this blueprint's own former `pulse_shorter_than_commit_window_is_absorbed`, whose "absorption" premise Context §F's own force-finalization rule now supersedes) — a single piston; within **one** tick's `NeighborUpdateEngine::drain` pass, test code drives two sequential `on_neighbor_changed` calls at the piston's own position with the underlying signal read as `true` on the first call and `false` on the second (simulating a same-tick reversal, Context §F). Assert: exactly two block events are queued this tick (`TRIGGER_EXTEND` then `TRIGGER_CONTRACT`/`TRIGGER_DROP`, in that call order); both are processed in that same tick's block-event sub-phase; handling the second event force-finalizes the first's still-in-flight `MovingPistonState` synchronously, so the piston is genuinely, visibly extended (real `piston_head` content landed) immediately after this same tick's own block-event pass, with a fresh retracting `MovingPistonState` now pending; at the eventual commit tick, the piston settles back to retracted and the `piston_head` content is cleared.
+2. `two_events_in_different_ticks_do_not_supersede` — the same reversal, but the second `on_neighbor_changed` call happens on a **later** tick (after the first event's own commit already fired at tick 2); assert both commits happen independently, in full, each with its own fan-out — proving the force-finalization rule applies only to a genuinely still-in-flight `MovingPistonState`, never to an already-completed one.
 
 ### `crates/mechanics/tests/piston_shape_table.rs` (pure, `rc-physics`)
 
