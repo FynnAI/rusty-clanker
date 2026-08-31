@@ -315,9 +315,16 @@ impl RedstoneSignalSource for ComparatorBehavior {
     fn is_diode(&self) -> bool {
         true
     }
-    fn connects_from(&self, _world: &dyn BlockWorldAccess, pos: BlockPos, from: Direction) -> bool {
-        from == self.facing(pos) || from == self.facing(pos).opposite()
-    }
+    // M3 field-report fix (Task 1): unlike `RepeaterBlock`, vanilla's own `RedStoneWireBlock.
+    // shouldConnectTo` special-cases only `Blocks.REPEATER` to its own front/back axis --
+    // every other `isSignalSource()` block (comparator included) falls through to the generic
+    // "any signal source connects from any direction" branch, so a wire touching a comparator's
+    // *side* face still visually connects to it (unlike a repeater's side, which never
+    // connects). Confirmed against a real oracle diff
+    // (`redstone/comparator/comparator_compare_vs_subtract`'s own `(-1,1,0)`, a wire on a
+    // comparator's side face showing `east=side`, `docs/findings-for-planning.md`) -- no
+    // override needed here at all; the trait's own default (`self.is_signal_source()`,
+    // direction-independent) is already the correct, direction-agnostic answer.
     fn diode_facing(&self, pos: BlockPos) -> Option<Direction> {
         Some(self.facing(pos))
     }
