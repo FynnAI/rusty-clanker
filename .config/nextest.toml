@@ -11,3 +11,17 @@ fail-fast = false
 
 [profile.ci-nightly.junit]
 path = "junit.xml"
+
+# Heavy multiplayer integration binaries: each test spawns a full HardcodedWorld
+# (its own region tick thread, real TCP sockets, several tokio runtimes). Running
+# many of them concurrently on a 2-core CI runner starves the region tick threads
+# and trips staged hang-guards that are generous for any sane load - the CI flake
+# family of 2026-08-30/31 was exactly this self-contention, not product races
+# (those were found and fixed separately). Cap their concurrency instead of
+# inflating budgets further.
+[test-groups.heavy-server-integration]
+max-threads = 2
+
+[[profile.default.overrides]]
+filter = 'binary(play_block_break_place_full) | binary(play_block_action_broadcast_reaches_unspawned_actor) | binary(play_chunk_streaming_on_move) | binary(region_unavailable_after_shutdown) | binary(play_position_persistence_roundtrip) | binary(play_movement_application) | binary(play_reach_validation) | binary(play_sneak_reach) | binary(login_configuration_flow)'
+test-group = 'heavy-server-integration'
