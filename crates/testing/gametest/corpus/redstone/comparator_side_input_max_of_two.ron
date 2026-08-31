@@ -1,0 +1,24 @@
+// M3-B07 redstone parity corpus — replacement entry R6 (ComparatorCircuit).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/comparator/comparator_side_input_max_of_two",
+    category: ComparatorCircuit,
+    description: "A subtract-mode comparator with a strong (undecayed, 15) side input on its west face and a one-hop-decayed, weaker side input on its east face, plus a full-strength front input — the output must reflect main minus the larger side reading, never main minus their sum.",
+    quirk: "Both side inputs powered at different strengths; the comparator subtracts max(left,right), not their sum (08-redstone-ticking.md §3.6, M3-B04 Context F/G).",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 213, has_analog_state: true),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (3, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

@@ -1,0 +1,23 @@
+// M3-B07 redstone parity corpus — content-plan entry #15 (Clock).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment. The hoppers' `vanilla_state` carries
+// inline NBT (legal /setblock grammar, spec.rs's own doc comment) — capture-side only;
+// item-transfer replay depends on M3-B06's HopperBlockEntity/Tier1ContainerSignalSource,
+// out of this blueprint's own Stage-4 scope (same caveat the content plan itself
+// already flags for this entry, mirroring #17/#33's identical dependency).
+ContraptionSpec(
+    id: "redstone/clock/hopper_clock_basic",
+    category: Clock,
+    description: "Two hoppers facing each other with one starting item, plus a comparator reading the westward hopper's own fullness — items ping-pong back and forth on MECH-D19's 8-tick transfer cooldown, producing a periodic comparator reading.",
+    quirk: "Two hoppers facing each other with a comparator reading fullness (MECH-D19's 8-tick base transfer cooldown).",
+    max_ticks: 40,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:hopper[facing=east,enabled=true]{Items:[{Slot:0b,id:\"minecraft:redstone\",Count:1b}]}", state_id: 208),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:hopper[facing=west,enabled=true]", state_id: 209),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 210, has_analog_state: true),
+    ],
+    actions: [],
+)

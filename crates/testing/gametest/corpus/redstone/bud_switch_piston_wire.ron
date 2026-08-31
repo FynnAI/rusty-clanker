@@ -1,0 +1,23 @@
+// M3-B07 redstone parity corpus — content-plan entry #8 (PulseGenerator).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/pulse/bud_switch_piston_wire",
+    category: PulseGenerator,
+    description: "A piston, triggered from above, pushes a plain block downward to rest directly atop an already-lit wire run — a pure block-presence change with no signal-level change, forcing the wire's own neighbor-changed re-evaluation to re-enter the queue mid-drain.",
+    quirk: "CollectingNeighborUpdater's stack-based reentrant-buffer-then-reverse-push order (08-redstone-ticking.md §3.3, M3-B01's NeighborUpdateEngine::drain) — a BUD-switch-class trigger where the newly-appearing neighbor carries no power of its own, only a shape/presence change.",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 3, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 4, 0), vanilla_state: "minecraft:piston[facing=down,extended=false]", state_id: 214),
+    ],
+    actions: [
+        (tick: 2, pos: (2, 5, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

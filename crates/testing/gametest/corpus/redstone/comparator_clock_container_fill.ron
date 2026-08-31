@@ -1,0 +1,25 @@
+// M3-B07 redstone parity corpus — content-plan entry #17 (Clock).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment. The hopper/chest `vanilla_state`
+// values carry inline NBT (legal /setblock grammar, spec.rs's own doc comment) —
+// capture-side only; item-transfer replay depends on M3-B06's HopperBlockEntity/
+// Tier1ContainerSignalSource, out of this blueprint's own Stage-4 scope (same caveat
+// the content plan itself already flags for this entry, mirroring #15/#33's identical
+// dependency).
+ContraptionSpec(
+    id: "redstone/clock/comparator_clock_container_fill",
+    category: Clock,
+    description: "A hopper slowly feeds a full stack of redstone down into a chest; a subtract-mode comparator reads the chest's own rising fullness against a fixed, weaker side input, so its analog output changes tick over tick as the container fills.",
+    quirk: "Comparator subtract-mode analog output driven by a slowly-filling container (MECH-D48; block-entity dependent, same M3-B06 caveat as #15).",
+    max_ticks: 40,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:chest[facing=south,type=single,waterlogged=false]", state_id: 211),
+        (pos: (0, 2, 0), vanilla_state: "minecraft:hopper[facing=down,enabled=true]{Items:[{Slot:0b,id:\"minecraft:redstone\",Count:64b}]}", state_id: 212),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 213, has_analog_state: true),
+        (pos: (-1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+    ],
+    actions: [],
+)

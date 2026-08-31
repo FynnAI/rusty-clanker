@@ -1,0 +1,29 @@
+// M3-B07 redstone parity corpus — replacement entry R1 (UpdateOrderProbe).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/update_order/wire_cross_shape_connectivity",
+    category: UpdateOrderProbe,
+    description: "A torch feeds a wire hub that reaches a tap through two parallel routes (a direct 1-tile path and a 3-tile bypass); the direct path's middle tile is removed mid-run, forcing a shape-update recompute and rerouting power through the bypass.",
+    quirk: "A wire's connection-shape recomputation when a neighbouring wire is removed mid-circuit — exercises on_shape_update reshaping and the resulting signal reroute (M3-B01 Context, 08-redstone-ticking.md §3.3).",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 0, 2), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (2, 0, 2), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 4, pos: (1, 1, 1), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

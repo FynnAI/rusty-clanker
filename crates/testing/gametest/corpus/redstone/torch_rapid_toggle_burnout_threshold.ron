@@ -1,0 +1,38 @@
+// M3-B07 redstone parity corpus — replacement entry R3 (Clock).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment. Two independent, spatially separated
+// sub-builds (both starting their toggle sequence at tick 2) demonstrate the exact
+// MAX_RECENT_TOGGLES=8 boundary within one spec: sub-build A gets exactly 8 input
+// transitions, sub-build B gets exactly 7 — both well inside the 60-tick window.
+ContraptionSpec(
+    id: "redstone/clock/torch_rapid_toggle_burnout_threshold",
+    category: Clock,
+    description: "Two identical torch inverters 4 blocks apart: the first is toggled exactly 8 times inside 60 ticks (trips burnout), the second exactly 7 times (does not).",
+    quirk: "Exactly MAX_RECENT_TOGGLES=8 toggles inside RECENT_TOGGLE_TIMER=60 ticks trips burnout; 7 does not (08-redstone-ticking.md §3.7).",
+    max_ticks: 80,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (0, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (4, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (4, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (4, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+    ],
+    actions: [
+        (tick: 2, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 4, pos: (0, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 6, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 8, pos: (0, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 10, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 12, pos: (0, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 14, pos: (0, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 16, pos: (0, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 2, pos: (4, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 4, pos: (4, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 6, pos: (4, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 8, pos: (4, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 10, pos: (4, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 12, pos: (4, -1, -1), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 14, pos: (4, -1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

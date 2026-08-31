@@ -1,0 +1,18 @@
+// M3-B07 redstone parity corpus — content-plan entry #21 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/basic_piston_door_2x1",
+    category: PistonDoor,
+    description: "A single piston facing a plain block, triggered to extend and later retract via a redstone_block appearing and disappearing on its own back face.",
+    quirk: "Piston extend/retract, TICKS_TO_EXTEND=2, progress += 0.5F/tick (08-redstone-ticking.md §3.9, M3-B05 Context E).",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 204),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+    ],
+    actions: [
+        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 6, pos: (-1, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

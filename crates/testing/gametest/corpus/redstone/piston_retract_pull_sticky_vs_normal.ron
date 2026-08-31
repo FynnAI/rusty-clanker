@@ -1,0 +1,22 @@
+// M3-B07 redstone parity corpus — replacement entry R5 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/piston_retract_pull_sticky_vs_normal",
+    category: PistonDoor,
+    description: "A sticky piston and a plain piston, both starting extended and powered with their pushed block resting two cells out, both lose power on the identical tick — the sticky one pulls its block back, the plain one leaves its block in place.",
+    quirk: "Side-by-side sticky vs normal piston retract: sticky pulls its block back, normal leaves it (08-redstone-ticking.md §3.9, M3-B05 Context C).",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:sticky_piston[facing=east,extended=true]", state_id: 206),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (0, 1, 3), vanilla_state: "minecraft:piston[facing=east,extended=true]", state_id: 207),
+        (pos: (2, 1, 3), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 3), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+    actions: [
+        (tick: 3, pos: (-1, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 3, pos: (-1, 1, 3), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

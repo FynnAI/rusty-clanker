@@ -1,0 +1,27 @@
+// M3-B07 redstone parity corpus — content-plan entry #14 (Clock).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+//
+// Geometry note: a redstone-grid adjacency graph is bipartite, so no 3 blocks can
+// mutually touch pairwise (a literal 3-cell triangle of torches cannot exist). This
+// build instead closes the loop over a proper 4-cell square footprint (three
+// torch-bearing supports plus one plain pass-through support), giving the required
+// odd inversion count (3 torches) around an even-length cycle (4 edges) — the
+// standard vanilla "3-torch ring" shape.
+ContraptionSpec(
+    id: "redstone/clock/torch_clock_classic",
+    category: Clock,
+    description: "Three redstone torches, each on its own support block, wired in a closed ring via a fourth plain pass-through support (2x2 footprint) — each torch inverts the next support's neighbor-signal state, and the odd inversion count around the closed loop never settles.",
+    quirk: "Three-torch ring inverter clock, each 2-tick recheck compounding into the classic self-sustaining period (08-redstone-ticking.md §3.7).",
+    max_ticks: 40,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+    ],
+    actions: [],
+)

@@ -1,0 +1,25 @@
+// M3-B07 redstone parity corpus — content-plan entry #11 (PulseGenerator).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/pulse/repeater_chain_delay_sum_2_4_6_8",
+    category: PulseGenerator,
+    description: "Four same-facing repeaters in a straight daisy chain, delay settings 1/2/3/4 in order, fed a single steady trigger — exercising every DELAY setting's own scheduled-tick width in one cumulative run.",
+    quirk: "All four repeater DELAY settings (2/4/6/8 ticks) chained, exact cumulative timing: the trigger reaches the tap wire only after 2+4+6+8=20 ticks (08-redstone-ticking.md §3.6).",
+    max_ticks: 30,
+    blocks: [
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 200),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=2,locked=false,powered=false]", state_id: 201),
+        (pos: (3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (3, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=3,locked=false,powered=false]", state_id: 202),
+        (pos: (4, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (4, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=4,locked=false,powered=false]", state_id: 203),
+        (pos: (5, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (5, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)
