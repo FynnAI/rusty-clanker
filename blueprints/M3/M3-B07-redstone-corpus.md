@@ -153,7 +153,7 @@ TEST-D7's differential harness pattern (a real subprocess plus a bot connection,
 5. **Per-contraption placement area.** `world_origin_for(index: usize) -> (i32, i32, i32) = (index as i32 * 64, 4, 0)` — a fixed, deterministic 64-block spacing along X on the flat world's own platform, far exceeding tier-1's largest possible footprint (a 12-block max piston push chain plus its structure, MECH-D13/08-redstone-ticking.md §3.9) — no two contraptions' fan-out or block-event traffic can ever cross-talk.
 6. **Bot connection.** One `rc-paritybot` bot (offline account, per M1-B06's already-established oracle-boundary rule — capture never touches Mojang's session server) connects once per `fetch-corpus` invocation (not once per contraption) and teleports (`tp <bot> <x> <y> <z>`, console-issued) to each contraption's origin in turn — reusing one connection across the whole corpus keeps capture wall-clock dominated by tick-stepping latency, not per-contraption reconnect overhead.
 7. **Placement.** For each `PlacedBlock` in list order: issue `setblock <world x> <world y> <world z> <vanilla_state>` (world coordinates = origin + `pos`), then read the bot's most-recently-received state id at that position (`rc_paritybot::packet_capture`, below) and call `check_state_id_consistency`.
-8. **Tick 0 snapshot.** Read every position in `[bounds_min, bounds_max]` from the bot's currently-known block-state map (populated incrementally by every Block Update packet received since connecting — this blueprint's bot always requests/holds the relevant chunk(s) loaded, so every placement's resulting packet is guaranteed delivered) and any `has_analog_state` position's most-recent block-entity-held value; assemble and append `TickSnapshot { tick: 0, .. }`.
+8. **Tick 0 snapshot.** Read every position in `[bounds_min, bounds_max]` from `state_id_at` (below — polls the bot's own live world model, correct for both an already-tracked chunk's delta and a freshly-tracked chunk's initial full snapshot alike) and any `has_analog_state` position's most-recent block-entity-held analog value; assemble and append `TickSnapshot { tick: 0, .. }`. **Corrected (M3 field report, real-oracle-verified):** this step's own placement loop (7, above) cannot simply wait for *any* reported state at a freshly-placed position and trust it — the very first chunk load after each contraption's own `tp` delivers that position's pre-placement value baked into the initial full-chunk snapshot before the placement's own delta ever arrives, so the wait must poll for the specific *expected* `state_id` (each `PlacedBlock`'s own declared value) up to the observation deadline, not merely for the first `Some` reported value.
 9. **Tick loop, `t` in `1..=max_ticks`.** Apply every `ScriptedAction` with `tick == t` (same `setblock` mechanism as placement — a trigger is not privileged over ordinary placement, both are plain, immediate `Level.setBlock` calls), then issue `tick step 1`, then read the full volume + analog positions the same way as tick 0, append `TickSnapshot { tick: t, .. }`.
 10. **Write and clean up.** Serialize the assembled `RedstoneTrace` via `postcard` (already pinned, CLUSTER-D12) to `corpus/redstone/<id>/trace.postcard` (git-ignored, per "Fixture custody" below); `fill <bounds> air` clears this contraption's footprint before moving to the next `world_origin_for` slot (defense against any straggling block-entity/scheduled-tick state leaking into a later capture, even though spacing already prevents fan-out cross-talk).
 
@@ -171,14 +171,19 @@ BlockSnapshotView {
 /// Connects one bot (offline account) to `host:port`, teleport-follows console-issued
 /// `tp` commands (this function does not itself issue them — the caller drives
 /// placement/tick-stepping via the oracle's stdin, this function only listens),
-/// and returns a live, continuously-updated `BlockSnapshotView` plus a handle whose
-/// `Drop` disconnects cleanly. Every clientbound block-state-affecting packet
-/// (block update, multi/section block update, block-entity data) updates the
-/// view's internal map immediately upon receipt — the exact azalea `Event`
-/// variant(s) this subscribes to are verified against azalea's own current
-/// documentation at implementation time (mirroring M1-B06's own repeated
-/// "verify against azalea's current source" caveat for exactly this class of
-/// wire-adjacent detail this project does not independently re-derive).
+/// and returns a live `BlockSnapshotView` plus a handle whose `Drop` disconnects
+/// cleanly. **Corrected (M3 field report, real-oracle-verified):** `state_id_at`
+/// polls the bot's own azalea-maintained world model (`Client::world()` ->
+/// `get_block_state`) rather than a hand-maintained map fed only by delta packets
+/// (`BlockUpdate`/`SectionBlocksUpdate`) — azalea already merges *both* delivery
+/// paths a position's state can arrive by (that same delta pair, and a freshly-
+/// tracked chunk's own initial full `LevelChunkWithLight` snapshot) into that one
+/// model, where a hand-matched delta-only map silently never observes the second
+/// path at all. `analog_at` has no azalea-side model to poll (block-entity NBT is
+/// azalea-world-untracked), so it keeps a packet-derived map, but now fed from
+/// *both* of its own two delivery paths for the identical reason: the delta
+/// `BlockEntityData` packet, and the block-entity list already embedded in
+/// `LevelChunkWithLight`'s own initial snapshot.
 pub async fn connect_and_observe(host: &str, port: u16, account_name: &str)
     -> Result<(BlockSnapshotView, ObserverHandle), PacketCaptureError>;
 ```
@@ -674,18 +679,29 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PacketCaptureError {
-    #[error("connect/login timed out")]
-    LoginTimeout,
+    #[error("no Event::Spawn observed within the {0:?} login timeout")]
+    LoginTimeout(std::time::Duration),
+    // Corrected (M3 field report, real-oracle-verified): a disconnect observed
+    // before Event::Spawn is its own, immediately-surfaced variant (mirrors
+    // `idle_stability::ScenarioError::DisconnectedBeforeSpawn` exactly) rather than
+    // left to wait out the rest of `login_timeout` — azalea's own `ClientBuilder::
+    // start` retries the identical handshake forever on its own, and a disconnect
+    // this early reproduces identically on every retry.
+    #[error("disconnected before Event::Spawn: {reason:?}")]
+    DisconnectedBeforeSpawn { reason: Option<String> },
     #[error("azalea error: {0}")]
     Azalea(String),
 }
 
-/// A live, continuously-updated view over one bot session's observed block state
-/// (Context, "Packet observation"). Cheap to clone (`Arc`-backed); every clone
-/// observes the same underlying map.
+/// A live view over one bot session's observed world state (Context, "Packet
+/// observation" — corrected there, M3 field report). Cheap to clone (`Arc`-backed);
+/// every clone observes the same underlying session. `state_id_at` polls the bot's
+/// own live azalea world model directly rather than replaying a hand-maintained
+/// packet-observed map; only `analog_at` (no azalea-side model exists for
+/// block-entity NBT) still keeps one, fed from both of its own two delivery paths.
 #[derive(Clone)]
 pub struct BlockSnapshotView {
-    // private: Arc<Mutex<HashMap<(i32,i32,i32), u32>>>, Arc<Mutex<HashMap<(i32,i32,i32), u8>>>
+    // private: Arc<Mutex<Option<azalea::Client>>>, Arc<Mutex<HashMap<(i32,i32,i32), u8>>>
 }
 
 impl BlockSnapshotView {
@@ -700,9 +716,9 @@ pub struct ObserverHandle {
 }
 
 /// Connects one offline-account bot (Context, "Bot connection") and returns a live
-/// `BlockSnapshotView` updated from every clientbound block-state-affecting packet
-/// this session receives — see Context for the exact azalea event surface this
-/// subscribes to (verified at implementation time).
+/// `BlockSnapshotView` reflecting this session's own world model — see Context for
+/// the exact azalea event surface this subscribes to (verified at implementation
+/// time, corrected once more against the real oracle by the M3 field report).
 pub async fn connect_and_observe(
     host: &str,
     port: u16,

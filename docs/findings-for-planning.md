@@ -38,4 +38,53 @@ WS-D15, TEST-D54–D57 and PLAN-D9)*
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
-*(none pending)*
+- **M3-B07's own capture-pipeline design assumed a freshly-tracked chunk's first
+  state always arrives as a delta packet — false, verified against the real
+  oracle (M3, this blueprint's own first real `fetch-corpus` run).**
+  `M3-B07-redstone-corpus.md`'s Step 8 prose asserted "this blueprint's bot always
+  requests/holds the relevant chunk(s) loaded, so every placement's resulting
+  packet is guaranteed delivered," and the `packet_capture` interface doc comment
+  enumerated exactly three packet types (`block update, multi/section block
+  update, block-entity data`) as the complete set `BlockSnapshotView` needed to
+  observe. Both are wrong: a fresh `tp` into a contraption's own not-yet-tracked
+  chunk delivers that position's *pre-placement* value baked into the initial
+  full-chunk `LevelChunkWithLight` snapshot, not a delta — a packet type the
+  blueprint's own enumeration omitted entirely. Against the real vanilla 26.2
+  oracle, this made every one of the corpus's 51 contraptions time out
+  identically on their own very first placement (`redstone/piston/
+  basic_piston_door_2x1` at `(0, 1, 0)`, etc. — `target/verify/fetch-corpus.json`
+  from the failing run has the full list), a systemic harness defect rather than
+  51 broken specs. Fixed in `crates/testing/paritybot/src/packet_capture.rs`:
+  `BlockSnapshotView::state_id_at` now polls the bot's own live azalea world
+  model (`Client::world()` -> `azalea_world::World::get_block_state`), which
+  already unions both delivery paths internally, rather than replaying a
+  hand-maintained delta-only map; `corpus_capture::wait_for_state_id` now polls
+  for the *expected* declared `state_id` up to its deadline (not merely the
+  first `Some` value), since a freshly-loaded chunk reports a real `Some` state
+  immediately and that state can still be the pre-placement one. A second,
+  independent bug compounded the same symptom: the bot's own offline account
+  name (`"rc_fetch_corpus_bot"`, 19 characters) silently exceeded vanilla's own
+  16-character `ServerboundHello.name` limit on *write* (azalea's own
+  `#[limit(16)]` enforces only on *read*), so the real oracle's Login decoder
+  rejected every connection attempt outright and the bot never reached `Play`
+  state at all — renamed to `"rc_corpus_bot"` (13 characters), factored into one
+  `CORPUS_BOT_NAME` constant so the connect call and the per-contraption `tp`
+  target can never drift apart again. `M3-B07-redstone-corpus.md` has been
+  corrected (Step 8, the `packet_capture` Context sketch, and the matching
+  Deliverables sketch) to describe the corrected mechanism instead of the
+  disproven one. Planning reconciliation: none needed in
+  `09-testing-quality.md` — TEST-D7/D8/D14 stay at the decision-ID level and
+  never described this packet-type/timing detail themselves, so nothing there
+  is now stale.
+
+  Post-fix, `fetch-corpus`'s own real-oracle run no longer times out on any of
+  the 51 contraptions; all 51 instead fail with a `StateIdMismatch` naming the
+  exact declared-vs-observed state id — each corpus `.ron` file's own header
+  comment already documents its `state_id` values as unresolved placeholders
+  ("resolved to the real `reports/blocks.json`-derived ids by whoever performs
+  this blueprint's own manual verification step... at this blueprint's first
+  real `fetch-corpus` run"), i.e. this is the anticipated content-authoring step
+  the blueprint always deferred to that first run, not a further harness defect
+  — left for a `test-authoring` changeset to resolve, not fixed here (out of a
+  `fix`/`governance` changeset's own scope, and `.ron` corpus specs are
+  fixture content this changeset type never touches).
