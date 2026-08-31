@@ -1,0 +1,29 @@
+// M3-B07 redstone parity corpus — field-report replacement entry R8 (ComparatorCircuit).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/comparator/comparator_subtract_zero_clamp",
+    category: ComparatorCircuit,
+    description: "A subtract-mode comparator with a constant, decayed rear input (14) and a side input that starts stronger than the rear (15, direct block touch, west face) — clamping the output to 0 — then the side input is weakened, via its own upstream source swap, to a value below the rear (13), letting the output rise to rear-minus-side.",
+    quirk: "calculate_output_signal: `side > input` clamps output to 0 unconditionally (never negative), taking priority over the ordinary `input - side` subtraction; once side drops below input the formula falls through to the plain subtraction (M3-B04 Context §G: 'input == 0 -> 0; else side > input -> 0; else mode == Compare -> input; else (Subtract) -> input - side', 08-redstone-ticking.md §3.6).",
+    max_ticks: 14,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 213, has_analog_state: true),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 0, -2), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (0, 1, -3), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (-2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (-3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-3, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (-4, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+    actions: [
+        (tick: 6, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+)

@@ -1,0 +1,27 @@
+// M3-B07 redstone parity corpus — field-report replacement entry R11 (QcShowcase).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/qc/wire_strong_vs_weak_power_door",
+    category: QcShowcase,
+    description: "Two mirrored sub-builds sharing one plain conductor block each: in the first, a permanently-fed repeater's own output face directly touches the block (strong/direct power); in the second, an identical block instead has a redstone_wire resting on top of it, fed by its own separate source (weak power only). Both blocks carry an otherwise-identical downstream wire tile on a free side face and a downstream torch mounted on another free face.",
+    quirk: "emitted_toward(pos, towards) = max(weak, direct_signal_to(pos)) for a conductor, but direct_signal_to only ever sums neighbors' own raw direct_signal_toward — a repeater's output face overrides that to 15, while WireBehavior never overrides it (dust gives only weak_signal_toward, never a direct/strong signal, in any direction). So the repeater-touched block re-broadcasts 15 from all six of its own faces (lighting the side wire and inverting the torch), while the wire-topped block's own direct_signal_to stays 0 from that neighbor and it never becomes conductively powered at all — its side wire and torch see nothing (M3-B04 Context §A: 'Strong/direct signal... what feeds into a conductor block resting against the source, which that conductor then re-broadcasts from all six of its own faces'; MECH-D8, 08-redstone-ticking.md §3.1/§3.7).",
+    max_ticks: 20,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]", state_id: 220),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 2, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 100),
+        (pos: (10, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (10, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (11, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+        (pos: (11, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (9, 1, 0), vanilla_state: "minecraft:redstone_wall_torch[facing=west,lit=true]", state_id: 260),
+    ],
+    actions: [
+        (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 3, pos: (11, 2, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

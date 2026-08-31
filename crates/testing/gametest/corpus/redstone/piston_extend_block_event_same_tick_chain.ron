@@ -1,0 +1,18 @@
+// M3-B07 redstone parity corpus — field-report replacement entry R10 (PistonDoor).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/piston/piston_extend_block_event_same_tick_chain",
+    category: PistonDoor,
+    description: "Piston A, triggered from its own west (non-push) face, pushes a redstone_block one tile east; piston B sits beside the landing tile, oriented so that tile is one of its own checked activation faces — B's own extension is provably a same-tick side effect of A's own two-tick-delayed commit, not of A's original trigger tick.",
+    quirk: "PistonBehavior::on_scheduled_tick performs A's atomic commit (raw writes, then border::fan_out_from_changed_block per position) inside Stage 4's scheduled phase; the resulting neighbor-changed cascade reaches B synchronously (same engine.drain call), and B's own on_neighbor_changed emits its own TRIGGER_EXTEND via ctx.emit_block_event into the same live queue — which the SAME tick's block-event sub-phase (running right after the scheduled phase, MECH-D9's single, live, re-entrant queue, M3-B01 Context) drains before the tick ends. B's own commit therefore lands exactly COMMIT_DELAY_TICKS after A's commit tick, not after A's original trigger tick (M3-B05 Context §E 'Emission timing — same-tick, not next-tick').",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 140),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (2, 1, 1), vanilla_state: "minecraft:piston[facing=south,extended=false]", state_id: 141),
+    ],
+    actions: [
+        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+    ],
+)

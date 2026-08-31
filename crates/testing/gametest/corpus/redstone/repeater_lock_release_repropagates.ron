@@ -1,0 +1,23 @@
+// M3-B07 redstone parity corpus — field-report replacement entry R9 (PulseGenerator).
+// `state_id` values below are placeholders (Implementation step 4) — see
+// torch_inverter_basic.ron's own header comment.
+ContraptionSpec(
+    id: "redstone/pulse/repeater_lock_release_repropagates",
+    category: PulseGenerator,
+    description: "A repeater locked from the start by a permanently-on side repeater; its own main input is switched on while still locked (held, ignored); later the locking repeater's own upstream source is removed, releasing the lock only after the locking repeater's own turn-off delay — the released repeater then picks up the already-changed main input and turns on only its own configured delay after that release, not after the original input change.",
+    quirk: "is_locked(pos) = alternate_signal(pos) > 0 gates both on_scheduled_tick ('if is_locked, do nothing') and checkTickOnNeighbor ('if is_locked, do nothing') — a locked repeater neither reacts to nor schedules anything from a main-input change; only once the locking neighbor's own POWERED flips false (itself scheduled at the locking repeater's own get_delay) does this repeater's on_neighbor_changed re-fire, observe is_locked == false, and schedule its own turn-on at its own get_delay from THAT moment (M3-B04 Context §F: 'Lock', 'Tick', 'checkTickOnNeighbor').",
+    max_ticks: 20,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=3,locked=true,powered=false]", state_id: 251),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=true]", state_id: 222),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 111),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 101),
+        (tick: 6, pos: (2, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)
