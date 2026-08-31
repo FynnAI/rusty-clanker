@@ -832,8 +832,87 @@ Entries name the milestone that surfaced them and the code they concern.
   how to make the post-`tick step` observation itself deterministic (e.g.
   polling for a positive confirmation signal the way `wait_for_state_id`
   already does elsewhere, rather than a fixed sleep) before any piston
-  parity number in this corpus is trustworthy. Not attempted here — task
-  scope was measurement only, no mechanics or harness-timing changes.
+  parity number in this corpus is trustworthy.
+
+  **(Update, M3 field-report fix wave, recapture-stability closed for real —
+  two further designs tried before landing one that actually holds up.)**
+  A first replacement — a bare `setblock` fired immediately after `tick step
+  1`, confirmed via a plain state-id poll — was tried and empirically
+  falsified, not merely suspected: it *still* produced a different hash on
+  every one of 3 repeat captures of `basic_piston_door_2x1`. Root cause
+  (`docs/research/mc-26.2/01-bootstrap-lifecycle.md` §3.8): `tick step`'s own
+  `frozenTicksToRun` counter is only consulted, and world simulation
+  (`tickChildren`) only actually runs, on the oracle's own *next main-loop
+  iteration* — two console commands "processed in receipt order" only orders
+  when each is *dequeued*, not when the world tick `tick step` merely
+  *requested* actually executes, so a follow-up `setblock` can still land
+  before that tick's own `tickChildren()` call. A second replacement — a
+  `minecraft:repeater` whose input reads a toggled `redstone_block`, gating
+  on vanilla's own `level.scheduleTick` queue — was theoretically sound but
+  also empirically dead on arrival: a dedicated manual probe (force-place a
+  repeater next to an already-lit `redstone_torch`, issue up to 6 real `tick
+  step 1` calls with a genuine 500ms real-wall-clock gap before each check)
+  found it *never* powers on, while an adjacent plain `redstone_wire` cell
+  correctly reads power `15` from the very first check with no tick step
+  needed at all — basic power propagation works fine; only the diode's own
+  scheduled-tick path does not advance under `tick step` in this environment
+  (cross-checked against `docs/research/mc-26.2/08-redstone-ticking.md`:
+  `PistonBaseBlock` — the mechanism this project's stable piston captures
+  actually depend on — extends via a **block event** queue, a completely
+  different mechanism from diodes' `level.scheduleTick`; a working piston
+  capture never actually proved scheduled-tick processing works under `tick
+  step` at all). **The design that finally holds (`crates/testing/paritybot/
+  src/corpus_capture.rs`, `BARRIER_REL_OFFSET`'s own doc comment has the
+  full account) confirms directly against `level.getGameTime()` instead of
+  any specific redstone component's own state**: `/time query gametime`'s
+  response lands in the oracle's own log (the same channel `verify_setup_
+  commands_accepted` already trusts), re-polled each attempt until it
+  reports a value past a tracked baseline — confirmed server-side that a
+  real tick actually ran — *before* toggling a client-visible marker cell
+  and waiting for the bot's own world model to report it. All three of
+  `basic_piston_door_2x1`, `piston_retract_pull_sticky_vs_normal`, and
+  `piston_extend_block_event_same_tick_chain` are now byte-identical SHA-256
+  across 3 fresh repeat captures each, resolving in well under a second per
+  tick (no repeat of the earlier designs' multi-second stalls).
+
+  **With capture now genuinely deterministic, a full corpus recapture +
+  parity-check gives the first trustworthy piston numbers this whole
+  question has been waiting for, and they answer Task 2/Section B's own
+  long-standing open question (line ~424 above) precisely.** `fetch-corpus`:
+  49/51 (the two pre-existing, separately-tracked `qc_piston_top_side_signal`
+  and `wire_climbs_conductor_step_up_down` RON-content `StateIdMismatch`
+  defects above — unrelated to capture timing, confirmed by their own
+  `detail` text still naming a bad declared `state_id`, not a capture-race
+  signature). `parity-check redstone`: 38/49 captured fixtures pass. Piston
+  family (the 9 `PistonDoor`-category fixtures under `redstone/piston/`,
+  all 9 captured): 5 pass outright (`piston_door_double_flush`, `piston_
+  extend_block_event_same_tick_chain`, `piston_max_push_depth_12`, `piston_
+  quasi_connectivity_trigger`, `piston_unpushable_obsidian`); 4 fail —
+  `basic_piston_door_2x1` (2), `piston_retract_pull_sticky_vs_normal` (6),
+  `piston_sticky_pull_entity_free` (2), `sticky_piston_retractor_door_2x2`
+  (4). **Every single one of these 14 mismatches, in all 4 failing
+  fixtures, is a content mismatch at the old head/pulled-block position —
+  `expected` (real oracle) already `air` (or the pulled block already
+  relocated), `actual` (this engine's replay) still showing `piston_head`/
+  the stale block — spanning exactly the 2 ticks right after the trigger,
+  in every case. Not one of the 14 is a base-position mismatch.** This is
+  precisely Task 2's original "content settles immediately, base flip is the
+  only genuinely deferred half" diagnosis, now independently reconfirmed by
+  data this file can finally trust — and it means Section B's own "retract's
+  base-flip is uniformly `COMMIT_DELAY_TICKS` (2)" fix reads as *correct*
+  (zero base-position mismatches anywhere in this corpus), while `commit_
+  retract`/`commit_extend`'s own *atomic* single-commit model (`crates/
+  mechanics/src/redstone/piston.rs`, both write the head/pulled-block content
+  and the base's own `EXTENDED` flag together, at the one `COMMIT_DELAY_
+  TICKS`-later scheduled tick) is the confirmed remaining defect: real
+  vanilla decouples the two halves (content immediate, base alone deferred)
+  where this engine bundles them. Task 2's own "not attempted" fix direction
+  (line ~471 above: make retract's content commit synchronous, mirroring
+  extend's own immediate-base/deferred-content split reversed, while
+  reconciling this with the `moving`-HashMap same-tick-supersession model
+  `piston_zero_tick.rs` depends on) is the fix this now-trustworthy data
+  points to — not attempted here, a mechanics edit and out of this changeset
+  type's own scope.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 

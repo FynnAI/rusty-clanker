@@ -18,8 +18,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use rc_gametest::capture::{
-    CaptureError, OracleServerHandle, check_state_id_consistency, send_console_command,
-    verify_setup_commands_accepted,
+    CaptureError, OracleServerHandle, check_state_id_consistency, read_server_log,
+    send_console_command, verify_setup_commands_accepted,
 };
 use rc_gametest::spec::{ContraptionSpec, bounding_box, world_origin_for};
 use rc_gametest::trace::{
@@ -56,23 +56,100 @@ const AIR_STATE_ID: u32 = 0;
 /// 'serverbound/minecraft:hello'`), disconnecting the bot before it ever reached
 /// `Play` state — see `docs/findings-for-planning.md` for the full writeup.
 const CORPUS_BOT_NAME: &str = "rc_corpus_bot";
-/// Real-wall-clock allowance per `tick step 1` (blueprint Context, "Rates and
-/// limits": "≤50 ms per step including the snapshot read" is the *budget*, not a
-/// hard wait — this is simply how long this module gives the oracle's own tick and
-/// the resulting packets time to land before reading the snapshot).
+
+/// Tick-boundary barrier (M3 field-report fix, Section E recapture-stability):
+/// replaces the former fixed-sleep-then-single-unconfirmed-poll synchronization
+/// after each `tick step 1` (`docs/findings-for-planning.md`'s "recapture-
+/// stability" finding has the full diagnosis — a real oracle under a genuine `tick
+/// freeze` is perfectly deterministic server-side; the instability was entirely
+/// this module's own client-side observation race).
 ///
-/// M3 field-report fix (Section E, recapture-stability mitigation): tightened from
-/// the former `50ms` — the oracle's own block-entity ticking (piston animations
-/// included) advances on real wall-clock even under `tick freeze`, so every extra
-/// millisecond this module spends between consecutive `tick step 1` commands lets
-/// an in-flight piston animation age invisibly, independent of the logical tick
-/// count the capture is trying to pin. `20ms` (matching `OBSERVATION_POLL_INTERVAL`,
-/// itself already tuned for this same local-server round-trip) is still generous
-/// for a local oracle process's own step-plus-packet-delivery latency; a genuinely
-/// slow step just means the next tick's own placement-confirmation poll (`wait_for_
-/// state_id`, up to `OBSERVATION_TIMEOUT`) absorbs the rest, exactly as it already
-/// does for a slow placement.
-const TICK_STEP_SETTLE: Duration = Duration::from_millis(20);
+/// **Two earlier designs were tried and empirically falsified before this one —
+/// recorded here so a future session never re-treads them:**
+///
+/// 1. *A bare `setblock` fired immediately after `tick step 1`, confirmed via a
+///    plain state-id poll.* Still produced a different hash on every one of 3
+///    repeat captures of `basic_piston_door_2x1`, with the exact same
+///    one-tick-boundary-misattribution signature as the original bug. Root cause,
+///    confirmed against `docs/research/mc-26.2/01-bootstrap-lifecycle.md` §3.8
+///    (`TickRateManager`): `frozenTicksToRun` (the counter `tick step` sets) is
+///    only consulted, and world simulation (`tickChildren`) only actually runs, on
+///    the oracle's own *next main-loop iteration* — a plain `setblock` is not
+///    gated behind that at all. Two console commands "processed in receipt order"
+///    only orders when each is *dequeued*, not when the world tick `tick step`
+///    merely *requested* actually executes, so whether our follow-up `setblock`
+///    lands before or after that tick's own `tickChildren()` call is a genuine,
+///    unresolved race against the oracle's own per-iteration task-drain
+///    checkpoint.
+/// 2. *A `minecraft:repeater` whose input reads a toggled `redstone_block`,
+///    confirmed via a poll for any state change.* Theoretically sound (a
+///    repeater's own delayed flip is queued via `level.scheduleTick`, dequeued
+///    only by a real `tickChildren()` pass) but empirically dead on arrival: a
+///    dedicated manual probe (`examples/probe_repeater.rs`, never committed) that
+///    force-placed a repeater next to an already-lit `redstone_torch`/
+///    `redstone_block` and issued up to 6 real `tick step 1` calls with a genuine
+///    500ms real-wall-clock gap before each check (ruling out any client-side or
+///    command-batching artifact) found it **never** powers on — while an adjacent
+///    plain `redstone_wire` cell, read the same way, correctly reports power `15`
+///    from the very first check, with no tick step needed at all (confirming
+///    basic power propagation works fine; only the diode's own scheduled-tick
+///    path does not advance under `tick step` in this environment). Cross-checked
+///    against `docs/research/mc-26.2/08-redstone-ticking.md` §"Repeater
+///    specifics"/"`PistonBaseBlock`": pistons — the mechanism this project's own
+///    stable, repeat-verified piston captures actually depend on — extend via a
+///    **block-event** (`level.blockEvent`), a completely different queue from
+///    diodes' `level.scheduleTick`; this fix's earlier belief that a working
+///    piston capture proved scheduled-tick processing works under `tick step` was
+///    itself mistaken. Whatever the oracle's precise scheduled-tick-under-freeze
+///    behavior is, this module has no business depending on it.
+///
+/// **The actual fix never depends on any specific redstone mechanism's own
+/// internal scheduling at all — it confirms directly against the engine's own
+/// most fundamental per-tick signal, `level.getGameTime()`,** which increments by
+/// exactly 1 on every real `tickChildren()` call and nothing else (not gated
+/// behind any block/diode/scheduled-tick machinery whose own freeze-time behavior
+/// might vary). `/time query gametime`'s response lands in the oracle's own log
+/// (`read_server_log`, the same channel `verify_setup_commands_accepted` already
+/// trusts for setup-command acknowledgement) — `wait_for_game_time_past` re-issues
+/// that query and re-polls the log each attempt until it reports a value greater
+/// than the tracked baseline, which a probe confirmed resolves in well under a
+/// second per tick step (`examples/probe_repeater.rs`'s own gametime variant,
+/// never committed), not the 5-second-per-tick stall design #2's own undetected
+/// bug produced. Only *after* that server-side confirmation does this module issue
+/// the client-visible marker cell's own `setblock` (`BARRIER_REL_OFFSET`,
+/// alternating `minecraft:air`/`minecraft:stone` so every step is a genuine
+/// observable change) and wait for the bot's own `view` to report it
+/// (`wait_for_state_id`, the same "poll for the exact expected value" discipline
+/// used everywhere else in this module) — closing the *client* delivery half of
+/// the race the same way design #1 intended to, but only once the *server* half
+/// (design #1's actual flaw) is independently confirmed first. TCP's own in-order
+/// delivery on the bot's single connection then guarantees every block update the
+/// confirmed-complete tick produced — including any straggler synchronous
+/// cascade from the scripted action placed just before `tick step 1`, since that
+/// cascade necessarily finished before `tick step 1` was even dispatched — has
+/// already arrived by the time the marker's own new state is observed.
+///
+/// Fixed per slot and never derived from any individual spec's own bounding box: a
+/// survey of every `redstone/` corpus fixture's declared block/action positions
+/// found relative Y in `[-2, 5]`; `+32` on Y alone already clears every fixture's
+/// own footprint (padded or not) by a wide margin, so X/Z can stay at the origin's
+/// own `(0, 0)` without any per-fixture bounds math. Leaving X/Z unchanged from
+/// `origin` also keeps the marker cell inside the origin's own landing chunk
+/// column — the one chunk `wait_for_site_settled`'s own doc comment already
+/// established this bot's client-side tracking is reliable for immediately after
+/// `tp`.
+const BARRIER_REL_OFFSET: (i32, i32, i32) = (0, 32, 0);
+
+/// The marker cell's two alternating states — plain, already-trusted vanilla ids
+/// reused from elsewhere in this same file (`AIR_STATE_ID`, and `minecraft:
+/// stone`'s id `1` as declared by this corpus's own fixtures, e.g. `basic_piston_
+/// door_2x1.ron`'s own `stone` block) rather than inventing new ones.
+const BARRIER_STATE_AIR: (&str, u32) = ("minecraft:air", AIR_STATE_ID);
+const BARRIER_STATE_STONE: (&str, u32) = ("minecraft:stone", 1);
+
+fn barrier_pos(origin: (i32, i32, i32)) -> (i32, i32, i32) {
+    world_pos(origin, BARRIER_REL_OFFSET)
+}
 
 /// Polls `view` for `pos`'s state id until it matches `expected` or `OBSERVATION_
 /// TIMEOUT` elapses, returning whatever was last observed either way (`None` only
@@ -109,6 +186,65 @@ async fn wait_for_state_id(
             return last_seen;
         }
         tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
+    }
+}
+
+/// The prefix `/time query gametime` echoes its answer with, e.g. `"The game time
+/// is 42 tick(s)"` (confirmed live against the pinned 26.2 jar).
+const GAME_TIME_LOG_PREFIX: &str = "The game time is ";
+
+/// Parses the oracle's own log (`read_server_log`) for the *last* `/time query
+/// gametime` response it contains, returning `0` if none has ever been issued this
+/// session yet (a safe baseline: this is only ever used as a comparison anchor for
+/// "did it advance *past* this", never asserted against directly). The log is
+/// append-only and shared by the *whole* corpus run — a later fixture's own first
+/// reading may already be a large number left over from earlier fixtures' own tick
+/// steps, which is fine, since only forward movement from a freshly-established
+/// per-fixture baseline is ever checked (`wait_for_game_time_past`).
+fn last_reported_game_time(work_dir: &Path) -> u64 {
+    let log = read_server_log(work_dir);
+    log.lines()
+        .rev()
+        .find_map(|line| {
+            let rest = line.split(GAME_TIME_LOG_PREFIX).nth(1)?;
+            rest.split_whitespace().next()?.parse::<u64>().ok()
+        })
+        .unwrap_or(0)
+}
+
+/// Re-issues `/time query gametime` and re-polls the oracle's own log
+/// (`last_reported_game_time`) each attempt until it reports a value strictly
+/// greater than `previous`, or `OBSERVATION_TIMEOUT` elapses (bounded, loud
+/// failure via `CaptureError::ObservationTimeout`, `BARRIER_REL_OFFSET` used as the
+/// reported position since this check is not itself tied to a real block cell).
+/// Unlike `wait_for_state_id`'s live-view polling (whose target, once queried,
+/// keeps itself current as packets arrive on their own), the log only reflects
+/// `time query`'s own most recent *response* — each poll attempt must re-issue the
+/// query itself before re-checking, the same discipline `verify_setup_commands_
+/// accepted` already applies to setup-command acknowledgement. This is this
+/// module's own tick-boundary barrier's *server-side* half (`BARRIER_REL_OFFSET`'s
+/// own doc comment has the full account of why this, and not a redstone
+/// component's own state, is what gates on a real `tickChildren()` pass here).
+async fn wait_for_game_time_past(
+    handle: &mut OracleServerHandle,
+    work_dir: &Path,
+    contraption_id: &str,
+    previous: u64,
+) -> Result<u64, CaptureError> {
+    let deadline = tokio::time::Instant::now() + OBSERVATION_TIMEOUT;
+    loop {
+        send_console_command(handle, "time query gametime")?;
+        tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
+        let observed = last_reported_game_time(work_dir);
+        if observed > previous {
+            return Ok(observed);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CaptureError::ObservationTimeout {
+                contraption_id: contraption_id.to_string(),
+                pos: BARRIER_REL_OFFSET,
+            });
+        }
     }
 }
 
@@ -261,9 +397,19 @@ async fn wait_for_site_settled(
 /// tick) — factored out of `capture_contraption` so that function's own Step 10
 /// cleanup can run unconditionally, whether this returns `Ok` or `Err` (see that
 /// function's own doc comment for why).
+///
+/// `work_dir` (Section E recapture-stability fix, `BARRIER_REL_OFFSET`'s own doc
+/// comment) is the one addition over this function's pre-fix parameter list, for
+/// the server-log-based barrier half (`wait_for_game_time_past`) — pushing it past
+/// clippy's own default argument-count lint; splitting `origin`/`bounds_min`/
+/// `bounds_max` into a private struct purely to dodge that count would obscure
+/// more than it clarifies for a function whose whole job is already threading
+/// these same few values through one linear algorithm.
+#[allow(clippy::too_many_arguments)]
 async fn capture_contraption_body(
     handle: &mut OracleServerHandle,
     view: &BlockSnapshotView,
+    work_dir: &Path,
     spec: &ContraptionSpec,
     source_jar_sha1: &str,
     origin: (i32, i32, i32),
@@ -312,6 +458,7 @@ async fn capture_contraption_body(
     let (padded_min, padded_max) = pad_bounds(bounds_min, bounds_max);
     let wipe_min = world_pos(origin, padded_min);
     let wipe_max = world_pos(origin, padded_max);
+    let barrier = barrier_pos(origin);
     let mut settle_result = Ok(());
     for attempt in 0..WIPE_ATTEMPTS {
         send_console_command(
@@ -321,6 +468,12 @@ async fn capture_contraption_body(
                 wipe_min.0, wipe_min.1, wipe_min.2, wipe_max.0, wipe_max.1, wipe_max.2
             ),
         )?;
+        // Clean the barrier marker cell too (Section E recapture-stability fix) —
+        // it sits well outside the padded fill above (`BARRIER_REL_OFFSET`'s own
+        // doc comment), so it needs its own explicit reset back to a known
+        // baseline every time this slot is wiped, whether that is this same
+        // attempt's pre-settle wipe or `capture_contraption`'s Step 10 cleanup.
+        issue_setblock(handle, barrier, BARRIER_STATE_AIR.0)?;
         // Deliberately the narrow declared bounding box, not the padded region the
         // wipe above targeted: it's the only region the rest of this function ever
         // reads through `view`, and (verified live) client-side tracking of chunks
@@ -335,6 +488,31 @@ async fn capture_contraption_body(
         tokio::time::sleep(WIPE_RETRY_BACKOFF).await;
     }
     settle_result?;
+
+    // Confirm the barrier's own pre-tick-loop baseline (Section E
+    // recapture-stability fix): the wipe above already re-issued this cell's own
+    // `setblock ... air`, but only a confirmed poll — not merely "the command was
+    // written to stdin" — establishes AIR as the marker's own known starting
+    // state before the tick loop's alternation below assumes it. The server-side
+    // half of the barrier (`wait_for_game_time_past`) needs its own starting
+    // baseline too — this session's own last-recorded game time, whatever fixture
+    // last advanced it (`last_reported_game_time`'s own doc comment).
+    let observed = wait_for_state_id(view, barrier, BARRIER_STATE_AIR.1)
+        .await
+        .ok_or_else(|| CaptureError::ObservationTimeout {
+            contraption_id: spec.id.clone(),
+            pos: BARRIER_REL_OFFSET,
+        })?;
+    if observed != BARRIER_STATE_AIR.1 {
+        return Err(CaptureError::StateIdMismatch {
+            contraption_id: spec.id.clone(),
+            pos: BARRIER_REL_OFFSET,
+            declared: BARRIER_STATE_AIR.1,
+            observed,
+            vanilla_state: BARRIER_STATE_AIR.0.to_string(),
+        });
+    }
+    let mut game_time_prev = last_reported_game_time(work_dir);
 
     // Step 7: placement, self-validating against the oracle's own observed state id.
     for block in &spec.blocks {
@@ -388,6 +566,14 @@ async fn capture_contraption_body(
     // everywhere else). This also closes `comparator_subtract_zero_clamp.ron`'s own
     // previously-flagged gap ("this action is never live-validated by fetch-corpus
     // (only `blocks:` entries are)") for every fixture at once, not just that one.
+    //
+    // M3 field-report fix (Section E, recapture-stability): the symmetric race on
+    // the *other* side of `tick step 1` — this loop used to follow the step with a
+    // fixed `TICK_STEP_SETTLE` sleep and then read the snapshot unconditionally.
+    // It now confirms, server-side first then client-side, that the step's own
+    // tick genuinely ran and that its resulting packets have arrived
+    // (`BARRIER_REL_OFFSET`'s own doc comment has the full account, including the
+    // two earlier designs this replaced and why each one failed).
     for t in 1..=spec.max_ticks as u64 {
         for action in spec.actions.iter().filter(|a| a.tick == t) {
             let wp = world_pos(origin, action.pos);
@@ -408,8 +594,43 @@ async fn capture_contraption_body(
                 });
             }
         }
+
         send_console_command(handle, "tick step 1")?;
-        tokio::time::sleep(TICK_STEP_SETTLE).await;
+
+        // Barrier, server-side half: confirm the oracle's own game time has
+        // genuinely advanced — i.e. a real `tickChildren()` pass actually ran —
+        // before ever touching the client-visible marker below.
+        game_time_prev =
+            wait_for_game_time_past(handle, work_dir, &spec.id, game_time_prev).await?;
+
+        // Barrier, client-side half: only now (tick confirmed complete
+        // server-side) toggle the marker cell — strict alternation by tick parity
+        // guarantees a genuine change every time — and wait for the bot's own
+        // world model to report it. TCP's in-order delivery on this one
+        // connection then guarantees every block update the now-confirmed-
+        // complete tick produced has already arrived by the time this resolves.
+        let barrier_state = if t % 2 == 1 {
+            BARRIER_STATE_STONE
+        } else {
+            BARRIER_STATE_AIR
+        };
+        issue_setblock(handle, barrier, barrier_state.0)?;
+        let observed = wait_for_state_id(view, barrier, barrier_state.1)
+            .await
+            .ok_or_else(|| CaptureError::ObservationTimeout {
+                contraption_id: spec.id.clone(),
+                pos: BARRIER_REL_OFFSET,
+            })?;
+        if observed != barrier_state.1 {
+            return Err(CaptureError::StateIdMismatch {
+                contraption_id: spec.id.clone(),
+                pos: BARRIER_REL_OFFSET,
+                declared: barrier_state.1,
+                observed,
+                vanilla_state: barrier_state.0.to_string(),
+            });
+        }
+
         ticks.push(TickSnapshot {
             tick: t,
             blocks: snapshot_volume_from_view(view, origin, bounds_min, bounds_max, &has_analog),
@@ -433,9 +654,12 @@ async fn capture_contraption_body(
 /// `capture_contraption_body` as their exact algorithm — freeze, gamerules,
 /// teleport, settle wait, place-with-validation, snapshot tick 0, scripted-action +
 /// step loop, snapshot per tick, `fill air` cleanup). `source_jar_sha1` is threaded
-/// straight into the resulting `RedstoneTrace`. Step 3 (freeze) and step 4
-/// (gamerules) are one-time, whole-corpus setup performed by
-/// `run_full_corpus_capture`, not repeated here.
+/// straight into the resulting `RedstoneTrace`. `work_dir` is threaded through only
+/// for `capture_contraption_body`'s own server-log-based barrier half
+/// (`wait_for_game_time_past`) — the same directory `launch_oracle_server` already
+/// wrote the oracle's log into. Step 3 (freeze) and step 4 (gamerules) are
+/// one-time, whole-corpus setup performed by `run_full_corpus_capture`, not
+/// repeated here.
 ///
 /// Step 10 (cleanup) now runs unconditionally, on both the `Ok` and `Err` paths —
 /// governance fix for the previously-tracked "stale world residue accumulating
@@ -454,6 +678,7 @@ async fn capture_contraption_body(
 pub async fn capture_contraption(
     handle: &mut OracleServerHandle,
     view: &BlockSnapshotView,
+    work_dir: &Path,
     spec: &ContraptionSpec,
     index: usize,
     source_jar_sha1: &str,
@@ -464,6 +689,7 @@ pub async fn capture_contraption(
     let body_result = capture_contraption_body(
         handle,
         view,
+        work_dir,
         spec,
         source_jar_sha1,
         origin,
@@ -490,7 +716,12 @@ pub async fn capture_contraption(
             "fill {} {} {} {} {} {} air",
             min_wp.0, min_wp.1, min_wp.2, max_wp.0, max_wp.1, max_wp.2
         ),
-    );
+    )
+    // Clean the barrier marker cell too (Section E recapture-stability fix) — it
+    // sits outside the padded fill above (`BARRIER_REL_OFFSET`'s own doc comment),
+    // so Step 10 must reset it explicitly, the same as the pre-settle wipe already
+    // does at the *start* of the next attempt at this slot.
+    .and_then(|()| issue_setblock(handle, barrier_pos(origin), BARRIER_STATE_AIR.0));
 
     match body_result {
         Ok(trace) => cleanup_result.map(|()| trace),
@@ -596,7 +827,8 @@ pub async fn run_full_corpus_capture(
             continue;
         }
 
-        let outcome = capture_contraption(&mut handle, &view, spec, index, source_jar_sha1).await;
+        let outcome =
+            capture_contraption(&mut handle, &view, work_dir, spec, index, source_jar_sha1).await;
         let outcome = match outcome {
             Ok(trace) => write_trace(&trace_path, &trace).map_err(CaptureError::Io),
             Err(err) => Err(err),
