@@ -158,6 +158,105 @@ Entries name the milestone that surfaced them and the code they concern.
   unchanged across every tick regardless of any wire-logic fix — it is pure
   fixture content, not an engine defect.
 
+  **(Update, M3 field-report fix-agent wave, Task 5): `.ron` content fixed**
+  (`state_id` corrected to `4441`, manifest hash regenerated) — but this did
+  **not** flip the fixture to a bit-identical pass, and the reason is no
+  longer pure fixture content: with Task 4's real `up`/`side` connection
+  shape now implemented, `redstone/update_order/wire_climbs_conductor_step_
+  up_down` still fails identically (25 mismatches, confirmed via `cargo run
+  -p xtask -- parity-check redstone`), including at tick 0 itself. Root
+  cause, confirmed by tracing the replay's own `blocks:` placement order:
+  `(1, 1, 0)` is placed 4th, `(2, 1, 0)` (its own East neighbor, a plain
+  stone step) 6th, and `(2, 2, 0)` (the wire it should climb toward,
+  diagonally two cells away) 7th. Placing `(2, 1, 0)` fans out a shape
+  update to `(1, 1, 0)` (a direct neighbor) *before* `(2, 2, 0)` exists yet —
+  `connection_shape_on_side` correctly (given the world state at that exact
+  moment) computes `East = None`, since no wire is found at `Up.apply(2, 1,
+  0)`. Nothing ever re-triggers `(1, 1, 0)` afterward: `(2, 2, 0)`'s own
+  later placement fans out only to *its own* 6 direct neighbors, none of
+  which is `(1, 1, 0)` (two cells away). This is a genuine replay/engine
+  propagation-ordering gap, not fixture content — either the real oracle's
+  own placement pipeline propagates wider than "direct neighbors only" for
+  this diagonal case (needs real-oracle research this pass didn't have
+  access to), or the corpus's own placement order needs `(2, 2, 0)` listed
+  before `(1, 1, 0)`/`(2, 1, 0)` (a `test-authoring` reordering, mirroring
+  this same file's own already-established "floor before wire" reordering
+  precedent) so the diagonal neighbor exists before the intervening direct
+  neighbor ever triggers the premature recompute. Needs a decision on which
+  fix is correct before this fixture can reach a real pass.
+
+- **`redstone/piston/basic_piston_door_2x1` (and every other push-then-
+  retract-nothing-to-pull piston fixture) shows a residual one-tick
+  discrepancy specific to a non-sticky retract, surfaced by Task 3's own
+  piston base-flip-timing fix.** Task 3 confirmed (via multiple fixtures'
+  own diff dumps) that the piston base's own `EXTENDED` id flips
+  *immediately*, at block-event time, matching the real oracle exactly for
+  every *extend* trigger examined. For a plain (non-sticky) *retract* with
+  nothing to pull, the oracle instead shows: the vacated head position
+  already `air` at the very same tick the retract-triggering action fires,
+  while the base's own `EXTENDED=false` flip lags by one further tick (e.g.
+  `basic_piston_door_2x1`: action at tick 6 removes the triggering
+  `redstone_block`; oracle shows the head already air at tick 6 but the base
+  still `extended` until tick 7). This is the reverse ordering from what
+  Task 3's own "base immediate, content two-ticks-later" model predicts, and
+  reverse of extend's own confirmed-correct behavior — our own simulation
+  (base flips immediately at tick 6, content settles at tick 8, matching the
+  *extend* model applied symmetrically) mismatches on both counts. Not
+  investigated further within Task 3's own scope (a genuine timing question
+  needing either real-oracle packet-level research or a decision to accept
+  it as a known residual) — candidate explanations, neither confirmed: (a) a
+  real, asymmetric vanilla retract-vs-extend timing rule this project's own
+  research corpus does not yet document in enough detail; (b) an artifact of
+  this specific "nothing to pull" case only (`resolve_retract`'s own early
+  return for a non-sticky piston never reads world state at all, unlike
+  extend's `resolve_extend` walk) that a real MOVING_PISTON-placeholder
+  model (Section B's own "no generated per-property registry"-adjacent gap)
+  would resolve as a side effect of modeling that placeholder properly.
+
+- **`redstone/comparator/comparator_tie_no_turn_on`'s own comparator (no
+  floor support anywhere in the fixture's own geometry, ever) shows as
+  `air` in the real oracle trace from tick 0 through tick 3 (the tick before
+  its own re-placement action fires), while this project's own diode
+  support-loss handling — Task 1 only wired torch/wire, per its own explicit
+  scope — never destroys it at all.** `RepeaterBehavior`/`ComparatorBehavior`
+  have no `on_shape_update` override whatsoever (falls through to the
+  `BlockBehavior` trait's own no-op default), so a diode placed with no
+  floor support simply stays put in this project's own simulation
+  indefinitely. Whether real vanilla's `DiodeBlock` (the shared repeater/
+  comparator base) genuinely requires floor support the same way torch/wire
+  do (plausible — most "sits on the ground" blocks share this contract) is
+  unconfirmed by this pass — attempted a same-shape reactive fix (mirroring
+  `WireBehavior`'s own `Down`-direction `should_pop` check) but found it
+  cannot explain this specific fixture's own `air`-from-tick-0 result even
+  in principle: the comparator's own floor position (`Down.apply(pos)`) is
+  never written by *any* `blocks:`/`actions:` entry in this fixture, so no
+  shape update ever reaches the comparator from `Down` at all (nothing ever
+  gets placed there to trigger the fan-out) — a reactive-only Down-gated
+  check, even if wired up, would never fire here. The real oracle's own
+  destruction must happen through some other mechanism (a placement-time
+  validation this project's `/setblock`-bypasses-`canSurvive` convention,
+  confirmed correct for wire via the `wire_strong_vs_weak_power_door.ron`
+  reordering precedent, doesn't obviously explain either) — needs either
+  real-oracle packet-level research or a decision on whether diode
+  support-loss is in scope at all before this fixture (and any other
+  diode-on-no-floor fixture) can reach a real pass.
+
+- **Task 2's diode re-placement fix (`BlockBehavior::on_placed`, wired only
+  into `crates/testing/gametest/src/replay.rs`'s own `place_and_settle`)
+  needs no separate production-side fix once the already-tracked
+  "production's own composition root never calls `register_tier1_redstone`"
+  gap (this file's own Section A, above) closes.** Checked directly: nothing
+  under `crates/server/src/` references `RepeaterBehavior`/
+  `ComparatorBehavior` at all yet (`grep` came back empty), confirming
+  production has no placement call site to fix today. `on_placed` is a
+  generic `BlockBehavior` trait hook, dispatched the same way `on_neighbor_
+  changed`/`on_shape_update` already are — once a real per-region
+  composition root exists and routes its own `/setblock`/block-placement
+  path through the same `ctx.set_block`-plus-`behaviors.resolve(state).
+  on_placed(...)` pattern `place_and_settle` now uses, diode re-placement
+  will work there too with no further changes. Recorded only so whoever
+  closes the composition-root gap knows this piece is already handled.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
