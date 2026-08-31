@@ -27,17 +27,19 @@
 //!   (Context §D) and with `piston_shape_table.rs`'s own local copy — a cross-file consistency
 //!   note in all three places.
 //!
-//! A further deviation, forced by this project's own "no generated block-state-property
-//! registry" gap (Context §I) applied honestly to the commit step itself: real vanilla's
-//! `EXTENDED` block-state property genuinely flips a piston base's own stored `BlockStateId`.
-//! `PistonStateIds`' own doc comment already establishes that this project's dispatch never
-//! needs that distinction (one registered range covers both retracted and extended states) —
-//! this blueprint extends that same stance to the world's own stored representation: the base's
-//! raw `BlockStateId` is simply re-affirmed (written back unchanged) at commit time, and
-//! `EXTENDED`'s only observable representation anywhere in this project is `PistonState.
-//! extended`'s own runtime value, read back via `PistonBehavior::is_extended`. A future
-//! blueprint that migrates a real generated per-property `BlockStateId` transition into this
-//! commit step changes only that one write, not this function's own structure.
+//! M3 field-report fix (own-state writeback): `commit_extend`/`commit_retract` now write the
+//! piston base's own real `EXTENDED` `BlockStateId` (`piston_state_id`, arithmetic read
+//! directly off `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:piston`/
+//! `minecraft:sticky_piston` entries -- WS-D15's generated per-property registry is still
+//! future work) rather than re-affirming the base unchanged, closing the parity classification's
+//! own dominant-root-cause finding for this component. `PistonStateIds`' own doc comment's
+//! "dispatch never needs that distinction" stance is unaffected (one registered
+//! `BlockBehaviorRegistry` range still covers both retracted and extended states) — only the
+//! world's own stored representation changed. `classify`'s own `Immovable` check now also
+//! recognizes the real extended-id ranges (an already-extended piston base is still Immovable,
+//! same as before), alongside its former placeholder-literal check (never produced by this
+//! module's own writes anymore, but still exercised directly by
+//! `piston_structure_resolver.rs`'s own acceptance test).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -103,6 +105,39 @@ const STICKY_PISTON_EXTENDED_PLACEHOLDER: u32 = 900_102;
 /// (cross-file consistency note, this module's own top-of-file doc comment); `classify`
 /// (Context §C) treats every one of them as `Immovable`.
 const PISTON_HEAD_IDS: [u32; 6] = [900_001, 900_002, 900_003, 900_004, 900_005, 900_006];
+
+/// Own-state id arithmetic for `minecraft:piston`/`minecraft:sticky_piston` (M3 field-report
+/// fix: own-state writeback, closing this module's own top-of-file "further deviation" note --
+/// WS-D15's generated per-property registry is still future work, so these two constants are
+/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
+/// `minecraft:piston`/`minecraft:sticky_piston` entries, protocol 776). `extended`
+/// (`[true,false]`, blocks.json order) is the slower-varying property, stride 6; then `facing`
+/// (`[north,east,south,west,up,down]`, blocks.json's own listed order -- **not** this module's
+/// own `direction_index`/`PISTON_HEAD_IDS` convention above, a separate, unrelated,
+/// hand-authored id space for a different purpose), stride 1.
+const PISTON_BASE: u32 = 2257; // extended=true, facing=north
+const STICKY_PISTON_BASE: u32 = 2235; // extended=true, facing=north
+
+fn piston_facing_index(d: Direction) -> u32 {
+    match d {
+        Direction::North => 0,
+        Direction::East => 1,
+        Direction::South => 2,
+        Direction::West => 3,
+        Direction::Up => 4,
+        Direction::Down => 5,
+    }
+}
+
+fn piston_state_id(sticky: bool, extended: bool, facing: Direction) -> BlockStateId {
+    let base = if sticky {
+        STICKY_PISTON_BASE
+    } else {
+        PISTON_BASE
+    };
+    let extended_idx = u32::from(!extended);
+    BlockStateId(base + extended_idx * 6 + piston_facing_index(facing))
+}
 
 fn direction_index(d: Direction) -> usize {
     match d {
@@ -170,9 +205,22 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
         return PushClass::Immovable;
     };
     let raw = state.to_raw();
+    // Own-state writeback (M3 field-report fix): `commit_extend`/`commit_retract` now write a
+    // piston base's own *real* extended id (`piston_state_id`'s own doc comment) rather than
+    // this module's former placeholder pair -- an already-extended piston base is still
+    // `Immovable` (real vanilla: an extended piston base is not a normal pushable block), so
+    // `classify` must recognize the real id ranges too. The two placeholder checks stay
+    // alongside this (never produced by this module's own writes anymore, but
+    // `piston_structure_resolver.rs`'s own `PISTON_EXTENDED` acceptance test still exercises
+    // them directly) rather than being removed outright.
+    let is_real_extended_piston = (PISTON_BASE..PISTON_BASE + 6).contains(&raw);
+    let is_real_extended_sticky_piston =
+        (STICKY_PISTON_BASE..STICKY_PISTON_BASE + 6).contains(&raw);
     if raw == BEDROCK_ID
         || raw == PISTON_EXTENDED_PLACEHOLDER
         || raw == STICKY_PISTON_EXTENDED_PLACEHOLDER
+        || is_real_extended_piston
+        || is_real_extended_sticky_piston
         || PISTON_HEAD_IDS.contains(&raw)
         || BLOCK_ENTITY_IMMOVABLE_IDS.contains(&raw)
     {
@@ -467,13 +515,16 @@ impl PistonBehavior {
 
         let mut written: Vec<BlockPos> = Vec::new();
 
-        // The base itself: always re-affirmed (Context §G already validated it above, in
-        // `on_scheduled_tick`) — see this module's own top-of-file note on why its raw id
-        // never actually changes at M3.
-        let Some(base_state) = ctx.world.get_block(piston_pos) else {
+        // The base itself (Context §G already validated it above, in `on_scheduled_tick`):
+        // own-state writeback (M3 field-report fix, closing this module's own top-of-file
+        // "further deviation" note) -- writes the real `EXTENDED=true` id (`piston_state_id`)
+        // instead of re-affirming the base unchanged.
+        if ctx.world.get_block(piston_pos).is_none() {
             return;
-        };
-        ctx.world.set_block(piston_pos, base_state);
+        }
+        let sticky = self.is_sticky(piston_pos);
+        ctx.world
+            .set_block(piston_pos, piston_state_id(sticky, true, push_direction));
         written.push(piston_pos);
 
         // One write per chain element (index 0 = piston_pos itself, producing piston_head;
@@ -551,10 +602,15 @@ impl PistonBehavior {
             written.push(p);
         }
 
-        let Some(base_state) = ctx.world.get_block(piston_pos) else {
+        // Own-state writeback (M3 field-report fix): writes the real `EXTENDED=false` id
+        // (`piston_state_id`) instead of re-affirming the base unchanged, mirroring
+        // `commit_extend`'s own identical treatment.
+        if ctx.world.get_block(piston_pos).is_none() {
             return;
-        };
-        ctx.world.set_block(piston_pos, base_state);
+        }
+        let sticky = self.is_sticky(piston_pos);
+        ctx.world
+            .set_block(piston_pos, piston_state_id(sticky, false, push_direction));
         written.push(piston_pos);
 
         // M3 field-report fix, mirroring `commit_extend`'s own identical note: `old_head`
