@@ -413,6 +413,94 @@ Entries name the milestone that surfaced them and the code they concern.
   Not attempted (no fix possible without guessing which of the many
   candidate trigger-context rules is correct).
 
+- **Stage 7 (block-entity ticking) has no path to trigger a Stage-4 redstone
+  re-evaluation when a tier-1 container's contents change — the real vanilla
+  mechanism a container mutation uses to refresh an adjacent comparator
+  (`BlockEntity.setChanged(Level, BlockPos, BlockState)`'s own
+  `Level.updateNeighbourForOutputSignal` call, referenced only indirectly by
+  `08-redstone-ticking.md`'s comparator `getInputSignal`/`hasAnalogOutputSignal`
+  passage, never itself documented in the research corpus) has no counterpart
+  anywhere in `rc-mechanics`.** Surfaced wiring the three container-comparator
+  parity fixtures (`redstone/clock/comparator_clock_container_fill`,
+  `redstone/clock/hopper_clock_basic`,
+  `redstone/comparator/comparator_container_fullness_chest`) into the M3-B07
+  replay path (`crates/testing/gametest/src/replay.rs`): `replay_contraption`
+  now runs M3-B06's own `stage7::run_block_entity_tick` every tick, strictly
+  after Stage 4 (`DISPATCH_ORDER`, `crates/scheduler/src/executor.rs`, matches
+  vanilla's own per-tick stage ordering), against a real `Tier1
+  ContainerSignalSource` shared with `ComparatorBehavior` — replacing the
+  former `NoContainers` placeholder — and seeds hopper/chest block entities
+  from the fixtures' own inline `Items:[...]` `/setblock` NBT. This wiring is
+  independently confirmed correct and functioning: a scratch probe of
+  `comparator_clock_container_fill` mid-replay shows `Tier1
+  ContainerSignalSource` correctly recording the chest's own rising fullness
+  (`Some(1)`, matching `comparator_signal_from_slots`'s own hand-computed
+  value for a single 1-count-of-64 slot in a 27-slot chest) and the hopper's
+  own draining fullness (`Some(3)`, matching a 63-of-64 stack in one of 5
+  slots) after the first hopper→chest transfer. But `BlockEntityWorldAccess`
+  (`crates/mechanics/src/block_entity/mod.rs`) exposes no
+  `NeighborUpdateEngine`/`ScheduledTickQueue` handle at all — Stage 7 can
+  record a container's new signal into the cache, but has no way to tell
+  Stage 4 "re-run `on_neighbor_changed` at the comparator reading this
+  position" the way vanilla's container mutation path does. Concretely: a
+  comparator only ever recomputes its `get_input_signal` reading in response
+  to an actual `PendingUpdate::NeighborChanged` dispatch, and the only
+  dispatches this replay (or the real production Stage 4) ever produces
+  originate from a *block placement* cascade — never from a container's
+  Stage-7-computed signal changing on a later tick. Both `redstone/clock/
+  comparator_clock_container_fill` and `redstone/clock/hopper_clock_basic`
+  remain failing for exactly this reason: their comparators evaluate once, at
+  initial placement (before Stage 7 has ever run, so the container reads as
+  absent and falls back to a 0 base-diode input), then never re-evaluate for
+  the rest of the run, regardless of how the container's real contents change
+  afterward. `redstone/comparator/comparator_container_fullness_chest` is
+  unaffected by (and does not exercise) this gap: its comparator has no floor
+  support in its own fixture geometry and is destroyed to air by the M3
+  field-report floor-support-loss check (`ComparatorBehavior::on_placed`) at
+  placement time, before container timing could ever matter — it already
+  passed before this wiring and still passes after it, unchanged. Needs a
+  decision on how Stage 7 should notify Stage 4 of a container-fullness
+  change (e.g. widening `BlockEntityWorldAccess` with a neighbor-notify hook
+  `run_block_entity_tick` calls whenever `container_signals.record`'s new
+  value differs from the previous one, mirroring `notify_neighbor_changed_
+  only`'s own cross-region-aware shape) — a real `rc-mechanics` feature
+  addition, out of this replay-only governance fix's own scope.
+
+- **`redstone/clock/comparator_clock_container_fill`'s own oracle trace shows
+  its subtract-mode comparator permanently powered from tick 1 onward — a
+  result that looks irreconcilable with this project's own container-fullness
+  formula and torch semantics even setting the notify gap above aside, and
+  needs real-oracle research before any fix is attempted.** The fixture's
+  comparator (`facing=north, mode=subtract`) reads the chest below it as
+  `input` and a lit floor `redstone_torch` directly beside it (west,
+  perpendicular to `facing`) as `side`. `TorchBehavior::weak_signal_toward`
+  (`crates/mechanics/src/redstone/torch.rs`) unconditionally returns `15` for
+  any direction other than the torch's own attachment face, so `side_input_
+  signal` reads a constant `15` for the whole 40-tick run (independently
+  re-derived from the code three times during this pass; not in doubt). But
+  `comparator_signal_from_slots`'s own MECH-D13/D48 formula divides by the
+  container's *total* slot count, not the occupied count — for a chest (27
+  slots) with only ever one slot holding any redstone (the hopper feeds a
+  single accumulating stack, never spreading to a second slot within this
+  fixture's own 40-tick window), the resulting signal is mathematically fixed
+  at exactly `1` for any count `1..=64` in that one slot (`floor((1/64/27) *
+  14) + 1 == floor((64/64/27) * 14) + 1 == 1`), confirmed empirically by the
+  scratch probe above. `ComparatorBehavior::should_turn_on` requires
+  `input > side` in subtract mode — `1 > 15` is false, so this comparator
+  cannot legitimately turn on under either formula as currently understood,
+  regardless of the missing-notify gap above ever being fixed. The oracle
+  trace (re-fetched today via `fetch-corpus`, `format_version`-current, not a
+  stale artifact) nonetheless shows it powered (`state_id 11265`) at every
+  tick from 1 through 40. Left unresolved: either the container-fullness
+  formula has a special case this project's own restatement of MECH-D48
+  misses, or a lit floor redstone torch's real weak-signal contribution to an
+  adjacent comparator's side input is not the unconditional `15` this
+  codebase assumes, or something about this fixture's own real capture
+  differs from what its `.ron` describes. `redstone/clock/hopper_clock_basic`
+  has no such second issue (its comparator's side reads a plain `0` — no
+  adjacent signal source in that fixture at all) — once the notify gap above
+  is closed, that fixture should resolve on its own; this one may not.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
