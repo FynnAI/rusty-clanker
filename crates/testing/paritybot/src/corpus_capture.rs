@@ -35,11 +35,13 @@ use crate::packet_capture::BlockSnapshotView;
 const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Vanilla's own air state id — every corpus site is guaranteed air immediately
-/// after `tp` and before this contraption's own first `/setblock` (either never
-/// touched before, or left that way by the *previous* attempt at this same
-/// `world_origin_for` slot's own Step 10 cleanup, which now runs unconditionally —
-/// see `capture_contraption`). Used as the known-good target for the post-`tp`
-/// settle wait below, not merely a magic number.
+/// after `tp` and before this contraption's own first `/setblock`: this same
+/// attempt's own unconditional pre-settle-wait `fill ... air` wipe (`capture_
+/// contraption_body`) guarantees it fresh regardless of what a *previous* attempt at
+/// this `world_origin_for` slot left behind, on top of that previous attempt's own
+/// Step 10 cleanup already running unconditionally (see `capture_contraption`). Used
+/// as the known-good target for the post-`tp` settle wait below, not merely a magic
+/// number.
 const AIR_STATE_ID: u32 = 0;
 /// The whole-corpus-run bot's offline account name — a single source of truth shared
 /// by both `run_full_corpus_capture`'s own `connect_and_observe` call and
@@ -111,6 +113,41 @@ async fn wait_for_state_id(
 
 fn world_pos(origin: (i32, i32, i32), rel: (i32, i32, i32)) -> (i32, i32, i32) {
     (origin.0 + rel.0, origin.1 + rel.1, origin.2 + rel.2)
+}
+
+/// Margin added on every side of a contraption's own declared `bounding_box` before
+/// wiping/settle-checking/cleaning its `world_origin_for` slot (governance fix,
+/// idempotent-capture hardening). `bounding_box` only spans `PlacedBlock`/
+/// `ScriptedAction` *positions* — never a derived physical effect a spec never
+/// declares, e.g. a piston's own extended head/pushed-block resting cell one block
+/// past the piston itself. Any such effect left standing past this same capture's own
+/// (previously unpadded) `fill ... air` cleanup would sit outside every future
+/// capture's own settle-wait check too, surfacing only as an unrelated, confusing
+/// "residual content" failure on whichever contraption's slot it happened to land in
+/// next (`docs/findings-for-planning.md`'s own untraced `update_order_mc11193_style_
+/// staleness` residue finding). Only `world_origin_for`'s own `x` axis actually varies
+/// between slots (`y`/`z` are the same fixed baseline for every index), and 64-per-
+/// index spacing "far exceeds tier-1's largest possible footprint" by that function's
+/// own doc comment — `8` blocks of margin is generous for any real overshoot while
+/// staying nowhere near half that spacing.
+const SLOT_PADDING: i32 = 8;
+
+fn pad_bounds(
+    bounds_min: (i32, i32, i32),
+    bounds_max: (i32, i32, i32),
+) -> ((i32, i32, i32), (i32, i32, i32)) {
+    (
+        (
+            bounds_min.0 - SLOT_PADDING,
+            bounds_min.1 - SLOT_PADDING,
+            bounds_min.2 - SLOT_PADDING,
+        ),
+        (
+            bounds_max.0 + SLOT_PADDING,
+            bounds_max.1 + SLOT_PADDING,
+            bounds_max.2 + SLOT_PADDING,
+        ),
+    )
 }
 
 /// `/setblock <world x> <world y> <world z> <vanilla_state>` (blueprint Context,
@@ -249,10 +286,54 @@ async fn capture_contraption_body(
         ),
     )?;
 
-    // Step 6.5 (settle wait): confirm the bot's own world model actually reports
-    // this site as clean before touching it — see `wait_for_site_settled`'s own doc
-    // comment.
-    wait_for_site_settled(view, &spec.id, origin, bounds_min, bounds_max).await?;
+    // Step 6.4/6.5 (unconditional pre-settle wipe + settle wait, governance fix):
+    // clear this slot's own padded footprint *before* ever checking it's clean,
+    // regardless of what a prior attempt — this contraption's own previous run
+    // (verified live: a genuinely interrupted earlier session's own leftover blocks,
+    // matching this exact spec's own declared positions one-for-one, sitting
+    // unremoved at this same `world_origin_for` slot because that earlier process
+    // never reached its own Step 10 cleanup), or (pre-fix) an unrelated contraption
+    // colliding at the same `--only` slot 0 — left behind. Makes every capture
+    // attempt idempotent against world residue instead of merely detecting and
+    // refusing to proceed past it.
+    //
+    // Retried, not fire-and-forget: a `fill` issued immediately after `tp` can itself
+    // fail server-side ("That position is not loaded", observed live) for a chunk the
+    // teleport's own synchronous force-load hasn't finished settling for yet — a
+    // one-shot wipe would then leave real residue standing and `wait_for_site_
+    // settled` would (correctly) refuse to proceed past it, but *permanently*, since
+    // nothing would ever re-issue the wipe. Re-issuing the padded `fill` before each
+    // settle-wait attempt, up to `WIPE_ATTEMPTS` times, means a transient not-yet-
+    // settled chunk gets a few real chances to load before this contraption's own
+    // capture is abandoned as a genuine defect.
+    const WIPE_ATTEMPTS: u32 = 5;
+    const WIPE_RETRY_BACKOFF: Duration = Duration::from_millis(300);
+    let (padded_min, padded_max) = pad_bounds(bounds_min, bounds_max);
+    let wipe_min = world_pos(origin, padded_min);
+    let wipe_max = world_pos(origin, padded_max);
+    let mut settle_result = Ok(());
+    for attempt in 0..WIPE_ATTEMPTS {
+        send_console_command(
+            handle,
+            &format!(
+                "fill {} {} {} {} {} {} air",
+                wipe_min.0, wipe_min.1, wipe_min.2, wipe_max.0, wipe_max.1, wipe_max.2
+            ),
+        )?;
+        // Deliberately the narrow declared bounding box, not the padded region the
+        // wipe above targeted: it's the only region the rest of this function ever
+        // reads through `view`, and (verified live) client-side tracking of chunks
+        // beyond the teleport's own landing chunk is unreliable under this whole
+        // run's own `tick freeze` — a client-confirmed wait over the wider padded
+        // region timed out even when the `fill` targeting that same region had
+        // already executed.
+        settle_result = wait_for_site_settled(view, &spec.id, origin, bounds_min, bounds_max).await;
+        if settle_result.is_ok() || attempt + 1 == WIPE_ATTEMPTS {
+            break;
+        }
+        tokio::time::sleep(WIPE_RETRY_BACKOFF).await;
+    }
+    settle_result?;
 
     // Step 7: placement, self-validating against the oracle's own observed state id.
     for block in &spec.blocks {
@@ -390,12 +471,18 @@ pub async fn capture_contraption(
     )
     .await;
 
-    // Step 10 (cleanup half): clear this contraption's footprint before the next
-    // `world_origin_for` slot is used — write-and-persist is `run_full_corpus_
+    // Step 10 (cleanup half): clear this contraption's *padded* footprint (same
+    // margin as the pre-settle-wait wipe, `pad_bounds`'s own doc comment) before the
+    // next `world_origin_for` slot is used — write-and-persist is `run_full_corpus_
     // capture`'s own job, not this function's. Runs regardless of `body_result`
-    // (this function's own doc comment).
-    let min_wp = world_pos(origin, bounds_min);
-    let max_wp = world_pos(origin, bounds_max);
+    // (this function's own doc comment). Padded, not just the bare declared bounding
+    // box, so a physical effect this spec never declared (e.g. a piston push landing
+    // one cell past its own footprint) can never survive past this same capture to
+    // dirty a future one — belt-and-braces alongside the pre-settle-wait wipe, which
+    // already makes a future capture idempotent against this one either way.
+    let (padded_min, padded_max) = pad_bounds(bounds_min, bounds_max);
+    let min_wp = world_pos(origin, padded_min);
+    let max_wp = world_pos(origin, padded_max);
     let cleanup_result = send_console_command(
         handle,
         &format!(
@@ -420,16 +507,26 @@ pub async fn capture_contraption(
 
 /// Orchestrates the whole corpus: launches one oracle, connects one bot, applies the
 /// shared gamerule set once, then calls `capture_contraption` once per `specs`
-/// entry (in slice order, using that entry's own index for `world_origin_for`),
-/// writing each result via `rc_gametest::trace::write_trace` to
-/// `corpus_dir.join(&spec.id).join("trace.postcard")` — skipping (not re-capturing)
-/// any contraption whose cached trace's `source_jar_sha1` already matches
-/// `source_jar_sha1` (blueprint Context, "Fixture custody").
+/// entry, using that entry's own explicit, stable `world_origin_for` index — the
+/// entry's real position in the *full* sorted corpus, not merely its position within
+/// this (possibly `--only`-narrowed) slice — writing each result via
+/// `rc_gametest::trace::write_trace` to `corpus_dir.join(&spec.id).join("trace.
+/// postcard")` — skipping (not re-capturing) any contraption whose cached trace's
+/// `source_jar_sha1` already matches `source_jar_sha1` (blueprint Context, "Fixture
+/// custody").
+///
+/// Governance fix: this used to take a bare `&[ContraptionSpec]` and derive each
+/// spec's origin index via `.enumerate()` — correct for a full-corpus run (whose
+/// slice position *is* the real index) but silently wrong for any narrowed slice
+/// (`--only`'s single-element list always enumerated to index 0). Taking the caller-
+/// supplied `(usize, ContraptionSpec)` pairs directly removes that assumption: the
+/// index is now always the contraption's own stable full-run position, however the
+/// caller filtered `specs` to build this slice.
 pub async fn run_full_corpus_capture(
     jar_path: &Path,
     work_dir: &Path,
     corpus_dir: &Path,
-    specs: &[ContraptionSpec],
+    specs: &[(usize, ContraptionSpec)],
     source_jar_sha1: &str,
 ) -> Result<Vec<(String, Result<(), CaptureError>)>, CaptureError> {
     let mut handle = rc_gametest::capture::launch_oracle_server(
@@ -462,7 +559,8 @@ pub async fn run_full_corpus_capture(
     .map_err(|err| CaptureError::BotConnect(err.to_string()))?;
 
     let mut results = Vec::with_capacity(specs.len());
-    for (index, spec) in specs.iter().enumerate() {
+    for (index, spec) in specs.iter() {
+        let index = *index;
         let trace_path = corpus_dir.join(&spec.id).join("trace.postcard");
         if let Ok(Some(cached)) = read_trace_if_current(&trace_path)
             && cached.source_jar_sha1 == source_jar_sha1

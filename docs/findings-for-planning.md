@@ -122,6 +122,33 @@ Entries name the milestone that surfaced them and the code they concern.
   `fill`-based reset step ahead of every capture attempt regardless of
   believed-clean state.
 
+  **(Update, this milestone's own slot-bug governance fix: root-caused and
+  resolved.)** Live packet-level visibility (a temporary column-scan probe
+  through `BlockSnapshotView::state_id_at`, since removed) showed the residue
+  precisely: world `y=4` held `minecraft:stone` (this spec's own `(0, 0, 0)`
+  block) and `y=5` directly above it held `redstone_wire` state `5171` (this
+  spec's own `(0, 1, 0)` block, isolated/no-connections id) — an exact,
+  one-for-one match for this spec's own declared blocks, i.e. genuine leftover
+  from an *earlier* capture attempt at this same `world_origin_for` slot that
+  never reached its own Step 10 cleanup (killed externally — a Bash-tool
+  timeout or an interrupted session — bypassing `OracleServerHandle`'s
+  `Drop`-based teardown same as the "zombie oracle process" finding below).
+  Fixed generically, not fixture-specifically: `capture_contraption_body` now
+  issues an unconditional, *retried* `fill ... air` wipe over a padded
+  bounding box immediately after `tp` and before `wait_for_site_settled`, so
+  every capture attempt is idempotent against whatever a previous attempt
+  (however it ended) left behind, regardless of root cause. A single-shot wipe
+  was insufficient on its own — live-verified, a `fill` issued immediately
+  after `tp` can itself fail server-side (`"That position is not loaded"`) for
+  a chunk the teleport's own force-load hasn't settled for yet — so the wipe
+  is retried (up to 5 attempts, 300 ms backoff) alongside the existing settle
+  wait rather than fired once and trusted. Verified against the real oracle:
+  `fetch-corpus --only redstone/update_order/update_order_mc11193_style_
+  staleness` now captures cleanly and repeatably (confirmed across 2
+  consecutive runs) once its own stale placement id (declared `4738`, real
+  oracle observes `5171` at `(0, 1, 0)` — a `test-authoring` fix, not this
+  entry's own concern) was also corrected.
+
 - **`xtask fetch-corpus --only <id>` reuses `world_origin_for(0)` for every
   invocation, regardless of `<id>`'s real position in the corpus.**
   `fetch_corpus_runner`'s own `main` (`crates/testing/paritybot/src/bin/
@@ -138,6 +165,18 @@ Entries name the milestone that surfaced them and the code they concern.
   shortcut). Not fixed here (out of this changeset's own scope) — needs
   `fetch_corpus_runner`'s own `main` to look up the real index in the full
   sorted list before filtering, not after.
+
+  **(Update, this milestone's own slot-bug governance fix: resolved.)**
+  `fetch_corpus_runner`'s own `main` now loads every `.ron` file's spec into
+  one full sorted list first, `.enumerate()`s *that* to pair each spec with
+  its own stable full-run index, and only *then* filters down to `only` (if
+  given) — `run_full_corpus_capture`'s own signature changed from a bare
+  `&[ContraptionSpec]` to `&[(usize, ContraptionSpec)]` to carry that real
+  index explicitly through the whole call chain instead of re-deriving it via
+  a second `.enumerate()` over a possibly-narrowed slice. Verified against the
+  real oracle: `fetch-corpus --only redstone/pulse/torch_inverter_basic`
+  (real full-run index 38) now correctly teleports to `world_origin_for(38)`
+  (`(2432, 4, 0)`), not `(0, 4, 0)`.
 
 - **`redstone/clock/torch_clock_classic`'s three-torch ring shows zero
   state-id changes across all 40 ticks in the freshly re-captured (not stale)
@@ -689,6 +728,78 @@ Entries name the milestone that surfaced them and the code they concern.
   diagnosed further within this pass's own scope (would need real-oracle
   packet-level timing data on the hopper's own per-tick fullness sequence to
   pin down safely); recorded as a residual rather than forced.
+
+- **`xtask fetch-corpus`'s own `tick freeze` and all four `gamerule ...`
+  console commands fail silently every single run — the oracle's own console
+  logs `An unexpected error occurred while trying to execute that command` /
+  `Incorrect argument for command` for every one of them, every session,
+  confirmed across every server log this milestone's own governance pass
+  captured — while `tick step 1` (issued later, same `tick` command family)
+  succeeds cleanly every time (`Stepping 1 tick(s)` feedback).** Net effect:
+  the oracle world is never actually frozen and `randomTickSpeed`/
+  `doMobSpawning`/`doDaylightCycle`/`doWeatherCycle` are never actually
+  changed from their vanilla defaults during capture — it ticks in real time
+  throughout the whole capture pipeline, `tick step 1` just adds *extra*
+  ticks on top of whatever real time already elapsed between commands.
+  Directly verified as the cause of genuine, reproducible non-determinism:
+  capturing each of `basic_piston_door_2x1`, `piston_retract_pull_sticky_vs_
+  normal`, and `piston_extend_block_event_same_tick_chain` three times back-
+  to-back (this milestone's own governance idempotency fix applied first, so
+  each capture is a real, independent attempt, not a cache hit) produced
+  three different `trace.postcard` file sizes and three different SHA-256
+  hashes for every one of the three fixtures — never bit-identical. A tick-
+  by-tick diff between repeat captures of the same fixture shows the *same
+  declared tick number* holding a *different piston animation phase* between
+  runs (e.g. `basic_piston_door_2x1` tick 2 at `(1, 1, 0)`: one capture shows
+  the piston head already extended, `state_id 2275`; another shows it still
+  retracted, `state_id 1`) — exactly the signature of real-wall-clock tick
+  drift, not a capture-order or placement race. `piston_retract_pull_sticky_
+  vs_normal` shows the same class of divergence at **tick 0**, before any
+  `tick step 1` has even been issued, meaning a piston can already be mid-
+  animation by the time the tick-0 snapshot is taken. Because the oracle
+  traces are themselves this unstable, `xtask parity-check redstone`'s own
+  diffs against them for these three fixtures (5, 12, and 13 mismatches
+  respectively, all clustered on piston extend/retract timing at the exact
+  positions the repeat-capture diff above already flags as unstable) cannot
+  be trusted as evidence of a real engine defect versus oracle-side capture
+  jitter — a meaningful piston-parity verdict needs `tick freeze` genuinely
+  working first. Root cause (why the exact syntax fails) not diagnosed
+  further here — needs either the correct `tick freeze`/`gamerule` invocation
+  syntax for this pinned build (`tick freeze` may need an explicit argument
+  in 26.2, unlike the historical no-argument form; the four `gamerule` calls'
+  own well-established two-token syntax failing identically suggests a
+  broader console-command-parsing regression in this specific build rather
+  than four independent syntax changes) or a different mechanism entirely for
+  pinning the oracle's own tick rate during capture. Out of this changeset's
+  own scope (a `fix`/`governance` changeset touching `corpus_capture.rs`
+  again for a capture-determinism concern unrelated to the slot-residue bug
+  it was scoped to) — left for a dedicated follow-up.
+
+- **A zombie oracle `server.jar` process from an earlier, externally-
+  interrupted `fetch-corpus` invocation can keep listening on port 25566
+  indefinitely, silently absorbing every subsequent run's bot connection
+  while that run's own freshly-spawned `java` child (which fails to bind the
+  already-held port and exits quickly) never receives any of the real console
+  commands sent to its own dead stdin pipe.** `launch_oracle_server`'s own
+  readiness poll only checks `TcpStream::connect` succeeding — against
+  *whichever* process is listening, not necessarily the one it just spawned —
+  so a stale process from a session killed hard enough to bypass
+  `OracleServerHandle`'s `Drop`-based teardown (a Bash-tool timeout sending a
+  forceful kill, not a graceful process exit) leaves every later invocation
+  silently talking to nothing: the bot connects and disconnects a few seconds
+  later once the *new* (command-blind) process's own `OracleServerHandle` is
+  dropped, and every capture in between fails in ways that look like real
+  capture-pipeline bugs (this milestone's own governance pass initially
+  mis-diagnosed several hours of exactly this as a settle-wait/chunk-loading
+  defect before finding the actual zombie `java.exe` via `Get-Process java`).
+  Not fixed here — `launch_oracle_server` has no way to distinguish "the port
+  I expect is already bound by a leftover process" from "my own child is
+  ready" without a stronger readiness signal (e.g. a marker written only by
+  *this* child's own stdout, which is currently discarded via `Stdio::null()`
+  entirely) — recorded so a future session burns less time on the same
+  misdiagnosis; local mitigation is simply checking `Get-Process java` (or
+  the Unix equivalent) before trusting any `fetch-corpus` failure as a real
+  capture-pipeline defect.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 

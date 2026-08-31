@@ -40,6 +40,53 @@ pub enum CaptureError {
         contraption_id: String,
         pos: (i32, i32, i32),
     },
+    #[error("{0}")]
+    JavaNotFound(String),
+}
+
+/// Resolves the `java` executable used to launch the oracle server, trying (in
+/// order): `$JAVA_HOME/bin/java[.exe]`, this project's own pinned Adoptium 25
+/// install, then a bare `java` looked up on `$PATH`. Governance fix: a prior
+/// debugging session's `Command::new("java")` let the *shell's* own `PATH`
+/// resolution pick whichever `java` happened to come first — silently launching
+/// a different JVM (or none) than the one this project's oracle tooling is
+/// pinned to, diagnosed only much later as an opaque `OracleStartupTimeout`.
+/// Explicit resolution here fails loudly instead, naming every candidate path
+/// it tried.
+fn resolve_java_binary() -> Result<std::path::PathBuf, String> {
+    let exe_name = if cfg!(windows) { "java.exe" } else { "java" };
+    let mut tried = Vec::new();
+
+    if let Some(java_home) = std::env::var_os("JAVA_HOME") {
+        let candidate = Path::new(&java_home).join("bin").join(exe_name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        tried.push(format!("{} (from JAVA_HOME)", candidate.display()));
+    }
+
+    let pinned = std::path::PathBuf::from(
+        r"C:\Program Files\Eclipse Adoptium\jdk-25.0.4.7-hotspot\bin\java.exe",
+    );
+    if pinned.is_file() {
+        return Ok(pinned);
+    }
+    tried.push(format!("{} (pinned Adoptium install)", pinned.display()));
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(exe_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    tried.push(format!("{exe_name} on PATH"));
+
+    Err(format!(
+        "could not resolve a java executable to launch the oracle server with — tried: {}",
+        tried.join("; ")
+    ))
 }
 
 /// An owned, running oracle `server.jar` subprocess. `Drop` kills it unconditionally
@@ -62,9 +109,10 @@ impl Drop for OracleServerHandle {
 }
 
 /// Writes `eula.txt`/`server.properties` into `work_dir` (blueprint Context, "Capture
-/// pipeline" step 2's exact property list), spawns `java -jar <jar_path> nogui` with
-/// piped stdin and `work_dir` as the current directory, polls a raw TCP connect
-/// against `port` until one succeeds or `startup_timeout` elapses.
+/// pipeline" step 2's exact property list), spawns `<resolved java> -jar <jar_path>
+/// nogui` (see `resolve_java_binary`) with piped stdin and `work_dir` as the current
+/// directory, polls a raw TCP connect against `port` until one succeeds or
+/// `startup_timeout` elapses.
 pub fn launch_oracle_server(
     jar_path: &Path,
     work_dir: &Path,
@@ -84,7 +132,8 @@ pub fn launch_oracle_server(
     );
     std::fs::write(work_dir.join("server.properties"), properties)?;
 
-    let mut child = Command::new("java")
+    let java_bin = resolve_java_binary().map_err(CaptureError::JavaNotFound)?;
+    let mut child = Command::new(java_bin)
         .arg("-jar")
         .arg(jar_path)
         .arg("nogui")

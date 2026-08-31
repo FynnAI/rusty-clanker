@@ -78,14 +78,21 @@ async fn main() -> std::process::ExitCode {
         .collect();
     ron_paths.sort();
 
-    let mut specs = Vec::with_capacity(ron_paths.len());
+    // Governance fix: load every spec in the full sorted corpus first, so each one's
+    // `world_origin_for` index is its own stable position in the *whole* list — then
+    // filter to `only` afterward. The previous code filtered *while* loading (pushing
+    // straight into a single, already-narrowed `Vec`), so a single-fixture `--only`
+    // run always drove `run_full_corpus_capture`'s own `.enumerate()` from index 0,
+    // regardless of the named contraption's real position in the corpus — colliding
+    // with whatever full-run index-0 slot (`world_origin_for(0)`) held, including
+    // that slot's own real occupant's un-fillable-by-bounding-box residue (see
+    // `corpus_capture::capture_contraption`'s own pre-settle-wait wipe, this same
+    // changeset). `specs` below is `(real_index, spec)` pairs, never a bare `Vec
+    // <ContraptionSpec>` re-enumerated from zero.
+    let mut all_specs = Vec::with_capacity(ron_paths.len());
     for path in &ron_paths {
         match load_spec(path) {
-            Ok(spec) => {
-                if only.as_deref().is_none_or(|id| id == spec.id) {
-                    specs.push(spec);
-                }
-            }
+            Ok(spec) => all_specs.push(spec),
             Err(err) => {
                 println!("RESULT=ERROR");
                 println!(
@@ -96,6 +103,11 @@ async fn main() -> std::process::ExitCode {
             }
         }
     }
+    let specs: Vec<(usize, rc_gametest::spec::ContraptionSpec)> = all_specs
+        .into_iter()
+        .enumerate()
+        .filter(|(_, spec)| only.as_deref().is_none_or(|id| id == spec.id))
+        .collect();
 
     // Every azalea-driven task this run spawns (`corpus_capture::run_full_corpus_
     // capture` -> `packet_capture::connect_and_observe` -> `ClientBuilder::start`)
