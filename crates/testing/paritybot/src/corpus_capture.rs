@@ -57,7 +57,19 @@ const CORPUS_BOT_NAME: &str = "rc_corpus_bot";
 /// limits": "≤50 ms per step including the snapshot read" is the *budget*, not a
 /// hard wait — this is simply how long this module gives the oracle's own tick and
 /// the resulting packets time to land before reading the snapshot).
-const TICK_STEP_SETTLE: Duration = Duration::from_millis(50);
+///
+/// M3 field-report fix (Section E, recapture-stability mitigation): tightened from
+/// the former `50ms` — the oracle's own block-entity ticking (piston animations
+/// included) advances on real wall-clock even under `tick freeze`, so every extra
+/// millisecond this module spends between consecutive `tick step 1` commands lets
+/// an in-flight piston animation age invisibly, independent of the logical tick
+/// count the capture is trying to pin. `20ms` (matching `OBSERVATION_POLL_INTERVAL`,
+/// itself already tuned for this same local-server round-trip) is still generous
+/// for a local oracle process's own step-plus-packet-delivery latency; a genuinely
+/// slow step just means the next tick's own placement-confirmation poll (`wait_for_
+/// state_id`, up to `OBSERVATION_TIMEOUT`) absorbs the rest, exactly as it already
+/// does for a slow placement.
+const TICK_STEP_SETTLE: Duration = Duration::from_millis(20);
 
 /// Polls `view` for `pos`'s state id until it matches `expected` or `OBSERVATION_
 /// TIMEOUT` elapses, returning whatever was last observed either way (`None` only
