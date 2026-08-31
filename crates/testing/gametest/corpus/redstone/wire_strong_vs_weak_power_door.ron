@@ -19,7 +19,7 @@ ContraptionSpec(
         (pos: (10, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (10, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (11, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (11, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (11, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4737),
         (pos: (9, 1, 0), vanilla_state: "minecraft:redstone_wall_torch[facing=west,lit=true]", state_id: 6891),
     ],
     actions: [

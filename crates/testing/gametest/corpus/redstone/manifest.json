@@ -28,7 +28,7 @@
     },
     {
       "path": "comparator_compare_vs_subtract.ron",
-      "sha256": "2832f6572d405ff584363a8d9ebe8915815304e3f670a0ae0828f7c0b0828303",
+      "sha256": "89145cd6c1ae0ce93c65d644e91047564cc741b33cf4ad7e7d3b0c5a6aa6f96a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -76,7 +76,7 @@
     },
     {
       "path": "comparator_wire_signal_read.ron",
-      "sha256": "7e3a0a47d0bc7ded88827ef277e2f83b3393a70baf034b1fe4d1702104280266",
+      "sha256": "b05984b94689bc6fd766b2368cef18d0a23c8f927115ca8fcb0e955d3707e0d6",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -250,13 +250,13 @@
     },
     {
       "path": "update_order_classic_wire_full_replot.ron",
-      "sha256": "ecf1ef8895aa0f515a0acd7966ff99382456677830e61692aa11eb4c3704b3cf",
+      "sha256": "09c743fba6d742da2ab1440a68606cfc43bb80d9ebcebd4105ae0522d199e655",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_mc11193_style_staleness.ron",
-      "sha256": "73a528df74da404904d10933e5f864983bd255946775c9549344bff28baeaa89",
+      "sha256": "d3c9ae41edd5d8ea7e9524e0ea5ee86d4c10a4a0e4dd094d3fff709adadf8a2f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -280,13 +280,13 @@
     },
     {
       "path": "wire_climbs_conductor_step_up_down.ron",
-      "sha256": "1743fff69d4529c2b844f24c9e5c49ad2e6b94c5fc267349a071976fb14fbf09",
+      "sha256": "c1458baee7bec3fad3cbcada2be723cd60537b6f45e8d079c64d89a5b775fcb9",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_cross_shape_connectivity.ron",
-      "sha256": "fb91de944146a96057a44e84439500abb5c6c93778858b7bd29aed61086f2f6a",
+      "sha256": "d7b288a198026ed546514e892e2fd9162ffe2aa017181a347d7f854be3966dbc",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -298,7 +298,7 @@
     },
     {
       "path": "wire_strong_vs_weak_power_door.ron",
-      "sha256": "512194eb11270ced789deca904006d7d116594ed5d23b43027d6c45d6613cbbc",
+      "sha256": "300e028eb67825d48892b5ec7a2a1adf59528bc9c60cdcf15fd3c46efdc90af1",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },

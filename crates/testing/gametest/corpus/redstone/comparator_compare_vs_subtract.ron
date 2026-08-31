@@ -17,7 +17,7 @@ ContraptionSpec(
         (pos: (-1, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4873),
-        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4717),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4721),
     ],
     actions: [
         (tick: 6, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 11266),

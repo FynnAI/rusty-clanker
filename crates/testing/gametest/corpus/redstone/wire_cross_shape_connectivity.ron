@@ -17,7 +17,7 @@ ContraptionSpec(
         (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4864),
         (pos: (2, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4708),
+        (pos: (2, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5143),
         (pos: (2, 0, 2), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (2, 1, 2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4699),
     ],
