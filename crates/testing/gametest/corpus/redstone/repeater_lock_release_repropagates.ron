@@ -12,7 +12,7 @@ ContraptionSpec(
         (pos: (1, 1, 0), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=true]", state_id: 7048),
         (pos: (2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
     ],
     actions: [
         (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),

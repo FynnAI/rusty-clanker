@@ -29,8 +29,25 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## A. Open questions needing a decision
 
-*(none pending — last review 2026-08-28 resolved all entries into MECH-D76–D81,
-WS-D15, TEST-D54–D57 and PLAN-D9)*
+- **`redstone/qc/qc_piston_top_side_signal` (M3-B07 corpus, content-plan entry
+  #38) has a geometry defect its own documented intent can't be resolved
+  without a real redesign.** Its probe wire at `(0, 2, -1)` sits directly on
+  top of nothing — `(0, 1, -1)` is never placed — so the wire self-destructs
+  back to air the instant it's `/setblock`'d (`xtask fetch-corpus`'s own
+  self-diagnosing check: `RON declares 5171, oracle observed 0`). The obvious
+  fix (place a stone floor at `(0, 1, -1)`) can't be applied blindly: that cell
+  is a horizontal neighbor of the piston at `(0, 1, 0)`, so a solid block there
+  would touch the piston directly — defeating this spec's own stated premise
+  ("nothing ever touches the piston itself directly"), which is exactly the
+  isolation the QC (quasi-connectivity) mechanism under test depends on. A
+  correct fix needs to route the wire's own support around the piston's y=1
+  footprint (e.g. extend the top-of-piston platform sideways at y=2 before
+  dropping the wire's floor, so the floor lands two cells out rather than one)
+  without changing which specific block the wire is described as touching —
+  a real content decision, not a numeric or ordering fix. Left with the wire's
+  state_id at its pre-existing placeholder value; `xtask fetch-corpus` will
+  keep failing this one case until content-plan/blueprint authorship revisits
+  the geometry.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 

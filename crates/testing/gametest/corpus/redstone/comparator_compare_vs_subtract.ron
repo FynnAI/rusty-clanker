@@ -9,8 +9,15 @@ ContraptionSpec(
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
-        (pos: (-1, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
-        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        // Field-report fix: redstone_wire self-validates its own floor support
+        // immediately on /setblock placement (unlike comparator/torch, which don't) —
+        // these two floor tiles must precede their wire tiles in list order, or the
+        // wire never actually comes into existence (placement silently reverts to
+        // air).
+        (pos: (-1, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4873),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4717),
     ],
     actions: [
         (tick: 6, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 11266),

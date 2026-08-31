@@ -9,13 +9,17 @@ ContraptionSpec(
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]", state_id: 7037),
         (pos: (0, 1, 1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        // Field-report fix: redstone_wire self-validates its own floor support
+        // immediately on /setblock placement — reordered so both wire tiles' floor
+        // stones precede them (the floors were already present, just listed after
+        // the wire they support, which silently reverted each wire to air).
         (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (0, 2, 1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
         (pos: (10, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (10, 2, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
-        (pos: (11, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (11, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (11, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
         (pos: (9, 1, 0), vanilla_state: "minecraft:redstone_wall_torch[facing=west,lit=true]", state_id: 6891),
     ],
     actions: [

@@ -10,7 +10,7 @@
     },
     {
       "path": "bud_switch_piston_wire.ron",
-      "sha256": "0c74a3dcc5a1cbf966e05f5acdd57a8a348e88bb51d3495d9473f992eceaeba8",
+      "sha256": "d66d764cfd552f13ab9058c6d0155f589ef4067672841ec4348daf9c9b5048c8",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -28,7 +28,7 @@
     },
     {
       "path": "comparator_compare_vs_subtract.ron",
-      "sha256": "1456a09ce151cc5ab7ebb2064a07cf3f89fe6c25eac46190ff25eecae2f15983",
+      "sha256": "2832f6572d405ff584363a8d9ebe8915815304e3f670a0ae0828f7c0b0828303",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -46,25 +46,25 @@
     },
     {
       "path": "comparator_priority_diode_behind.ron",
-      "sha256": "d8648e4fd4c190d50661936911584d97c2dbf9337c0ff43789e13b0c1849884e",
+      "sha256": "d3db227dce4ae214c22ee07ec284cfbf71488957784cd1cdfe047c16c9a919c0",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_side_input_max_of_two.ron",
-      "sha256": "9f4bddcf9b8e863d2e3600a3dead6695c055cb363c67fbccc98942c4d66b28fa",
+      "sha256": "70f970baa325c1306d929ef6cc8a726b79428640eee8128e67b326383983c1e3",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_subtract_analog_probe.ron",
-      "sha256": "fe9ac7e2b671dd7085f8c3b01cce5566e5ae2eef3f12647bb5a49faf5dfcca75",
+      "sha256": "5cd574641775dd595df5d3cacf6ebceab50acaf0115f0c990a5571a92f96708a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_subtract_zero_clamp.ron",
-      "sha256": "8c7020913dbb24a406eb67d1b871e2da18f828cc7f3b4acbef2df76ee7a09194",
+      "sha256": "ed51e5b182dedfe1d3edd8ac5fcfc44e452aa09c667d9eb7ff8badb5efa3414f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -76,7 +76,7 @@
     },
     {
       "path": "comparator_wire_signal_read.ron",
-      "sha256": "c4fbe4b3649ac197a679b9b3b9a2178dbde6dce6989d4f704bd8293a7de299f2",
+      "sha256": "7e3a0a47d0bc7ded88827ef277e2f83b3393a70baf034b1fe4d1702104280266",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -184,13 +184,13 @@
     },
     {
       "path": "repeater_chain_delay_sum_2_4_6_8.ron",
-      "sha256": "38502f20e54c7de2357e149922d48a96987a4bad24a5f86752fbb1b09d1a516f",
+      "sha256": "7cf9371e28163eac133165105c1f73506852ae82bbaf9109b33bba93c3577e81",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "repeater_lock_release_repropagates.ron",
-      "sha256": "39f31fe59ebdf0567cbd8d79e6a9d58ce14671e8ed7f948f520a7aa84d9565ca",
+      "sha256": "902a5dbb477af5e042c883ccff374b4b3405d7ea52458101ead6f74aea991dac",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -202,7 +202,7 @@
     },
     {
       "path": "repeater_pulse_stretch_2tick.ron",
-      "sha256": "cb90edcf435089fe5fb99ba351f0a3d14705d0a06269b8fdd08559bcbf141e1c",
+      "sha256": "1304ebe1a6c97598c93d6f3d16c807f0ed5b52f2da5b0ad73d29c1fe491656d3",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -244,19 +244,19 @@
     },
     {
       "path": "two_torch_and_gate.ron",
-      "sha256": "cc80f552cbbf239945d51583487f71fc925b4c4b12e364aec7f36e6439fb4289",
+      "sha256": "f5068914005f5fca0b73650161480fd40949e30d27407111c363e1512a7d670b",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_classic_wire_full_replot.ron",
-      "sha256": "f41a43735a050fddf98a323a5c3d73193863e9c2bccbd9794ae9aa27533b97bb",
+      "sha256": "ecf1ef8895aa0f515a0acd7966ff99382456677830e61692aa11eb4c3704b3cf",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "update_order_mc11193_style_staleness.ron",
-      "sha256": "3505d20e52d04de756460d10a0450838e0d074f9323f66c84cbf96a8ecae3199",
+      "sha256": "73a528df74da404904d10933e5f864983bd255946775c9549344bff28baeaa89",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -280,25 +280,25 @@
     },
     {
       "path": "wire_climbs_conductor_step_up_down.ron",
-      "sha256": "203999f6a745d560ffb6a96961b7cba5b78af58acbb9abb8b09db44d1c479e6f",
+      "sha256": "1743fff69d4529c2b844f24c9e5c49ad2e6b94c5fc267349a071976fb14fbf09",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_cross_shape_connectivity.ron",
-      "sha256": "ba739a3195e58cbd74fcb426a425285452510a54fdfb7afb2cfd0aa9dcf0054a",
+      "sha256": "fb91de944146a96057a44e84439500abb5c6c93778858b7bd29aed61086f2f6a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_signal_decay_15_chain.ron",
-      "sha256": "67d595aeac044673c611ea5eff62a76f784651c56392cf69f98d54526d3866e9",
+      "sha256": "220f035d0b110e73cf30c0e202742f3f86c1f55927e95bbaa2a1bc7f0e47df3b",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "wire_strong_vs_weak_power_door.ron",
-      "sha256": "177ad9b8721fa5675fb6fe9c7c63c7ea56e14ae7d90f681f7e0e950032d5f30a",
+      "sha256": "512194eb11270ced789deca904006d7d116594ed5d23b43027d6c45d6613cbbc",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },

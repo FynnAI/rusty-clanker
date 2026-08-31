@@ -9,19 +9,29 @@ ContraptionSpec(
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 11266, has_analog_state: true),
         (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
         (pos: (0, 0, -2), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, -2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (0, 1, -2), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
         (pos: (0, 1, -3), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (-2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4873),
         (pos: (-3, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (-3, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (-3, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4864),
         (pos: (-4, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
     ],
     actions: [
-        (tick: 6, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        // Field-report fix: this action is never live-validated by fetch-corpus (only
+        // `blocks:` entries are), so its state_id is resolved by hand instead of
+        // against an oracle observation: by tick 6 the (-4,1,0)->(-3,1,0)->(-2,1,0)
+        // chain has fully settled to power=15 at both wire tiles (each directly
+        // touches a redstone_block on one side), so replacing the (-1,1,0)
+        // redstone_block with this wire leaves it fed only by the now-14-then-
+        // decaying chain -- matching the spec's own documented target, "weakened...
+        // to a value below the rear (13)" (line 5 above). Shape is the same
+        // east/west-connected, north/south-open family as every other tile in this
+        // chain (comparator to its east, wire to its west).
+        (tick: 6, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4855),
     ],
 )

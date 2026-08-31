@@ -7,7 +7,12 @@ ContraptionSpec(
     max_ticks: 8,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
-        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        // Field-report fix: redstone_wire self-validates its own floor support
+        // immediately on /setblock placement (unlike comparator, which doesn't) — this
+        // floor tile must precede the wire in list order, or the wire never actually
+        // comes into existence (placement silently reverts to air).
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
     ],
     actions: [
         (tick: 2, pos: (0, 1, -2), vanilla_state: "minecraft:redstone_block", state_id: 11311),

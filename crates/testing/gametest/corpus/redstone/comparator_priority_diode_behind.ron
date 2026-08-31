@@ -7,6 +7,11 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        // Field-report fix: repeater self-validates its own floor support immediately
+        // on /setblock placement (unlike comparator, which doesn't) — this floor tile
+        // must precede the repeater in list order, or the repeater never actually
+        // comes into existence (placement silently reverts to air).
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, 1), vanilla_state: "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]", state_id: 7037),
     ],
     actions: [
