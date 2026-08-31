@@ -257,6 +257,45 @@ Entries name the milestone that surfaced them and the code they concern.
   will work there too with no further changes. Recorded only so whoever
   closes the composition-root gap knows this piece is already handled.
 
+- **A freshly placed, untriggered wire's connection shape appears to follow
+  vanilla's "straight-line/full-cross" auto-connect default (this same M3
+  field-report fix wave's `compute_connection_shapes` addition, Task 1) in
+  some real-oracle-captured fixtures but not others, and the distinguishing
+  factor could not be pinned down — a real research gap, not a guess this
+  pass could resolve safely.** Attempted a placement-time self-recompute fix
+  (`WireBehavior::on_placed`, mirroring `RepeaterBehavior`'s/
+  `ComparatorBehavior`'s own established `on_placed` re-seeding pattern) so a
+  wire's own connections resolve immediately on `/setblock`, matching real
+  vanilla's own `getStateForPlacement` — this closed
+  `redstone/qc/wire_strong_vs_weak_power_door`'s own `(10,2,0)` (tick 0-2,
+  genuinely isolated at placement, oracle-observed `4738`: `east=side,
+  west=side`, matching the straight-line default) but broke a previously
+  *passing* fixture, `redstone/pulse/pulse_repeater_side_input_wire_ignored`
+  (its own `(-1,1,0)`, also genuinely isolated at placement — nothing
+  touches it in any direction until a later action — but the oracle shows it
+  staying at the bare, unconnected placement default `5171` through tick 1,
+  contradicting the straight-line rule). A third position,
+  `redstone/qc/wire_strong_vs_weak_power_door`'s own `(1,1,1)`, is *also*
+  genuinely isolated (a plain, non-signal-source stone conductor sits on its
+  only occupied side) and *also* never retriggered before the point its own
+  mismatch is observed, and *also* stays at the bare default — matching
+  `pulse_repeater_side_input_wire_ignored`'s pattern, not `(10,2,0)`'s.
+  Every geometric distinction this pass could construct between `(10,2,0)`
+  (gets the auto-connect) and the other two (don't) failed to hold — the
+  leading candidate, "does the untriggered position have a solid block
+  (even non-connecting) occupying at least one of its four horizontal
+  neighbors," is directly contradicted by `wire_climbs_conductor_step_up_
+  down`'s own `(4,1,0)` (Section C's own entry below), which *does* have an
+  occupied, non-connecting neighbor (its own West, a plain stone step) yet
+  *does* show the full auto-cross once genuinely triggered (post-tick-4).
+  Reverted the `on_placed` attempt in full (per this fix's own "never trade
+  passes" governing instruction) rather than ship it with a known
+  regression. Needs a live-oracle debugging session (packet-level
+  visibility into exactly what `getStateForPlacement`/`updateShape` compute
+  and when, for these specific geometries) or a decision that this
+  particular tick-0-only mismatch class is out of scope until such research
+  exists — `(10,2,0)`'s own tick 0-2 mismatch is left unresolved either way.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
