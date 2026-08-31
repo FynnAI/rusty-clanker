@@ -147,6 +147,62 @@ fn forget_clears_a_previously_recorded_position() {
     assert_eq!(source.container_signal(pos), None);
 }
 
+/// Section C (M3 field-report fix): a position's *first-ever* `record` counts as a change --
+/// vanilla's own `BlockEntity.setChanged -> updateNeighbourForOutputSignal` fires the instant a
+/// container's contents first become observable too (`docs/findings-for-planning.md`'s own
+/// "Stage7->Stage4 container notify" entry).
+#[test]
+fn first_record_at_a_position_counts_as_changed() {
+    let source = Tier1ContainerSignalSource::new();
+    let pos = BlockPos::new(1, 2, 3);
+
+    source.record(pos, 0);
+
+    assert_eq!(source.take_changed(), vec![pos]);
+}
+
+/// A `record` call with the *same* signal value as last time is not a real content change --
+/// mirrors vanilla's own `setChanged` being called unconditionally by every `getItems()` mutator
+/// even when the net result is unchanged, while the actual comparator re-evaluation this drives
+/// only matters when the analog value itself moved.
+#[test]
+fn record_with_an_unchanged_signal_is_not_reported_as_changed() {
+    let source = Tier1ContainerSignalSource::new();
+    let pos = BlockPos::new(1, 2, 3);
+
+    source.record(pos, 5);
+    source.take_changed(); // drain the initial change.
+
+    source.record(pos, 5); // same value again.
+
+    assert_eq!(source.take_changed(), Vec::<BlockPos>::new());
+}
+
+/// A `record` call with a genuinely different signal value is reported as changed.
+#[test]
+fn record_with_a_different_signal_is_reported_as_changed() {
+    let source = Tier1ContainerSignalSource::new();
+    let pos = BlockPos::new(1, 2, 3);
+
+    source.record(pos, 5);
+    source.take_changed(); // drain the initial change.
+
+    source.record(pos, 6);
+
+    assert_eq!(source.take_changed(), vec![pos]);
+}
+
+/// `take_changed` drains -- a second call with nothing new recorded in between returns empty.
+#[test]
+fn take_changed_drains_and_does_not_repeat() {
+    let source = Tier1ContainerSignalSource::new();
+    let pos = BlockPos::new(1, 2, 3);
+
+    source.record(pos, 5);
+    assert_eq!(source.take_changed(), vec![pos]);
+    assert_eq!(source.take_changed(), Vec::<BlockPos>::new());
+}
+
 #[test]
 fn implements_the_m3_b04_trait_object_unmodified() {
     let concrete = Arc::new(Tier1ContainerSignalSource::new());
