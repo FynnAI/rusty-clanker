@@ -62,6 +62,9 @@ struct ComparatorState {
 /// vanilla stores it in a separate `ComparatorBlockEntity`, out of this changeset's own scope
 /// (Stage-7/block-entity wiring, per the M3 fix-agent brief's own container-case carve-out).
 const COMPARATOR_BASE: u32 = 11263;
+/// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
+/// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
+const AIR_ID: BlockStateId = BlockStateId(0);
 
 fn comparator_state_id(facing: Direction, mode: ComparatorMode, powered: bool) -> BlockStateId {
     let mode_idx = match mode {
@@ -396,6 +399,20 @@ impl BlockBehavior for ComparatorBehavior {
         let rel = current.0.wrapping_sub(COMPARATOR_BASE);
         if rel >= 16 {
             return; // not a real comparator id -- defensive only, dispatch never reaches here otherwise
+        }
+        // M3 field-report fix (Task 3): `DiodeBlock` requires a real conductor directly beneath
+        // it, checked immediately at placement time -- mirrors `WireBehavior::should_pop`'s own
+        // identical `Down`-direction check, but run here (unconditionally, every placement)
+        // rather than only reactively off a later `Down`-direction shape update, since nothing
+        // in this fixture's own geometry ever places anything at the floor position to trigger
+        // a reactive check at all (confirmed empirically: `redstone/comparator/comparator_tie_
+        // no_turn_on`'s own comparator has no floor anywhere in its own `blocks:`/`actions:`
+        // list, ever, and the real oracle shows it destroyed from tick 0, `docs/findings-for-
+        // planning.md`). `is_conductor` on an absent/unloaded floor position already answers
+        // `false` (its own doc comment), so this needs no extra `world.get_block` guard.
+        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
+            ctx.world.set_block(pos, AIR_ID);
+            return;
         }
         let facing = signal::diode_facing_from_index(rel / 4);
         let mode = if (rel % 4) / 2 == 0 {

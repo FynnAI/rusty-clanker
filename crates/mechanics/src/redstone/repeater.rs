@@ -40,6 +40,9 @@ struct RepeaterState {
 /// `id = 7034 + (delay-1)*16 + facing_idx*4 + locked_idx*2 + powered_idx` (`locked_idx`/
 /// `powered_idx`: `true` -> `0`, `false` -> `1`, blocks.json's own listed value order).
 const REPEATER_BASE: u32 = 7034;
+/// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
+/// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
+const AIR_ID: BlockStateId = BlockStateId(0);
 
 fn repeater_state_id(
     delay_setting: u8,
@@ -381,6 +384,13 @@ impl BlockBehavior for RepeaterBehavior {
         let rel = current.0.wrapping_sub(REPEATER_BASE);
         if rel >= 64 {
             return; // not a real repeater id -- defensive only, dispatch never reaches here otherwise
+        }
+        // M3 field-report fix (Task 3): `DiodeBlock` requires a real conductor directly beneath
+        // it, checked immediately at placement time -- mirrors `ComparatorBehavior::on_placed`'s
+        // own identical fix/doc comment (same shared base class, same requirement).
+        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
+            ctx.world.set_block(pos, AIR_ID);
+            return;
         }
         let delay_setting = (rel / 16) as u8 + 1;
         let facing = signal::diode_facing_from_index((rel % 16) / 4);
