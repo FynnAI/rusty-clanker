@@ -146,14 +146,23 @@ fn setup() -> SetupResult {
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
+    let logging_piston = Arc::new(EventLoggingWrapper {
+        inner: Arc::clone(&piston),
+        event_ids: Arc::clone(&event_ids),
+    }) as Arc<dyn BlockBehavior>;
     behaviors.register_range(
         PISTON_ID,
         BlockStateId(PISTON_ID.0 + 1),
-        Arc::new(EventLoggingWrapper {
-            inner: Arc::clone(&piston),
-            event_ids: Arc::clone(&event_ids),
-        }) as Arc<dyn BlockBehavior>,
+        Arc::clone(&logging_piston),
     );
+    // Own-state writeback (M3 field-report fix): once a commit writes this regular, facing=East
+    // piston's own real id (2258 extended / 2264 retracted, `piston_state_id`'s own doc comment
+    // in piston.rs) back into the world, a *later* block-event's own `block_state` (captured
+    // live at emit time, in `on_neighbor_changed`) reflects that real id instead of the
+    // placeholder-only `PISTON_ID` above -- `run_block_event_subphase`'s own dispatch needs it
+    // registered too, or a second commit's own TRIGGER_CONTRACT/TRIGGER_EXTEND event silently
+    // falls through to `NoOpBehavior`.
+    behaviors.register_range(BlockStateId(2258), BlockStateId(2265), logging_piston);
 
     let mut h = Harness::new(behaviors);
     h.world.set_block(piston_pos, PISTON_ID);
@@ -245,4 +254,38 @@ fn two_events_in_different_ticks_do_not_supersede() {
         "the second commit also fired in full, independently"
     );
     assert_eq!(h.world.get_block(front_pos), Some(AIR));
+}
+
+/// Own-state writeback (M3 field-report fix): the piston base's own `EXTENDED` bit is
+/// expressed in its own stored `BlockStateId`, not only in `PistonBehavior::is_extended`'s
+/// internal side-table (blocks.json's own `minecraft:piston` entry, protocol 776:
+/// `facing=east,extended=true` = state 2258, `...extended=false` = state 2264, both cited
+/// directly off `datagen-output/26.2/generated/reports/blocks.json`, TEST-D56).
+#[test]
+fn piston_own_state_writeback_reflects_extended() {
+    let (mut h, piston, source, _event_ids, piston_pos, _front_pos) = setup();
+
+    source.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        piston.on_neighbor_changed(&mut ctx, piston_pos, Direction::Down);
+    }
+    h.run_block_events(0);
+    h.run_scheduled(2);
+    assert!(piston.is_extended(piston_pos));
+    assert_eq!(
+        h.world.get_block(piston_pos),
+        Some(BlockStateId(2258)),
+        "piston base's own stored BlockStateId must flip to the real extended=true id"
+    );
+
+    source.set_power(0);
+    {
+        let mut ctx = h.ctx_at(5);
+        piston.on_neighbor_changed(&mut ctx, piston_pos, Direction::Down);
+    }
+    h.run_block_events(5);
+    h.run_scheduled(7);
+    assert!(!piston.is_extended(piston_pos));
+    assert_eq!(h.world.get_block(piston_pos), Some(BlockStateId(2264)));
 }

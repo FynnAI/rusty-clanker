@@ -43,6 +43,11 @@ const REPEATER: BlockStateId = BlockStateId(7037);
 const COMPARATOR: BlockStateId = BlockStateId(11264);
 const PISTON_RETRACTED: BlockStateId = BlockStateId(2263);
 const PISTON_EXTENDED: BlockStateId = BlockStateId(900_101);
+/// Own-state writeback (M3 field-report fix): the real id `commit_extend` now writes for a
+/// facing=South, regular (non-sticky) extended piston base (blocks.json's own
+/// `minecraft:piston` entry, protocol 776: `facing=south,extended=true` = state 2259) -- must
+/// classify as `Immovable` exactly like `PISTON_EXTENDED`'s own placeholder above.
+const PISTON_EXTENDED_REAL: BlockStateId = BlockStateId(2259);
 const PISTON_HEAD: BlockStateId = BlockStateId(900_001);
 const CHEST: BlockStateId = BlockStateId(3988);
 const FURNACE: BlockStateId = BlockStateId(5328);
@@ -69,6 +74,7 @@ fn classify_matches_tier1_table() {
     let immovable_rows = [
         BEDROCK,
         PISTON_EXTENDED,
+        PISTON_EXTENDED_REAL,
         PISTON_HEAD,
         CHEST,
         FURNACE,

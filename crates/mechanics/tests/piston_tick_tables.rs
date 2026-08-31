@@ -334,14 +334,22 @@ fn piston_door_element() {
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
+    let logging_piston = Arc::new(EventLoggingWrapper {
+        inner: Arc::clone(&piston),
+        event_ids: Arc::clone(&event_ids),
+    }) as Arc<dyn BlockBehavior>;
     behaviors.register_range(
         PISTON_ID,
         BlockStateId(PISTON_ID.0 + 1),
-        Arc::new(EventLoggingWrapper {
-            inner: Arc::clone(&piston),
-            event_ids: Arc::clone(&event_ids),
-        }) as Arc<dyn BlockBehavior>,
+        Arc::clone(&logging_piston),
     );
+    // Own-state writeback (M3 field-report fix): once the commit below writes the sticky
+    // piston's own real facing=East id (2236 extended / 2242 retracted, `piston_state_id`'s own
+    // doc comment) back into the world, `piston_pos`'s own stored id moves outside the
+    // placeholder-only `[PISTON_ID, PISTON_ID+1)` range above -- the retract commit's own
+    // scheduled-tick dispatch (`run_scheduled`, which resolves the *live* world id, unlike the
+    // block-event dispatch above which resolves the id captured at emit time) needs this too.
+    behaviors.register_range(BlockStateId(2236), BlockStateId(2243), logging_piston);
 
     let mut h = Harness::new(behaviors);
     h.world.set_block(piston_pos, PISTON_ID);
@@ -393,14 +401,17 @@ fn sticky_retract_with_nothing_to_pull_fires_drop() {
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
+    let logging_piston = Arc::new(EventLoggingWrapper {
+        inner: Arc::clone(&piston),
+        event_ids: Arc::clone(&event_ids),
+    }) as Arc<dyn BlockBehavior>;
     behaviors.register_range(
         PISTON_ID,
         BlockStateId(PISTON_ID.0 + 1),
-        Arc::new(EventLoggingWrapper {
-            inner: Arc::clone(&piston),
-            event_ids: Arc::clone(&event_ids),
-        }) as Arc<dyn BlockBehavior>,
+        Arc::clone(&logging_piston),
     );
+    // Own-state writeback (M3 field-report fix) -- `piston_door_element`'s own identical note.
+    behaviors.register_range(BlockStateId(2236), BlockStateId(2243), logging_piston);
 
     let mut h = Harness::new(behaviors);
     h.world.set_block(piston_pos, PISTON_ID);
