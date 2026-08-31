@@ -296,6 +296,72 @@ Entries name the milestone that surfaced them and the code they concern.
   particular tick-0-only mismatch class is out of scope until such research
   exists — `(10,2,0)`'s own tick 0-2 mismatch is left unresolved either way.
 
+- **Task 2 (piston retract one-tick timing): root-caused the split precisely,
+  but the base-flip delay itself is inconsistent across fixtures in a way
+  this pass could not resolve into one rule — recorded in full rather than
+  guessed at, since the candidate fix also carries real risk to the
+  already-modeled zero-tick-pulse-drop mechanic.** Diagnosed from three real
+  oracle diffs (`redstone/piston/basic_piston_door_2x1`,
+  `redstone/piston/piston_retract_pull_sticky_vs_normal`) by tracing exactly
+  which tick each half of a retraction settles at:
+  - **The pulled/vacated *content* (the old head position going back to
+    `air`, or — for a sticky piston with something to pull — the pulled
+    block actually arriving) settles **immediately**, synchronously with the
+    triggering block event, in *every* case examined (sticky-with-pull and
+    non-sticky-nothing-to-pull alike)** — this piece is consistent and
+    well-evidenced. `basic_piston_door_2x1`'s own head position shows `air`
+    already at the very tick its own triggering `redstone_block` is removed;
+    `piston_retract_pull_sticky_vs_normal`'s own sticky piston shows the
+    pulled stone already relocated at the very tick its own power is cut.
+    This is the *opposite* of extend's own confirmed model (base immediate,
+    content deferred two ticks to `COMMIT_DELAY_TICKS`) — for retract it is
+    content immediate, base deferred.
+  - **The base's own `EXTENDED=false` flip is deferred, but by a
+    *different* number of ticks in different fixtures, contradicting a
+    single fixed delay.** `basic_piston_door_2x1`'s own non-sticky,
+    nothing-to-pull base flips by exactly one tick after the trigger (its
+    own diff shows a mismatch only at the trigger tick itself, none at
+    trigger+1). `piston_retract_pull_sticky_vs_normal`'s own non-sticky,
+    *also* nothing-to-pull base (a second piston, structurally identical in
+    kind to the first fixture's) instead stays mismatched through
+    trigger+1 and only resolves by trigger+2 — the currently-unchanged
+    `COMMIT_DELAY_TICKS=2`, not one tick. The same fixture's *sticky*
+    piston (which *does* have something to pull) shows **no** base-flip
+    mismatch at all — its base already flips immediately, matching the
+    current (Task 3) implementation exactly. Every distinguishing factor
+    this pass tried — sticky vs non-sticky, has-something-to-pull vs not,
+    whether the piston reached its extended state via a real in-fixture
+    extend animation (`basic_piston_door_2x1`) vs a direct `/setblock`
+    placement already extended (`piston_retract_pull_sticky_vs_normal`) —
+    either fails to separate the two non-sticky/nothing-to-pull cases
+    (both are non-sticky-nothing-to-pull, one 1-tick, one 2-tick) or isn't
+    confirmed by a third data point. The most likely real explanation (not
+    confirmed) is that vanilla's own `MOVING_PISTON`-block-entity retract
+    animation genuinely differs in length depending on some state this
+    project doesn't model at all (e.g. whether a real `PistonMovingBlockEntity`
+    ever existed for this piston, which a direct `/setblock`-to-extended
+    piston never had) — exactly the "no intermediate `MOVING_PISTON`
+    placeholder is modeled" scope gap this module's own top-of-file note
+    already names for a different reason.
+  - **Not attempted**, despite the content-immediate half being
+    well-evidenced enough to fix in isolation: making retract's content
+    commit synchronous (dropping its `COMMIT_DELAY_TICKS`-later scheduled
+    commit entirely, mirroring extend's own immediate-base/deferred-content
+    split reversed) would also collapse the `moving`-HashMap "a same-tick
+    second event overwrites the first's still-pending commit" mechanism
+    `crates/mechanics/tests/piston_zero_tick.rs`'s own `pulse_shorter_than_
+    commit_window_is_absorbed` test currently relies on to model zero-tick
+    pulse dropping (itself one of this pass's own still-failing fixtures,
+    `redstone/pulse/zero_tick_pulse_dropper_piston`) — an extend queued the
+    same tick as a retract would no longer be silently superseded by an
+    immediately-executing retract, changing that mechanic's own observable
+    behavior in a way this pass had no real-oracle evidence to validate
+    either direction of. Needs a decision on: (a) the real per-fixture
+    base-delay rule (real-oracle research into whichever `PistonMovingBlockEntity`
+    state actually varies here), and (b) whether/how to reconcile a
+    synchronous retract-content commit with the existing same-tick-events
+    supersession model before this task can be attempted safely.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
