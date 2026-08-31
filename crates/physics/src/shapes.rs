@@ -210,13 +210,12 @@ fn build_tier1_table() -> ShapeTable {
     let empty = BlockPhysicsProperties::air();
     let full = BlockPhysicsProperties::default_full_cube();
 
-    ShapeTable::from_entries(vec![
+    let mut entries = vec![
         // `air`'s own raw id (0) -- an explicit entry, not left to the registry's own
         // default-full-cube fallback (which is for "any *other* unlisted block," implicitly
         // assumed ordinary terrain, never air itself; without this row every `air` lookup
         // would wrongly resolve as a solid full cube).
         (0, empty),                          // air
-        (5171, flat(wire_shape())),          // redstone_wire
         (6885, flat(torch_shape())),         // redstone_torch
         (6887, flat(torch_shape())),         // redstone_wall_torch
         (7037, flat(low_slab())),            // repeater, facing North (direction_offset 0)
@@ -272,7 +271,28 @@ fn build_tier1_table() -> ShapeTable {
         (5328, full.clone()),                         // furnace
         (20763, full.clone()),                        // blast_furnace
         (20755, full),                                // smoker
-    ])
+    ];
+
+    // `redstone_wire`'s own *entire* reachable id range (M3 field-report fix: wire's conductor
+    // classification) -- blocks.json's own `minecraft:redstone_wire` entry (protocol 776) is
+    // wire's full `power` (0..=15) x `east`/`north`/`south`/`west` (`up`/`side`/`none` each)
+    // cross-product, ids `4011..=5306` contiguous (1296 states) -- follows this table's own
+    // established "one row per real reachable id" range-registration precedent (the M3
+    // oriented-shapes fix's own repeater/comparator/wall-torch/chest/hopper rows above), but
+    // generated in a loop rather than hand-enumerated: every one of these 1296 states shares
+    // the identical flat, non-full `wire_shape()` box (only the *id* varies, exactly as for
+    // every other oriented-id row in this table). Registering only the single default id
+    // (5171, the M3-B02/M3-B04-era placeholder this fix removes above) made
+    // `rc_mechanics::redstone::signal::is_conductor` wrongly resolve every *other* reachable
+    // wire id -- i.e. almost every powered or connected wire tile -- as a `default_full_cube()`
+    // conductor, spuriously leaking quasi-connectivity through wire tiles vanilla never treats
+    // as conductors at all (M3 field-report finding, `docs/findings-for-planning.md`'s own
+    // "wire own-state writeback attempt reverted" entry) -- this is what let a wire's own
+    // *stored* id ever move off 5171 (own-state writeback, this same field-report wave) without
+    // corrupting every later signal computation at that position.
+    entries.extend((4011u32..=5306).map(|id| (id, flat(wire_shape()))));
+
+    ShapeTable::from_entries(entries)
 }
 
 /// `piston_head`'s own two-box shape (M3-B05 Context §D): a face plate (`PLATFORM_THICKNESS =
