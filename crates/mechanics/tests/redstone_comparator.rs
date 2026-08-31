@@ -473,6 +473,10 @@ fn comparator_on_placed_reseeds_facing_and_mode_from_the_raw_id() {
     comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
 
     let mut h = Harness::new();
+    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
+    // this test is about facing/mode reseeding, not support, so give it a real floor.
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(11274)); // west, subtract, powered=false
 
     let mut ctx = h.ctx_at(0);
@@ -480,6 +484,56 @@ fn comparator_on_placed_reseeds_facing_and_mode_from_the_raw_id() {
 
     assert_eq!(comparator.facing(pos), Direction::West);
     assert_eq!(comparator.mode(pos), ComparatorMode::Subtract);
+}
+
+/// M3 field-report fix (Task 3): `DiodeBlock` (the shared repeater/comparator base) requires a
+/// real conductor directly beneath it, checked immediately at placement time -- a comparator
+/// `/setblock`'d with no floor support at all self-destructs to air on the spot, mirroring
+/// `WireBehavior`'s own identical `should_pop` contract but run reactively at *placement* rather
+/// than only off a later `Down`-direction shape update (confirmed against a real oracle diff,
+/// `redstone/comparator/comparator_2tick_fixed_delay`'s own comparator, destroyed from tick 0
+/// with no floor ever placed anywhere in that fixture, `docs/findings-for-planning.md`).
+#[test]
+fn comparator_self_destructs_when_placed_with_no_floor_support() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    // No floor placed at all -- `Direction::Down.apply(pos)` stays entirely unset.
+    h.world.set_block(pos, BlockStateId(11264)); // north, compare, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    comparator.on_placed(&mut ctx, pos);
+
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "an unsupported comparator must self-destruct to air on placement"
+    );
+}
+
+/// The mirror case: a real conductor floor is present -- the comparator survives and seeds
+/// normally, exactly as every other `on_placed` test in this file already establishes.
+#[test]
+fn comparator_survives_placement_with_a_real_floor() {
+    let pos = BlockPos::new(0, 0, 0);
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
+    h.world.set_block(pos, BlockStateId(11264)); // north, compare, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    comparator.on_placed(&mut ctx, pos);
+
+    assert_eq!(h.world.get_block(pos), Some(BlockStateId(11264)));
+    assert_eq!(comparator.facing(pos), Direction::North);
+    assert_eq!(comparator.mode(pos), ComparatorMode::Compare);
 }
 
 /// `on_placed` is a full replace-on-replace, not a partial update — a comparator re-placed
@@ -505,6 +559,10 @@ fn comparator_on_placed_resets_powered_and_output_to_the_fresh_placement_default
     comparator.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
+    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
+    // this test is about powered/output reset, not support, so give it a real floor.
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(11268)); // north, compare, powered=false
     h.world.set_block(front, FRONT_ID);
 

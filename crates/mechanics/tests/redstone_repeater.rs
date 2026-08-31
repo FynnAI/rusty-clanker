@@ -693,6 +693,10 @@ fn repeater_on_placed_reseeds_facing_and_delay_from_the_raw_id() {
     repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
 
     let mut h = Harness::new();
+    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
+    // this test is about facing/delay reseeding, not support, so give it a real floor.
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(7073)); // south, delay=3, locked=false, powered=false
 
     let mut ctx = h.ctx_at(0);
@@ -701,6 +705,30 @@ fn repeater_on_placed_reseeds_facing_and_delay_from_the_raw_id() {
     assert_eq!(repeater.facing(pos), Direction::South);
     assert_eq!(repeater.delay_setting(pos), 3);
     assert_eq!(repeater.get_delay(pos), 6);
+}
+
+/// M3 field-report fix (Task 3): `DiodeBlock` (the shared repeater/comparator base) requires a
+/// real conductor directly beneath it, checked immediately at placement time -- mirrors
+/// `ComparatorBehavior`'s own identical `comparator_self_destructs_when_placed_with_no_floor_
+/// support` regression test.
+#[test]
+fn repeater_self_destructs_when_placed_with_no_floor_support() {
+    let pos = BlockPos::new(0, 0, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+
+    let mut h = Harness::new();
+    // No floor placed at all -- `Direction::Down.apply(pos)` stays entirely unset.
+    h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
+
+    let mut ctx = h.ctx_at(0);
+    repeater.on_placed(&mut ctx, pos);
+
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "an unsupported repeater must self-destruct to air on placement"
+    );
 }
 
 /// `on_placed` is a full replace-on-replace, not a partial update — a repeater re-placed while
@@ -724,6 +752,10 @@ fn repeater_on_placed_resets_powered_to_the_fresh_placement_default() {
     repeater.bind_registry(Arc::new(signals));
 
     let mut h = Harness::new();
+    // M3 field-report fix (Task 3): `on_placed` now self-destructs an unsupported diode --
+    // this test is about powered reset, not support, so give it a real floor.
+    h.world
+        .set_block(Direction::Down.apply(pos), BlockStateId(9_999_500));
     h.world.set_block(pos, BlockStateId(7037)); // north, delay=1, locked=false, powered=false
     h.world.set_block(input_pos, INPUT_ID);
 
