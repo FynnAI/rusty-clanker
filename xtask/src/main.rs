@@ -203,5 +203,30 @@ fn main() -> ExitCode {
             }
         },
         Command::M3Report { server_bin, mode } => xtask::m3_report::run(server_bin, mode),
+        Command::PlacementDiff {
+            version,
+            server_jar,
+            server_bin,
+            only,
+            side,
+            accept_eula,
+        } => {
+            let side = match xtask::corpus::placement_diff::Side::parse(&side) {
+                Ok(side) => side,
+                Err(err) => {
+                    eprintln!("placement-diff: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let args = xtask::corpus::placement_diff::PlacementDiffArgs {
+                version,
+                server_jar,
+                server_bin,
+                only,
+                side,
+                accept_eula,
+            };
+            xtask::corpus::placement_diff::run(&args)
+        }
     }
 }

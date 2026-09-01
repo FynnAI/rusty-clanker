@@ -184,4 +184,31 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = m3_report::Mode::Smoke)]
         mode: m3_report::Mode,
     },
+    /// M3 field-report harness (governance changeset): drives every tier-1 placeable
+    /// block kind through the real client -> server `UseItemOn`/creative-hotbar
+    /// packet path (never the redstone corpus's own oracle-pre-resolved,
+    /// Stage-4-direct replay) against both a real vanilla oracle and our own real
+    /// `rusty-clanker-server`, diffs the resulting block states, and writes
+    /// `target/verify/placement-diff.json`.
+    PlacementDiff {
+        #[arg(long, default_value = "26.2")]
+        version: String,
+        #[arg(long)]
+        server_jar: Option<std::path::PathBuf>,
+        #[arg(long)]
+        server_bin: std::path::PathBuf,
+        /// Restrict to one scenario id, for local iteration.
+        #[arg(long)]
+        only: Option<String>,
+        /// `oracle` (capture/cache only, no diff), `ours` (capture only, no diff), or
+        /// `both` (capture both sides and diff) — default `both`.
+        #[arg(long, default_value = "both")]
+        side: String,
+        /// TEST-D41 legal consent, same flag shape as `xtask setup-oracle
+        /// --accept-eula`/`xtask fetch-corpus --accept-eula` — this verb launches the
+        /// same real vanilla oracle jar and is bound by the identical consent gate
+        /// whenever `--side` includes the oracle.
+        #[arg(long)]
+        accept_eula: bool,
+    },
 }
