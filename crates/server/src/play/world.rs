@@ -2539,6 +2539,34 @@ impl HardcodedWorld {
             .map_err(|_| RegionUnavailable)
     }
 
+    /// M3 field-report fix ("everything I place becomes stone"): the production-path
+    /// equivalent of `debug_set_held_item`, below -- `connection.rs`'s own inbound dispatch
+    /// calls this from the two real hotbar-tracking packets a real client sends
+    /// (`SetCreativeModeSlot`/`SetCarriedItem`) instead of only ever being reachable from a
+    /// test's own diagnostic call. Deliberately reuses `debug_held_item_tx` itself -- the
+    /// SAME channel, drained by the SAME per-tick step -- rather than adding a second,
+    /// parallel one: that drain step's own carry-forward discipline (this file's own tick-loop
+    /// doc comment, "a not-yet-spawned target is now carried into the next tick's own drain,
+    /// exactly like `carried_movement_updates`... any future held-item/inventory mutation...
+    /// needs the identical carry-forward discipline") already covers this exact join/action
+    /// mpsc-ordering race for a network_entity_id that has not finished joining yet, and this
+    /// call site needs precisely that same guarantee. Fire-and-forget, unlike `debug_set_
+    /// held_item`: a real connection's own dispatch loop has no reason to block on this tick
+    /// loop's own drain step (`debug_set_held_item`'s own `.await` exists only so a *test* can
+    /// order later assertions after the mutation has landed) -- the paired `oneshot::Receiver`
+    /// is simply dropped here, unread; the tick loop's own `let _ = ack.send(())` already
+    /// tolerates that.
+    pub fn queue_held_item(
+        &self,
+        network_entity_id: i32,
+        item: HeldItemStub,
+    ) -> Result<(), RegionUnavailable> {
+        let (ack_tx, _ack_rx) = oneshot::channel();
+        self.debug_held_item_tx
+            .send((network_entity_id, item, ack_tx))
+            .map_err(|_| RegionUnavailable)
+    }
+
     /// New, test/diagnostic only (Context, `debug_query_block`'s own doc comment). Awaits
     /// this tick's or the next tick's debug-query drain step, whichever comes first after
     /// the call. Already `Option`-returning for "not found" -- a dead tick-loop thread (send

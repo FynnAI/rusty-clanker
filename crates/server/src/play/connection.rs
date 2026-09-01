@@ -14,15 +14,16 @@ use tokio::sync::mpsc;
 use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
+use super::mining::{HeldItemStub, PlaceableBlockKind, placeable_kind_for_item_id};
 use super::movement::{
     PendingMoveReport, PendingMovementPacket, PendingPlayerInput, feet_block_pos,
 };
 use super::packets::{
     ChunkBatchFinished, ChunkBatchReceived, ChunkBatchStart, ConfirmTeleportation, GameEvent,
     KeepAliveClientbound, KeepAliveServerbound, LevelChunkWithLight, LoginPlay, PlayerAction,
-    PlayerInput, SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SetPlayerMovementFlags,
-    SetPlayerPosition, SetPlayerPositionAndRotation, SetPlayerRotation, SynchronizePlayerPosition,
-    UseItemOn, pack_position, unpack_position,
+    PlayerInput, SetCarriedItem, SetChunkCacheCenter, SetCreativeModeSlot, SetDefaultSpawnPosition,
+    SetHealth, SetPlayerMovementFlags, SetPlayerPosition, SetPlayerPositionAndRotation,
+    SetPlayerRotation, SynchronizePlayerPosition, UseItemOn, pack_position, unpack_position,
 };
 use super::persistence::PlayerSessionStore;
 use super::world::{HardcodedWorld, PendingJoin};
@@ -376,6 +377,7 @@ pub async fn enter_play(
     }
 
     let mut keepalive = KeepAliveDriver::new(Instant::now());
+    let mut hotbar = HotbarState::new();
     let mut poll = tokio::time::interval(KEEPALIVE_POLL_INTERVAL);
 
     loop {
@@ -402,10 +404,76 @@ pub async fn enter_play(
                 let Some(raw) = maybe_raw else {
                     return;
                 };
-                if !dispatch_inbound(raw, &mut keepalive, &handle, world, network_entity_id) {
+                if !dispatch_inbound(
+                    raw,
+                    &mut keepalive,
+                    &mut hotbar,
+                    &handle,
+                    world,
+                    network_entity_id,
+                ) {
                     return;
                 }
             }
+        }
+    }
+}
+
+/// The player-inventory container's own hotbar slot range (`InventoryMenu.USE_ROW_SLOT_START`
+/// `..` `USE_ROW_SLOT_END`, the ASSET-D18(f) reference, `mc-research/26.2/src/net/minecraft/
+/// world/inventory/InventoryMenu.java`) -- `SetCreativeModeSlot`'s own `slot` field addresses
+/// the FULL 46-slot container this way; hotbar slot `i` (`0..9`, `SetCarriedItem`'s own
+/// addressing space) is container slot `HOTBAR_SLOT_START + i`.
+const HOTBAR_SLOT_START: u16 = 36;
+const HOTBAR_SIZE: u8 = 9;
+
+/// `None` for any container slot outside the hotbar range (`HOTBAR_SLOT_START`'s own doc
+/// comment) -- every other slot (crafting grid, armor, main inventory rows, offhand) has no
+/// effect on this milestone's own held-item tracking, M3-scope-minimal (M4's own real-
+/// inventory scope covers the rest).
+fn hotbar_slot_index(slot: u16) -> Option<u8> {
+    let offset = slot.checked_sub(HOTBAR_SLOT_START)?;
+    (offset < HOTBAR_SIZE as u16).then_some(offset as u8)
+}
+
+/// Per-connection hotbar-tracking state (M3 field-report fix, "everything I place becomes
+/// stone" -- Deliverables: "Track per-connection: the 9 hotbar slots'... and the currently-
+/// selected index"). Session-scoped, owned by `enter_play`'s own dispatch loop exactly like
+/// `KeepAliveDriver` right next to it -- never an ECS component itself (that's `HeldItem`,
+/// `world.rs`'s own tick-resident mirror this state's own `queue_held_item` calls, below,
+/// keep in sync one tick-loop drain later). `slots[i]` is hotbar slot `i`'s own currently-
+/// known `PlaceableBlockKind` (`None` for an empty slot or an item this milestone's closed
+/// 12-entry set does not map, `placeable_kind_for_item_id`'s own doc comment).
+struct HotbarState {
+    slots: [Option<PlaceableBlockKind>; HOTBAR_SIZE as usize],
+    selected: u8,
+}
+
+impl HotbarState {
+    /// Matches the join-time ECS default's own *shape* only loosely (`world.rs`'s own
+    /// `HeldItem(HeldItemStub::Block(PlaceableBlockKind::Stone))` doc comment) -- this local
+    /// mirror starts genuinely empty (`slots: [None; 9]`), the honest reflection of a real
+    /// client's own fresh creative inventory (nothing dragged into the hotbar yet); the ECS
+    /// side's own pre-existing `Stone` default is untouched by this changeset (out of scope --
+    /// M3-scope-minimal) and simply stays whatever it already was until this connection's own
+    /// first hotbar-tracking packet arrives and calls `queue_held_item`.
+    fn new() -> Self {
+        HotbarState {
+            slots: [None; HOTBAR_SIZE as usize],
+            selected: 0,
+        }
+    }
+
+    /// The currently-selected slot's own kind, translated into the same `HeldItemStub` shape
+    /// `mining::apply_placement` already consumes -- `EmptyHand` for an empty/unmapped slot
+    /// (Deliverables: "an unmapped/empty item -> fall back to... 'nothing placeable'" -- this
+    /// module's own doc comment on `HOTBAR_SLOT_START` records why `EmptyHand`, not a `Stone`
+    /// fallback, is the honest choice: `apply_placement` already rejects `EmptyHand`/`Tool`
+    /// with `RejectReason::NothingToPlace` rather than silently placing a wrong block).
+    fn effective_held_item(&self) -> HeldItemStub {
+        match self.slots[self.selected as usize] {
+            Some(kind) => HeldItemStub::Block(kind),
+            None => HeldItemStub::EmptyHand,
         }
     }
 }
@@ -422,12 +490,24 @@ pub async fn enter_play(
 /// batched, in `HardcodedWorld`'s own tick loop (Context, "Where this check runs,
 /// precisely").
 ///
+/// M3 field-report fix ("everything I place becomes stone"): gains the two hotbar-tracking
+/// arms (`SetCarriedItem`/`SetCreativeModeSlot`) a real client's own creative-inventory
+/// interaction sends -- until this fix, both fell through the `other =>` catch-all below,
+/// unread, so `world.rs`'s own join-time `HeldItem(HeldItemStub::Block(PlaceableBlockKind::
+/// Stone))` default never changed for a real client no matter what it actually selected. Both
+/// arms decode, update `hotbar`'s own local mirror, and (only when the change actually
+/// affects the currently-selected slot) push the resulting `HeldItemStub` to the region via
+/// `HardcodedWorld::queue_held_item` -- `world.rs`'s own production-path counterpart to the
+/// test/diagnostic `debug_set_held_item`, reusing that exact same channel and per-tick drain
+/// step (`queue_held_item`'s own doc comment has the full carry-forward-reuse rationale).
+///
 /// Returns `false` iff a `queue_*` call above hit `RegionUnavailable` (M3 field-report fix,
 /// symptom 2: `world.rs`'s own `RegionUnavailable` doc comment) -- the caller's own dispatch
 /// loop closes the connection on that signal instead of this function panicking.
 fn dispatch_inbound(
     raw: RawPacket,
     keepalive: &mut KeepAliveDriver,
+    hotbar: &mut HotbarState,
     handle: &ConnectionHandle,
     world: &HardcodedWorld,
     network_entity_id: i32,
@@ -617,6 +697,50 @@ fn dispatch_inbound(
             {
                 tracing::error!("region unavailable; closing connection");
                 return false;
+            }
+        }
+        // M3 field-report fix ("everything I place becomes stone"): a real client's own
+        // hotbar-selection packet -- decoded, bounds-checked exactly like vanilla's own
+        // `handleSetCarriedItem` (`packets.rs`'s own `SetCarriedItem` doc comment), and
+        // pushed to the region only when the selection actually changes what's effectively
+        // held (`HotbarState::effective_held_item`'s own doc comment has the `EmptyHand`-not-
+        // Stone fallback rationale).
+        SetCarriedItem::ID => {
+            if let Ok(packet) = decode_one::<SetCarriedItem>(raw.body)
+                && packet.slot < HOTBAR_SIZE as u16
+            {
+                hotbar.selected = packet.slot as u8;
+                if world
+                    .queue_held_item(network_entity_id, hotbar.effective_held_item())
+                    .is_err()
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
+            }
+        }
+        // M3 field-report fix ("everything I place becomes stone"): a real client's own
+        // creative-inventory hotbar-drop packet -- decoded far enough to extract the item id
+        // (`packets::CreativeSlotItem`'s own doc comment has the full wire-shape reconciliation),
+        // mapped to this milestone's closed `PlaceableBlockKind` set
+        // (`mining::placeable_kind_for_item_id`), and recorded against this connection's own
+        // hotbar mirror. Only pushes an update to the region when the touched slot is the
+        // CURRENTLY selected one -- editing an unselected hotbar slot changes nothing about
+        // what this player is effectively holding right now.
+        SetCreativeModeSlot::ID => {
+            if let Ok(packet) = decode_one::<SetCreativeModeSlot>(raw.body)
+                && let Some(hotbar_index) = hotbar_slot_index(packet.slot)
+            {
+                let kind = packet.item.item_id.and_then(placeable_kind_for_item_id);
+                hotbar.slots[hotbar_index as usize] = kind;
+                if hotbar_index == hotbar.selected
+                    && world
+                        .queue_held_item(network_entity_id, hotbar.effective_held_item())
+                        .is_err()
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
             }
         }
         other => {

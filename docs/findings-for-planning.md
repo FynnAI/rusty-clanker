@@ -283,6 +283,67 @@ Entries name the milestone that surfaced them and the code they concern.
   research doc is amended, so the corpus text records the true mechanism
   rather than the empirical patch.
 
+- **azalea's checked-out protocol crate (pinned rev `6249c295`,
+  `azalea_protocol::packets::PROTOCOL_VERSION == 776` — the same pin this
+  project targets, not a stale cross-version mismatch) disagrees with the
+  decompiled server reference on `ServerboundSetCreativeModeSlotPacket`'s
+  own `ItemStack` wire shape, specifically its `DataComponentPatch`
+  half.** Surfaced wiring the real "Set Creative Mode Slot"/"Set Carried
+  Item" packets (M3 field-report fix, "everything I place becomes stone",
+  `crates/server/src/play/packets.rs`'s own `CreativeSlotItem`). The
+  decompiled reference (`mc-research/26.2/src/net/minecraft/network/
+  protocol/game/ServerboundSetCreativeModeSlotPacket.java` →
+  `ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC` →
+  `DataComponentPatch.DELIMITED_STREAM_CODEC` →
+  `ByteBufCodecs.registryFriendlyLengthPrefixed`) unambiguously wraps
+  every *present* component's own payload in an explicit `VarInt` byte
+  length, specifically so a receiver that does not interpret a given
+  component type can still skip it byte-exact — this is the entire reason
+  the "untrusted" codec variant exists, and the identical shared
+  `StreamCodec` also encodes this packet on a real client's own sending
+  side, so a real client's own wire bytes must carry that prefix.
+  Azalea's own `azalea-inventory::ItemStack`/`DataComponentPatch::
+  azalea_read` (`azalea-inventory/src/slot.rs`) omits the prefix entirely,
+  decoding each present component directly via its own concrete shape —
+  the *trusted* codec's own shape (`DataComponentPatch.STREAM_CODEC`),
+  which every other serverbound/clientbound `ItemStack` field in the
+  reference genuinely does use, just not this one. This implementation
+  followed the decompiled reference (recorded in `CreativeSlotItem`'s own
+  doc comment, `packets.rs`) since it is this project's own established
+  ground-truth source and the one a real client's own encoder actually
+  matches; azalea served only as the cross-check here and, for this one
+  field, appears to be wrong (or is simply never exercised against a
+  strict vanilla server for this exact packet in azalea's own test
+  suite). Needs a decision on whether this is worth reporting upstream to
+  azalea, and whether any other `ItemStack`-carrying serverbound packet
+  this project has not yet implemented shares the same "untrusted codec"
+  divergence from azalea's own generic type.
+
+- **The hardcoded region's per-tick drain order processes block actions
+  before the held-item channel `HardcodedWorld::queue_held_item`
+  (production) and `debug_set_held_item` (test/diagnostic) both write
+  to.** Surfaced by the same M3 field-report fix as the finding above.
+  `world.rs`'s own tick loop drains `block_action_rx` (placement/breaking)
+  well before it drains `debug_held_item_tx` (the channel a real client's
+  own `SetCreativeModeSlot`/`SetCarriedItem` dispatch now also pushes
+  onto, `connection.rs`) within the same tick iteration — so a held-item
+  update and a placement action queued in the exact same ~50ms tick
+  window could still have the placement resolve against the *prior*
+  selection rather than the one the client believes is now current. Not
+  believed to be reachable in ordinary real play (selecting a hotbar slot
+  and then clicking to place are two separate, human-paced input events,
+  essentially never landing in the same 50ms server tick), and this
+  changeset deliberately did not reorder the tick loop's own stage
+  sequence to close it (`queue_held_item`'s own doc comment: reuses the
+  existing drain step exactly as instructed, M3-scope-minimal) — but the
+  ordering hazard is real and would affect any future fast-input client
+  (a bot, or a sufficiently laggy real client) that pipelines a selection
+  change immediately before a placement. Needs a decision on whether to
+  move the held-item drain ahead of the block-action drain (the low-risk
+  fix, touching only drain-step order, not either step's own logic) as
+  part of a future changeset, or accept the current ordering as an
+  accepted-risk simplification.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real

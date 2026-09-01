@@ -315,6 +315,135 @@ impl PlayerInput {
     }
 }
 
+/// M3 field-report fix ("everything I place becomes stone" -- a real vanilla client's own
+/// two hotbar-tracking packets were decoded nowhere in this crate's inbound dispatch, so the
+/// join-time `HeldItem` default never changed for a real client, `play::connection`'s own
+/// dispatch doc comment has the full root-cause writeup). Id and field shape reconciled
+/// against the pinned server's own decompiled reference (`ServerboundSetCarriedItemPacket`,
+/// `mc-research/26.2/src/net/minecraft/network/protocol/game/`, the ASSET-D18(f) reference,
+/// Constraints (d)) and independently against the local datagen report
+/// (`mc-research/26.2/datagen/generated/reports/packets.json`'s own `minecraft:
+/// set_carried_item` entry): `protocol_id` 53 (`0x35`). `slot` is a raw two-byte `Short`
+/// (`FriendlyByteBuf.readShort`/`writeShort` in the reference -- NOT a `VarInt`, unlike almost
+/// every other small integer field this crate decodes), restated here as the closest matching
+/// wire primitive, `u16` (every real value is the non-negative `0..9` hotbar index; vanilla's
+/// own `handleSetCarriedItem` rejects anything else, `connection.rs`'s own dispatch mirrors
+/// that same bound).
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "server", id = 0x35)]
+pub struct SetCarriedItem {
+    pub slot: u16,
+}
+
+/// As `SetCarriedItem`'s own doc comment for the id-reconciliation method: cross-checked
+/// against `ServerboundSetCreativeModeSlotPacket` (same reference file) and the datagen
+/// report's own `minecraft:set_creative_mode_slot` entry, `protocol_id` 56 (`0x38`). `slot`
+/// is the same raw `Short` shape, but addresses the FULL player-inventory container (`0..=45`,
+/// `InventoryMenu`'s own `USE_ROW_SLOT_START..USE_ROW_SLOT_END` == `36..45` for the hotbar
+/// specifically -- `connection.rs`'s own dispatch doc comment has the full slot-index-mapping
+/// citation), never the bare `0..9` hotbar index `SetCarriedItem` uses. `item`'s own wire
+/// shape is `CreativeSlotItem`'s own doc comment.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[packet(state = "play", bound = "server", id = 0x38)]
+pub struct SetCreativeModeSlot {
+    pub slot: u16,
+    pub item: CreativeSlotItem,
+}
+
+/// `ServerboundSetCreativeModeSlotPacket.itemStack`'s own wire shape (Mojang decompiled
+/// reference, Constraints (d)): a plain `count: VarInt` (`<= 0` decodes to "no item," no
+/// further bytes at all -- vanilla's own `ItemStack.EMPTY` encoding); otherwise the held
+/// item's own `minecraft:item` registry id (`Item.STREAM_CODEC` ==
+/// `ByteBufCodecs.holderRegistry(Registries.ITEM)`, a bare, unoffset VarInt -- the *fixed*-
+/// registry shape, distinct from the `id + 1`-offset "direct holder" shape a *dynamic*
+/// registry's `ByteBufCodecs.holder` uses), then a `DataComponentPatch` in its own
+/// "untrusted"/"delimited" wire shape (`ItemStack.OPTIONAL_UNTRUSTED_STREAM_CODEC` ->
+/// `DataComponentPatch.DELIMITED_STREAM_CODEC`): `positive_count: VarInt`,
+/// `negative_count: VarInt`, then, for each of the `positive_count` entries, a
+/// `component_type_id: VarInt` (same bare-VarInt registry shape, into
+/// `minecraft:data_component_type`) followed by a `payload_len: VarInt` and exactly
+/// `payload_len` raw bytes (`ByteBufCodecs.registryFriendlyLengthPrefixed` -- the untrusted
+/// codec's whole reason to exist: a length-prefixed payload a receiver that does not
+/// interpret a given component type can still skip byte-exact), and finally, for each of the
+/// `negative_count` entries, one more bare `component_type_id: VarInt` with no payload at
+/// all. This type decodes exactly that shape -- every byte accounted for, never a truncated
+/// "consume the rest of the packet" shortcut -- but only ever *keeps* `item_id`: no
+/// component this milestone's placement logic reads (M3-scope-minimal: held-item *tracking*,
+/// not a real inventory/component system -- M4's own future scope) is interpreted at all.
+///
+/// M3 field-report cross-check: azalea's own `azalea-inventory::ItemStack`/
+/// `DataComponentPatch::azalea_read` (checked-out rev `6249c295`, `azalea_protocol::packets::
+/// PROTOCOL_VERSION == 776` -- the SAME pin this project targets, not a stale cross-version
+/// mismatch) omits this length prefix entirely, decoding each present component directly via
+/// its own concrete shape instead -- the *trusted* codec's own shape
+/// (`DataComponentPatch.STREAM_CODEC`), never the untrusted one this specific serverbound
+/// packet's own `ServerboundSetCreativeModeSlotPacket.STREAM_CODEC` actually declares. Since
+/// the identical shared `StreamCodec` class also encodes this packet on a real client's own
+/// sending side, the real wire bytes a real vanilla client sends match the decompiled server
+/// reference, not azalea's own shape -- this type follows the reference (recorded as a
+/// discrepancy finding, `docs/findings-for-planning.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreativeSlotItem {
+    /// `None` for an explicitly empty stack (`count <= 0`) or an item id this milestone's own
+    /// closed `PlaceableBlockKind` set never maps (`play::mining::placeable_kind_for_item_id`'s
+    /// own doc comment) -- never a decode failure either way.
+    pub item_id: Option<i32>,
+}
+
+impl rc_protocol::WireRead for CreativeSlotItem {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, rc_protocol::PacketDecodeError> {
+        let count = rc_protocol::VarInt::decode(buf)?.get();
+        if count <= 0 {
+            return Ok(CreativeSlotItem { item_id: None });
+        }
+        let item_id = rc_protocol::VarInt::decode(buf)?.get();
+        skip_data_component_patch(buf)?;
+        Ok(CreativeSlotItem {
+            item_id: Some(item_id),
+        })
+    }
+}
+
+impl rc_protocol::WireWrite for CreativeSlotItem {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        // Never actually sent by this crate (`SetCreativeModeSlot` is serverbound-only) --
+        // present only so `#[derive(RcPacket)]`'s generated `encode_body` compiles. The empty
+        // encoding (`count = 0`) is correct for `item_id: None`; `Some(id)` writes the
+        // smallest legal non-empty stack this decode also accepts back (`count = 1`, no
+        // component patch) -- exercised only by this file's own round-trip test, never by
+        // production code.
+        match self.item_id {
+            None => rc_protocol::VarInt::new(0).write_wire(buf),
+            Some(id) => {
+                rc_protocol::VarInt::new(1).write_wire(buf);
+                rc_protocol::VarInt::new(id).write_wire(buf);
+                rc_protocol::VarInt::new(0).write_wire(buf);
+                rc_protocol::VarInt::new(0).write_wire(buf);
+            }
+        }
+    }
+}
+
+/// `CreativeSlotItem`'s own doc comment has the full format this skips: `positive_count`
+/// length-prefixed-payload entries, then `negative_count` bare-id-only entries.
+fn skip_data_component_patch(buf: &mut Bytes) -> Result<(), rc_protocol::PacketDecodeError> {
+    let positive_count = rc_protocol::VarInt::decode(buf)?.get().max(0);
+    let negative_count = rc_protocol::VarInt::decode(buf)?.get().max(0);
+    for _ in 0..positive_count {
+        let _component_type_id = rc_protocol::VarInt::decode(buf)?;
+        let payload_len = rc_protocol::VarInt::decode(buf)?.get();
+        let payload_len = usize::try_from(payload_len).unwrap_or(0);
+        if buf.remaining() < payload_len {
+            return Err(rc_protocol::PacketDecodeError::UnexpectedEof);
+        }
+        buf.advance(payload_len);
+    }
+    for _ in 0..negative_count {
+        let _component_type_id = rc_protocol::VarInt::decode(buf)?;
+    }
+    Ok(())
+}
+
 /// Packs a "Position" wire value (Context: 26-bit X, 26-bit Z, 12-bit Y, two's complement),
 /// written as one plain big-endian 8-byte `Long` by the caller (`WireWrite for i64`).
 pub fn pack_position(pos: rc_core::BlockPos) -> i64 {

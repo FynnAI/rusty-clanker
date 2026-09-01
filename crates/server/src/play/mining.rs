@@ -147,6 +147,56 @@ pub struct GameModeState {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Component)]
 pub struct HeldItem(pub HeldItemStub);
 
+/// Item-registry id -> `PlaceableBlockKind` reverse lookup (M3 field-report fix, "everything
+/// I place becomes stone" -- the map `connection.rs`'s own inbound dispatch needs to turn a
+/// real client's decoded `SetCreativeModeSlot`/`item_id`
+/// (`packets::CreativeSlotItem`'s own doc comment) into the same `PlaceableBlockKind` this
+/// module's placement logic already understands). Ids are `rc-registries`' own generated
+/// `minecraft:item` table (`generated_v776::registries::item`, NET-D9/D10 codegen, protocol
+/// 776) -- the exact table the codegen step itself already derives from
+/// `mc-research/26.2/datagen/generated/reports/registries.json`'s own `minecraft:item`
+/// entries, so this lookup never hand-duplicates an id the generated source already owns.
+/// `RedstoneWire`'s own item form is `minecraft:redstone` (the item name differs from the
+/// block name, vanilla's own long-standing "redstone dust" naming); every other kind's item
+/// shares its own block's exact name. `None` for any item id outside this closed 12-entry set
+/// -- every tool, every other block, and a genuinely empty slot (`CreativeSlotItem { item_id:
+/// None }`) all fold into the same `HeldItemStub::EmptyHand` fallback at the call site
+/// (`connection.rs`'s own dispatch), never a silent "assume Stone" default (M3-scope-minimal:
+/// no real tool/inventory system exists yet to honestly represent "holding a sword" any other
+/// way -- M4's own future scope).
+pub fn placeable_kind_for_item_id(item_id: i32) -> Option<PlaceableBlockKind> {
+    use rc_registries::generated_v776::registries::item;
+
+    const STONE_ITEM: i32 = item::STONE.0 as i32;
+    const REDSTONE_ITEM: i32 = item::REDSTONE.0 as i32;
+    const REDSTONE_TORCH_ITEM: i32 = item::REDSTONE_TORCH.0 as i32;
+    const REPEATER_ITEM: i32 = item::REPEATER.0 as i32;
+    const COMPARATOR_ITEM: i32 = item::COMPARATOR.0 as i32;
+    const PISTON_ITEM: i32 = item::PISTON.0 as i32;
+    const STICKY_PISTON_ITEM: i32 = item::STICKY_PISTON.0 as i32;
+    const CHEST_ITEM: i32 = item::CHEST.0 as i32;
+    const FURNACE_ITEM: i32 = item::FURNACE.0 as i32;
+    const BLAST_FURNACE_ITEM: i32 = item::BLAST_FURNACE.0 as i32;
+    const SMOKER_ITEM: i32 = item::SMOKER.0 as i32;
+    const HOPPER_ITEM: i32 = item::HOPPER.0 as i32;
+
+    match item_id {
+        STONE_ITEM => Some(PlaceableBlockKind::Stone),
+        REDSTONE_ITEM => Some(PlaceableBlockKind::RedstoneWire),
+        REDSTONE_TORCH_ITEM => Some(PlaceableBlockKind::RedstoneTorch),
+        REPEATER_ITEM => Some(PlaceableBlockKind::Repeater),
+        COMPARATOR_ITEM => Some(PlaceableBlockKind::Comparator),
+        PISTON_ITEM => Some(PlaceableBlockKind::Piston),
+        STICKY_PISTON_ITEM => Some(PlaceableBlockKind::StickyPiston),
+        CHEST_ITEM => Some(PlaceableBlockKind::Chest),
+        FURNACE_ITEM => Some(PlaceableBlockKind::Furnace),
+        BLAST_FURNACE_ITEM => Some(PlaceableBlockKind::BlastFurnace),
+        SMOKER_ITEM => Some(PlaceableBlockKind::Smoker),
+        HOPPER_ITEM => Some(PlaceableBlockKind::Hopper),
+        _ => None,
+    }
+}
+
 /// Per-block-type physical properties the dig-timing formula needs (Context's own tier-1
 /// table). `min_tier_for_drops: None` means "any tool, including bare hand, always drops"
 /// (Context's own per-row rule, bypassing the tool-*kind* check too — see this module's own
