@@ -192,7 +192,7 @@ fn simple_extension() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, false);
+    piston.place(piston_pos, facing, false, false);
 
     let log = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
@@ -295,7 +295,7 @@ fn multi_block_push_shifts_each_block_forward_not_duplicated() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, false);
+    piston.place(piston_pos, facing, false, false);
 
     let mut behaviors = BlockBehaviorRegistry::new();
     behaviors.register_range(
@@ -354,7 +354,7 @@ fn qc_double_piston() {
     let (_source, signals, source_id) = make_signal(15);
 
     let piston1 = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston1.place(p1, Direction::Up, false);
+    piston1.place(p1, Direction::Up, false, false);
     // M3 field-report fix (Task 3): `piston2` is deliberately `sticky = true` here (unlike
     // `piston1`), even though this test cares only about QC-activation independence, not
     // stickiness -- own-state writeback (`write_base_extended`'s own doc comment) now writes
@@ -364,7 +364,7 @@ fn qc_double_piston() {
     // disjoint (two genuinely separate `PistonBehavior` instances, standing in for two
     // independent in-region positions, cannot otherwise both claim the identical real id).
     let piston2 = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston2.place(p2, Direction::Up, true);
+    piston2.place(p2, Direction::Up, true, false);
 
     let mut behaviors = BlockBehaviorRegistry::new();
     behaviors.register_range(
@@ -449,7 +449,7 @@ fn piston_door_element() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, true);
+    piston.place(piston_pos, facing, true, false);
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
@@ -552,7 +552,7 @@ fn sticky_retract_with_nothing_to_pull_fires_drop() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, true);
+    piston.place(piston_pos, facing, true, false);
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();
@@ -616,7 +616,7 @@ fn commit_reads_live_state_and_skips_a_changed_position() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, false);
+    piston.place(piston_pos, facing, false, false);
 
     let mut behaviors = BlockBehaviorRegistry::new();
     behaviors.register_range(
@@ -678,7 +678,7 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
 
     let (source, signals, source_id) = make_signal(0);
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, false);
+    piston.place(piston_pos, facing, false, false);
 
     let log = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();

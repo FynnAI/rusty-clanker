@@ -145,7 +145,7 @@ fn setup() -> SetupResult {
     let signals = Arc::new(signals);
 
     let piston = Arc::new(PistonBehavior::new(Arc::clone(&signals)));
-    piston.place(piston_pos, facing, false);
+    piston.place(piston_pos, facing, false, false);
 
     let event_ids = Arc::new(Mutex::new(Vec::new()));
     let mut behaviors = BlockBehaviorRegistry::new();

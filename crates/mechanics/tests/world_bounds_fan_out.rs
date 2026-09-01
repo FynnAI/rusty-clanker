@@ -270,7 +270,7 @@ fn piston_extend_at_the_world_floor_does_not_panic_on_a_beyond_world_write() {
     world.set_block(piston_pos, PISTON_RETRACTED);
 
     let piston = PistonBehavior::new(Arc::new(SignalSourceRegistry::new()));
-    piston.place(piston_pos, Direction::Down, false);
+    piston.place(piston_pos, Direction::Down, false, false);
 
     let ownership = RegionOwnership::always_local(local);
     let mut engine = NeighborUpdateEngine::new();

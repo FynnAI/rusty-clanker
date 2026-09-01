@@ -804,7 +804,23 @@ pub fn tier1_registry(
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
             let facing = facing_property(&block.vanilla_state);
             let sticky = block.vanilla_state.starts_with("minecraft:sticky_piston");
-            piston.place(pos, facing, sticky);
+            // M3 field-report fix (phantom-extend-on-already-extended-placement defect):
+            // `spec.blocks` settles in list order (this function's own module doc comment),
+            // so a raw `blocks:` entry placing a piston already `extended=true` must seed
+            // `PistonBehavior` with that same real property -- a later-listed signal source
+            // (e.g. a `redstone_block`) fanning `on_neighbor_changed` to this already-placed
+            // piston must see a state that already matches its own signal, not a spurious
+            // `false -> true` transition (`piston.rs`'s own `place` doc comment has the full
+            // citation).
+            let extended = match vanilla_property(&block.vanilla_state, "extended") {
+                Some("true") => true,
+                Some("false") => false,
+                other => panic!(
+                    "tier1_registry: unrecognized/missing extended in {:?}: {other:?}",
+                    block.vanilla_state
+                ),
+            };
+            piston.place(pos, facing, sticky, extended);
         }
     }
     let (lo, hi) = exclusive(PISTON_RANGE);
