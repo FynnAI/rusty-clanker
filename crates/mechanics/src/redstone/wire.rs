@@ -177,6 +177,14 @@ pub struct WireBehavior {
     /// currently being recomputed -- safe without finer-grained (per-position) scoping because
     /// Stage-4 dispatch is strictly sequential, never reentrant, within one region (binding
     /// principle: "redstone... always fully sequential and single-worker per region").
+    ///
+    /// M3 field-report finding: narrowing this to a per-position `excluding: Option<BlockPos>`
+    /// (only suppressing the one position actually mid-recompute, never every other wire tile
+    /// this instance also serves) was tried and reverted -- it broke `wire_climbs_conductor_
+    /// step_up_down` and several other previously-passing fixtures outright, so the instance-wide
+    /// suppression is evidently load-bearing for cases this investigation did not fully map, not
+    /// merely an over-broad side effect. Recorded in `docs/findings-for-planning.md` rather than
+    /// re-attempted here.
     should_signal: AtomicBool,
 }
 
@@ -437,6 +445,90 @@ impl WireBehavior {
 
         (east, north, south, west)
     }
+
+    /// `updateIndirectNeighbourShapes` (M3 field-report fix, Rule B -- `docs/findings-for-
+    /// planning.md`'s own "wire diagonal cascade" entry): the missing beyond-direct-neighbor
+    /// relay every ordinary 6-neighbor fan-out (`UpdateContext::set_block`'s own `border::
+    /// fan_out_from_changed_block`, `signal::notify_neighbor_changed_only`) never reaches, since
+    /// a diagonal wire two Manhattan steps away is never a direct neighbor of `pos`. For each
+    /// horizontal direction whose freshly-known shape (`east`/`north`/`south`/`west`, exactly
+    /// this position's own just-computed or just-declared connection state) is not `None`, and
+    /// whose direct neighbor (`mid`) is *not itself a wire* (a directly-adjacent wire is already
+    /// reached the ordinary way, needing no diagonal relay) -- probes `mid.below()` and
+    /// `mid.above()`; each that holds a wire receives a targeted `ShapeUpdate` recomputing that
+    /// wire's own connections from scratch (`WireBehavior::on_shape_update` always recomputes
+    /// all four sides unconditionally, so a single targeted dispatch already covers "recompute
+    /// the connection toward this column").
+    ///
+    /// Fired from both `on_placed` (a freshly-placed wire's own already-auto-connected declared
+    /// shape, Rule C) and `on_shape_update` (a settled recompute's freshly-derived shape) --
+    /// mirroring vanilla's own two call sites (a wire's own placement, and every later
+    /// `setBlock` a real connection change writes).
+    fn diagonal_shape_update_cascade(
+        &self,
+        ctx: &mut UpdateContext,
+        registry: &SignalSourceRegistry,
+        pos: BlockPos,
+        east: WireSideShape,
+        north: WireSideShape,
+        south: WireSideShape,
+        west: WireSideShape,
+    ) {
+        for (dir, shape) in [
+            (Direction::East, east),
+            (Direction::North, north),
+            (Direction::South, south),
+            (Direction::West, west),
+        ] {
+            if shape == WireSideShape::None {
+                continue;
+            }
+            let mid = dir.apply(pos);
+            if wire_power_at(ctx.world, registry, mid).is_some() {
+                continue;
+            }
+            for probe_dir in [Direction::Down, Direction::Up] {
+                let probe_pos = probe_dir.apply(mid);
+                if wire_power_at(ctx.world, registry, probe_pos).is_some()
+                    && let Some(from) =
+                        loaded_neighbor_direction(ctx.world, probe_pos, probe_dir.opposite())
+                {
+                    signal::notify_shape_update_at(ctx, probe_pos, from);
+                }
+            }
+        }
+    }
+}
+
+/// Picks a `Direction` whose `target`-relative neighbor actually holds a loaded block, for
+/// `notify_shape_update_at`'s own `from` parameter (M3 field-report fix, Rule B). The generic
+/// `dispatch_pending_update`/`dispatch_one` machinery (`stage4.rs`/`replay.rs`, neither owned by
+/// this file) requires `ctx.get_block(from.apply(pos))` to resolve before it will even call
+/// `on_shape_update` -- but `preferred` (the semantically "real" trigger direction,
+/// `probe_dir.opposite()`, pointing back at `mid`) can easily be a position nothing ever
+/// explicitly placed (a bare open-ledge cell is, by definition, often untouched air, not a real
+/// stored block -- confirmed directly against this exact gap via `wire_climbs_conductor_step_
+/// up_down`'s own `(1, 2, 0)`). Since `WireBehavior::on_shape_update` never actually reads its
+/// own `from`/`neighbor_state` parameters (it recomputes every one of the four sides
+/// unconditionally regardless of which direction triggered it), any direction whose neighbor
+/// resolves is equally correct here -- `preferred` is tried first (matches vanilla's real
+/// causal direction whenever that position happens to be loaded), then `Down` (every wire
+/// currently alive in the world is guaranteed to rest on a real conductor -- `should_pop`'s own
+/// `Down`-triggered destruction check is exactly what enforces that invariant), then every
+/// remaining direction as a last-resort fallback. Returns `None` only if `target` itself is
+/// somehow floating with zero loaded neighbors at all -- should never happen for a live wire,
+/// but skipping (rather than notifying with a direction dispatch would silently drop anyway) is
+/// the safe default.
+fn loaded_neighbor_direction(
+    world: &dyn BlockWorldAccess,
+    target: BlockPos,
+    preferred: Direction,
+) -> Option<Direction> {
+    let mut candidates = vec![preferred, Direction::Down];
+    candidates.extend(crate::direction::NEIGHBOR_CHANGED_ORDER);
+    candidates
+        .into_iter()
+        .find(|dir| world.get_block(dir.apply(target)).is_some())
 }
 
 /// Whether the position holds a redstone wire (any `WireBehavior`, generalized via the
@@ -510,17 +602,32 @@ impl BlockBehavior for WireBehavior {
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
         let registry = Arc::clone(self.registry());
         let new_power = self.compute_power(ctx.world, &registry, pos);
-        let changed = {
-            let mut state = self.state.lock().unwrap();
-            let entry = state.entry(pos).or_default();
-            if entry.power == new_power {
-                false
-            } else {
-                entry.power = new_power;
-                true
-            }
+        // Always keep the internal side-table current -- every other reader (`power`/`weak_
+        // signal_toward`/`direct_signal_toward`/`raw_wire_power`) reads through it, regardless
+        // of whether the writeback below actually fires this time.
+        self.state.lock().unwrap().entry(pos).or_default().power = new_power;
+
+        // M3 field-report fix (Rule D depower correctness): the change gate compares against
+        // the REAL currently-stored block id's own power digit, not the internal side-table's
+        // cached value -- a freshly-placed wire's declared power digit (Rule C: already
+        // vanilla-auto-connected) never populates this behavior's own internal map, which starts
+        // every position at `power: 0` by construction (`WireState`'s own `#[derive(Default)]`);
+        // gating the writeback on the internal map alone meant a recompute that happened to
+        // ALSO land on that same `0` default short-circuited as "unchanged" even when the real
+        // stored id still showed a stale nonzero declared power, permanently orphaning it --
+        // confirmed directly against this exact gap: `wire_climbs_conductor_step_up_down`'s own
+        // `(4, 1, 0)` (declared power 12, recomputes correctly to 0 the moment the conductor at
+        // `(4, 2, 0)` cuts its only supply, but the internal map's own untouched `0` default
+        // silently ate the writeback). Mirrors `on_shape_update`'s own already-correct pattern
+        // just below (`new_id == current`, always read fresh off `ctx.get_block`), never the
+        // internal map, for exactly this reason.
+        let Some(current) = ctx.get_block(pos) else {
+            return;
         };
-        if !changed {
+        if !is_wire_range(current.0) {
+            return;
+        }
+        if wire_decode(current.0).2 == new_power {
             return;
         }
         // M3 field-report fix: own-state writeback -- vanilla's `DefaultRedstoneWireEvaluator`
@@ -529,12 +636,8 @@ impl BlockBehavior for WireBehavior {
         // `notify_neighbor_changed_only` below, unchanged), so this write goes through the raw
         // world accessor, never `ctx.set_block`. `new_power_state_id` preserves every
         // connection digit already stored (`side_index`'s own doc comment).
-        if let Some(current) = ctx.get_block(pos)
-            && is_wire_range(current.0)
-        {
-            let new_id = new_power_state_id(current.0, new_power);
-            ctx.world.set_block(pos, new_id);
-        }
+        let new_id = new_power_state_id(current.0, new_power);
+        ctx.world.set_block(pos, new_id);
         // The unconditional 7-cell-plus notify (Context §D): `pos` itself first, then its own
         // 6 neighbors in `NEIGHBOR_CHANGED_ORDER` -- no shape update is fired.
         signal::notify_neighbor_changed_only(ctx, pos);
@@ -601,10 +704,49 @@ impl BlockBehavior for WireBehavior {
                 if new_id == current {
                     None
                 } else {
+                    // M3 field-report fix (Rule B): a real connection change just happened at
+                    // `pos` -- fire the diagonal relay using these same freshly-computed shapes
+                    // (`diagonal_shape_update_cascade`'s own doc comment), exactly matching
+                    // vanilla's own "only when the wire's state actually changes" gate (a no-op
+                    // `updateShape` call never touches `updateIndirectNeighbourShapes` either).
+                    self.diagonal_shape_update_cascade(
+                        ctx, &registry, pos, east_shape, north_shape, south_shape, west_shape,
+                    );
                     Some(new_id)
                 }
             }
             _ => None,
         }
+    }
+
+    /// M3 field-report fix (Rule B/Rule C): a freshly-(re)placed wire's own declared id is
+    /// already auto-connected by vanilla's own placement pipeline (Rule C -- this behavior never
+    /// recomputes or rewrites it here, only reads the connection digits already stored) but
+    /// still needs to fire the diagonal relay a fresh placement can trigger just as much as a
+    /// later recompute (`diagonal_shape_update_cascade`'s own doc comment: "vanilla's own two
+    /// call sites").
+    fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        if !is_wire_range(current.0) {
+            return;
+        }
+        let (east_idx, north_idx, _power, south_idx, west_idx) = wire_decode(current.0);
+        let shape_of = |idx: u32| match idx {
+            0 => WireSideShape::Up,
+            1 => WireSideShape::Side,
+            _ => WireSideShape::None,
+        };
+        let registry = Arc::clone(self.registry());
+        self.diagonal_shape_update_cascade(
+            ctx,
+            &registry,
+            pos,
+            shape_of(east_idx),
+            shape_of(north_idx),
+            shape_of(south_idx),
+            shape_of(west_idx),
+        );
     }
 }

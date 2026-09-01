@@ -316,6 +316,42 @@ pub fn notify_neighbor_changed_only(ctx: &mut UpdateContext, at: BlockPos) {
     }
 }
 
+/// Cross-region-aware, single-target `ShapeUpdate` dispatch (Context, M3 field-report fix:
+/// wire's own `updateIndirectNeighbourShapes` diagonal relay -- `wire.rs`'s own
+/// `diagonal_shape_update_cascade` doc comment has the full citation and the "why this exact
+/// target/`from` pair" geometry). Unlike `notify_neighbor_changed_only`'s uniform 6-neighbor
+/// fan-out, this dispatches to exactly one already-computed `target` position with a fresh
+/// full `SHAPE_DEPTH` budget -- a targeted relay, not a continuation of the triggering
+/// cascade's own remaining depth: `BlockBehavior::on_shape_update`/`on_placed`'s own trait
+/// signatures carry no depth-remaining parameter for a caller to thread through here, and
+/// `NeighborUpdateEngine::SHAPE_DEPTH`'s own 512-hop bound is already far beyond anything a
+/// legal contraption could ever need, so restarting the budget here is a bounded,
+/// practically-unobservable simplification rather than a real parity gap.
+///
+/// Local-target only. `target`'s own ownership is resolved fresh here since the calling wire
+/// behavior only knows the *local* geometry it walked to find `target`, never its ownership --
+/// a genuinely-remote `target` is silently skipped rather than misrouted: sending it would need
+/// a dedicated `BorderUpdateEvent` payload this project's own message substrate does not yet
+/// carry (unlike `notify_one`'s existing `BlockChanged` payload, which communicates *the
+/// locally-owned origin's* new state to a remote neighbor -- this call's own `target` is the
+/// *remote* side, with nothing local to attach to that payload). A documented, bounded-latency
+/// gap (`docs/findings-for-planning.md`) rather than a blocking dependency (binding principle:
+/// "no cross-partition blocking... fire-and-forget with bounded-latency delivery") -- every
+/// caller in this corpus is single-region (`replay_contraption`'s own `RegionOwnership::
+/// always_local`), so `owner == ctx.ownership.local` always holds in practice today.
+pub fn notify_shape_update_at(ctx: &mut UpdateContext, target: BlockPos, from: Direction) {
+    let dimension = ctx.world.dimension();
+    let chunk = target.chunk_key(dimension);
+    let owner = (ctx.ownership.resolve)(chunk);
+    if owner == ctx.ownership.local {
+        ctx.engine.emit_single(PendingUpdate::ShapeUpdate {
+            pos: target,
+            from,
+            remaining_depth: crate::neighbor_update::NeighborUpdateEngine::SHAPE_DEPTH,
+        });
+    }
+}
+
 /// A diode's own `facing` property, as blocks.json's own `minecraft:repeater`/
 /// `minecraft:comparator` entries list it (`[north, south, west, east]`) -- shared between
 /// `repeater.rs`'s and `comparator.rs`'s own own-state id arithmetic (M3 field-report fix; WS-D15's
