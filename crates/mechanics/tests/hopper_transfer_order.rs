@@ -412,7 +412,12 @@ fn furnace_face_rule_top_targets_input_side_targets_fuel() {
 
     let mut h_side = HopperBlockEntity::empty(Direction::East);
     h_side.slots[0] = stack("minecraft:coal", 1);
-    let outcome = h_side.tick(h_side_pos, &mut world, &DefaultMaxStackSize, &HashSet::new());
+    let outcome = h_side.tick(
+        h_side_pos,
+        &mut world,
+        &DefaultMaxStackSize,
+        &HashSet::new(),
+    );
     assert_eq!(outcome, HopperTickOutcome::Pushed);
     assert_eq!(
         world.slots_at(f_pos).unwrap()[FURNACE_SLOT_FUEL],
