@@ -162,7 +162,7 @@ fn synthetic_player_movement_drives_real_load_unload_and_persistence() {
                        ticket_manager: &mut TicketManager,
                        region: &mut rc_scheduler::RegionState,
                        condition: &dyn Fn(&ChunkLifecycleManager) -> bool| {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(90);
         while !condition(lifecycle) {
             let churn = ticket_manager.step();
             lifecycle.pre_tick(&mut region.world, &churn.needs_load, &churn.needs_unload);

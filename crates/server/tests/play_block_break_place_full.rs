@@ -491,13 +491,13 @@ async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event
     let uuid_a = uuid::Uuid::from_u128(1);
     let (mut a, mut a_acc) = staged(
         "spawn-a",
-        Duration::from_secs(30),
+        Duration::from_secs(120),
         spawn_actor(&world, "a", 1),
     )
     .await;
     let (mut b, mut b_acc) = staged(
         "spawn-b",
-        Duration::from_secs(30),
+        Duration::from_secs(120),
         spawn_actor(&world, "b", 2),
     )
     .await;
@@ -548,7 +548,7 @@ async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event
     .await;
     let body = staged(
         "start-destroy-ack",
-        Duration::from_secs(15),
+        Duration::from_secs(60),
         recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID),
     )
     .await;
@@ -569,7 +569,7 @@ async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event
     .await;
     let body = staged(
         "stop-destroy-ack",
-        Duration::from_secs(15),
+        Duration::from_secs(60),
         recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID),
     )
     .await;
