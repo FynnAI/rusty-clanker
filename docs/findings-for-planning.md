@@ -247,7 +247,15 @@ Entries name the milestone that surfaced them and the code they concern.
   `synthetic_player_movement...` stage budgets in the same file), or a
   decision to fold both binaries into a stricter nextest scheduling group;
   until then the mitigation is `gh run rerun --failed` after confirming the
-  local repro is green.
+  local repro is green. **(Update, same night):** `play_block_break_place_
+  full.rs` belongs to the same class — its `spawn-a`/`spawn-b` 30s stage
+  budgets timed out on windows-2025 CI (run for adb4ec1) and, locally, the
+  six-test file swings between 37s and 60s with one sporadic stage timeout
+  while three cargo builds run concurrently, versus ~5s per test on a quiet
+  machine. Both files should get the same sizing pass in one `test-authoring`
+  changeset: hang-guard-scale stage budgets (minutes, not tens of seconds)
+  plus membership in the nextest heavy-server-integration group, so a
+  contended runner degrades into slower green runs instead of red ones.
 
 - **`xtask`'s `m1_report.rs` and `corpus/fetch_corpus.rs` carry the same
   latent piped-child stdout/stderr deadlock `m3_report.rs` just had fixed
