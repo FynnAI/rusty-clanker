@@ -332,15 +332,17 @@ pub async fn enter_play(
         }
     }
 
-    if handle
-        .try_send_payload(encode_payload(&ChunkBatchFinished {
-            batch_size: chunk_count as i32,
-        }))
-        .is_err()
-    {
-        return;
-    }
-
+    // M3 field-report fix (join/broadcast race, `task_9ce21947`'s remaining symptom,
+    // `world.rs`'s own `queue_join` doc comment has the full root-cause writeup): queued --
+    // and awaited -- strictly before `ChunkBatchFinished` is ever sent. `ChunkBatchFinished`
+    // is the one signal any outside observer (a real client, or this crate's own
+    // `drain_play_entry`-style tests) has for "this player is joined"; `queue_join` itself
+    // now only returns once the tick loop has actually spawned this player's own
+    // `PlayerMarker` into `region.world`, so no per-tick broadcast loop can ever again miss
+    // this player at a moment an observer could already call them joined. This deliberately
+    // undoes this call site's own former placement (sent last, after every chunk packet) --
+    // that ordering only ever mattered for the wire's own packet sequence, which is
+    // unaffected here: `queue_join` sends nothing to this connection's own socket at all.
     if world
         .queue_join(PendingJoin {
             network_entity_id,
@@ -356,10 +358,20 @@ pub async fn enter_play(
             position: pos,
             rotation,
         })
+        .await
         .is_err()
     {
         // M3 field-report fix (symptom 2): `queue_join`'s own doc comment.
         tracing::error!("region unavailable while joining; refusing join");
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&ChunkBatchFinished {
+            batch_size: chunk_count as i32,
+        }))
+        .is_err()
+    {
         return;
     }
 

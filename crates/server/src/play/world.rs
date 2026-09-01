@@ -852,7 +852,13 @@ fn superflat_filler() -> SuperflatFiller {
 /// `Arc`-backed sender handle).
 #[derive(Clone)]
 pub struct HardcodedWorld {
-    join_tx: tokio::sync::mpsc::UnboundedSender<PendingJoin>,
+    /// M3 field-report fix (join/broadcast race): the paired `oneshot::Sender<()>` is
+    /// signaled by the tick loop's own join-drain step immediately after the
+    /// `region.world.spawn(...)` call that creates this join's `PlayerMarker` -- entirely
+    /// internal to this channel (never part of `PendingJoin`'s own public shape, which
+    /// `connection.rs` constructs unchanged) -- `queue_join`'s own doc comment has the
+    /// full rationale.
+    join_tx: tokio::sync::mpsc::UnboundedSender<(PendingJoin, oneshot::Sender<()>)>,
     /// New (M2-B07): enqueued by `connection.rs`'s inbound dispatch, drained once per tick
     /// at this region's own Stage-3-equivalent manual step (Context, "Which pipeline
     /// stage").
@@ -955,7 +961,8 @@ impl HardcodedWorld {
     /// Spawns the tick-loop thread and returns a handle; the thread runs until `shutdown`
     /// is called.
     pub fn with_config(config: WorldConfig) -> Self {
-        let (join_tx, mut join_rx) = tokio::sync::mpsc::unbounded_channel::<PendingJoin>();
+        let (join_tx, mut join_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(PendingJoin, oneshot::Sender<()>)>();
         let (block_action_tx, mut block_action_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
         let (movement_tx, mut movement_rx) =
@@ -1129,7 +1136,7 @@ impl HardcodedWorld {
                     return;
                 }
 
-                while let Ok(join) = join_rx.try_recv() {
+                while let Ok((join, join_ack)) = join_rx.try_recv() {
                     // M2 field-report fix: this player's own real, just-loaded (or freshly
                     // defaulted) chunk -- previously this registration unconditionally used
                     // `SPAWN_POSITION`'s own chunk plus `config.simulation_distance_chunks`
@@ -1223,6 +1230,17 @@ impl HardcodedWorld {
                         // own current `player_input` state again soon after joining anyway.
                         PlayerInputState::default(),
                     ));
+                    // M3 field-report fix (join/broadcast race, `task_9ce21947`'s remaining
+                    // symptom: `play_block_action_broadcast_reaches_unspawned_actor.rs`'s own
+                    // "bystander-block-update" stage): signaled only now, strictly after the
+                    // `region.world.spawn(...)` call directly above -- `queue_join`'s own
+                    // `.await` on this same oneshot is what lets `connection.rs`'s `enter_play`
+                    // hold `ChunkBatchFinished` back until this exact join has genuinely
+                    // landed, so no per-tick broadcast loop (`respond_to_action`'s own
+                    // `broadcast_to_all`/`broadcast_to_others` foremost) can ever again find
+                    // this player's own `PlayerMarker` missing at a moment any outside
+                    // observer could already call this player "joined."
+                    let _ = join_ack.send(());
                 }
 
                 // M2 integration addition: registers (or replaces, harmlessly -- Context's
@@ -2176,12 +2194,17 @@ impl HardcodedWorld {
                 // M3 field-report fix (CI run 33319009203, `play_block_break_place_full.rs`'s
                 // own `placement_selects_the_held_items_own_block_and_orientation`, reproduced
                 // locally under parallel load with an instrumented build: ~35% failure rate,
-                // always the identical shape): a not-yet-spawned target -- `spawn_actor`'s own
-                // completion (`ChunkBatchFinished` receipt) only proves `connection.rs`'s
-                // `enter_play` is *about* to call `queue_join`, never that the join has
-                // actually reached `join_rx`, let alone been drained above -- is the same
-                // join/action mpsc-ordering race `carried_movement_updates`'s own doc comment
-                // already documents for ordinary movement reports. The pre-fix code here
+                // always the identical shape): a not-yet-spawned target -- that test's own
+                // reproduction calls `debug_set_held_item` directly, racing `queue_join` itself
+                // without ever waiting on this exact player's own join at all (that test's own
+                // doc comment: "deliberately not waiting for the join to land first"). A later
+                // M3 field-report fix (join/broadcast race, `queue_join`'s own doc comment) made
+                // `ChunkBatchFinished` receipt itself a reliable "this player's own `PlayerMarker`
+                // already exists" signal for any caller that *does* wait for it, but changes
+                // nothing for a caller like this one that never does -- this carry-forward stays
+                // load-bearing for exactly that case, the same join/action mpsc-ordering race
+                // `carried_movement_updates`'s own doc comment already documents for ordinary
+                // movement reports. The pre-fix code here
                 // handled it differently and wrongly: `find_player_entity` returning `None`
                 // left the mutation un-applied but *still* unconditionally sent `ack.send(())`
                 // -- the exact opposite of this pair's own doc comment, which already promised
@@ -2295,16 +2318,47 @@ impl HardcodedWorld {
     }
 
     /// Enqueues a `PlayerMarker` spawn, applied at the start of the region's next tick
-    /// (Context's join-queue). Never blocks (`UnboundedSender::send` never blocks).
+    /// (Context's join-queue), and awaits the tick loop's own confirmation that the spawn
+    /// has actually happened before returning.
     ///
-    /// `Err(RegionUnavailable)` iff the hardcoded region's tick-loop thread has already
-    /// died (M3 field-report fix, symptom 2: this project's single hardcoded region has no
+    /// M3 field-report fix (join/broadcast race, `task_9ce21947`'s remaining symptom): a
+    /// fire-and-forget send here used to let `connection.rs`'s `enter_play` send
+    /// `ChunkBatchFinished` -- the one signal any outside observer (a real client, or this
+    /// crate's own `drain_play_entry`-style tests) has for "this player is joined" -- while
+    /// this join might still be sitting undrained in `join_tx`'s queue. The region's own
+    /// per-tick drain order already guarantees the join-drain step (which spawns this
+    /// join's `PlayerMarker`) runs before that same tick's block-action-drain step
+    /// (`broadcast_to_all`/`broadcast_to_others`'s own doc comment), but gives no guarantee
+    /// at all about *which* tick a join queued concurrently with an unrelated player's
+    /// action actually lands on relative to that action -- a join enqueued moments too late
+    /// for the current tick's own join-drain window is carried to the next tick exactly like
+    /// every other per-tick queue in this loop, while an unrelated already-connected
+    /// player's own action queued in that same window can still be drained and broadcast
+    /// *this* tick, permanently missing the not-yet-spawned joiner (block-state changes are
+    /// idempotent -- once applied, no later broadcast repeats them). Awaiting this method
+    /// closes that window structurally rather than shrinking it: `connection.rs`'s
+    /// `enter_play` now calls this strictly before sending `ChunkBatchFinished` (mirrors
+    /// `debug_set_held_item`/`debug_set_survival`'s own established "await the tick loop's
+    /// own ack" pattern, below), so by the time any observer could possibly read
+    /// `ChunkBatchFinished` off the wire, this player's own `PlayerMarker` already exists in
+    /// `region.world` for every per-tick broadcast loop to find -- from that instant onward,
+    /// permanently, since `region.world` state persists across every later tick too.
+    ///
+    /// `Err(RegionUnavailable)` iff the hardcoded region's tick-loop thread has already died
+    /// (M3 field-report fix, symptom 2: this project's single hardcoded region has no
     /// supervision/restart, so once that thread is gone it stays gone for the rest of the
-    /// process's life) -- every caller treats this the same way `try_send_payload`
-    /// failures elsewhere in `connection.rs` are already treated: close/refuse this one
-    /// connection attempt with a diagnostic, never panic the per-connection task over it.
-    pub fn queue_join(&self, join: PendingJoin) -> Result<(), RegionUnavailable> {
-        self.join_tx.send(join).map_err(|_| RegionUnavailable)
+    /// process's life) -- covers both the initial send failing outright and the ack itself
+    /// never arriving (the thread died with this join still undrained, dropping its own
+    /// paired `oneshot::Sender` along with every other still-queued sender/reply it owned).
+    /// Every caller treats this the same way `try_send_payload` failures elsewhere in
+    /// `connection.rs` are already treated: close/refuse this one connection attempt with a
+    /// diagnostic, never panic the per-connection task over it.
+    pub async fn queue_join(&self, join: PendingJoin) -> Result<(), RegionUnavailable> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.join_tx
+            .send((join, ack_tx))
+            .map_err(|_| RegionUnavailable)?;
+        ack_rx.await.map_err(|_| RegionUnavailable)
     }
 
     /// Signals the region thread to stop after finishing its current tick, run
