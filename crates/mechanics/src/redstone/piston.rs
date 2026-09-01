@@ -40,6 +40,22 @@
 //! same as before), alongside its former placeholder-literal check (never produced by this
 //! module's own writes anymore, but still exercised directly by
 //! `piston_structure_resolver.rs`'s own acceptance test).
+//!
+//! M3 field-report fix (retract content/base timing split): a bare retraction's content — the
+//! vacated head clearing to air, with nothing pulled — settles immediately, synchronously with
+//! the triggering block event (`apply_retract_content`, called from `on_block_event`'s own
+//! TRIGGER_CONTRACT/TRIGGER_DROP arm). A sticky pull settles less of its content immediately
+//! than that: only the pulled block's own *source* position clears right away; the old head
+//! itself is left untouched at trigger time, and the pulled block's own relocated content there
+//! is genuinely deferred, landing only alongside the base's own `EXTENDED=false` flip at the
+//! `COMMIT_DELAY_TICKS`-later commit (`commit_retract`) — this asymmetry between the two retract
+//! sub-cases, and extend's own opposite split (base immediate via `write_base_extended`, content
+//! wholesale deferred via `commit_extend`, unchanged by this fix), are both confirmed directly
+//! against a now-deterministic real-oracle capture: `docs/findings-for-planning.md`'s own
+//! "recapture-stability closed for real" entry originally diagnosed retract's content as
+//! uniformly immediate, a hypothesis this fix's own implementation found too coarse once actually
+//! tried against the real per-fixture traces — `apply_retract_content`'s own doc comment has the
+//! full per-case breakdown and citations.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -393,11 +409,17 @@ struct PistonState {
 
 /// One in-flight extend or retract (Context §E) — cleared on commit (`on_scheduled_tick`'s own
 /// ordinary path) or force-finalized by a superseding trigger (`finalize_moving`, Section B4:
-/// forced early, never silently dropped).
+/// forced early, never silently dropped). `Retracting` carries the pulled block's own already-
+/// captured content (M3 field-report fix, retract content/base timing split) rather than the
+/// `PullPlan` itself — nothing at commit time needs the plan any more, only what it already
+/// captured: `None` for a bare retraction (nothing further to write at commit — its content
+/// already landed, immediately, in `apply_retract_content`); `Some(content)` for a sticky pull,
+/// where `content` is the one write commit time still owes (`commit_retract`'s own doc comment
+/// has the full citation).
 #[derive(Clone, Debug)]
 enum MovingPlan {
     Extending(PushPlan),
-    Retracting(PullPlan),
+    Retracting(Option<BlockStateId>),
 }
 
 #[derive(Clone, Debug)]
@@ -406,8 +428,12 @@ struct MovingPistonState {
     direction: Direction,
     /// Additive beyond Context's own literal `{ plan, direction }` listing — see this module's
     /// own top-of-file doc comment. Index 0 is always `piston_pos` itself (Context §G case 1's
-    /// whole-abort trigger); every other entry is a case-2 per-position skip candidate,
-    /// captured the moment `on_block_event` resolved this plan.
+    /// whole-abort trigger); every other entry is a case-2 per-position skip candidate, captured
+    /// the moment `on_block_event` resolved this plan. For a `Retracting` plan this is either
+    /// just `piston_pos` alone (a bare retraction has no further deferred write to re-validate)
+    /// or `piston_pos` plus the old head position (a sticky pull's own deferred content write
+    /// re-validates against whatever the old head held right after `apply_retract_content` left
+    /// it untouched) — `retract_snapshot`'s own doc comment has the full citation.
     snapshot: Vec<(BlockPos, Option<BlockStateId>)>,
 }
 
@@ -423,14 +449,21 @@ fn extend_snapshot(
     out
 }
 
+/// M3 field-report fix (retract content/base timing split): captures `piston_pos` itself
+/// (Context §G case 1's own whole-abort trigger, always present) plus, only when `old_head` is
+/// given, that position's own live state too (Context §G case 2's own per-position skip
+/// candidate for a sticky pull's deferred content write — real-vanilla-confirmed left untouched
+/// by `apply_retract_content`, so this snapshot captures exactly what it was left holding).
+/// `None` for a bare retraction, which has no further deferred content write left to
+/// re-validate at all — its content already landed, immediately, in `apply_retract_content`.
 fn retract_snapshot(
     world: &dyn BlockWorldAccess,
     piston_pos: BlockPos,
-    plan: &PullPlan,
+    old_head: Option<BlockPos>,
 ) -> Vec<(BlockPos, Option<BlockStateId>)> {
     let mut out = vec![(piston_pos, world.get_block(piston_pos))];
-    if let Some(p) = plan.pulled {
-        out.push((p, world.get_block(p)));
+    if let Some(head) = old_head {
+        out.push((head, world.get_block(head)));
     }
     out
 }
@@ -641,61 +674,94 @@ impl PistonBehavior {
         }
     }
 
-    /// Context §E's own atomic commit for a retraction — mirrors `commit_extend`'s own
-    /// structure. The pulled block (if any and still consistent, Context §G case 2) moves into
-    /// the old head position; its own vacated position becomes `AIR_ID`; a bare retraction (no
-    /// pull, or a since-changed pull candidate) simply leaves the old head as `AIR_ID`.
+    /// M3 field-report fix (retract content/base timing split): applies a retraction's
+    /// immediate content half, synchronously with the triggering block event (`on_block_event`'s
+    /// own TRIGGER_CONTRACT/TRIGGER_DROP arm calls this directly, never through
+    /// `finalize_moving`), and returns the pulled block's own captured content for
+    /// `commit_retract` to write in later — the one write commit time still owes.
+    ///
+    /// The two cases settle differently, both confirmed directly against the real oracle
+    /// (`docs/findings-for-planning.md`'s own "recapture-stability closed for real" entry has
+    /// the full citation):
+    /// - Bare retraction (`plan.pulled` is `None`): the old head clears to `AIR_ID` right here,
+    ///   immediately — `basic_piston_door_2x1`'s own trace shows this position already `air` at
+    ///   the very tick the retract triggers. Returns `None`: there is nothing further to write
+    ///   at commit time.
+    /// - Sticky pull (`plan.pulled` is `Some`): only the pulled block's own *source* position
+    ///   clears to `AIR_ID` immediately here. The old head itself is left completely untouched —
+    ///   `piston_sticky_pull_entity_free`'s own trace shows it still holding its own *pre-
+    ///   retract* content (a real `piston_head`, in that fixture), unchanged, for the two ticks
+    ///   right after the trigger — only settling into the pulled block's own real content at the
+    ///   deferred commit. Returns `Some(content)`, captured here (read once, before the source
+    ///   position's own write): no re-validation is needed for this read itself, since
+    ///   `plan` was just resolved against this very `ctx.world`, moments ago in the same
+    ///   `on_block_event` call, with zero elapsed ticks in which the source could have changed
+    ///   underneath it. The *write* of this captured content, later, is a different matter —
+    ///   `commit_retract`'s own doc comment covers that half's own re-validation.
+    fn apply_retract_content(
+        &self,
+        ctx: &mut UpdateContext,
+        piston_pos: BlockPos,
+        push_direction: Direction,
+        plan: &PullPlan,
+    ) -> Option<BlockStateId> {
+        let old_head = push_direction.apply(piston_pos);
+
+        let Some(source) = plan.pulled else {
+            ctx.world.set_block(old_head, AIR_ID);
+            if let Some(state) = ctx.world.get_block(old_head) {
+                border::fan_out_from_changed_block(ctx, old_head, state);
+            }
+            return None;
+        };
+
+        let pulled_content = ctx.world.get_block(source);
+        ctx.world.set_block(source, AIR_ID);
+        if let Some(state) = ctx.world.get_block(source) {
+            border::fan_out_from_changed_block(ctx, source, state);
+        }
+        pulled_content
+    }
+
+    /// M3 field-report fix (retract content/base timing split): the genuinely deferred half of
+    /// a retraction's commit. A bare retraction (`pulled_content` is `None`) has nothing further
+    /// to write here at all — its content already landed, immediately, in
+    /// `apply_retract_content`. A sticky pull (`pulled_content` is `Some`) still owes one write:
+    /// the pulled block's own real content, landing at the old head — gated by Context §G case
+    /// 2 (`state_matches_snapshot`, skipped if the old head's own live state no longer matches
+    /// what `apply_retract_content` left it as, mirroring `commit_extend`'s own identical
+    /// per-position distrust handling). Either way, this always writes the base's own real
+    /// `EXTENDED=false` id (`piston_state_id`) last, mirroring `commit_extend`'s own identical
+    /// base-writeback treatment.
     fn commit_retract(
         &self,
         ctx: &mut UpdateContext,
         piston_pos: BlockPos,
         push_direction: Direction,
-        plan: PullPlan,
+        pulled_content: Option<BlockStateId>,
         snapshot: &[(BlockPos, Option<BlockStateId>)],
     ) {
-        let old_head = push_direction.apply(piston_pos);
-        let mut written: Vec<BlockPos> = Vec::new();
-
-        let pulled_content = match plan.pulled {
-            Some(p) if state_matches_snapshot(&*ctx.world, snapshot, p) => ctx.world.get_block(p),
-            _ => None,
-        };
-
-        ctx.world
-            .set_block(old_head, pulled_content.unwrap_or(AIR_ID));
-        written.push(old_head);
-
-        if let (Some(p), Some(_)) = (plan.pulled, pulled_content) {
-            ctx.world.set_block(p, AIR_ID);
-            written.push(p);
-        }
-
-        // Own-state writeback (M3 field-report fix): writes the real `EXTENDED=false` id
-        // (`piston_state_id`) instead of re-affirming the base unchanged, mirroring
-        // `commit_extend`'s own identical treatment.
-        if ctx.world.get_block(piston_pos).is_none() {
-            return;
-        }
-        let sticky = self.is_sticky(piston_pos);
-        ctx.world
-            .set_block(piston_pos, piston_state_id(sticky, false, push_direction));
-        written.push(piston_pos);
-
-        // M3 field-report fix, mirroring `commit_extend`'s own identical note: `old_head`
-        // can itself land beyond the world's floor/ceiling when `piston_pos` sits flush
-        // against it (`push_direction.apply(piston_pos)`), in which case `set_block` above
-        // silently no-op'd it -- tolerate `get_block` resolving `None` here instead of
-        // `.expect`ing a write that never landed.
-        for pos in written {
-            if let Some(state) = ctx.world.get_block(pos) {
-                border::fan_out_from_changed_block(ctx, pos, state);
+        if let Some(content) = pulled_content {
+            let old_head = push_direction.apply(piston_pos);
+            if state_matches_snapshot(&*ctx.world, snapshot, old_head) {
+                ctx.world.set_block(old_head, content);
+                if let Some(state) = ctx.world.get_block(old_head) {
+                    border::fan_out_from_changed_block(ctx, old_head, state);
+                }
             }
         }
+
+        let sticky = self.is_sticky(piston_pos);
+        self.write_base_extended(ctx, piston_pos, sticky, push_direction, false);
     }
 
     /// Section B4 (M3 field-report fix): one `MovingPistonState`'s complete finalization --
-    /// re-validate (Context §G case 1's whole-abort check), commit (`commit_extend`/
-    /// `commit_retract`), then write back `PistonState.extended`. Shared by two call sites:
+    /// re-validate (Context §G case 1's whole-abort check), commit the half that is still
+    /// pending (`commit_extend`'s full content+base commit for an `Extending` plan;
+    /// `commit_retract`'s own base flip, plus a sticky pull's own still-owed content write, for
+    /// a `Retracting` one -- a bare retraction's content already landed synchronously back in
+    /// `on_block_event`/`apply_retract_content`, retract content/base timing split, M3 field-
+    /// report fix), then write back `PistonState.extended`. Shared by two call sites:
     /// `on_scheduled_tick`, the ordinary path (the commit's own `COMMIT_DELAY_TICKS`-later
     /// scheduled tick actually fires), and `on_block_event`, the FORCED path -- a new trigger
     /// arriving for `pos` while a previous commit is still in flight force-finalizes it right
@@ -717,8 +783,8 @@ impl PistonBehavior {
                 self.commit_extend(ctx, pos, moving.direction, plan, &moving.snapshot);
                 true
             }
-            MovingPlan::Retracting(plan) => {
-                self.commit_retract(ctx, pos, moving.direction, plan, &moving.snapshot);
+            MovingPlan::Retracting(pulled_content) => {
+                self.commit_retract(ctx, pos, moving.direction, pulled_content, &moving.snapshot);
                 false
             }
         };
@@ -834,22 +900,24 @@ impl BlockBehavior for PistonBehavior {
             }
             TRIGGER_CONTRACT | TRIGGER_DROP => {
                 let plan = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
-                // M3 field-report fix (Section B2, regression correction): unlike extend, a
-                // retract's own base `EXTENDED=false` flip is ALWAYS deferred -- never
-                // synchronous, whether or not anything is actually pulled (`TRIGGER_DROP`'s own
-                // "arm retracts without pulling" case is no exception). The base position itself
-                // becomes an in-flight animation and only shows `EXTENDED=false` at
-                // finalization, `COMMIT_DELAY_TICKS` ticks later -- `commit_retract`'s own
-                // writeback (`piston.rs`'s doc comment there) is the only base writer for a
-                // retract; this arm used to also flip it here immediately (the former `self.
-                // write_base_extended(ctx, pos, sticky, facing, false)` call, confirmed wrong
-                // against a real oracle diff, `docs/findings-for-planning.md`'s own "piston
-                // retract base-flip timing" entry).
-                let snapshot = retract_snapshot(ctx.world, pos, &plan);
+                // M3 field-report fix (retract content/base timing split, verified against a
+                // now-deterministic real-oracle capture: `docs/findings-for-planning.md`'s own
+                // "recapture-stability closed for real" entry has the full citation): a bare
+                // retraction's content settles immediately, synchronously with this block event
+                // (`TRIGGER_DROP`'s own "arm retracts without pulling" case is no exception) --
+                // but a sticky pull's own relocated content is genuinely deferred right alongside
+                // the base's own `EXTENDED=false` flip; only the pulled block's own *source*
+                // position clears immediately here (`apply_retract_content`'s own doc comment has
+                // the full breakdown of which half settles when). The base position itself
+                // becomes an in-flight animation and only shows `EXTENDED=false` at finalization,
+                // `COMMIT_DELAY_TICKS` ticks later (`commit_retract`'s own doc comment).
+                let pulled_content = self.apply_retract_content(ctx, pos, facing, &plan);
+                let old_head_for_snapshot = plan.pulled.map(|_| facing.apply(pos));
+                let snapshot = retract_snapshot(ctx.world, pos, old_head_for_snapshot);
                 self.moving.lock().unwrap().insert(
                     pos,
                     MovingPistonState {
-                        plan: MovingPlan::Retracting(plan),
+                        plan: MovingPlan::Retracting(pulled_content),
                         direction: facing,
                         snapshot,
                     },
