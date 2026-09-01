@@ -239,7 +239,15 @@ fn build_tier1_table() -> ShapeTable {
         (11314, flat(hopper_shape.clone())), // hopper, facing North
         (11315, flat(hopper_shape.clone())), // hopper, facing South
         (11316, flat(hopper_shape.clone())), // hopper, facing West
-        (11317, flat(hopper_shape)),         // hopper, facing East
+        (11317, flat(hopper_shape.clone())), // hopper, facing East
+        // Hopper `enabled=false` (M3-B0X hopper-ENABLED-at-placement fix,
+        // `play::mining::apply_placement`'s own `+5` outer-property offset): `enabled` never
+        // changes hopper's own hitbox, only the *id* -- same five rows, `+5` per facing.
+        (11318, flat(hopper_shape.clone())), // hopper, enabled=false, facing Down
+        (11319, flat(hopper_shape.clone())), // hopper, enabled=false, facing North
+        (11320, flat(hopper_shape.clone())), // hopper, enabled=false, facing South
+        (11321, flat(hopper_shape.clone())), // hopper, enabled=false, facing West
+        (11322, flat(hopper_shape)),         // hopper, enabled=false, facing East
         // piston_head (M3 field-report fix, Task 3: own-state writeback now writes the real
         // `minecraft:piston_head` id -- `crates/mechanics/src/redstone/piston.rs`'s own
         // `piston_head_id`/`PISTON_HEAD_BASE` doc comment has the full arithmetic citation,

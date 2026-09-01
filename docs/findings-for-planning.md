@@ -466,6 +466,24 @@ Entries name the milestone that surfaced them and the code they concern.
   (`crates/server/src/play/mining.rs`) before this path is genuinely
   exercised end-to-end by a real player action.
 
+  **Superseded by the M3-B0X block-entity production wiring wave** (owner's
+  real-client field report: "chest placed, rejoin -> invisible"):
+  `world.rs`'s new `spawn_block_entity_for_placement`/`despawn_block_entity_
+  if_needed` now spawn/despawn a real `ChestBlockEntity`/`FurnaceBlockEntity`/
+  `HopperBlockEntity` on every real placement/break of the six BE-creating
+  kinds, and the chunk packet's own `block_entities` list (`chunk::encode_
+  block_entities`, `packets::BlockEntityInfo`, `LevelChunkWithLight.
+  block_entities` — previously an inert `Vec<u8>` that could only ever encode
+  correctly as empty) now reflects them for real, real-connection-verified
+  end to end (`crates/server/tests/play_block_entity_chunk_list.rs`): a chest
+  a second player joins after is visible in that join's own chunk packet;
+  breaking it removes the entry from a later joiner's own packet. This
+  section's own three new entries below (block entities not persisted across
+  a restart; a furnace's own `lit` bit never visually swaps; comparator has
+  no real ECS block entity, deliberately) are what remains open from this
+  wave's own work — read them alongside this entry rather than treating it
+  as still fully unresolved.
+
 - **Replay harness still uses hand-calibrated dispatch-range constants.**
   `crates/testing/gametest/src/replay.rs`'s own `tier1_registry` construction
   still hardcodes each tier-1/piston component's own dispatch range as a
@@ -655,6 +673,86 @@ Entries name the milestone that surfaced them and the code they concern.
   redstone-lockout behavior is conventionally implemented alongside its own
   block entity); not attempted here as this wave's own brief explicitly
   scoped block-entity work to a separate future wave.
+
+  **Superseded in part by the M3-B0X block-entity production wiring wave
+  (owner's real-client field report, "chest placed, rejoin -> invisible"):**
+  this wave DID implement the `onPlace` half of this entry (`play::mining::
+  apply_placement_with_redstone`'s new `redstone` parameter, consulted only
+  for `Hopper` via `rc_mechanics::redstone::best_neighbor_signal`) — a
+  hopper placed beside an already-active signal source now correctly writes
+  the `enabled=false` id (real-connection-verified, `crates/server/tests/
+  play_block_entity_chunk_list.rs`'s `hopper_placed_beside_a_lit_redstone_
+  torch_starts_disabled`). What remains open, unchanged from this entry's
+  own original wording: there is still no real `HopperBehavior`/dispatch-
+  range registration, so `ENABLED` is never re-evaluated again after
+  placement — a hopper placed unpowered, with power arriving at an adjacent
+  cell on some LATER tick, stays enabled forever instead of vanilla's own
+  dynamic `neighborChanged`-driven lockout. Planning still owed a decision
+  on whether/when a real `HopperBehavior` closes this remaining half.
+
+- **M3-B0X block-entity production wiring (owner's real-client field
+  report, "chest placed, rejoin -> invisible" — the Stage-7 entry above)
+  closed the production spawn/despawn/chunk-list gap that entry described,
+  but surfaced three new, narrower simplifications of its own, all needing
+  a decision:**
+
+  (a) **Block entities do not survive a server restart.** `chunk_nbt.rs`'s
+  own pre-existing `ChunkNbtCodec::to_nbt` already refused (`Err
+  (UnsupportedBlockEntities)`) to serialize any chunk carrying a non-empty
+  `BlockEntityIndex` at all — a real invariant this project has held since
+  M2-B04 ("no `BlockEntityCodec` exists yet, WORLD-D6"), previously
+  unreachable in practice because nothing ever populated that index. Once
+  this wave starts spawning real entries, that invariant would otherwise
+  turn every autosave/shutdown save of a chunk holding a placed chest/
+  furnace/hopper into a hard failure for the WHOLE chunk (blocks/biomes/
+  light included, not merely the block entity — `io_pool.rs`'s own
+  `SaveError` doc comment: any `Err` here is logged and the entire save is
+  skipped), a materially worse regression than "the block entity itself
+  doesn't persist." Contained defensively, without touching `chunk_nbt.rs`
+  or its established error contract: `io_pool.rs::save_one` now always
+  hands `to_nbt` a fresh, empty `BlockEntityIndex` instead of the real
+  live one, so ordinary chunk content keeps saving/loading exactly as
+  before and only the block entity's own runtime state (inventory
+  contents, furnace cook progress, hopper cooldown) is silently dropped —
+  confirmed: a chest reloaded after a full server restart is invisible
+  again (no chunk-list entry, since the reloaded index is empty), exactly
+  the owner's own originally reported symptom, now scoped to "after a
+  restart" instead of "always." Needs a decision on when a real
+  `BlockEntityCodec` (WORLD-D6) is built to close this for good — likely
+  the same future wave that adds real per-entity NBT to the chunk-list's
+  own `data` field (`BlockEntityInfo.type_id`'s own sibling field, always
+  `TAG_End` today) for M4's menu-open channel.
+
+  (b) **A real furnace's own `lit` block-state bit never visually changes,
+  even while it is actively smelting.** `EcsBlockEntityWorld::swap_furnace_
+  lit_state` (`stage7/ecs.rs`, pre-existing, unmodified by this wave) has
+  always been a documented no-op ("ships no real `FurnaceLitStateResolver`
+  ... a future blueprint with a legal path to a real generated block-state
+  table supplies one") — previously inconsequential since no real furnace
+  block entity ever ticked in production at all. Now that this wave spawns
+  and ticks real `FurnaceBlockEntity`s, the gap is client-visible for the
+  first time: `FurnaceBlockEntity.lit_time_remaining`/`cook_time` correctly
+  track fuel consumption and smelting progress internally, but the block a
+  player actually sees stays at whatever `lit` value `apply_placement`
+  wrote (always `lit=false`, the placement-time default) forever — a real
+  furnace never shows its lit-fire-front texture. Needs the same decision
+  this pre-existing doc comment already flags (a real generated block-state
+  lookup table/resolver) plus a scheduling call on which wave builds it.
+
+  (c) **`minecraft:comparator` intentionally has no real ECS block entity.**
+  Per this wave's own briefing (confirmed: `ComparatorBehavior` keeps its
+  analog output in its own internal Stage-4 per-position table, never in a
+  `rc_mechanics::block_entity` component) — a comparator's own chunk-packet
+  block-entity-list entry (`chunk::encode_block_entities`) is derived
+  purely from its live raw block-state id, with no persisted per-instance
+  record backing it at all, unlike the other five kinds. This is a
+  deliberate, working M3 design (real-connection-verified: `crates/server/
+  tests/play_block_entity_chunk_list.rs`'s `comparator_appears_in_the_
+  chunk_block_entity_list_without_a_tracked_ecs_entity`), not a defect —
+  recorded here only because a future wave needing a comparator's
+  `OutputSignal` independently queryable (e.g. a container-menu/analyzer
+  UI, M4 scope) will need a real `ComparatorBlockEntity` introduced from
+  scratch, with no existing partial scaffolding to build on.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 

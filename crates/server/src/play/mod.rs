@@ -39,12 +39,14 @@ pub use connection::{PlayerProfile, enter_play};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
 pub use mining::{
     BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER, BLOCK_INTERACTION_RANGE_CREATIVE,
-    BLOCK_INTERACTION_RANGE_SURVIVAL, BreakOutcome, DestroyOutcome, DestroySpeed, DestroyState,
-    DigProperties, GameModeState, HeldItem, HeldItemStub, Orientation, OrientedStateTable,
-    PlaceOutcome, PlaceableBlockKind, PlacementSelection, RejectReason, StopOutcome, TickOutcome,
-    ToolKind, ToolMaterial, abort_destroy, apply_placement, begin_destroy, destroy_speed,
-    dig_properties, dig_properties_for_raw_state, finalize_break, has_correct_tool_for_drops,
-    is_placement_obstructed, is_within_block_interaction_range, look_vector, nearest_direction6,
+    BLOCK_INTERACTION_RANGE_SURVIVAL, BlockEntityWireKind, BreakOutcome, DestroyOutcome,
+    DestroySpeed, DestroyState, DigProperties, GameModeState, HeldItem, HeldItemStub, Orientation,
+    OrientedStateTable, PlaceOutcome, PlaceableBlockKind, PlacementSelection, RejectReason,
+    StopOutcome, TickOutcome, ToolKind, ToolMaterial, abort_destroy, apply_placement,
+    apply_placement_with_redstone, begin_destroy, block_entity_wire_kind_for_raw_state,
+    destroy_speed, dig_properties, dig_properties_for_raw_state, finalize_break,
+    has_correct_tool_for_drops, hopper_facing_from_raw_state, is_placement_obstructed,
+    is_within_block_interaction_range, look_vector, nearest_direction6,
     nearest_horizontal_direction4, resolve_orientation, settle_neighbor_updates, stop_destroy,
     tick_destroy_state, ticks_to_break, tier1_oriented_state_table,
 };
@@ -56,5 +58,6 @@ pub use movement::{
 };
 pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
 pub use world::{
-    HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES, Stage4Counters,
+    EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES,
+    Stage4Counters,
 };

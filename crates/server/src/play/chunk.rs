@@ -9,7 +9,8 @@ use bytes::{Buf, Bytes};
 use bytes::{BufMut, BytesMut};
 use rc_registries::generated_v776::block_states::{self, default_state as blocks};
 
-use super::packets::LightArray;
+use super::mining;
+use super::packets::{BlockEntityInfo, LightArray};
 
 /// M2 integration note: `#[cfg(test)]` -- this constant's only remaining production-code
 /// consumer, `build_placeholder_chunk_data` (below), lost its own last production call
@@ -319,6 +320,43 @@ pub fn encode_live_chunk_data(
         data.extend(encode_section(&block_arr, &biome_arr));
     }
     data
+}
+
+/// M3-B0X block-entity production wiring (Context, "Chunk packet block-entity list"): one
+/// `BlockEntityInfo` per block in `blocks` whose raw state id is one of the six
+/// `BlockEntityWireKind`s' reachable ids (`play::mining::block_entity_wire_kind_for_raw_state`)
+/// -- derived directly from the column's own live block-state content, not from `rc-chunk-
+/// storage`'s `BlockEntityIndex` (which only tracks the five ECS-backed kinds this project
+/// spawns a real component for, never `Comparator` -- Context, "Comparator BE"): scanning raw
+/// state instead means a comparator's chunk-list entry needs no separate tracking, and the
+/// furnace/blast_furnace/smoker distinction (one shared `FurnaceBlockEntity` component, three
+/// distinct `minecraft:block_entity_type` ids) falls out for free, since the id alone already
+/// tells the three apart. Iterated in the same per-section, index-ascending order `encode_live_
+/// chunk_data` already visits every entry in (`block_index`'s own `(local_y<<8)|(z<<4)|x`
+/// order, `rc_chunk_storage::column`'s own doc comment) -- no extra pass over the column beyond
+/// what that function already pays for, only a cheap `HashMap` lookup per entry. `packed_xz`/
+/// `y` match `BlockEntityInfo`'s own doc comment exactly.
+pub fn encode_block_entities(blocks: &rc_chunk_storage::BlockStateColumn) -> Vec<BlockEntityInfo> {
+    use rc_chunk_storage::{RegistryId, WORLD_MIN_Y as CHUNK_STORAGE_WORLD_MIN_Y};
+
+    let mut out = Vec::new();
+    for section_index in 0..SECTION_COUNT {
+        let section_base_y = CHUNK_STORAGE_WORLD_MIN_Y + (section_index as i32) * 16;
+        for (i, id) in blocks.section(section_index).iter().enumerate() {
+            let Some(kind) = mining::block_entity_wire_kind_for_raw_state(id.to_raw()) else {
+                continue;
+            };
+            let local_y = (i >> 8) as i32;
+            let z = ((i >> 4) & 0x0F) as u8;
+            let x = (i & 0x0F) as u8;
+            out.push(BlockEntityInfo {
+                packed_xz: (x << 4) | z,
+                y: (section_base_y + local_y) as i16,
+                type_id: kind.registry_type_id(),
+            });
+        }
+    }
+    out
 }
 
 /// M1 integration fix: this blueprint's own first implementation attempt hand-rolled

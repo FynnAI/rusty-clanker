@@ -13,11 +13,15 @@ use rc_chunk_storage::io_pool::ChunkNbtResolvers;
 use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    AnvilDiskBackend, BiomeColumn, BlockStateColumn, ChunkKeyTag, ChunkPersistenceState,
-    ChunkStorageBackend, CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds,
-    WORLD_HEIGHT, WORLD_MIN_Y,
+    AnvilDiskBackend, BiomeColumn, BlockEntityIndex, BlockStateColumn, ChunkKeyTag,
+    ChunkPersistenceState, ChunkStorageBackend, CompressionScheme, FilesystemPlayerDataStore,
+    PaletteThresholds, WORLD_HEIGHT, WORLD_MIN_Y,
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_mechanics::block_entity::{
+    BlockEntityHeader, chest::ChestBlockEntity, furnace::FurnaceBlockEntity,
+    hopper::HopperBlockEntity,
+};
 use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
 use rc_physics::{Aabb, PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HEIGHT_SNEAKING, Vec3};
 use rc_protocol::encode_payload;
@@ -47,7 +51,7 @@ use super::movement::{
     eye_position, feet_block_pos, merge_move_report,
 };
 use super::packets::{
-    AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
+    AcknowledgeBlockChange, BlockEntityInfo, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
     LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent, SetBlockDestroyStage,
     SetChunkCacheCenter, SynchronizePlayerPosition, pack_position,
 };
@@ -677,7 +681,23 @@ struct ChunkGridRequest {
     /// this type never assumes the requested grid and the ticket's own load radius share
     /// one shape.
     coords: Vec<(i32, i32)>,
-    reply: oneshot::Sender<Vec<Vec<u8>>>,
+    reply: oneshot::Sender<Vec<EncodedChunk>>,
+}
+
+/// One chunk column's wire-encoded content, threaded through `ChunkGridRequest`/
+/// `PendingStreamChunk`'s own resolution pipeline (M3-B0X block-entity production wiring,
+/// Context "Chunk packet block-entity list"): `data` is `chunk::encode_live_chunk_data`'s own
+/// section blob (unchanged); `block_entities` is `chunk::encode_block_entities`'s own real
+/// per-chunk list, computed from the identical `BlockStateColumn` in the same call, so the two
+/// never observe a different tick's content. Replaces the bare `Vec<u8>` this pipeline used to
+/// carry (`block_entities` had no source at all before this wave). `pub` (not private, unlike
+/// `ChunkGridRequest`/`PendingChunkGridRequest`): `request_chunk_grid` is a `pub` method whose
+/// return type must name this struct, and `connection.rs`'s own `enter_play` (a sibling
+/// module, not this one) destructures its fields directly.
+#[derive(Clone)]
+pub struct EncodedChunk {
+    pub data: Vec<u8>,
+    pub block_entities: Vec<BlockEntityInfo>,
 }
 
 /// The tick-loop-owned bookkeeping for one still-resolving `ChunkGridRequest` -- carried
@@ -685,8 +705,8 @@ struct ChunkGridRequest {
 /// chunks' async load may take several ticks to complete.
 struct PendingChunkGridRequest {
     coords: Vec<(i32, i32)>,
-    resolved: Vec<Option<Vec<u8>>>,
-    reply: oneshot::Sender<Vec<Vec<u8>>>,
+    resolved: Vec<Option<EncodedChunk>>,
+    reply: oneshot::Sender<Vec<EncodedChunk>>,
 }
 
 /// New (M2 field-report chunk-streaming fix): one chunk coordinate `stream_chunks_for_
@@ -774,11 +794,133 @@ fn bootstrap_redstone_dispatch(world: &mut World) {
     let signals = Arc::new(signals);
     handles.bind_registry(Arc::clone(&signals));
 
+    // M3-B0X hopper-ENABLED-at-placement fix: `mining::apply_placement`'s own real-connection
+    // call site (below) needs this same region's `SignalSourceRegistry` to answer `hasNeighbor
+    // Signal` for a freshly placed hopper -- cloned here, before `register_piston` below moves
+    // `signals` away, and inserted as its own resource (`ComparatorBehavior`/`RepeaterBehavior`
+    // never needed one themselves, since `bind_registry` already wired their own copy in
+    // directly -- this is the first call site outside `rc-mechanics` that needs to consult the
+    // registry on its own, so no such resource existed before this wave).
+    let signals_for_placement = Arc::clone(&signals);
+
     let piston_ids = rc_mechanics::redstone::derive_piston_state_ids();
     rc_mechanics::redstone::register_piston(&mut behaviors, signals, &piston_ids);
 
     world.insert_resource(behaviors);
     world.insert_resource(rc_mechanics::ContainerSignalsResource(container_signals));
+    world.insert_resource(SignalRegistryResource(signals_for_placement));
+}
+
+/// `bootstrap_redstone_dispatch`'s own doc comment above ("Also constructs...") has the full
+/// rationale. `Resource`, not merely a plain `Arc` alias, so it can live in `region.world`
+/// alongside every other per-region resource this composition root already inserts.
+#[derive(Resource)]
+struct SignalRegistryResource(Arc<rc_mechanics::redstone::SignalSourceRegistry>);
+
+/// M3-B0X production block-entity spawn wiring (Context, "Spawn on placement / remove on
+/// break"): if `kind` is one of the six BE-creating kinds, spawns a real `rc_mechanics::
+/// block_entity` component pair -- `BlockEntityHeader { pos }` plus the matching typed
+/// component -- into `world` and pushes the new `Entity` onto `pos`'s own chunk's real
+/// `BlockEntityIndex` component (the same index `stage7::ecs::EcsBlockEntityWorld` discovers
+/// entities through, `stage7/ecs.rs`'s own `chunk_be_index: Query<&BlockEntityIndex>`
+/// construction), so Stage 7's already-wired-but-previously-unfed tick systems (`register_
+/// stage7`, called unconditionally by this same composition root) find it starting next tick.
+/// A no-op for every other kind (`Comparator` included -- Context, "Comparator BE": its
+/// analog output lives inside `ComparatorBehavior`'s own Stage-4 state, never a real block
+/// entity). Furnace/blast_furnace/smoker all share `FurnaceBlockEntity` (Stage 7's own single
+/// `BlockEntityKind::Furnace` tick behavior, `stage7.rs`'s own module doc comment) -- only the
+/// chunk-list's own `minecraft:block_entity_type` id (`chunk::encode_block_entities`) tells the
+/// three apart, never the ECS component. `new_state` is the placement's own final broadcast
+/// id -- `HopperBlockEntity::empty(facing)` needs a real `Direction`, recovered from it via
+/// `mining::hopper_facing_from_raw_state` (`PlaceOutcome` carries no `Orientation`).
+fn spawn_block_entity_for_placement(
+    world: &mut World,
+    kind: PlaceableBlockKind,
+    pos: BlockPos,
+    new_state: u32,
+) {
+    let entity = match kind {
+        PlaceableBlockKind::Chest => Some(
+            world
+                .spawn((BlockEntityHeader { pos }, ChestBlockEntity::empty()))
+                .id(),
+        ),
+        PlaceableBlockKind::Furnace
+        | PlaceableBlockKind::BlastFurnace
+        | PlaceableBlockKind::Smoker => Some(
+            world
+                .spawn((BlockEntityHeader { pos }, FurnaceBlockEntity::empty()))
+                .id(),
+        ),
+        PlaceableBlockKind::Hopper => {
+            let facing = mining::hopper_facing_from_raw_state(new_state);
+            Some(
+                world
+                    .spawn((BlockEntityHeader { pos }, HopperBlockEntity::empty(facing)))
+                    .id(),
+            )
+        }
+        _ => None,
+    };
+    let Some(entity) = entity else { return };
+
+    let key = pos.chunk_key(DimensionId::OVERWORLD);
+    let chunk_entity = world.resource::<ChunkIndex>().0.get(&key).copied();
+    if let Some(chunk_entity) = chunk_entity
+        && let Some(mut index) = world.get_mut::<BlockEntityIndex>(chunk_entity)
+    {
+        index.push(entity);
+    }
+}
+
+/// M3-B0X production block-entity spawn wiring (Context, "Spawn on placement / remove on
+/// break"): the call-site-shared "was this a BE-creating kind, and did the break actually
+/// happen" gate every `mining::finalize_break` call site applies before despawning -- `pre_
+/// break_raw` is the raw state each call site already read *before* calling `finalize_break`
+/// (every site already computes this for `respond_break`'s own diff), so this needs no
+/// separate world read of its own. `Comparator` never spawns a tracked entity in the first
+/// place (`spawn_block_entity_for_placement`'s own doc comment) -- `spawns_tracked_entity()`
+/// filters it out here too, so a broken comparator is correctly a no-op.
+fn despawn_block_entity_if_needed(world: &mut World, outcome: BreakOutcome, pre_break_raw: u32) {
+    let BreakOutcome::Applied { pos, .. } = outcome else {
+        return;
+    };
+    let Some(kind) = mining::block_entity_wire_kind_for_raw_state(pre_break_raw) else {
+        return;
+    };
+    if !kind.spawns_tracked_entity() {
+        return;
+    }
+    despawn_block_entity_at(world, pos);
+}
+
+/// Finds the real block-entity `Entity` at `pos` (by scanning its own chunk's
+/// `BlockEntityIndex`, comparing each candidate's `BlockEntityHeader.pos` -- mirrors `stage7::
+/// ecs::EcsBlockEntityWorld::new`'s own identical `Query`-then-match pattern, at chunk
+/// granularity instead of region granularity since this call site only ever needs one
+/// position), removes it from that index, and despawns the entity -- a silent no-op if `pos`'s
+/// own chunk carries no such index or no matching entity (defensive only: every real call site
+/// here already confirmed, via `block_entity_wire_kind_for_raw_state`, that `pos` held a
+/// BE-creating kind immediately before the break that triggered this call).
+fn despawn_block_entity_at(world: &mut World, pos: BlockPos) {
+    let key = pos.chunk_key(DimensionId::OVERWORLD);
+    let Some(chunk_entity) = world.resource::<ChunkIndex>().0.get(&key).copied() else {
+        return;
+    };
+    let Some(index) = world.get::<BlockEntityIndex>(chunk_entity) else {
+        return;
+    };
+    let candidates: Vec<Entity> = index.entities().to_vec();
+    let Some(target) = candidates
+        .into_iter()
+        .find(|&e| world.get::<BlockEntityHeader>(e).map(|h| h.pos) == Some(pos))
+    else {
+        return;
+    };
+    if let Some(mut index) = world.get_mut::<BlockEntityIndex>(chunk_entity) {
+        index.remove(target);
+    }
+    world.despawn(target);
 }
 
 /// Direct (non-`Query`) `BlockWorldAccess` adapter over `region.world`'s own chunk entities
@@ -1464,14 +1606,16 @@ impl HardcodedWorld {
                                     let biomes = region.world.get::<BiomeColumn>(entity).expect(
                                         "every resident chunk entity carries BiomeColumn (M2-B01's fixed component set)",
                                     );
-                                    req.resolved[slot] =
-                                        Some(chunk::encode_live_chunk_data(blocks, biomes));
+                                    req.resolved[slot] = Some(EncodedChunk {
+                                        data: chunk::encode_live_chunk_data(blocks, biomes),
+                                        block_entities: chunk::encode_block_entities(blocks),
+                                    });
                                 }
                             }
                         }
                         if chunk_grid_requests[i].resolved.iter().all(Option::is_some) {
                             let req = chunk_grid_requests.remove(i);
-                            let ordered: Vec<Vec<u8>> = req
+                            let ordered: Vec<EncodedChunk> = req
                                 .resolved
                                 .into_iter()
                                 .map(|v| v.expect("just checked all Some"))
@@ -1495,7 +1639,7 @@ impl HardcodedWorld {
                 // stays in `pending_stream_chunks` for a later tick (mirrors `chunk_grid_
                 // requests`' own carry-forward pattern above).
                 if !pending_stream_chunks.is_empty() {
-                    let mut ready: std::collections::HashMap<i32, Vec<(i32, i32, Vec<u8>)>> =
+                    let mut ready: std::collections::HashMap<i32, Vec<(i32, i32, EncodedChunk)>> =
                         std::collections::HashMap::new();
                     let mut still_pending = Vec::new();
                     for item in std::mem::take(&mut pending_stream_chunks) {
@@ -1509,11 +1653,14 @@ impl HardcodedWorld {
                                 let biomes = region.world.get::<BiomeColumn>(entity).expect(
                                     "every resident chunk entity carries BiomeColumn (M2-B01's fixed component set)",
                                 );
-                                let data = chunk::encode_live_chunk_data(blocks, biomes);
+                                let encoded = EncodedChunk {
+                                    data: chunk::encode_live_chunk_data(blocks, biomes),
+                                    block_entities: chunk::encode_block_entities(blocks),
+                                };
                                 ready.entry(item.network_entity_id).or_default().push((
                                     item.coord.0,
                                     item.coord.1,
-                                    data,
+                                    encoded,
                                 ));
                             }
                             None => still_pending.push(item),
@@ -1542,13 +1689,13 @@ impl HardcodedWorld {
                             let _ = marker
                                 .connection
                                 .try_send_payload(encode_payload(&ChunkBatchStart {}));
-                            for (chunk_x, chunk_z, data) in chunks {
+                            for (chunk_x, chunk_z, encoded) in chunks {
                                 let level_chunk = LevelChunkWithLight {
                                     chunk_x,
                                     chunk_z,
                                     heightmaps: heightmaps.clone(),
-                                    data,
-                                    block_entities: Vec::new(),
+                                    data: encoded.data,
+                                    block_entities: encoded.block_entities,
                                     sky_light_mask: sky_light_mask.clone(),
                                     block_light_mask: block_light_mask.clone(),
                                     empty_sky_light_mask: empty_sky_light_mask.clone(),
@@ -1765,6 +1912,11 @@ impl HardcodedWorld {
                                     &cascade_before,
                                     location,
                                 );
+                                despawn_block_entity_if_needed(
+                                    &mut region.world,
+                                    outcome,
+                                    pre_break,
+                                );
                             } else {
                                 let props = mining::dig_properties_for_raw_state(read_raw_state(
                                     &region.world,
@@ -1825,6 +1977,11 @@ impl HardcodedWorld {
                                         DimensionId::OVERWORLD,
                                         &cascade_before,
                                         location,
+                                    );
+                                    despawn_block_entity_if_needed(
+                                        &mut region.world,
+                                        outcome,
+                                        pre_break,
                                     );
                                 }
                             }
@@ -1891,6 +2048,11 @@ impl HardcodedWorld {
                                         &cascade_before,
                                         location,
                                     );
+                                    despawn_block_entity_if_needed(
+                                        &mut region.world,
+                                        outcome,
+                                        pre_break,
+                                    );
                                 }
                             }
                         }
@@ -1941,7 +2103,14 @@ impl HardcodedWorld {
                                 DimensionId::OVERWORLD,
                                 location,
                             );
-                            let outcome = mining::apply_placement(
+                            // M3-B0X hopper-ENABLED-at-placement fix: cloned out (cheap, `Arc`-
+                            // backed) before `DirectBlockWorld` below takes `&mut region.world`
+                            // -- `mining::apply_placement_with_redstone`'s own `redstone`
+                            // parameter needs only a borrow of the registry itself, never
+                            // `region.world`.
+                            let redstone_registry =
+                                region.world.resource::<SignalRegistryResource>().0.clone();
+                            let outcome = mining::apply_placement_with_redstone(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
                                     dimension: DimensionId::OVERWORLD,
@@ -1962,6 +2131,7 @@ impl HardcodedWorld {
                                 motion.yaw,
                                 motion.pitch,
                                 &player_boxes,
+                                Some(&redstone_registry),
                             );
                             let outcome_pos = match outcome {
                                 PlaceOutcome::Applied { pos, .. }
@@ -1975,6 +2145,24 @@ impl HardcodedWorld {
                                 &cascade_before,
                                 outcome_pos,
                             );
+                            // M3-B0X production block-entity spawn wiring (Context, owner's
+                            // real-client field report: "chest placed, rejoin -> invisible" --
+                            // production never spawned a real block entity for the six BE-
+                            // creating kinds at all). `held` is `Copy` (already consumed by
+                            // value above); `outcome` is `Copy` too (`PlaceOutcome`'s own
+                            // derive) -- both safe to read again here.
+                            if let (
+                                PlaceOutcome::Applied { pos, new_state },
+                                HeldItemStub::Block(kind),
+                            ) = (outcome, held)
+                            {
+                                spawn_block_entity_for_placement(
+                                    &mut region.world,
+                                    kind,
+                                    pos,
+                                    new_state,
+                                );
+                            }
                         }
                         BlockActionKind::Ignored => {
                             send_ack(&action);
@@ -2121,6 +2309,7 @@ impl HardcodedWorld {
                                 &cascade_before,
                                 pos,
                             );
+                            despawn_block_entity_if_needed(&mut region.world, outcome, pre_break);
                         }
                         TickOutcome::Idle
                         | TickOutcome::CancelledBlockChanged
@@ -2669,7 +2858,7 @@ impl HardcodedWorld {
         center: ChunkKey,
         ticket_radius: u8,
         coords: Vec<(i32, i32)>,
-    ) -> Option<Vec<Vec<u8>>> {
+    ) -> Option<Vec<EncodedChunk>> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.chunk_grid_tx
             .send(ChunkGridRequest {

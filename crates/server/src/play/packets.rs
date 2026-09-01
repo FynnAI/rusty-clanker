@@ -5,7 +5,7 @@
 //! per Implementation step 12 (see the implementation commit body for the reconciliation
 //! record).
 
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 use rc_core::BlockPos;
 use rc_protocol::{Bytes, BytesMut, RcPacket};
 
@@ -160,6 +160,68 @@ impl rc_protocol::WireRead for LightArray {
     }
 }
 
+/// M3-B0X block-entity production wiring (Context, "Chunk packet block-entity list"): one
+/// `LevelChunkWithLight.block_entities` entry -- `packed_xz = (x << 4) | z` (both
+/// chunk-section-local, minecraft.wiki's own documented "Chunk Data" wire format, matching
+/// `crates/testing/paritybot/src/packet_capture.rs`'s own already-established packing
+/// convention for the same field), `y` an absolute world coordinate, `type_id` the real
+/// `minecraft:block_entity_type` registry id (`play::mining::BlockEntityWireKind::
+/// registry_type_id`). Cross-checked directly against azalea's own real decoder
+/// (`azalea-protocol/src/packets/game/c_level_chunk_with_light.rs::BlockEntity`:
+/// `packed_xz: u8, y: u16, kind: BlockEntityKind (VarInt registry id), data: Nbt`) -- `y` is
+/// written as a plain big-endian `i16` here (Java's own `short`; the two-byte pattern is
+/// identical whether the local type treats it as signed or not, and every real world-Y this
+/// project ever produces, including this milestone's own negative superflat floor, round-trips
+/// correctly through `i16`). `data` carries no NBT content at M3 (Context: "Contents are never
+/// pushed via BE NBT... entries carry NO NBT (empty update tag -> written as null)") -- a
+/// lone `TAG_End` (`0x00`) byte, exactly the network-format "no data" `simdnbt::owned::
+/// read_unnamed` decodes as `Nbt::None` (verified directly against that crate's own `Nbt::
+/// read_unnamed` source, `simdnbt-0.10.0/src/owned/mod.rs`) -- never a real compound; M4's own
+/// future scope (menus sending real contents on open, per the same Context note) is what
+/// would ever need this type to carry real NBT bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockEntityInfo {
+    pub packed_xz: u8,
+    pub y: i16,
+    pub type_id: u32,
+}
+
+impl rc_protocol::WireWrite for BlockEntityInfo {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        buf.put_u8(self.packed_xz);
+        buf.put_i16(self.y);
+        rc_protocol::VarInt::new(self.type_id as i32).encode(buf);
+        buf.put_u8(0); // TAG_End -- no NBT content (this struct's own doc comment, M3-scope).
+    }
+}
+impl rc_protocol::WireRead for BlockEntityInfo {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, rc_protocol::PacketDecodeError> {
+        if buf.remaining() < 1 + 2 {
+            return Err(rc_protocol::PacketDecodeError::UnexpectedEof);
+        }
+        let packed_xz = buf.get_u8();
+        let y = buf.get_i16();
+        let type_id = rc_protocol::VarInt::decode(buf)?.get() as u32;
+        // NBT tail: a lone `TAG_End` (`0x00`) for every entry this server ever writes (this
+        // struct's own doc comment) -- any other root tag type is a malformed/foreign packet
+        // this crate never needs to decode for real (no production caller reads this type off
+        // the wire; only this crate's own test-side round-trip/decode helpers do), so a real
+        // compound is skipped by its own declared byte length rather than fully parsed.
+        if buf.remaining() < 1 {
+            return Err(rc_protocol::PacketDecodeError::UnexpectedEof);
+        }
+        let root_type = buf.get_u8();
+        if root_type != 0 {
+            return Err(rc_protocol::PacketDecodeError::UnexpectedEof);
+        }
+        Ok(BlockEntityInfo {
+            packed_xz,
+            y,
+            type_id,
+        })
+    }
+}
+
 #[derive(RcPacket, Debug, Clone, PartialEq)]
 #[packet(state = "play", bound = "client", id = 0x2D)]
 pub struct LevelChunkWithLight {
@@ -170,7 +232,7 @@ pub struct LevelChunkWithLight {
     #[rc(prefixed_array = "VarInt")]
     pub data: Vec<u8>,
     #[rc(prefixed_array = "VarInt")]
-    pub block_entities: Vec<u8>,
+    pub block_entities: Vec<BlockEntityInfo>,
     #[rc(prefixed_array = "VarInt")]
     pub sky_light_mask: Vec<i64>,
     #[rc(prefixed_array = "VarInt")]

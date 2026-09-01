@@ -311,13 +311,13 @@ pub async fn enter_play(
         return;
     };
 
-    for ((chunk_x, chunk_z), data) in coords.into_iter().zip(encoded_data) {
+    for ((chunk_x, chunk_z), encoded) in coords.into_iter().zip(encoded_data) {
         let level_chunk = LevelChunkWithLight {
             chunk_x,
             chunk_z,
             heightmaps: heightmaps.clone(),
-            data,
-            block_entities: Vec::new(),
+            data: encoded.data,
+            block_entities: encoded.block_entities,
             sky_light_mask: sky_light_mask.clone(),
             block_light_mask: block_light_mask.clone(),
             empty_sky_light_mask: empty_sky_light_mask.clone(),

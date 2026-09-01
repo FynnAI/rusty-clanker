@@ -45,6 +45,7 @@ use std::sync::OnceLock;
 use bevy_ecs::prelude::Component;
 use rc_chunk_storage::{BlockStateId as StorageBlockStateId, RegistryId};
 use rc_core::BlockPos;
+use rc_mechanics::redstone::{SignalSourceRegistry, best_neighbor_signal};
 use rc_mechanics::{
     BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, Direction, NeighborUpdateEngine,
     PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
@@ -1104,6 +1105,133 @@ fn raw_state_dig_properties_table() -> &'static HashMap<u32, DigProperties> {
     })
 }
 
+/// The six tier-1 placeable kinds that create a real vanilla block entity on placement
+/// (M3-B0X block-entity production wiring, owner's real-client field report: "chest placed,
+/// rejoin -> invisible" -- research-verified against the ASSET-D18(f) reference: chest,
+/// furnace, blast_furnace, smoker, hopper, comparator; NOT stone, wire, torches, repeater,
+/// pistons). Doubles as the `minecraft:block_entity_type` registry-id selector for the
+/// chunk-packet block-entity list (`chunk::encode_block_entities`) and as the kind
+/// discriminator `world.rs`'s own spawn/despawn wiring dispatches on. Furnace/blast_furnace/
+/// smoker all share `rc_mechanics::block_entity::furnace::FurnaceBlockEntity` as their one
+/// production tick-behavior component (Stage 7's own `BlockEntityKind::Furnace`, `stage7.rs`'s
+/// own module doc comment) -- this enum still keeps them distinct, since the chunk-list's own
+/// `minecraft:block_entity_type` id genuinely differs per kind even though the ECS component
+/// underneath does not.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockEntityWireKind {
+    Chest,
+    Furnace,
+    BlastFurnace,
+    Smoker,
+    Hopper,
+    Comparator,
+}
+
+impl BlockEntityWireKind {
+    /// `None` for every `PlaceableBlockKind` that does not create a block entity (Context
+    /// above's own closed six-kind list).
+    pub fn for_placeable_kind(kind: PlaceableBlockKind) -> Option<Self> {
+        match kind {
+            PlaceableBlockKind::Chest => Some(Self::Chest),
+            PlaceableBlockKind::Furnace => Some(Self::Furnace),
+            PlaceableBlockKind::BlastFurnace => Some(Self::BlastFurnace),
+            PlaceableBlockKind::Smoker => Some(Self::Smoker),
+            PlaceableBlockKind::Hopper => Some(Self::Hopper),
+            PlaceableBlockKind::Comparator => Some(Self::Comparator),
+            _ => None,
+        }
+    }
+
+    /// The real `minecraft:block_entity_type` registry id (`rc_registries::generated_v776::
+    /// registries::block_entity_type`, cross-checked directly against azalea's own generated
+    /// `azalea_registry::builtin::BlockEntityKind` declaration order -- both independently
+    /// derived from the same protocol-776 datagen `registries.json`, and agree exactly:
+    /// `furnace=0, chest=1, hopper=18, comparator=19, smoker=27, blast_furnace=28`).
+    pub fn registry_type_id(self) -> u32 {
+        use rc_registries::generated_v776::registries::block_entity_type;
+        match self {
+            Self::Chest => block_entity_type::CHEST.0,
+            Self::Furnace => block_entity_type::FURNACE.0,
+            Self::BlastFurnace => block_entity_type::BLAST_FURNACE.0,
+            Self::Smoker => block_entity_type::SMOKER.0,
+            Self::Hopper => block_entity_type::HOPPER.0,
+            Self::Comparator => block_entity_type::COMPARATOR.0,
+        }
+    }
+
+    /// `false` only for `Comparator`: production keeps a comparator's analog output inside
+    /// `ComparatorBehavior`'s own internal per-position table (Stage 4), never in a real
+    /// `rc_mechanics::block_entity` component (Context, "Comparator BE"), so a comparator has
+    /// no ECS block-entity to spawn or despawn -- only its chunk-list entry.
+    pub fn spawns_tracked_entity(self) -> bool {
+        !matches!(self, Self::Comparator)
+    }
+}
+
+static RAW_STATE_BLOCK_ENTITY_KIND: OnceLock<HashMap<u32, BlockEntityWireKind>> = OnceLock::new();
+
+/// Every raw block-state id this project's own placement/redstone systems can ever leave one
+/// of the six `BlockEntityWireKind`s' blocks in, mapped to that kind -- built from `tier1_
+/// oriented_entries()` (the placement-time defaults for chest/furnace/blast_furnace/smoker/
+/// hopper) plus two hand-added ranges `tier1_oriented_entries()` alone does not cover: hopper's
+/// own `enabled=false` variants (this same wave's own ENABLED-at-placement fix, stride 5) and
+/// comparator's full `facing`x`mode`x`powered` reachable range (`ComparatorBehavior` mutates
+/// `powered` dynamically via Stage-4 redstone after placement, unlike every other of these six
+/// kinds -- `crates/physics/src/shapes.rs`'s own identical `(11263u32..=11278)` row is this
+/// exact same range, restated here by hand since this crate cannot import that table either).
+fn raw_state_block_entity_kind_table() -> &'static HashMap<u32, BlockEntityWireKind> {
+    RAW_STATE_BLOCK_ENTITY_KIND.get_or_init(|| {
+        let mut map = HashMap::new();
+        for ((kind, _orientation), raw_id) in tier1_oriented_entries() {
+            if let Some(wire_kind) = BlockEntityWireKind::for_placeable_kind(kind) {
+                map.insert(raw_id, wire_kind);
+            }
+        }
+        // Hopper `enabled=false` (this wave's own placement-time ENABLED fix): outer property,
+        // stride 5, over the same five `hopper_facing_index` values `tier1_oriented_entries()`
+        // already registered at `enabled=true`.
+        for facing_idx in 0..5u32 {
+            map.insert(HOPPER.0 + 5 + facing_idx, BlockEntityWireKind::Hopper);
+        }
+        // Comparator's full reachable range (this function's own doc comment above).
+        for id in 11263u32..=11278 {
+            map.insert(id, BlockEntityWireKind::Comparator);
+        }
+        map
+    })
+}
+
+/// `None` if `raw` is not a raw state id any of the six `BlockEntityWireKind`s can leave a
+/// block at (Context above). Used both by `chunk::encode_block_entities` (every kind) and by
+/// `world.rs`'s own break-time despawn wiring (filtered to `spawns_tracked_entity()`).
+pub fn block_entity_wire_kind_for_raw_state(raw: u32) -> Option<BlockEntityWireKind> {
+    raw_state_block_entity_kind_table().get(&raw).copied()
+}
+
+/// Recovers a placed hopper's own `facing` from its final written raw block-state id --
+/// `facing` is the innermost, stride-1 property (`hopper_facing_index`'s own doc comment
+/// above), so `(raw - HOPPER.0) % 5` always recovers it regardless of the outer `enabled` term
+/// this same wave's own ENABLED-at-placement fix can add. Used by `world.rs`'s own
+/// block-entity spawn wiring: `HopperBlockEntity::empty(facing)` needs a real `Direction`, and
+/// `PlaceOutcome` carries only the final id, never the `Orientation` `apply_placement` resolved
+/// it from. Panics if `raw` is not a real hopper id (a config-time defect at the call site,
+/// mirroring `OrientedStateTable::lookup`'s own panic-on-defect convention) -- every real
+/// caller only ever passes a `new_state` this same module just wrote for a `Hopper` placement.
+pub fn hopper_facing_from_raw_state(raw: u32) -> Direction {
+    assert!(
+        (HOPPER.0..=HOPPER.0 + 9).contains(&raw),
+        "hopper_facing_from_raw_state: {raw} is not a real hopper id (HOPPER.0..=HOPPER.0+9)"
+    );
+    match (raw - HOPPER.0) % 5 {
+        0 => Direction::Down,
+        1 => Direction::North,
+        2 => Direction::South,
+        3 => Direction::West,
+        4 => Direction::East,
+        _ => unreachable!("(raw - HOPPER.0) % 5 is always < 5"),
+    }
+}
+
 // --- Top-level action application ---
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1338,6 +1466,13 @@ pub fn finalize_break(
 /// `is_placement_obstructed`'s own complete entity-AABB collection, caller-supplied (this
 /// module has no ECS access of its own) -- see that function's own doc comment for the full
 /// "why every currently-connected player, the placer included" reasoning.
+///
+/// A thin, signature-preserving wrapper around `apply_placement_with_redstone` (`redstone:
+/// None` -- a freshly placed hopper always resolves `enabled=true`, this function's own
+/// pre-existing behavior) -- kept so `crates/server/tests/mining_placement_obstruction.rs`'s
+/// own pre-existing direct call site (a committed integration test; implementation changesets
+/// never touch `tests/`, CLAUDE.md's own hard integrity rule) keeps compiling unchanged.
+/// `world.rs`'s own real placement call site uses `apply_placement_with_redstone` directly.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_placement(
     ctx_world: &mut dyn BlockWorldAccess,
@@ -1356,6 +1491,52 @@ pub fn apply_placement(
     yaw_degrees: f32,
     pitch_degrees: f32,
     player_boxes: &[rc_physics::Aabb],
+) -> PlaceOutcome {
+    apply_placement_with_redstone(
+        ctx_world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        behaviors,
+        current_tick,
+        location,
+        face,
+        inside_block,
+        cursor,
+        held,
+        yaw_degrees,
+        pitch_degrees,
+        player_boxes,
+        None,
+    )
+}
+
+/// As `apply_placement` (its own doc comment above has the full algorithm), plus `redstone`:
+/// `Some(registry)` lets a freshly placed `Hopper` resolve its real `ENABLED = !hasNeighbor
+/// Signal(pos)` placement-time rule (Context, "Hopper placement"); `None` (`apply_placement`'s
+/// own thin wrapper) always resolves `enabled=true`, this function's own pre-fix behavior.
+/// Every other kind ignores `redstone` entirely.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_placement_with_redstone(
+    ctx_world: &mut dyn BlockWorldAccess,
+    engine: &mut NeighborUpdateEngine,
+    scheduled: &mut ScheduledTickQueue,
+    events: &mut BlockEventQueue,
+    outbound: &mut Vec<(Address, RegionMessage)>,
+    ownership: &RegionOwnership,
+    behaviors: &BlockBehaviorRegistry,
+    current_tick: u64,
+    location: BlockPos,
+    face: Face,
+    inside_block: bool,
+    cursor: (f32, f32, f32),
+    held: HeldItemStub,
+    yaw_degrees: f32,
+    pitch_degrees: f32,
+    player_boxes: &[rc_physics::Aabb],
+    redstone: Option<&SignalSourceRegistry>,
 ) -> PlaceOutcome {
     let target = resolve_place_position(location, face, inside_block);
 
@@ -1420,6 +1601,26 @@ pub fn apply_placement(
     }
 
     let raw_state = tier1_oriented_state_table().lookup(selection.kind, selection.orientation);
+
+    // M3-B0X hopper-ENABLED-at-placement fix (Context, "Hopper placement: `ENABLED =
+    // !hasNeighborSignal(pos)` applied synchronously by onPlace"): `tier1_oriented_state_
+    // table()` always resolves a hopper to its `enabled=true` id (its own doc comment,
+    // "`enabled` is always `true` at placement" -- true only absent this fix); real vanilla
+    // instead reads whether `target` already has ANY neighbor supplying redstone signal --
+    // `rc_mechanics::redstone::best_neighbor_signal`, the identical `hasNeighborSignal`
+    // primitive every other tier-1 component's own placement-time self-resolution already
+    // uses (this function's own Root Cause 2 fix, above) -- and starts the hopper disabled if
+    // so. `enabled` is hopper's own OUTER property, stride 5 over the same five `facing`
+    // values `raw_state` already selected (`tier1_oriented_entries()`'s own doc comment) --
+    // `+5` always lands on the matching `enabled=false` id for whichever facing was resolved,
+    // never touching the `facing` term itself.
+    let raw_state = if matches!(selection.kind, PlaceableBlockKind::Hopper)
+        && redstone.is_some_and(|registry| best_neighbor_signal(ctx_world, registry, target) > 0)
+    {
+        raw_state + 5
+    } else {
+        raw_state
+    };
 
     let placement_shape = rc_physics::tier1_shape_table().lookup(raw_state).shape;
     if is_placement_obstructed(&placement_shape, target, player_boxes) {
