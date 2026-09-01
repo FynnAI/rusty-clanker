@@ -2,10 +2,11 @@
 ContraptionSpec(
     id: "redstone/qc/qc_piston_top_side_signal",
     category: QcShowcase,
-    description: "A horizontally-facing piston with a plain conductor block resting on top of it; a wire touches that top block's own side face, fed by a redstone_block appearing one hop further out — nothing ever touches the piston itself directly.",
+    description: "A horizontally-facing piston with a plain conductor block resting on top of it; a wire touches that top block's own side face, fed by a redstone_block appearing one hop further out — nothing ever touches the piston itself directly. The wire's own support block is glass: glass supports redstone wire but is not a conductor, so it can never be strongly powered — although it physically touches the piston at (0, 1, 0), no signal path ever reaches the piston directly through it, preserving the quirk under test.",
     quirk: "piston_neighbor_signal's step 3 — QC through the block directly above the piston, checking only that block's 4 horizontal faces, distinct from #27's own direct Down-face/supporting-block case (M3-B05 Context A, 08-redstone-ticking.md §3.9).",
     max_ticks: 8,
     blocks: [
+        (pos: (0, 1, -1), vanilla_state: "minecraft:glass", state_id: 562),
         (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
         (pos: (0, 2, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 2, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),

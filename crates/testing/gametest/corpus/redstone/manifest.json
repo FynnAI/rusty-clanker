@@ -166,7 +166,7 @@
     },
     {
       "path": "qc_piston_top_side_signal.ron",
-      "sha256": "c7eea0287a62aa893a20511ae56f881abd571c780f93b627b2a345e3f34ec632",
+      "sha256": "686f0c6c2cd970be91e7d5ce85f04fa9ab00b8b545c86c40d30ccbe7ed82443a",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
