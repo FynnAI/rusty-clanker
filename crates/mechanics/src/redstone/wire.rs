@@ -710,7 +710,13 @@ impl BlockBehavior for WireBehavior {
                     // vanilla's own "only when the wire's state actually changes" gate (a no-op
                     // `updateShape` call never touches `updateIndirectNeighbourShapes` either).
                     self.diagonal_shape_update_cascade(
-                        ctx, &registry, pos, east_shape, north_shape, south_shape, west_shape,
+                        ctx,
+                        &registry,
+                        pos,
+                        east_shape,
+                        north_shape,
+                        south_shape,
+                        west_shape,
                     );
                     Some(new_id)
                 }

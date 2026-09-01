@@ -231,9 +231,9 @@ fn build_tier1_table() -> ShapeTable {
         // own simplified per-block boxes (Context table) -- only the *id* changes per
         // facing, never the box -- so every offset row below reuses the same shape value the
         // facing-North row above already registers.
-        (3989, flat(chest_shape())), // chest, facing South
-        (3990, flat(chest_shape())), // chest, facing East
-        (3991, flat(chest_shape())), // chest, facing West
+        (3989, flat(chest_shape())),         // chest, facing South
+        (3990, flat(chest_shape())),         // chest, facing East
+        (3991, flat(chest_shape())),         // chest, facing West
         (11314, flat(hopper_shape.clone())), // hopper, facing South
         (11315, flat(hopper_shape.clone())), // hopper, facing East
         (11316, flat(hopper_shape.clone())), // hopper, facing West
