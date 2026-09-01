@@ -216,10 +216,6 @@ fn build_tier1_table() -> ShapeTable {
         // assumed ordinary terrain, never air itself; without this row every `air` lookup
         // would wrongly resolve as a solid full cube).
         (0, empty),                          // air
-        (6885, flat(torch_shape())),         // redstone_torch
-        (6887, flat(torch_shape())),         // redstone_wall_torch
-        (7037, flat(low_slab())),            // repeater, facing North (direction_offset 0)
-        (11264, flat(low_slab())),           // comparator, facing North (direction_offset 0)
         (2263, full.clone()),                // piston (extended = false)
         (2241, full.clone()),                // sticky_piston (extended = false)
         (3988, flat(chest_shape())),         // chest, facing North (direction_offset 0)
@@ -235,15 +231,6 @@ fn build_tier1_table() -> ShapeTable {
         // own simplified per-block boxes (Context table) -- only the *id* changes per
         // facing, never the box -- so every offset row below reuses the same shape value the
         // facing-North row above already registers.
-        (6888, flat(torch_shape())), // redstone_wall_torch, facing South
-        (6889, flat(torch_shape())), // redstone_wall_torch, facing East
-        (6890, flat(torch_shape())), // redstone_wall_torch, facing West
-        (7038, flat(low_slab())),    // repeater, facing South
-        (7039, flat(low_slab())),    // repeater, facing East
-        (7040, flat(low_slab())),    // repeater, facing West
-        (11265, flat(low_slab())),   // comparator, facing South
-        (11266, flat(low_slab())),   // comparator, facing East
-        (11267, flat(low_slab())),   // comparator, facing West
         (3989, flat(chest_shape())), // chest, facing South
         (3990, flat(chest_shape())), // chest, facing East
         (3991, flat(chest_shape())), // chest, facing West
@@ -304,6 +291,49 @@ fn build_tier1_table() -> ShapeTable {
     // *stored* id ever move off 5171 (own-state writeback, this same field-report wave) without
     // corrupting every later signal computation at that position.
     entries.extend((4011u32..=5306).map(|id| (id, flat(wire_shape()))));
+
+    // `repeater`'s and `comparator`'s own *entire* reachable id ranges (M3 field-report fix,
+    // Rule D depower correctness investigation: "repeater/comparator conductor
+    // misclassification" -- the same class of gap `docs/findings-for-planning.md`'s own "wire
+    // own-state writeback attempt reverted" entry already named for wire above, but never
+    // closed for these two diodes). The four hand-picked rows this table used to carry per
+    // block (one per horizontal facing, always at `delay=1`/`mode=compare`, always
+    // `locked=false`/`powered=false`) covered only each diode's own freshly-*placed* default
+    // id -- every other reachable id (any other `delay` setting, `locked=true`, `powered=true`,
+    // `mode=subtract`, ...) fell through `lookup`'s own `default_full_cube()` fallback,
+    // wrongly classifying an ordinary locked-or-powered-or-non-default-delay repeater (or a
+    // `subtract`-mode/powered comparator) as a *solid conductor* -- `is_conductor` reusing this
+    // exact table (this file's own module doc comment above), so `emitted_toward`'s own
+    // conductor branch would then relay a signal straight *through* that diode's `direct_
+    // signal_to` scan of its six faces, bypassing the diode's own lock/power gating entirely.
+    // Confirmed directly against this exact gap: `repeater_lock_release_repropagates`'s own
+    // `(0, 1, 1)` wire reads a permanently-on `redstone_block` straight through a `LOCKED`
+    // repeater sitting at delay=3 (id 7069, never one of the four hand-picked rows) the moment
+    // that repeater's `LOCKED` bit flips, well before the repeater's own real `POWERED`
+    // transition. `REPEATER_BASE..=REPEATER_MAX` / `COMPARATOR_BASE..=COMPARATOR_MAX`
+    // (`crates/mechanics/src/redstone/repeater.rs`'s / `comparator.rs`'s own identical
+    // constants, restated here by hand since this crate cannot import them, this table's own
+    // doc comment above) both share the identical flat `low_slab()` box regardless of id (only
+    // the *id* varies across `delay`/`facing`/`locked`/`powered` or `facing`/`mode`/`powered`,
+    // exactly as for wire's own range just above).
+    entries.extend((7034u32..=7097).map(|id| (id, flat(low_slab()))));
+    entries.extend((11263u32..=11278).map(|id| (id, flat(low_slab()))));
+
+    // `redstone_torch`'s and `redstone_wall_torch`'s own *entire* reachable id ranges (M3
+    // field-report fix, same "conductor misclassification" gap class as the repeater/comparator
+    // fix just above): the floor torch's own two hand-picked rows used to cover only `lit=true`
+    // (`6885`), leaving `lit=false` (`6886`) to fall through to `default_full_cube()`; the wall
+    // torch's own four hand-picked rows (one per horizontal facing) used to cover only that same
+    // single default `lit` value per facing (`6887..=6890`), leaving the other four `lit=false`
+    // combinations (`6891..=6894`) to fall through the exact same way. Confirmed directly
+    // against this exact gap: `wire_strong_vs_weak_power_door`'s own `(9, 1, 0)` wall torch
+    // turns `lit=false` (a real, reachable state this fixture's own contraption legitimately
+    // reaches) and immediately gets misclassified as a solid conductor, re-broadcasting a
+    // neighbor's direct signal through itself the same way an unregistered repeater/comparator
+    // id did. Both torch shapes are identical regardless of `lit` (`torch_shape()`'s own doc
+    // comment: floor and wall torches "share the same box" already) -- only the *id* varies.
+    entries.extend((6885u32..=6886).map(|id| (id, flat(torch_shape()))));
+    entries.extend((6887u32..=6894).map(|id| (id, flat(torch_shape()))));
 
     ShapeTable::from_entries(entries)
 }
