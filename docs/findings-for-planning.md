@@ -233,6 +233,35 @@ Entries name the milestone that surfaced them and the code they concern.
   the Unix equivalent) before trusting any `fetch-corpus` failure as a real
   capture-pipeline defect.
 
+- **`chunk_churn_end_to_end`'s "waiting for chunk churn to settle" budget is
+  too tight for contended CI runners — two independent CI timeouts on the
+  same day (windows-2025 in run 33485-era gates as test 150/150 at 95s under
+  full suite load; ubuntu-24.04 later the same day), while the same commit
+  passes 9/9 consecutive local runs in 1–5s and both CI legs pass on a plain
+  re-run.** Same class as the `play_chunk_streaming_on_move` per-stage
+  budgets already documented as "pure hang guards, deliberately sized for a
+  starved shared runner" — this one's settle deadline
+  (`crates/server/tests/chunk_churn_end_to_end.rs` ~line 171) apparently
+  never got the same sizing pass. Needs a `test-authoring` changeset to
+  raise it to hang-guard scale (and a quick audit of the sibling
+  `synthetic_player_movement...` stage budgets in the same file), or a
+  decision to fold both binaries into a stricter nextest scheduling group;
+  until then the mitigation is `gh run rerun --failed` after confirming the
+  local repro is green.
+
+- **`xtask`'s `m1_report.rs` and `corpus/fetch_corpus.rs` carry the same
+  latent piped-child stdout/stderr deadlock `m3_report.rs` just had fixed
+  (M3 field-report governance, "drain load_scenario_runner's pipes
+  concurrently"): a `Stdio::piped()` child whose pipes are only drained
+  after exit-polling can block forever on a full OS pipe buffer once its
+  output volume grows.** `m3_report`'s own subprocess produced 700KB+ of
+  stderr and deadlocked every full run until its drain moved onto dedicated
+  threads running concurrently with the wait loop; the sibling verbs'
+  subprocesses are quieter today, which is the only reason they have not
+  hit it. Needs one `governance` changeset applying the identical
+  concurrent-drain shape to both (and any future piped-subprocess call
+  site; worth a lint-tests forbidden-pattern if cheap to express).
+
 - **Research-rule refinement for reconciliation into the research corpus
   (`docs/research/mc-26.2/08-redstone-ticking.md` §3.1, the MECH-D11/D12
   citation): the wire step-up gate ("a conductor directly above the lower
