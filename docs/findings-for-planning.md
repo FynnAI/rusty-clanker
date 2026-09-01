@@ -451,6 +451,98 @@ Entries name the milestone that surfaced them and the code they concern.
   reverted once the real fix lands, to avoid two competing broadcast paths
   existing at once.
 
+- **M3 field-report fix landed (this changeset): the disciplined long-term
+  fix this same entry called for above is now shipped — `UpdateContext`
+  carries a real `changed: &mut Vec<(BlockPos, BlockStateId)>` collector
+  (`crates/mechanics/src/behavior.rs`), threaded through every construction
+  site across the workspace (the coordinated cross-changeset update this
+  entry's own paragraph (a) asked for a decision on — done directly, since
+  it is the disciplined fix the entry itself already named, not a new
+  decision). `UpdateContext::set_block` records every actually-changed
+  position into it; a new `UpdateContext::write_block_state` method does
+  the same for the many redstone behaviors that write via the raw
+  `ctx.world.set_block` accessor instead (own-state writeback — torch/
+  wire/repeater/comparator/piston), which turned out to be the vast
+  majority of real per-tick redstone state changes and would otherwise
+  have gone on being invisible to the collector.** `crates/mechanics/src/
+  stage4/ecs.rs`'s new `TickChangedPositions` resource accumulates every
+  system's own contribution across one tick (Stage 4's two systems, Stage
+  5's random-tick phase, Stage 7's container-signal-notify pass — all four
+  now thread `changed` too, for the identical reason); `world.rs`'s tick
+  loop drains it once, immediately after `executor.tick_region` returns,
+  and broadcasts one `Block Update` per entry to every connected player.
+  The retired bounded-radius stop-gap (`snapshot_cascade_neighborhood`/
+  `broadcast_cascaded_changes`, paragraph (b)'s own open question) is
+  removed outright — direct-action cascades now flow through the exact
+  same collector (a fresh, per-call `Vec` passed into `mining::
+  apply_placement`/`finalize_break`/`settle_neighbor_updates`, drained and
+  broadcast right after each call, excluding the primary position
+  `respond_place`/`respond_break` already sent), so there is only ever one
+  broadcast path, not two competing ones. Real-client-verified (`crates/
+  server/tests/play_redstone_field_report.rs`'s own two new tests): a
+  torch's scheduled re-eval turning it off, and a repeater's scheduled
+  `POWERED` flip, both reach a real, entirely passive bystander connection
+  with no further player action after the triggering placement. No
+  per-viewer view-distance/chunk-visibility filter exists anywhere in this
+  broadcast path (`broadcast_changed_positions`'s own doc comment) — every
+  other broadcast helper in `world.rs` is equally unconditional ("every
+  connected player"), an already-accepted M3-scope simplification this
+  fix does not newly introduce. Vanilla sends `SectionBlocksUpdate` for
+  multiple same-tick, same-section changes; this fix sends one `Block
+  Update` per position instead (no encoder for the batched packet exists
+  yet) — acceptable at M3 scope, a real, minor wire-efficiency gap for a
+  future blueprint to close, not a correctness one.
+
+- **New finding, surfaced while writing this changeset's own real-client
+  regression coverage: a piston placed by an actual connected player is
+  never wired into `PistonBehavior`'s own internal per-position state at
+  all, so it can never react to any redstone signal — a silent no-op, not
+  a crash.** `crates/server/src/play/mining.rs`'s `apply_placement` calls
+  `behaviors.resolve(state).on_placed(&mut ctx, target)` unconditionally
+  for every placed block, and separately self-resolves only four kinds
+  against whatever signal already surrounds them at placement time
+  (`match kind { RedstoneWire => .., RedstoneTorch | Repeater | Comparator
+  => .., _ => {} }`, Root Cause 2) — `Piston`/`StickyPiston` fall through
+  the `_ => {}` arm, same as every other non-redstone kind. This would
+  still be fine if `PistonBehavior::on_placed` seeded its own `state` map
+  (`facing`/`sticky`/`should_be_extended`) from the placed id the way
+  `RepeaterBehavior`/`ComparatorBehavior`/`WireBehavior::on_placed` already
+  do (`crates/mechanics/src/redstone/{repeater,comparator,wire}.rs`) — but
+  `PistonBehavior` implements no `on_placed` override at all, so the
+  default no-op runs instead, and every one of its own `BlockBehavior`
+  methods early-returns the instant `self.state.lock().unwrap().get(&pos)`
+  comes back `None` (`on_neighbor_changed`'s own `let Some(st) = ... else
+  { return; }`). Confirmed by direct trace, not inference: no production
+  call site anywhere in `crates/server/src/` ever calls `PistonBehavior::
+  place(..)` (`grep -rn "\.place(" crates/server/src/` — zero matches
+  outside doc comments); the ONLY place that ever calls it is
+  `crates/testing/gametest/src/replay.rs`'s own dedicated pre-scan of
+  `spec.blocks` (Context: "Seeding scans `spec.blocks` only... every
+  repeater/comparator/piston... must seed `PistonBehavior`"), a
+  replay-only bootstrap step with no live-server equivalent — a real
+  server cannot pre-scan a fixture spec it doesn't have. `BlockBehavior::
+  on_placed`'s own doc comment (`crates/mechanics/src/behavior.rs`)
+  currently claims "wire/torch/piston already self-heal" — this is
+  factually wrong for piston specifically (wire/torch's own claim holds;
+  piston's does not) and should be corrected once this gap is decided.
+  This changeset's own new piston regression coverage
+  (`crates/mechanics/tests/piston_tick_tables.rs`'s `simple_extension`,
+  extended with `changed`-collector assertions) therefore still drives
+  `PistonBehavior` directly, exactly like every pre-existing piston test
+  in that file — it cannot exercise the real placement pipeline the way
+  this changeset's own new torch/repeater tests do, so piston coverage of
+  the new broadcast mechanism stops at "the collector correctly records a
+  piston's own base/head writes," not "a real client placing a piston and
+  triggering it end-to-end," a real, acknowledged residual. Needs a
+  decision on the fix's own shape: an `on_placed` override mirroring
+  `RepeaterBehavior`'s (decode `facing`/`sticky`/`extended` straight off
+  the placed raw id) is the obvious candidate, but `PistonBehavior::place`
+  currently takes `extended` as an explicit bool the caller must already
+  know (real placement never places an already-extended piston, unlike a
+  replay fixture's raw `blocks:` entry) — whoever implements this should
+  confirm `extended: false` is always correct for a freshly-placed real
+  piston before wiring it in.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
