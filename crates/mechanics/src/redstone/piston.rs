@@ -56,6 +56,16 @@
 //! uniformly immediate, a hypothesis this fix's own implementation found too coarse once actually
 //! tried against the real per-fixture traces — `apply_retract_content`'s own doc comment has the
 //! full per-case breakdown and citations.
+//!
+//! M3 field-report fix (phantom-extend-on-already-extended-placement defect): `place` now seeds
+//! `extended`/`should_be_extended` from its own `extended` parameter — the placed state id's own
+//! real `extended` property — instead of unconditionally `false`, closing
+//! `docs/findings-for-planning.md`'s own "two of the four originally-failing piston fixtures"
+//! entry: both fixtures place their piston already extended via a raw `blocks:` state id, with
+//! the triggering `redstone_block` listed after it in the same setup batch, and the former
+//! unconditional-`false` seeding made the redstone_block's own placement look like a genuine
+//! `false -> true` transition, queuing a spurious extend `piston_head` the real oracle never
+//! shows — `place`'s own doc comment has the full citation.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -403,8 +413,11 @@ pub fn piston_neighbor_signal(
     false
 }
 
-/// Per-position steady-state (Context §B). `extended`/`should_be_extended` both start `false`
-/// from `place`.
+/// Per-position steady-state (Context §B). `extended`/`should_be_extended` both seed from
+/// `place`'s own `extended` parameter (M3 field-report fix, phantom-extend-on-already-extended-
+/// placement defect — `place`'s own doc comment has the full citation): `false` for an ordinary
+/// retracted placement, `true` only when the placed state id's own real `extended` property
+/// says so.
 #[derive(Copy, Clone, Debug)]
 struct PistonState {
     facing: Direction,
@@ -497,14 +510,31 @@ impl PistonBehavior {
     /// Test/composition-root-only placement setter (Context §B) — mirrors B04's
     /// `RepeaterBehavior::place`/`ComparatorBehavior::place` precedent exactly. Real
     /// placement-pipeline integration is future work, not this blueprint's.
-    pub fn place(&self, pos: BlockPos, facing: Direction, sticky: bool) {
+    ///
+    /// M3 field-report fix (phantom-extend-on-already-extended-placement defect,
+    /// `docs/findings-for-planning.md`'s own "two of the four originally-failing piston
+    /// fixtures" entry): `extended`/`should_be_extended` both now seed from `extended` — the
+    /// placed state id's own real `extended` property, decomposed by the caller exactly like
+    /// `facing`/`sticky` already are — instead of unconditionally `false`. A raw `/setblock` of
+    /// an already-`extended=true` id (real vanilla never runs an extend animation for this; the
+    /// state is simply already extended) now starts this piston already believing itself
+    /// extended *and* already wanting to be extended, so a signal fanning out immediately
+    /// afterward (e.g. a `redstone_block` placed later in the same setup batch,
+    /// `rc_gametest::replay::replay_contraption`'s own list-order settling) sees
+    /// `should_be_extended` already matching the freshly-computed value and triggers no
+    /// spurious `emit_block_event` — `on_neighbor_changed`'s own `changed` gate only ever fires
+    /// on an actual transition. `extended=false` placements are unaffected (seeding `false` was
+    /// already correct for them), and a piston placed extended that later genuinely loses its
+    /// signal still transitions `true -> false` normally, queuing a real retract exactly as
+    /// before.
+    pub fn place(&self, pos: BlockPos, facing: Direction, sticky: bool, extended: bool) {
         self.state.lock().unwrap().insert(
             pos,
             PistonState {
                 facing,
                 sticky,
-                extended: false,
-                should_be_extended: false,
+                extended,
+                should_be_extended: extended,
             },
         );
     }
