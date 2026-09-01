@@ -13,10 +13,20 @@
 //! `capture`/`trace`/`spec` items.
 
 pub mod capture;
+pub mod placement_spec;
+pub mod placement_trace;
 pub mod replay;
 pub mod spec;
 pub mod trace;
 
+pub use placement_spec::{
+    ApproachDirection, BlockKind, BotPitch, ClickedFace, Direction6, FaceGeometry,
+    InteractionScenario, PlacementScenario,
+};
+pub use placement_trace::{
+    CAPTURE_FORMAT_VERSION, CellMismatch, CellObservation, PlacementCaptureFile,
+    PlacementDiffReport, ScenarioCapture,
+};
 pub use replay::replay_contraption;
 pub use spec::{Category, ContraptionSpec, PlacedBlock, ScriptedAction};
 pub use trace::{
