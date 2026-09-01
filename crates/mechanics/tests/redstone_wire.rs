@@ -847,3 +847,127 @@ fn wire_on_neighbor_changed_corrects_a_stale_declared_power_even_when_the_recomp
          own untouched default (0) happens to already match the recomputed value"
     );
 }
+
+/// M3 field-report fix (Rule 1, step-up gate): a conductor that is *also* itself a redstone
+/// signal source (e.g. `redstone_block`) does not occlude the step-up branch, unlike a plain
+/// conductor -- `step_up_gate_open`'s own doc comment (`wire.rs`) has the full two-oracle-trace
+/// citation forcing this exact distinction. `wire_climb_shape_is_gated_by_the_conductor_
+/// occlusion_rule`, above, is this test's own negative control: an identical geometry with a
+/// *plain* conductor ceiling still severs. `pos`'s own ceiling here is `SOURCE_ID` (a conductor
+/// via the shared physics table's `default_full_cube()` fallback, and a registered signal
+/// source via `fixed_source`) rather than `CONDUCTOR` -- everything else about the geometry
+/// mirrors `wire_own_state_writeback_reflects_up_climb_shape`, just onto `West` instead of
+/// `East` to match `wire_strong_vs_weak_power_door`'s own real fixture geometry exactly (the
+/// oracle-verified `4737` this test's own expected result checks against is that fixture's own
+/// declared `(11, 1, 0)` id, which never changes across the whole trace).
+#[test]
+fn wire_step_up_climb_is_not_occluded_by_a_conductor_that_is_itself_a_signal_source() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let west = Direction::West.apply(pos);
+    h.world.set_block(west, CONDUCTOR); // the step -- a plain conductor, not itself a source
+    let west_up = Direction::Up.apply(west);
+    h.world.set_block(west_up, WIRE_ID); // the climbing wire, one block up on the far side
+    // `pos`'s own ceiling: a conductor that is ALSO a signal source -- must not occlude.
+    h.world.set_block(Direction::Up.apply(pos), SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::West, CONDUCTOR);
+
+    assert_eq!(
+        result,
+        Some(BlockStateId(4737)),
+        "west=Up (climb intact), east auto-extended to the isolated-line default -- a \
+         redstone_block-like ceiling must not sever the step-up connection the way a plain \
+         conductor ceiling does"
+    );
+}
+
+/// M3 field-report fix (Rule 1, step-up "connectable" scope widening): `(P+D).above()` holding
+/// any registered signal source -- not only a `WireBehavior` -- must satisfy the step-up
+/// branch's own "connectable" condition (`connectable_at`'s own doc comment in `wire.rs`:
+/// "wire/diode/source alike"). Identical geometry to `wire_own_state_writeback_reflects_up_
+/// climb_shape` except the climbing partner at `east_up` is a plain non-wire signal source
+/// (`SOURCE_ID`, a `TestSignalSource` standing in for a torch/repeater/redstone_block resting on
+/// the step) rather than another `WireBehavior` tile -- the former `wire_power_at(..).is_some()`
+/// check (wire only, via `raw_wire_power`, which `TestSignalSource` never overrides) would have
+/// missed this entirely and fallen through to the isolated-line default instead.
+#[test]
+fn wire_step_up_connectable_recognizes_a_non_wire_signal_source_above_the_step() {
+    let wire = setup_wire(vec![(
+        SOURCE_ID,
+        BlockStateId(SOURCE_ID.0 + 1),
+        fixed_source(15),
+    )]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    h.world.set_block(pos, WIRE_ID);
+    let east = Direction::East.apply(pos);
+    h.world.set_block(east, CONDUCTOR); // the step
+    let east_up = Direction::Up.apply(east);
+    h.world.set_block(east_up, SOURCE_ID); // non-wire signal source resting on the step
+    // `pos`'s own ceiling left unset -- open, the conductor-occlusion gate the climb requires.
+
+    let mut ctx = h.ctx();
+    let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
+
+    assert_eq!(
+        result,
+        Some(BlockStateId(4306)),
+        "east=Up must register even when the climbing partner is a non-wire signal source, not \
+         only another wire tile"
+    );
+}
+
+/// M3 field-report fix (Rule 2, shouldSignal window re-diagnosis): pins the flag's own already-
+/// correct narrow bracket as a regression guard (`WireBehavior`'s own struct doc comment in
+/// `wire.rs` has the full re-diagnosis: the flag turned out not to be the cause of `wire_strong_
+/// vs_weak_power_door`'s own wall-torch mismatch after all -- an unrelated `registration.rs` gap
+/// is). `floor` is a conductor two things share: `pos` sits directly on it and is fed a real
+/// West source; the assertion below reads `floor`'s own emitted signal downward the way
+/// `TorchBehavior::has_neighbor_signal` does, standing in for a torch mounted below `floor`.
+/// Once `pos` has settled (its own `on_neighbor_changed` call has already toggled `should_
+/// signal` false-then-true internally, entirely before returning), this later, wholly separate
+/// read through the shared conductor must see the real bounced-back power, never the `0` a
+/// still-held-`false` flag would produce.
+#[test]
+fn wire_should_signal_window_is_reset_before_a_later_independent_read_through_the_conductor() {
+    let wire = Arc::new(WireBehavior::new());
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        WIRE_RANGE_LO,
+        WIRE_RANGE_HI,
+        Arc::clone(&wire) as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(SOURCE_ID, BlockStateId(SOURCE_ID.0 + 1), fixed_source(15));
+    let registry = Arc::new(signals);
+    wire.bind_registry(Arc::clone(&registry));
+
+    let mut h = Harness::new();
+    let floor = BlockPos::new(0, 0, 0);
+    let pos = Direction::Up.apply(floor);
+    h.world.set_block(floor, CONDUCTOR);
+    h.world.set_block(pos, WIRE_ID);
+    h.world.set_block(Direction::West.apply(pos), SOURCE_ID);
+
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    assert_eq!(
+        wire.power(pos),
+        15,
+        "must pick up the real West source first"
+    );
+
+    let seen = rc_mechanics::redstone::emitted_toward(&h.world, &registry, floor, Direction::Down);
+    assert_eq!(
+        seen, 15,
+        "should_signal must already be back to true for this later, independent read -- a wire \
+         resting on a shared conductor bounces its power back down through it once settled"
+    );
+}
