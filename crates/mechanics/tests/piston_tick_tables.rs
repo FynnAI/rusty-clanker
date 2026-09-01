@@ -101,6 +101,7 @@ struct Harness {
     events: BlockEventQueue,
     halo: BorderHalo,
     outbound: Vec<(Address, RegionMessage)>,
+    changed: Vec<(BlockPos, BlockStateId)>,
     ownership: RegionOwnership,
     behaviors: BlockBehaviorRegistry,
 }
@@ -116,6 +117,7 @@ impl Harness {
             events: BlockEventQueue::new(),
             halo: BorderHalo::new(),
             outbound: Vec::new(),
+            changed: Vec::new(),
             ownership: RegionOwnership::always_local(local),
             behaviors,
         }
@@ -128,6 +130,7 @@ impl Harness {
             scheduled: &mut self.scheduled,
             events: &mut self.events,
             outbound: &mut self.outbound,
+            changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick,
         }
@@ -142,6 +145,7 @@ impl Harness {
             &mut self.events,
             &self.behaviors,
             &mut self.outbound,
+            &mut self.changed,
             current_tick,
         );
     }
@@ -157,6 +161,7 @@ impl Harness {
             &mut self.events,
             &self.behaviors,
             &mut self.outbound,
+            &mut self.changed,
             current_tick,
         );
     }
@@ -249,16 +254,48 @@ fn simple_extension() {
     );
     assert!(!piston.is_extended(piston_pos));
     assert!(log.lock().unwrap().is_empty());
+    // M3 field-report fix ("block-state changes made outside a direct player action never
+    // reach any client"): the base's own EXTENDED writeback -- `write_base_extended`'s own
+    // `ctx.write_block_state` call -- must already be visible in the changed-positions
+    // collector at this exact point, one full tick before the structural (head) commit below.
+    // This is the collector's own proof that a scheduled/block-event-driven state change (no
+    // concurrent direct player action) reaches the mechanism `crates/server/src/play/world.rs`
+    // drains once per tick to broadcast a `Block Update` to every connected client.
+    assert_eq!(
+        h.changed,
+        vec![(piston_pos, BlockStateId(2258))],
+        "the base's own EXTENDED write must be recorded into the changed-positions collector \
+         immediately at block-event time, before the head's own later commit"
+    );
 
     // Tick 1: nothing due yet.
     h.run_scheduled(1);
     assert!(!piston.is_extended(piston_pos));
     assert!(log.lock().unwrap().is_empty());
+    assert_eq!(
+        h.changed,
+        vec![(piston_pos, BlockStateId(2258))],
+        "no further block-state change until the commit fires"
+    );
 
     // Tick 2: the commit fires.
     h.run_scheduled(2);
     assert!(piston.is_extended(piston_pos));
     assert_eq!(h.world.get_block(front_pos), Some(PISTON_HEAD_EAST));
+    // The head's own settled content is the SECOND collector entry, in first-change order --
+    // the base's own already-recorded entry (above) is not re-appended (the second, identical
+    // `write_block_state(piston_pos, ..)` call inside `commit_extend` itself is a genuine no-op
+    // write -- `did_change` is `false` -- so `record_changed` never touches it a second time).
+    assert_eq!(
+        h.changed,
+        vec![
+            (piston_pos, BlockStateId(2258)),
+            (front_pos, PISTON_HEAD_EAST),
+        ],
+        "the head's own settled content must be recorded into the changed-positions collector \
+         at the deferred commit's own tick, two ticks after the base's own immediate write, \
+         with no further player action in between"
+    );
 
     let logged = log.lock().unwrap();
     assert_eq!(

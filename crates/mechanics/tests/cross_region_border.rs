@@ -129,6 +129,7 @@ fn border_event_targets_the_owning_region_not_local() {
     let mut events = BlockEventQueue::new();
     let mut halo = BorderHalo::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
 
     run_scheduled_phase(
@@ -141,6 +142,7 @@ fn border_event_targets_the_owning_region_not_local() {
         &mut events,
         &registry,
         &mut outbound,
+        &mut changed,
         0,
     );
 
@@ -218,6 +220,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
     let mut events = BlockEventQueue::new();
     let mut halo = BorderHalo::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
 
     run_scheduled_phase(
         &mut world,
@@ -229,6 +232,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
         &mut events,
         &registry,
         &mut outbound,
+        &mut changed,
         0,
     );
 

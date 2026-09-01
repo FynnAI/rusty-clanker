@@ -176,6 +176,7 @@ fn piston_stays_stale_until_directly_notified() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -183,6 +184,7 @@ fn piston_stays_stale_until_directly_notified() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };
@@ -235,6 +237,7 @@ fn already_extended_placement_with_signal_present_queues_no_extend_event() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -242,6 +245,7 @@ fn already_extended_placement_with_signal_present_queues_no_extend_event() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };
@@ -298,6 +302,7 @@ fn already_extended_placement_with_signal_absent_queues_retract() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -305,6 +310,7 @@ fn already_extended_placement_with_signal_absent_queues_retract() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };
@@ -331,6 +337,7 @@ fn already_extended_placement_with_signal_absent_queues_retract() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };

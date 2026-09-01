@@ -126,6 +126,7 @@ fn notify_relays_through_a_conductor_neighbor_to_its_own_far_side() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -133,6 +134,7 @@ fn notify_relays_through_a_conductor_neighbor_to_its_own_far_side() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };

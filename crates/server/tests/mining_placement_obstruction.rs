@@ -71,6 +71,7 @@ fn place_stone(world: &mut FakeWorld, target: BlockPos, player_boxes: &[Aabb]) -
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+    let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
     let behaviors = BlockBehaviorRegistry::new();
     apply_placement(
         world,
@@ -78,6 +79,7 @@ fn place_stone(world: &mut FakeWorld, target: BlockPos, player_boxes: &[Aabb]) -
         &mut scheduled,
         &mut events,
         &mut outbound,
+        &mut changed,
         &ownership,
         &behaviors,
         0,

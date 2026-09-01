@@ -50,17 +50,20 @@ impl BlockWorldAccess for FakeWorld {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn harness() -> (
     NeighborUpdateEngine,
     ScheduledTickQueue,
     BlockEventQueue,
     Vec<(Address, RegionMessage)>,
+    Vec<(BlockPos, BlockStateId)>,
     RegionOwnership,
 ) {
     (
         NeighborUpdateEngine::new(),
         ScheduledTickQueue::new(),
         BlockEventQueue::new(),
+        Vec::new(),
         Vec::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
@@ -105,7 +108,7 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
     );
 
     let seed = WorldSeed(55);
-    let (mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
 
     run_random_tick_phase(
         &mut world,
@@ -118,6 +121,7 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
         &mut events,
         &registry,
         &mut outbound,
+        &mut changed,
         &ownership,
     );
 
@@ -138,7 +142,7 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
 
     let registry = BlockBehaviorRegistry::new(); // only NoOpBehavior, nothing registered
     let seed = WorldSeed(77);
-    let (mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
 
     run_random_tick_phase(
         &mut world,
@@ -151,6 +155,7 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
         &mut events,
         &registry,
         &mut outbound,
+        &mut changed,
         &ownership,
     );
 
@@ -177,7 +182,7 @@ fn multiple_chunks_are_visited_in_ascending_order() {
     );
 
     let seed = WorldSeed(88);
-    let (mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
 
     // Pre-sorted by the caller, per this function's own doc comment.
     run_random_tick_phase(
@@ -191,6 +196,7 @@ fn multiple_chunks_are_visited_in_ascending_order() {
         &mut events,
         &registry,
         &mut outbound,
+        &mut changed,
         &ownership,
     );
 

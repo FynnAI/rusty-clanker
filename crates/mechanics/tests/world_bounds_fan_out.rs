@@ -277,12 +277,14 @@ fn piston_extend_at_the_world_floor_does_not_panic_on_a_beyond_world_write() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let mut ctx = UpdateContext {
         world: &mut world,
         engine: &mut engine,
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };

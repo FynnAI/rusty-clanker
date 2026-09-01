@@ -130,6 +130,7 @@ fn update_order_sensitivity_shape_vs_neighbor_changed_differ() {
     let mut events = BlockEventQueue::new();
     let mut halo = BorderHalo::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
 
@@ -143,6 +144,7 @@ fn update_order_sensitivity_shape_vs_neighbor_changed_differ() {
         &mut events,
         &behaviors,
         &mut outbound,
+        &mut changed,
         0,
     );
 
@@ -207,6 +209,7 @@ fn qc_bug_for_bug_wire_on_top_of_powered_block_ignores_direct_side_touch() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -214,6 +217,7 @@ fn qc_bug_for_bug_wire_on_top_of_powered_block_ignores_direct_side_touch() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };
@@ -284,6 +288,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     {
         let mut ctx = UpdateContext {
             world: &mut world,
@@ -291,6 +296,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
             scheduled: &mut scheduled,
             events: &mut events,
             outbound: &mut outbound,
+            changed: &mut changed,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -339,6 +345,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
     let mut scheduled_b = ScheduledTickQueue::new();
     let mut events_b = BlockEventQueue::new();
     let mut outbound_b = Vec::new();
+    let mut changed_b = Vec::new();
     let mut halo_b = BorderHalo::new();
     let mut ctx_b = UpdateContext {
         world: &mut world_b,
@@ -346,6 +353,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
         scheduled: &mut scheduled_b,
         events: &mut events_b,
         outbound: &mut outbound_b,
+        changed: &mut changed_b,
         ownership: &ownership_b,
         current_tick: 0,
     };
@@ -393,6 +401,7 @@ fn register_tier1_redstone_wires_all_four_components_into_both_registries() {
     let mut scheduled = ScheduledTickQueue::new();
     let mut events = BlockEventQueue::new();
     let mut outbound = Vec::new();
+    let mut changed = Vec::new();
     let ownership = RegionOwnership::always_local(world.local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -400,6 +409,7 @@ fn register_tier1_redstone_wires_all_four_components_into_both_registries() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };

@@ -56,6 +56,7 @@ struct Harness {
     scheduled: ScheduledTickQueue,
     events: BlockEventQueue,
     outbound: Vec<(Address, RegionMessage)>,
+    changed: Vec<(BlockPos, BlockStateId)>,
     ownership: RegionOwnership,
 }
 
@@ -69,6 +70,7 @@ impl Harness {
             scheduled: ScheduledTickQueue::new(),
             events: BlockEventQueue::new(),
             outbound: Vec::new(),
+            changed: Vec::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -80,6 +82,7 @@ impl Harness {
             scheduled: &mut self.scheduled,
             events: &mut self.events,
             outbound: &mut self.outbound,
+            changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick,
         }
@@ -625,6 +628,7 @@ fn repeater_chain_relays_signal_end_to_end() {
             &mut h.events,
             &behaviors,
             &mut h.outbound,
+            &mut h.changed,
             tick,
         );
     }

@@ -214,6 +214,12 @@ pub fn replay_contraption(
     // step is a hard bug, since a single, `always_local`-owned region can never
     // route a message cross-region, Deliverables doc comment).
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+    // M3 field-report fix ("block-state changes made outside a direct player action never
+    // reach any client"): the mechanical collector `UpdateContext` now always carries —
+    // this replay harness only supplies it (every construction site below), it never reads
+    // it back, matching this changeset's own "the replay harness/corpus stay byte-identical"
+    // requirement (the recorded `RedstoneTrace` output never reflects `changed` at all).
+    let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
     // M3 fix-agent brief ("bring the three container fixtures into the replay"): the Stage-7
     // block-entity world this replay now drives alongside Stage 4, plus the minimal fixed tables
@@ -238,6 +244,7 @@ pub fn replay_contraption(
             &mut scheduled,
             &mut events,
             &mut outbound,
+            &mut changed,
             &ownership,
             0,
             behaviors,
@@ -275,6 +282,7 @@ pub fn replay_contraption(
                 &mut scheduled,
                 &mut events,
                 &mut outbound,
+                &mut changed,
                 &ownership,
                 t - 1,
                 behaviors,
@@ -294,6 +302,7 @@ pub fn replay_contraption(
             &mut events,
             behaviors,
             &mut outbound,
+            &mut changed,
             t,
         );
         stage4::run_block_event_subphase(
@@ -304,6 +313,7 @@ pub fn replay_contraption(
             &mut events,
             behaviors,
             &mut outbound,
+            &mut changed,
             t,
         );
 
@@ -341,6 +351,7 @@ pub fn replay_contraption(
                 scheduled: &mut scheduled,
                 events: &mut events,
                 outbound: &mut outbound,
+                changed: &mut changed,
                 ownership: &ownership,
                 current_tick: t,
             };
@@ -353,6 +364,7 @@ pub fn replay_contraption(
                 scheduled: &mut scheduled,
                 events: &mut events,
                 outbound: &mut outbound,
+                changed: &mut changed,
                 ownership: &ownership,
                 current_tick: t,
             };
@@ -841,6 +853,7 @@ fn place_and_settle(
     scheduled: &mut ScheduledTickQueue,
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -854,6 +867,7 @@ fn place_and_settle(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
         };
@@ -876,6 +890,7 @@ fn place_and_settle(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
         };
@@ -910,7 +925,7 @@ fn dispatch_one(ctx: &mut UpdateContext, behaviors: &BlockBehaviorRegistry, item
             };
             let behavior = behaviors.resolve(state);
             if let Some(new_state) = behavior.on_shape_update(ctx, pos, from, neighbor_state) {
-                ctx.world.set_block(pos, new_state);
+                ctx.write_block_state(pos, new_state);
                 if remaining_depth > 0 {
                     ctx.engine
                         .emit_shape_update_fanout_at_depth(pos, remaining_depth - 1);

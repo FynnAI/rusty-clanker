@@ -50,12 +50,14 @@ impl BlockBehavior for LoggingBehavior {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn harness() -> (
     TinyWorld,
     NeighborUpdateEngine,
     ScheduledTickQueue,
     BlockEventQueue,
     Vec<(Address, rc_messaging::RegionMessage)>,
+    Vec<(BlockPos, BlockStateId)>,
     RegionOwnership,
 ) {
     (
@@ -66,6 +68,7 @@ fn harness() -> (
         ScheduledTickQueue::new(),
         BlockEventQueue::new(),
         Vec::new(),
+        Vec::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -75,7 +78,8 @@ fn unregistered_state_resolves_to_noop() {
     let registry = BlockBehaviorRegistry::new();
     let target = BlockPos::new(0, 0, 0);
 
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
+        harness();
     world.blocks.insert(target, BlockStateId(999));
 
     let behavior = registry.resolve(BlockStateId(999));
@@ -86,6 +90,7 @@ fn unregistered_state_resolves_to_noop() {
             scheduled: &mut scheduled,
             events: &mut events,
             outbound: &mut outbound,
+            changed: &mut changed,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -108,7 +113,8 @@ fn register_range_dispatches_correctly() {
     );
 
     let target = BlockPos::new(0, 0, 0);
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
+        harness();
 
     // In-range: dispatch reaches the logging behavior.
     {
@@ -119,6 +125,7 @@ fn register_range_dispatches_correctly() {
             scheduled: &mut scheduled,
             events: &mut events,
             outbound: &mut outbound,
+            changed: &mut changed,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -135,6 +142,7 @@ fn register_range_dispatches_correctly() {
             scheduled: &mut scheduled,
             events: &mut events,
             outbound: &mut outbound,
+            changed: &mut changed,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -170,7 +178,8 @@ fn register_one_is_a_width_one_range() {
     registry.register_one(BlockStateId(5), logging as Arc<dyn BlockBehavior>);
 
     let target = BlockPos::new(0, 0, 0);
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, ownership) = harness();
+    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
+        harness();
 
     for state in [BlockStateId(4), BlockStateId(6)] {
         let behavior = registry.resolve(state);
@@ -180,6 +189,7 @@ fn register_one_is_a_width_one_range() {
             scheduled: &mut scheduled,
             events: &mut events,
             outbound: &mut outbound,
+            changed: &mut changed,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -194,6 +204,7 @@ fn register_one_is_a_width_one_range() {
         scheduled: &mut scheduled,
         events: &mut events,
         outbound: &mut outbound,
+        changed: &mut changed,
         ownership: &ownership,
         current_tick: 0,
     };

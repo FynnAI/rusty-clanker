@@ -12,7 +12,8 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, UseItemOn, pack_position, unpack_position,
+    KeepAliveServerbound, PlayerAction, SetPlayerRotation, UseItemOn, pack_position,
+    unpack_position,
 };
 use rusty_clanker_server::play::{
     HardcodedWorld, HeldItemStub, PlaceableBlockKind, PlayerProfile, enter_play,
@@ -164,6 +165,52 @@ async fn drain_traffic_for(socket: &mut TcpStream, accumulator: &mut BytesMut, w
     }
 }
 
+/// Reads and discards clientbound traffic on `socket` until a `Block Update` matching exactly
+/// `(pos, expected_id)` is seen, then returns -- leaving the accumulator positioned right after
+/// it. Every test below that watches a bystander for a scheduled-tick-driven change first places
+/// the triggering block itself, whose own direct-response `Block Update` `broadcast_to_all`
+/// (`world.rs`) *also* delivers to the bystander (every currently-connected player, actor
+/// included) -- a blind, fixed-duration drain (`drain_traffic_for`) risks either stopping before
+/// that echo arrives (leaving it to be misread as the later genuine change by a subsequent
+/// `collect_block_updates_at` scan) or, if long enough to be safe against that, running past the
+/// LATER genuine change itself and silently discarding it too (both real failure modes this
+/// file's own first draft of the two tests below hit directly -- confirmed by tracing the
+/// server's own tick-indexed `TickChangedPositions` drain against the client's own observed
+/// traffic side by side). Matching the echo's own exact, already-known value instead of racing a
+/// clock closes both failure modes at once: nothing after the echo is ever consumed here, no
+/// matter how soon it follows.
+async fn drain_until_echo(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    pos: BlockPos,
+    expected_id: i32,
+    window: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "drain_until_echo: timed out waiting for the echo Block Update at {pos:?} = \
+             {expected_id}"
+        );
+        let (id, body) = tokio::time::timeout(remaining, recv_clientbound(socket, accumulator))
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "drain_until_echo: timed out waiting for the echo Block Update at {pos:?} = \
+                     {expected_id}"
+                )
+            });
+        if id == BlockUpdate::ID {
+            let update = decode_one::<BlockUpdate>(body).unwrap();
+            if unpack_position(update.location) == pos && update.block_state_id == expected_id {
+                return;
+            }
+        }
+    }
+}
+
 /// Places `held` at `(location, direction)` and returns the direct `Block Update`'s own
 /// `block_state_id` (the response `respond_place` sends for the position the player directly
 /// acted on).
@@ -197,6 +244,66 @@ async fn place_and_read_id(
     );
     let body = recv_packet_of_type(actor, acc, BlockUpdate::ID).await;
     decode_one::<BlockUpdate>(body).unwrap().block_state_id
+}
+
+async fn wait_until(mut check: impl FnMut() -> bool) {
+    loop {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Sets `yaw`/`pitch` and waits for it to land server-side -- every yaw-driven placement below
+/// (a repeater's own `FACING`) needs this first. Never touches position -- every actor in this
+/// file stays at spawn, mirroring `play_block_state_orientation_real_client.rs`'s own identical
+/// helper (this crate's own established per-file-duplication convention, no shared `tests/`
+/// support module exists today).
+async fn rotate(
+    actor: &mut TcpStream,
+    world: &HardcodedWorld,
+    uuid: uuid::Uuid,
+    yaw: f32,
+    pitch: f32,
+) {
+    send_packet(
+        actor,
+        &SetPlayerRotation {
+            yaw,
+            pitch,
+            on_ground: true,
+        },
+    )
+    .await;
+    wait_until(|| {
+        world
+            .player_sessions()
+            .with_record_mut(uuid, |r| r.data.rotation)
+            == Some([yaw, pitch])
+    })
+    .await;
+}
+
+// Yaw values producing each cardinal repeater `FACING`
+// (`nearest_horizontal_direction4(yaw).opposite()` -- `mining_block_state_ids.rs`'s/
+// `play_block_state_orientation_real_client.rs`'s own identical constants/derivation, restated
+// here since integration tests cannot share code across files in this crate today).
+const YAW_FACING_SOUTH: f32 = 180.0;
+
+/// A per-stage hang guard (`play_block_break_place_full.rs`'s own established helper, restated
+/// here): wraps `fut` in an outer `tokio::time::timeout`, panicking with `stage`'s own name on
+/// expiry rather than letting a genuine regression hang this file's own outer 60s test timeout
+/// silently until that fires with a far less specific message.
+async fn staged<T>(
+    stage: &'static str,
+    limit: Duration,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    match tokio::time::timeout(limit, fut).await {
+        Ok(value) => value,
+        Err(_) => panic!("stage {stage:?} timed out after {limit:?}"),
+    }
 }
 
 #[tokio::test]
@@ -429,6 +536,203 @@ async fn a_floor_torch_pops_when_its_own_support_block_is_broken() {
             torch_state.raw_state, 0,
             "torch cell is air server-side too"
         );
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report test-authoring: closes the gap the previous wave's own field report
+/// root-caused (`docs/findings-for-planning.md`'s own "block-state changes made outside a
+/// direct player action never reach any client" entry) -- `executor.tick_region`'s own ordinary
+/// per-tick Stage-4 dispatch (a scheduled tick with no concurrent direct player action) now
+/// broadcasts through `UpdateContext::changed`/`rc_mechanics::stage4::ecs::TickChangedPositions`,
+/// drained once per tick by `crates/server/src/play/world.rs`'s own tick loop -- the disciplined
+/// replacement for the retired `snapshot_cascade_neighborhood`/`broadcast_cascaded_changes`
+/// bounded-neighborhood stop-gap. Proves it for a torch's own delayed re-eval turning it OFF: a
+/// four-block vertical stack (Stone S1 -> driver floor torch, always lit, giving direct upward
+/// power into whatever sits on top of it, real vanilla's own "torch strongly powers the block
+/// directly above it" mechanic -> Stone B, now powered -> the torch under test, placed on top of
+/// B). The instant the test torch is placed, its OWN placement-time self-resolution
+/// (`apply_placement`'s own Root Cause 2 fix) synchronously sees B already reading power=15 and
+/// schedules its own 2-tick re-eval (`TorchBehavior::REEVAL_DELAY`) -- entirely without any
+/// later player action -- so its own direct placement response still reads `lit=true`; only the
+/// LATER, unsolicited `Block Update` (this test's real point) reads `lit=false`.
+#[tokio::test]
+async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_action() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        // B is a bystander watching for the torch's own scheduled-tick flip -- proving it
+        // reaches a real, entirely passive client, never merely the acting connection's own
+        // traffic.
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let mut seq = 0;
+
+        // S1: a Stone support, purely so the driver torch below has a solid floor to sit on.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let s1_pos = BlockPos::new(1, -59, 0);
+        let s1_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+        assert_ne!(s1_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The driver: a floor torch on S1. Nothing ever powers ITS OWN support (S1 stays plain
+        // Stone forever), so it stays lit permanently -- a stable power source for the rest of
+        // this circuit.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let driver_pos = BlockPos::new(1, -58, 0);
+        let driver_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s1_pos, 1).await;
+        assert_eq!(driver_id, 6885, "driver floor torch -> lit=true");
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // B: a Stone directly above the driver -- a conductor, so it aggregates and relays the
+        // driver's own direct upward signal onward (`direct_signal_to`) to whatever touches B on
+        // any OTHER face, including straight up.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let b_pos = BlockPos::new(1, -57, 0);
+        let b_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, driver_pos, 1).await;
+        assert_ne!(b_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The torch under test: a floor torch on B.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let torch_pos = BlockPos::new(1, -56, 0);
+        let torch_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, b_pos, 1).await;
+        assert_eq!(
+            torch_id, 6885,
+            "the torch's own direct placement response -- still lit=true; the re-eval it \
+             already scheduled synchronously, this same action, has not fired yet"
+        );
+        // Consumes ONLY B's own echo of this SAME placement's direct response (still lit=true,
+        // 6885) -- never a fixed time window, which could just as easily race past the 2-tick
+        // re-eval below and silently swallow it too (`drain_until_echo`'s own doc comment has
+        // the full incident citation).
+        drain_until_echo(&mut b, &mut b_acc, torch_pos, 6885, Duration::from_secs(2)).await;
+
+        // WITHOUT any further player action: the scheduled re-eval fires 2 game ticks later
+        // (100ms at 20 TPS) -- driven purely by `executor.tick_region`'s own ordinary per-tick
+        // dispatch, never by another direct player action.
+        let seen = staged(
+            "torch scheduled re-eval reaches a real client",
+            Duration::from_secs(5),
+            collect_block_updates_at(
+                &mut b,
+                &mut b_acc,
+                &[torch_pos],
+                Duration::from_millis(2000),
+            ),
+        )
+        .await;
+
+        let torch_state = world.debug_query_block(torch_pos).await.unwrap();
+        assert_eq!(
+            seen.get(&torch_pos).copied(),
+            Some(6886),
+            "the torch's own scheduled re-eval (lit=true -> lit=false) must reach a real client \
+             as its own unsolicited Block Update, with no further player action -- got {seen:?}"
+        );
+
+        assert_eq!(
+            torch_state.raw_state, 6886,
+            "torch reads lit=false server-side too"
+        );
+    })
+    .await
+    .unwrap();
+}
+
+/// Companion to the torch test above: a repeater's own scheduled `POWERED` flip, a SECOND,
+/// independent tier-1 redstone component proving the same disciplined broadcast mechanism.
+/// `Repeater` IS one of `apply_placement`'s own placement-time self-resolution kinds (Root
+/// Cause 2, unlike Piston -- `docs/findings-for-planning.md`'s own matching entry on that gap),
+/// so R2's OWN placement already self-checks against the driver torch (already lit before R2 is
+/// placed) and schedules its own 2-tick powered-flip re-eval synchronously, entirely without a
+/// later player action.
+#[tokio::test]
+async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_action() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        // B is a bystander watching for the repeater's own scheduled-tick flip.
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let mut seq = 0;
+
+        // S2: a Stone the driver torch attaches to.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let s2_pos = BlockPos::new(3, -59, 0);
+        let s2_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, 0), 1).await;
+        assert_ne!(s2_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The driver: a wall torch on S2's own NORTH face (`direction: 2` = `Face::North`,
+        // `block_action.rs`'s own `Face` enum order) -- always lit, emitting weak signal 15
+        // toward every direction except its own input side (South, back into S2) -- North
+        // included, the direction the repeater below reads it from.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let driver_pos = BlockPos::new(3, -59, -1);
+        let driver_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s2_pos, 2).await;
+        assert_eq!(driver_id, 6887, "driver wall torch, facing=north, lit=true");
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // R2: a repeater, FACING=South (its own input side), placed directly north of the
+        // driver -- so its own front face points straight at it. `YAW_FACING_SOUTH` ->
+        // `nearest_horizontal_direction4(180.0).opposite()` = South (this file's own top-of-file
+        // doc comment has the shared id-arithmetic citation with `mining_block_state_ids.rs`).
+        rotate(&mut a, &world, uuid_a, YAW_FACING_SOUTH, 0.0).await;
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Repeater))
+            .await;
+        let r2_pos = BlockPos::new(3, -59, -2);
+        let r2_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, -2), 1).await;
+        assert_eq!(
+            r2_id, 7041,
+            "repeater facing=south, delay=1, locked=false, powered=false -- R2's OWN placement \
+             already self-resolves against the driver's already-lit signal, scheduling its own \
+             2-tick powered-flip re-eval without waiting for a later notify"
+        );
+        // Consumes ONLY B's own echo of this SAME placement's direct response (still
+        // powered=false, 7041) -- never a fixed time window (`drain_until_echo`'s own doc
+        // comment has the full incident citation: a blind window either races past the 2-tick
+        // powered-flip below and swallows it too, or stops too early and lets a later scan
+        // misread this echo as that flip).
+        drain_until_echo(&mut b, &mut b_acc, r2_pos, 7041, Duration::from_secs(2)).await;
+
+        // WITHOUT any further player action: the scheduled powered-flip fires 2 game ticks later
+        // (`RepeaterBehavior::get_delay`, `delay_setting=1` -> 2 ticks).
+        let seen = staged(
+            "repeater scheduled powered-flip reaches a real client",
+            Duration::from_secs(5),
+            collect_block_updates_at(&mut b, &mut b_acc, &[r2_pos], Duration::from_millis(2000)),
+        )
+        .await;
+        assert_eq!(
+            seen.get(&r2_pos).copied(),
+            Some(7040),
+            "the repeater's own scheduled POWERED flip must reach a real client as its own \
+             unsolicited Block Update, with no further player action -- got {seen:?}"
+        );
+
+        let r2_state = world.debug_query_block(r2_pos).await.unwrap();
+        assert_eq!(
+            r2_state.raw_state, 7040,
+            "repeater reads powered=true server-side too"
+        );
+        let _ = driver_pos; // named for readability above; asserted via `driver_id` already.
     })
     .await
     .unwrap();

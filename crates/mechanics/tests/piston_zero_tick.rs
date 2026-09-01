@@ -60,6 +60,7 @@ struct Harness {
     events: BlockEventQueue,
     halo: BorderHalo,
     outbound: Vec<(Address, RegionMessage)>,
+    changed: Vec<(BlockPos, BlockStateId)>,
     ownership: RegionOwnership,
     behaviors: BlockBehaviorRegistry,
 }
@@ -75,6 +76,7 @@ impl Harness {
             events: BlockEventQueue::new(),
             halo: BorderHalo::new(),
             outbound: Vec::new(),
+            changed: Vec::new(),
             ownership: RegionOwnership::always_local(local),
             behaviors,
         }
@@ -87,6 +89,7 @@ impl Harness {
             scheduled: &mut self.scheduled,
             events: &mut self.events,
             outbound: &mut self.outbound,
+            changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick,
         }
@@ -101,6 +104,7 @@ impl Harness {
             &mut self.events,
             &self.behaviors,
             &mut self.outbound,
+            &mut self.changed,
             current_tick,
         );
     }
@@ -116,6 +120,7 @@ impl Harness {
             &mut self.events,
             &self.behaviors,
             &mut self.outbound,
+            &mut self.changed,
             current_tick,
         );
     }

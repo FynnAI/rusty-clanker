@@ -78,6 +78,7 @@ struct Harness {
     scheduled: ScheduledTickQueue,
     events: BlockEventQueue,
     outbound: Vec<(Address, RegionMessage)>,
+    changed: Vec<(BlockPos, BlockStateId)>,
     ownership: RegionOwnership,
 }
 
@@ -91,6 +92,7 @@ impl Harness {
             scheduled: ScheduledTickQueue::new(),
             events: BlockEventQueue::new(),
             outbound: Vec::new(),
+            changed: Vec::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -102,6 +104,7 @@ impl Harness {
             scheduled: &mut self.scheduled,
             events: &mut self.events,
             outbound: &mut self.outbound,
+            changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick: 0,
         }
@@ -134,6 +137,7 @@ fn wire_signal_falloff_along_a_straight_line() {
         scheduled,
         events,
         outbound,
+        changed,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -146,6 +150,7 @@ fn wire_signal_falloff_along_a_straight_line() {
                 scheduled,
                 events,
                 outbound,
+                changed,
                 ownership,
                 current_tick: 0,
             };
@@ -209,6 +214,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
         scheduled,
         events,
         outbound,
+        changed,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -221,6 +227,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
                 scheduled,
                 events,
                 outbound,
+                changed,
                 ownership,
                 current_tick: 0,
             };
