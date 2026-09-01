@@ -47,9 +47,11 @@ fn tick_loop_appends_parseable_tick_log_entries_and_region_count_is_one() {
     std::fs::create_dir_all(&dir).expect("a fresh temp directory always creates");
     let tick_log_path = dir.join("tick-log.ndjson");
 
-    let mut config = WorldConfig::default();
-    config.world_dir = dir.join("world");
-    config.tick_log = Some(tick_log_path.clone());
+    let config = WorldConfig {
+        world_dir: dir.join("world"),
+        tick_log: Some(tick_log_path.clone()),
+        ..WorldConfig::default()
+    };
 
     let world = HardcodedWorld::with_config(config);
     assert_eq!(
