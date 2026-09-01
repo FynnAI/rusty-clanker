@@ -233,54 +233,26 @@ Entries name the milestone that surfaced them and the code they concern.
   the Unix equivalent) before trusting any `fetch-corpus` failure as a real
   capture-pipeline defect.
 
-- **`redstone/qc/wire_strong_vs_weak_power_door`'s own `(11, 1, 0)` wire
-  connection shape and `redstone/update_order/wire_climbs_conductor_step_
-  up_down`'s own `(4, 1, 0)` wire connection shape demand opposite answers
-  from the same geometric rule, both confirmed against their own real
-  oracle traces — an apparent genuine contradiction in vanilla's own "wire
-  climbs a step" mechanic that this changeset could not resolve within
-  `wire.rs` alone.** Both positions sit one block below a diagonal wire
-  reached over a sturdy same-height neighbor (`WireBehavior::connection_
-  shape_on_side`'s own "Up" case: `mid` sturdy-on-top, a wire at `mid.
-  above()`), and in both fixtures a conductor is placed directly *above*
-  the lower wire itself partway through the run (`wire_climbs`: stone at
-  `(4, 2, 0)`, tick 4; `wire_strong`: `redstone_block` at `(11, 2, 0)`,
-  tick 3) — structurally identical setups by every geometric property this
-  module currently inspects (`mid`'s own solidity, whether `mid.above()`
-  still holds a wire, `pos`'s own floor support, `pos`'s own other three
-  sides). Gating the "Up" case on `pos`'s own ceiling being open
-  (`!is_conductor(Direction::Up.apply(pos))`, this module's pre-existing
-  check, not introduced by this changeset) makes `wire_climbs`'s `(4, 1, 0)`
-  correctly collapse to the oracle's own all-`Side` "isolated wire" shape
-  once its ceiling closes (`cargo run -p xtask -- parity-check redstone
-  --only redstone/update_order/wire_climbs_conductor_step_up_down` passes)
-  but leaves `wire_strong`'s `(11, 1, 0)` wrongly collapsing the same way
-  (oracle keeps `west = Up` even after its own ceiling closes — expected
-  `4872`, actual `4726`). Removing the gate entirely does the exact
-  opposite: `wire_strong`'s `(11, 1, 0)` matches perfectly for every tick,
-  while `wire_climbs`'s `(4, 1, 0)` regresses to the ungated shape
-  (`4737` instead of the oracle's `4591`) — verified empirically both ways,
-  not merely reasoned about. No other distinguishing factor was found by
-  direct inspection of every neighbor within two Manhattan steps of both
-  positions (the one non-geometric difference — `wire_strong`'s ceiling
-  block is `redstone_block`, `wire_climbs`'s is plain `stone`, and the
-  `redstone_block` placement also happens to freshly power the diagonal
-  wire in the same action — did not change the outcome when tested by
-  substituting the shape-table classification, since both already resolve
-  identically as full-cube conductors). Left gated (matching the far
-  better-known, widely-documented real vanilla mechanic that a solid
-  ceiling directly over the lower wire visually cuts a climbing connection
-  — and matching `wire_climbs`'s own fixture name/quirk text, which exists
-  specifically to pin this exact behavior) rather than trading one passing
-  target fixture for another; `wire_strong_vs_weak_power_door`'s own `(11,
-  1, 0)` mismatch (17 of its 35 total, tick 3 onward) stands as an open,
-  unresolved residual pending either a corrected understanding of the real
-  rule or a second look at whether this fixture's own oracle trace is
-  itself stale relative to a later capture-pipeline fix (the exact failure
-  mode `wire_climbs_conductor_step_up_down`'s own placement-id defect,
-  fixed in an earlier wave, already turned out to be).
-
-  </details>
+- **Research-rule refinement for reconciliation into the research corpus
+  (`docs/research/mc-26.2/08-redstone-ticking.md` §3.1, the MECH-D11/D12
+  citation): the wire step-up gate ("a conductor directly above the lower
+  wire severs the climbing connection, for all four horizontal directions at
+  once") carries one oracle-forced exemption — a conductor that is *also*
+  itself a redstone signal source (in tier-1 scope: `redstone_block`) does
+  NOT sever the climb.** Established empirically from two otherwise
+  irreconcilable oracle traces (`wire_climbs_conductor_step_up_down`'s plain
+  stone ceiling severs; `wire_strong_vs_weak_power_door`'s `redstone_block`
+  ceiling, in the geometrically identical relationship, does not), then
+  shipped as `WireBehavior::step_up_gate_open` (`crates/mechanics/src/
+  redstone/wire.rs`, its doc comment has the full account) with both
+  fixtures passing that position simultaneously. The decompiled reference's
+  own `isRedstoneConductor` semantics presumably already encode this (a
+  `redstone_block` may simply not be a redstone conductor in vanilla's own
+  block-properties sense, making the "exemption" an artifact of this
+  project's own coarser full-cube conductor classification rather than a
+  real extra rule) — worth one research-role verification pass before the
+  research doc is amended, so the corpus text records the true mechanism
+  rather than the empirical patch.
 
 - **CORRECTED (later M3 field-report wave). `WireBehavior`'s own `should_
   signal` self-exclusion flag (Context §D, `getBlockSignal`'s own doc
