@@ -97,15 +97,19 @@ pub fn register_tier1_redstone(
         Arc::clone(&torch_floor) as Arc<dyn RedstoneSignalSource>,
     );
 
-    // Wall torch: attachment direction is per-block-state (depends on the FACING property),
-    // not representable by a single fixed `TorchAttachment` across an entire id range without a
+    // Wall torch: attachment direction is per-block-state (depends on the FACING property), not
+    // representable by a single fixed `TorchAttachment` across an entire id range without a
     // generated block-state-property registry (Context §I's own "no generated registry exists
     // yet" gap) -- this blueprint registers one representative `Wall` orientation
-    // (`Direction::North`, arbitrary but fixed) for the whole `torch_wall` range, sufficient for
-    // every acceptance test in this blueprint's own scope (`wall_torch_reads_from_its_attach_
-    // direction` constructs its own standalone `TorchBehavior::new(Wall(..))`, never through
-    // this registration path) -- flagged for reconciliation once per-block-state wall
-    // orientation is representable.
+    // (`Direction::North`, arbitrary — any `Wall(_)` variant works identically) for the whole
+    // `torch_wall` range. `TorchBehavior` itself no longer trusts this representative value on
+    // any read path: `attachment_at` (M3 field-report fix, closing the last 17 corpus mismatches)
+    // decodes each individual wall torch's own real `facing` straight off its own stored
+    // `BlockStateId` instead, exactly the same "recover from the placed id" pattern
+    // `RepeaterBehavior`/`ComparatorBehavior::on_placed` already established — so this
+    // constructor argument only still matters as the `Wall`-vs-`Floor` discriminant and as a
+    // fallback for an id outside the real wall-torch range (`torch::is_wall_range`'s own doc
+    // comment).
     let torch_wall = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::North)));
     behaviors.register_range(
         ids.torch_wall.0,

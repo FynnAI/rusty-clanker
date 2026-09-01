@@ -65,6 +65,34 @@ pub(crate) fn wall_state_range() -> (u32, u32) {
     (TORCH_WALL_BASE, TORCH_WALL_MAX)
 }
 
+/// `true` iff `raw` is a real `minecraft:redstone_wall_torch` id (`TORCH_WALL_BASE..=
+/// TORCH_WALL_MAX`) -- `TorchBehavior::attachment_at`'s own guard, mirroring `wire.rs`'s
+/// documented `is_wire_range` convention: keeps a `Wall`-constructed behavior safe against a
+/// unit test's own small placeholder id (`wall_torch_reads_from_its_attach_direction`'s own
+/// `TORCH_ID = BlockStateId(1)`, standing in for "some wall torch" without needing a real id) as
+/// well as a position with nothing stored yet, falling back to the constructor's own `attachment`
+/// in both cases rather than attempting arithmetic that assumes a real one.
+fn is_wall_range(raw: u32) -> bool {
+    (TORCH_WALL_BASE..=TORCH_WALL_MAX).contains(&raw)
+}
+
+/// Inverse of this module's own `facing_idx*2` encoding above -- a wall torch's own `facing`
+/// property, in blocks.json's own listed order (this module's own top-of-file doc comment:
+/// `[north, south, west, east]`). Kept local to this module (this changeset's ownership is
+/// scoped to `torch.rs`/`registration.rs`) even though the digit order happens to coincide with
+/// `signal::diode_facing_index`'s -- a wall torch's `facing` and a diode's `facing` are unrelated
+/// properties on unrelated blocks that merely share blocks.json's alphabetical enum-value
+/// convention, not a real shared concept worth coupling the two modules over.
+fn wall_facing_from_index(index: u32) -> Direction {
+    match index {
+        0 => Direction::North,
+        1 => Direction::South,
+        2 => Direction::West,
+        3 => Direction::East,
+        other => panic!("wall_facing_from_index: index must be 0..=3, got {other}"),
+    }
+}
+
 /// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
 /// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
 /// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency
@@ -73,6 +101,20 @@ const AIR_ID: BlockStateId = BlockStateId(0);
 
 /// Redstone torch (Context §E). One instance per region (Context §I).
 pub struct TorchBehavior {
+    /// The constructor-supplied attachment (`Floor`, or a representative `Wall` orientation --
+    /// `registration.rs`'s own single shared wall-torch instance covers every registered id with
+    /// one constructed value, since there is only ever one `TorchBehavior` per variant per
+    /// region, Context §I). For `Floor`, this is authoritative -- a floor torch has no `facing`
+    /// property, so there is nothing to derive per-position. For `Wall`, this is only the
+    /// *fallback*: `attachment_at` derives each individual wall torch's own real per-position
+    /// `facing` straight off its own stored `BlockStateId` instead (M3 field-report fix, closing
+    /// the last 17 corpus mismatches -- a shared field cannot track per-position facing, exactly
+    /// the same shape as `RepeaterBehavior`'s own `facing: Mutex<HashMap<BlockPos, Direction>>`
+    /// side-table, except a wall torch's facing is never actually mutable state worth
+    /// side-tabling -- it is already fully recoverable, on every read, from the id already
+    /// sitting in the world). This field is used as `Wall`'s fallback only when the position's
+    /// own id does not (yet) fall in the real wall-torch range (`is_wall_range`'s own doc
+    /// comment: a unit test's small placeholder id, or nothing stored yet).
     attachment: TorchAttachment,
     state: Mutex<HashMap<BlockPos, TorchState>>,
     recent_toggles: Mutex<HashMap<BlockPos, VecDeque<u64>>>,
@@ -105,10 +147,34 @@ impl TorchBehavior {
             .unwrap_or(true)
     }
 
+    /// This position's own real attachment (M3 field-report fix, closing the last 17 corpus
+    /// mismatches -- `attachment` field's own doc comment). For a `Floor`-constructed behavior,
+    /// short-circuits straight to `self.attachment` without ever touching the world -- a floor
+    /// torch's attachment never varies. For a `Wall`-constructed behavior, decodes the real
+    /// `facing` off `pos`'s own currently-stored raw id when it falls in the wall-torch range
+    /// (mirroring `RepeaterBehavior::on_placed`'s/`ComparatorBehavior::on_placed`'s established
+    /// "recover facing from the placed id" pattern), otherwise falls back to `self.attachment`
+    /// (`is_wall_range`'s own doc comment: a unit test's small placeholder id, or a position with
+    /// nothing stored yet). Every `RedstoneSignalSource`/`BlockBehavior` read path below calls
+    /// this instead of reading `self.attachment` directly.
+    fn attachment_at(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> TorchAttachment {
+        let TorchAttachment::Wall(_) = self.attachment else {
+            return self.attachment;
+        };
+        match world.get_block(pos) {
+            Some(current) if is_wall_range(current.0) => {
+                let facing_idx = (current.0 - TORCH_WALL_BASE) / 2;
+                TorchAttachment::Wall(wall_facing_from_index(facing_idx))
+            }
+            _ => self.attachment,
+        }
+    }
+
     /// Pure query, no mutation (Context §E's "out of scope, flagged" support-loss note) —
-    /// `true` iff this floor torch's support block is currently not a conductor.
+    /// `true` iff this torch's own support block (per `attachment_at`'s per-position derivation)
+    /// is currently not a conductor.
     pub fn should_pop(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-        let support = self.attachment.input_direction().apply(pos);
+        let support = self.attachment_at(world, pos).input_direction().apply(pos);
         !signal::is_conductor(world, support)
     }
 
@@ -154,7 +220,7 @@ impl TorchBehavior {
             world,
             self.registry(),
             pos,
-            self.attachment.input_direction(),
+            self.attachment_at(world, pos).input_direction(),
         )
     }
 
@@ -233,14 +299,14 @@ impl TorchBehavior {
 impl RedstoneSignalSource for TorchBehavior {
     fn weak_signal_toward(
         &self,
-        _world: &dyn BlockWorldAccess,
+        world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
         if !self.lit(pos) {
             return 0;
         }
-        if towards == self.attachment.input_direction() {
+        if towards == self.attachment_at(world, pos).input_direction() {
             0
         } else {
             15
@@ -248,11 +314,11 @@ impl RedstoneSignalSource for TorchBehavior {
     }
     fn direct_signal_toward(
         &self,
-        _world: &dyn BlockWorldAccess,
+        world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        if self.lit(pos) && towards == self.attachment.input_direction().opposite() {
+        if self.lit(pos) && towards == self.attachment_at(world, pos).input_direction().opposite() {
             15
         } else {
             0
@@ -298,7 +364,9 @@ impl BlockBehavior for TorchBehavior {
         from: Direction,
         _neighbor_state: BlockStateId,
     ) -> Option<BlockStateId> {
-        if from == self.attachment.input_direction() && self.should_pop(ctx.world, pos) {
+        if from == self.attachment_at(ctx.world, pos).input_direction()
+            && self.should_pop(ctx.world, pos)
+        {
             self.state.lock().unwrap().remove(&pos);
             self.recent_toggles.lock().unwrap().remove(&pos);
             return Some(AIR_ID);
