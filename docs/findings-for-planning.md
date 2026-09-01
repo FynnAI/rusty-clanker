@@ -103,6 +103,84 @@ Entries name the milestone that surfaced them and the code they concern.
   equivalent per-region composition step) to the real ranges, once a generated
   per-block-state-property registry exists to supply them (see the next entry).
 
+  **(Update, M3 field-report fix wave, "production never wires redstone" task:
+  resolved.)** `world.rs`'s `bootstrap_region` now calls a new private helper,
+  `bootstrap_redstone_dispatch`, immediately after `bootstrap_default_stage4_
+  resources`/`bootstrap_default_stage7_resources` — it reproduces `replay.rs`'s
+  own `tier1_registry` construction order by hand (`register_redstone_block`,
+  the four tier-1 components via `register_tier1_redstone`, the two-phase
+  `Tier1RedstoneHandles::bind_registry` self-reference, `register_piston`
+  strictly after), then re-inserts the now-populated `BlockBehaviorRegistry`
+  and a fresh per-region `ContainerSignalsResource`. Dispatch ranges come from
+  a new `rc_mechanics::redstone::dispatch_ranges` module (`derive_tier1_state_
+  ids`/`derive_piston_state_ids`) rather than duplicating `replay.rs`'s own
+  hand-picked literals a third time — **but this is not a literal "read the
+  ranges off `rc-registries`" derivation**, and that gap is real, not
+  papered over: `rc-registries`' generated `block_states.rs` table (`crates/
+  registries/generated/v776/block_states.rs`, verified by reading both it and
+  `xtask/src/datagen/codegen.rs`'s `generate_block_states_rs`) carries exactly
+  one `BlockStateId` per block type — the game's own default state — plus two
+  global totals, and nothing else: no per-block state count, no `[min, max]`
+  range, no per-property enumeration-order table. `BlocksReport.states` *does*
+  carry every state id at codegen time (`xtask/src/datagen/reports.rs`), but
+  the generator only keeps the one flagged `"default": true`. A default state
+  is also not generally its own block's range boundary either (`REDSTONE_
+  WIRE`'s generated default, 5171, sits 1160 states inside its own 1296-wide
+  range). Widening the generated output would need an `xtask/**` change,
+  off-limits for this fix's own `implementation` changeset (CI path guard);
+  reproducing Mojang's own per-property cartesian-product state-id algorithm
+  from scratch outside the generated pipeline was rejected too (no legally-
+  held `blocks.json` copy in this pass's own environment to verify it against,
+  and a wrong per-property enumeration order would silently mis-register
+  dispatch ranges — worse than the pre-fix empty registry). `dispatch_ranges`
+  instead exposes each tier-1/piston component's own already-oracle-verified
+  private state-id arithmetic (`wire::state_range`, `torch::floor_state_
+  range`/`wall_state_range`, `repeater::state_range`, `comparator::state_
+  range`, `piston::state_range` — the same `*_BASE` constants each component
+  already relies on for its own "own-state writeback" reads/writes, bumped
+  `pub(crate)`) and cross-checks every derived range against `rc-registries`'
+  generated `default_state` constant for that block at call time (`assert!`,
+  loud panic on mismatch, never silent) — all seven cross-checks pass today,
+  including two independently self-consistent ones (`PISTON`'s and `STICKY_
+  PISTON`'s generated defaults both land at the identical offset-6-of-12
+  position within their own ranges, matching their shared `extended=false,
+  facing=north` default combination). This makes `rc-registries` a genuine
+  integrity anchor (catches a future pinned-version bump immediately and
+  loudly) rather than the literal sole source of truth WS-D15's eventual real
+  per-property registry would be — needs a decision on whether that's an
+  acceptable interim shape or whether `xtask codegen` should be widened first
+  (emitting each block's own `[min, max]` state-id range alongside `default_
+  state`, trivial from `BlocksReport.states`' already-parsed per-state ids) so
+  a later pass can delete the seven hand-derived `state_range` functions
+  entirely in favor of one generated table lookup.
+
+  A related, more severe gap surfaced verifying this same fix, also now
+  resolved as part of it: `crates/server/src/play/mining.rs`'s own real
+  placement path (`apply_placement`) writes a freshly-placed block's raw state
+  id via `ctx.set_block` and calls `settle_neighbor_updates`, but — unlike
+  `replay.rs`'s own `place_and_settle` — never called `behaviors.resolve(state
+  ).on_placed(...)`. With dispatch now genuinely live, this was not merely
+  "diode re-placement doesn't work" (the next entry's own, now-superseded,
+  prediction) but an active **crash risk**: `RepeaterBehavior`/`ComparatorBehavior
+  ::facing` both `panic!` ("position was never placed") the first time
+  `on_neighbor_changed` reaches an ordinarily-supported repeater/comparator a
+  real player placed and something nearby later changed, since nothing had
+  ever seeded their own per-position facing/delay/mode side table (`place()`
+  is never called by `apply_placement` either, only by `replay.rs`'s own
+  spec-aware `tier1_registry`). Fixed by adding the identical `on_placed` call
+  `apply_placement` was missing, immediately after `ctx.set_block`, before
+  `settle_neighbor_updates` — mirroring `place_and_settle` exactly. `Piston
+  Behavior` has no equivalent panic risk (`on_neighbor_changed` checks `self.
+  state.get(&pos)` and gracefully returns if absent) but also has no `on_
+  placed` override and is never `.place()`-seeded by `apply_placement` either
+  — a real piston placed by a player still silently never activates today,
+  unchanged from before this fix (not a new regression, since an empty
+  registry produced the identical non-function before) but still an open gap:
+  needs a decision on whether `PistonBehavior` gains an `on_placed` decode-
+  from-raw-id override (mirroring `RepeaterBehavior`'s/`ComparatorBehavior`'s
+  own established pattern) or `apply_placement` calls `PistonBehavior::place`
+  directly (it already has `selection`'s real facing/sticky at that call site).
+
 - **`redstone/update_order/update_order_mc11193_style_staleness`'s own capture
   fails a pre-placement settle-wait check with residual, non-air content at its
   own dedicated `world_origin_for` slot, and the cause could not be pinned down
@@ -381,6 +459,21 @@ Entries name the milestone that surfaced them and the code they concern.
   on_placed(...)` pattern `place_and_settle` now uses, diode re-placement
   will work there too with no further changes. Recorded only so whoever
   closes the composition-root gap knows this piece is already handled.
+
+  **(Update, M3 field-report fix wave, "production never wires redstone" task:
+  this entry's own prediction did not hold — recorded so the correction is
+  traceable, not silently overwritten.)** The composition-root gap closing
+  alone did **not** make `apply_placement` route through `ctx.set_block`-
+  plus-`on_placed` "with no further changes": `apply_placement` never called
+  `on_placed` at all (checked directly, `crates/server/src/play/mining.rs`),
+  and with dispatch now genuinely live this was worse than "diode re-placement
+  doesn't work" — it was a live `panic!` risk for `RepeaterBehavior`/
+  `ComparatorBehavior` the first time anything touched a real placed diode's
+  own neighborhood. Fixed as part of the same task (this file's own Section A
+  entry above has the full writeup) by adding the missing `on_placed` call to
+  `apply_placement` directly. This entry's own underlying point — `on_placed`
+  needed no *new* trait-level machinery, only a production call site — was
+  correct; only the "closes for free" part was wrong.
 
 - **A freshly placed, untriggered wire's connection shape appears to follow
   vanilla's "straight-line/full-cross" auto-connect default (this same M3
@@ -665,6 +758,51 @@ Entries name the milestone that surfaced them and the code they concern.
   cross-stage architectural addition (a new Stage-4-after-Stage-7 pass, or a
   cross-stage event queue), correctly out of scope for this replay-only fix,
   left as the decision this entry's own preceding paragraph already names.
+
+  **(Update, M3 field-report fix wave, "production never wires redstone"
+  task: the production ECS half is now closed too, and a materially larger,
+  previously-unrecorded companion gap closed alongside it.)** Discovered
+  while implementing this: Stage 7 (block-entity ticking) had **no
+  production wiring at all**, not merely the missing notify bridge —
+  `crates/server/src/play/world.rs` never called `rc_mechanics::stage7::ecs
+  ::register_stage7`, `bootstrap_default_stage7_resources`, or inserted
+  `ContainerSignalsResource` (confirmed by `grep`, zero matches for any of
+  the three anywhere under `crates/server/src`), so `system_block_entity_tick`
+  had literally never run on a real server tick either, in addition to Stage
+  4's own already-tracked gap above. Both are now wired: `bootstrap_region`
+  calls `bootstrap_default_stage7_resources` and constructs a real per-region
+  `Tier1ContainerSignalSource`/`ContainerSignalsResource` (this file's own
+  Section A entry above has the full composition-root writeup); the
+  executor-builder registers `register_stage7` (`system_block_entity_tick`,
+  `order_tag = 0`) then a new `system_container_signal_notify`
+  (`order_tag = 1`), both into `DomainGroup::BlockEntity` — the *notify*
+  system's own new `stage7::run_container_signal_notify` (ECS-agnostic core,
+  `crates/mechanics/src/stage7.rs`) reuses `stage4::drain_engine` (bumped
+  `pub(crate)` for this exact cross-module call) rather than duplicating
+  Stage 4's dispatch logic, mirroring `replay.rs`'s own already-proven
+  `take_changed`/`notify_neighbor_changed_only`/single-batched-drain shape
+  exactly. Ordering (notify strictly after the tick system, within the same
+  tick) is **not** guaranteed by mere declaration order — `DomainGroup::
+  BlockEntity` is one of the "conflict-graph-batched, deferred" groups
+  (`crates/scheduler/src/executor.rs`'s own `tick_region`), where two
+  *compatible* systems may run concurrently on separate `RcWorkerPool` worker
+  threads with no defined relative order. Forced via a deliberate
+  `ResMut<ContainerSignalsResource>` on the notify system (vs. the tick
+  system's own plain `Res<ContainerSignalsResource>`) — an otherwise-unneeded
+  exclusive-access marker whose only purpose is making `ComponentAccessSummary
+  ::is_compatible` return `false` for this pair, which `compute_waves`'s own
+  documented guarantee then turns into "different waves, earlier declaration
+  strictly first." Still genuinely inert in production today, same status
+  Stage 4 itself carried before `mining_stage4_wiring.rs` existed: no
+  production code path yet spawns a real hopper/furnace/chest block entity
+  (`crates/server/src/play/block_action.rs`'s own `BlockEntityIndex::new()`
+  stays empty — nothing ever inserts a `HopperBlockEntity`/`FurnaceBlockEntity`
+  /`ChestBlockEntity` component from a real placement), so `system_block_
+  entity_tick`'s own query returns nothing every tick and the new notify
+  system's own `take_changed()` is always empty — needs a decision on which
+  milestone/blueprint owns wiring real block-entity placement/spawning into
+  `apply_placement` (`crates/server/src/play/mining.rs`) before this path is
+  genuinely exercised end-to-end by a real player action.
 
 - **`redstone/clock/comparator_clock_container_fill`'s own oracle trace shows
   its subtract-mode comparator permanently powered from tick 1 onward — a

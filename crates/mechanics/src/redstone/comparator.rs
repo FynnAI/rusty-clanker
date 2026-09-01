@@ -62,9 +62,20 @@ struct ComparatorState {
 /// vanilla stores it in a separate `ComparatorBlockEntity`, out of this changeset's own scope
 /// (Stage-7/block-entity wiring, per the M3 fix-agent brief's own container-case carve-out).
 const COMPARATOR_BASE: u32 = 11263;
+/// Inclusive upper bound -- this module's own doc comment above already cites the full real
+/// range (`protocol 776, states 11263..=11278`); 16 reachable states (`facing`(4) x `mode`(2) x
+/// `powered`(2)).
+const COMPARATOR_MAX: u32 = 11278;
 /// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
 /// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
 const AIR_ID: BlockStateId = BlockStateId(0);
+
+/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
+/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
+/// identical role.
+pub(crate) fn state_range() -> (u32, u32) {
+    (COMPARATOR_BASE, COMPARATOR_MAX)
+}
 
 fn comparator_state_id(facing: Direction, mode: ComparatorMode, powered: bool) -> BlockStateId {
     let mode_idx = match mode {

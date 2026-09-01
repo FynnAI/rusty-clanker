@@ -2,6 +2,7 @@
 //! power-query substrate (`signal`) every one of them — and piston, M3-B05 — builds on.
 
 pub mod comparator;
+pub mod dispatch_ranges;
 pub mod piston;
 pub mod redstone_block;
 pub mod registration;
@@ -11,6 +12,7 @@ pub mod torch;
 pub mod wire;
 
 pub use comparator::{ComparatorBehavior, ComparatorMode, ContainerSignalSource};
+pub use dispatch_ranges::{derive_piston_state_ids, derive_tier1_state_ids};
 pub use piston::{PistonBehavior, register_piston};
 pub use redstone_block::RedstoneBlockSource;
 pub use registration::{

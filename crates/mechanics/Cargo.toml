@@ -8,6 +8,14 @@ publish = false
 rc-core = { path = "../core" }
 rc-messaging = { path = "../messaging" }
 rc-chunk-storage = { path = "../chunk-storage" }
+# M3 field-report fix ("production never wires redstone"): `redstone::dispatch_ranges` cross-
+# checks the tier-1/piston dispatch ranges' own internal state-id arithmetic against
+# `rc-registries`' generated `default_state` table at startup. WS-D3 rule 1 lists `rc-registries`
+# as `Shared` (reachable by both binaries), not `NETRENDER` (WS-D3 rule 2's forbidden list for
+# this crate), and `12-workspace-structure.md`'s own WS-D13 rationale already anticipates exactly
+# this edge ("Registry data must be reachable by crates that may never depend on rc-protocol...
+# rc-scheduler/rc-mechanics") -- this dependency is therefore sanctioned, not a new exception.
+rc-registries = { path = "../registries" }
 # M3-B06: block-entity NBT codecs (chest/furnace/hopper). Already workspace-pinned (M2-B02)
 # and already reachable via `rc-chunk-storage` -- crosses no `SIM`/`NETRENDER` boundary
 # (`xtask lint-deps` Rule 2).

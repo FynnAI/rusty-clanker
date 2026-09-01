@@ -43,6 +43,15 @@ fn is_wire_range(raw: u32) -> bool {
     (WIRE_BASE..=WIRE_MAX).contains(&raw)
 }
 
+/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
+/// field-report fix, "production never wires redstone"): exposes this module's own already
+/// oracle-verified `WIRE_BASE`/`WIRE_MAX` constants above, rather than duplicating them a second
+/// time the way `crates/testing/gametest/src/replay.rs`'s own `WIRE_RANGE` constant currently
+/// does.
+pub(crate) fn state_range() -> (u32, u32) {
+    (WIRE_BASE, WIRE_MAX)
+}
+
 /// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
 /// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
 /// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency

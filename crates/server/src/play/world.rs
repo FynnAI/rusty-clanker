@@ -724,6 +724,59 @@ fn bootstrap_region(world: &mut World) {
     // instead inserted once, per region, immediately after `RcExecutor::spawn_region`
     // returns (`with_config`'s own construction sequence, below).
     rc_mechanics::stage4::ecs::bootstrap_default_stage4_resources(world);
+    // M3-B06's own `Default`-able Stage-7 resources (`SmeltingRecipeTable`/`FuelTable`/
+    // `MaxStackSizeResource`) -- `ContainerSignalsResource` has no uniform default and is
+    // inserted directly below, alongside the tier-1 redstone wiring it feeds.
+    rc_mechanics::stage7::ecs::bootstrap_default_stage7_resources(world);
+    bootstrap_redstone_dispatch(world);
+}
+
+/// M3 field-report fix ("production's own composition root never calls `register_tier1_
+/// redstone`/`register_piston` at all" -- `docs/findings-for-planning.md`'s own Section A
+/// entry): registers the real tier-1 (wire/torch-floor/torch-wall/repeater/comparator) and
+/// piston redstone behaviors into the `BlockBehaviorRegistry` `bootstrap_default_stage4_
+/// resources` just inserted empty, so every real game-server tick actually dispatches
+/// Stage-4 block updates through them instead of the shared `NoOpBehavior` default. Mirrors
+/// `crates/testing/gametest/src/replay.rs`'s own `tier1_registry` construction order exactly
+/// -- this changeset's own briefing names it as the proven-correct composition to follow:
+/// `register_redstone_block`, the four tier-1 components via `register_tier1_redstone`, the
+/// two-phase `Tier1RedstoneHandles::bind_registry` registry self-reference (Context §I½), then
+/// `register_piston` strictly after (`register_piston`'s own doc comment, Context §B). Dispatch
+/// ranges come from `redstone::derive_tier1_state_ids`/`derive_piston_state_ids` -- this crate's
+/// own per-component state-id arithmetic, cross-checked at call time against `rc-registries`'
+/// generated `default_state` table (`dispatch_ranges.rs`'s own module doc comment has the full
+/// "why not read ranges straight off `rc-registries`" rationale) -- never raw `blocks.json`.
+///
+/// Also constructs this region's own `Tier1ContainerSignalSource` and wires it into both the
+/// comparator (read side, via `register_tier1_redstone`'s `containers` parameter) and the
+/// `ContainerSignalsResource` this function inserts (write side, Stage 7's own `system_block_
+/// entity_tick`) -- the identical shared-`Arc` shape `replay.rs`'s own module doc comment
+/// documents ("two independent `Arc` clones... shared with both `ComparatorBehavior::new`...
+/// and Stage 7's own driver").
+fn bootstrap_redstone_dispatch(world: &mut World) {
+    let mut behaviors = world
+        .remove_resource::<rc_mechanics::BlockBehaviorRegistry>()
+        .expect("bootstrap_default_stage4_resources (called immediately above) always inserts this");
+    let mut signals = rc_mechanics::redstone::SignalSourceRegistry::new();
+
+    rc_mechanics::redstone::register_redstone_block(&mut signals);
+
+    let container_signals = Arc::new(rc_mechanics::Tier1ContainerSignalSource::new());
+    let tier1_ids = rc_mechanics::redstone::derive_tier1_state_ids();
+    let handles = rc_mechanics::redstone::register_tier1_redstone(
+        &mut behaviors,
+        &mut signals,
+        &tier1_ids,
+        Arc::clone(&container_signals) as Arc<dyn rc_mechanics::redstone::ContainerSignalSource>,
+    );
+    let signals = Arc::new(signals);
+    handles.bind_registry(Arc::clone(&signals));
+
+    let piston_ids = rc_mechanics::redstone::derive_piston_state_ids();
+    rc_mechanics::redstone::register_piston(&mut behaviors, signals, &piston_ids);
+
+    world.insert_resource(behaviors);
+    world.insert_resource(rc_mechanics::ContainerSignalsResource(container_signals));
 }
 
 /// Direct (non-`Query`) `BlockWorldAccess` adapter over `region.world`'s own chunk entities
@@ -1048,6 +1101,21 @@ impl HardcodedWorld {
             // every tick (inert in the steady state under this milestone's own tier-1 scope,
             // `mining_stage4_wiring.rs`'s own acceptance test).
             rc_mechanics::stage4::ecs::register_stage4(&mut builder);
+            // M3 field-report fix ("production never wires redstone" -- docs/findings-for-
+            // planning.md's own Section C "Stage 7 has no path to trigger a Stage-4 redstone
+            // re-evaluation" entry): registers M3-B06's `system_block_entity_tick` plus this
+            // fix's own post-Stage-7 redstone-notify system into `DomainGroup::BlockEntity`, in
+            // that declaration order -- `register_stage7`'s own doc comment
+            // (`crates/mechanics/src/stage7/ecs.rs`) has the full ordering rationale (a forced
+            // `ComponentAccessSummary` incompatibility, not merely declaration order, is what
+            // actually keeps the notify system from racing the tick system it depends on).
+            // Neither system was ever registered in production before this fix -- Stage 7 (block-
+            // entity ticking) now also runs for real every tick, inert in the steady state under
+            // this milestone's own scope (no production code path yet spawns a real hopper/
+            // furnace/chest block entity to tick, the same "wired but not yet exercised" status
+            // Stage 4 itself carried before `mining_stage4_wiring.rs`; recorded as a finding for
+            // planning, not fixed here -- out of this changeset's own scope).
+            rc_mechanics::stage7::ecs::register_stage7(&mut builder);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );

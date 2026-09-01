@@ -159,6 +159,12 @@ const PISTON_HEAD_RANGE: std::ops::RangeInclusive<u32> = 2269..=2292;
 /// `piston_facing_index` convention `piston_head_id` above now shares), stride 1.
 const PISTON_BASE: u32 = 2257; // extended=true, facing=north
 const STICKY_PISTON_BASE: u32 = 2235; // extended=true, facing=north
+/// Inclusive upper bounds -- 12 reachable states each (`extended`(2) x `facing`(6)); also
+/// directly consistent with `PISTON_HEAD_BASE`'s own doc comment above (`PISTON_MAX + 1 ==
+/// PISTON_HEAD_BASE == 2269`, the next block's own range starting immediately where this one
+/// ends, per this crate's own contiguous-block-state-range convention).
+const PISTON_MAX: u32 = PISTON_BASE + 11;
+const STICKY_PISTON_MAX: u32 = STICKY_PISTON_BASE + 11;
 
 fn piston_facing_index(d: Direction) -> u32 {
     match d {
@@ -952,6 +958,18 @@ impl BlockBehavior for PistonBehavior {
 pub struct PistonStateIds {
     pub piston: (BlockStateId, BlockStateId),
     pub sticky_piston: (BlockStateId, BlockStateId),
+}
+
+/// `[min, max]` inclusive for `minecraft:piston` (`sticky = false`) or `minecraft:sticky_piston`
+/// (`sticky = true`) -- `dispatch_ranges::derive_piston_state_ids`'s own read side (M3
+/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
+/// identical role (`crates/mechanics/src/redstone/wire.rs`).
+pub(crate) fn state_range(sticky: bool) -> (u32, u32) {
+    if sticky {
+        (STICKY_PISTON_BASE, STICKY_PISTON_MAX)
+    } else {
+        (PISTON_BASE, PISTON_MAX)
+    }
 }
 
 /// Constructs one fresh `PistonBehavior` and registers it into `behaviors` at both of `ids`'

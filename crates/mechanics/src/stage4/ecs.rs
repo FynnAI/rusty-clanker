@@ -35,6 +35,24 @@ pub struct EcsBlockWorld<'w, 's> {
 }
 
 impl<'w, 's> EcsBlockWorld<'w, 's> {
+    /// `pub(crate)` (M3 field-report fix, Section C production half): `crate::stage7::ecs`'s own
+    /// post-`system_block_entity_tick` redstone-notify system is a second, sibling-module
+    /// construction site for this exact adapter (it needs the identical `BlockWorldAccess` view
+    /// of `BlockStateColumn` Stage 4 itself dispatches through, reused rather than duplicated) --
+    /// every field stays private to this module otherwise, so that call site goes through this
+    /// constructor instead of a struct literal.
+    pub(crate) fn new(
+        query: Query<'w, 's, (&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
+        chunk_index: &'w ChunkIndex,
+        ownership: &'w RegionOwnership,
+    ) -> Self {
+        Self {
+            query,
+            chunk_index,
+            ownership,
+        }
+    }
+
     fn local_pos(pos: BlockPos) -> (u8, u8) {
         (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8)
     }

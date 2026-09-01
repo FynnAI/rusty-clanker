@@ -7,10 +7,14 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
-use rc_chunk_storage::BlockEntityIndex;
+use rc_chunk_storage::{BlockEntityIndex, BlockStateColumn, ChunkKeyTag};
 use rc_core::{BlockPos, ChunkKey};
-use rc_scheduler::{DomainGroup, RcExecutorBuilder, SystemFactory};
+use rc_messaging::{Address, RegionMessage};
+use rc_scheduler::{
+    CurrentTick, DomainGroup, RcExecutorBuilder, RegionMessageOutbox, SystemFactory,
+};
 
+use crate::behavior::BlockBehaviorRegistry;
 use crate::block_entity::chest::ChestBlockEntity;
 use crate::block_entity::container_signal_source::ContainerSignalsResource;
 use crate::block_entity::furnace::{
@@ -18,8 +22,12 @@ use crate::block_entity::furnace::{
 };
 use crate::block_entity::hopper::HopperBlockEntity;
 use crate::block_entity::{BlockEntityHeader, BlockEntityKind, BlockEntityWorldAccess};
+use crate::block_event::BlockEventQueue;
+use crate::border::RegionOwnership;
 use crate::container::{DefaultMaxStackSize, MaxStackSizeResource, TierOneContainer};
-use crate::stage4::ecs::ChunkIndex;
+use crate::neighbor_update::NeighborUpdateEngine;
+use crate::scheduled_tick::ScheduledTickQueue;
+use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld};
 
 type BlockEntityQueryData = (
     Entity,
@@ -147,14 +155,85 @@ impl<'w, 's> BlockEntityWorldAccess for EcsBlockEntityWorld<'w, 's> {
     }
 }
 
-/// Registers `system_block_entity_tick` into `DomainGroup::BlockEntity` (`order_tag = 0`, the
-/// only system ever registered there).
+/// Registers `system_block_entity_tick` (`order_tag = 0`) then `system_container_signal_notify`
+/// (`order_tag = 1`) into `DomainGroup::BlockEntity` -- both map to `Stage::BlockEntityTick`
+/// (Stage 7), `DomainGroup::stage()`'s own table, so the notify system reuses "the current
+/// tick's post-stage7 window" (M3 field-report fix brief) rather than needing a dedicated eighth
+/// domain group. Declaration order here is load-bearing, not cosmetic: `DomainGroup::BlockEntity`
+/// is one of the "conflict-graph-batched, deferred" groups (`executor.rs`'s own `tick_region`
+/// match arm) -- unlike Stage 4's mandatory sequential collapse, two *compatible* systems in this
+/// group may run concurrently on `RcWorkerPool` worker threads, in no defined relative order.
+/// `system_container_signal_notify`'s own `ResMut<ContainerSignalsResource>` (vs. this system's
+/// plain `Res<ContainerSignalsResource>`) is a deliberate, otherwise-unneeded exclusive-access
+/// marker that makes the two systems' `ComponentAccessSummary`s mutually incompatible purely for
+/// ordering purposes (`ComponentAccessSummary::is_compatible`, `crates/scheduler/src/access.rs`)
+/// -- `compute_waves`'s own documented guarantee ("two systems whose summaries are incompatible
+/// are guaranteed to land in different waves, with the earlier-declared one's wave strictly
+/// preceding the later-declared one's") is what actually forces `system_container_signal_notify`
+/// to observe this same tick's `container_signals.record` calls before it drains them, instead of
+/// racing them.
 pub fn register_stage7(builder: &mut RcExecutorBuilder) {
     builder.register_system(
         DomainGroup::BlockEntity,
         block_entity_tick_factory(),
         vec![],
     );
+    builder.register_system(
+        DomainGroup::BlockEntity,
+        container_signal_notify_factory(),
+        vec![],
+    );
+}
+
+/// `crate::stage7::run_container_signal_notify`'s `bevy_ecs`/`rc-scheduler` adapter (M3
+/// field-report fix, Section C production half) -- mirrors `system_scheduled_phase`'s/`system_
+/// block_event_subphase`'s own established shape (`crates/mechanics/src/stage4/ecs.rs`): builds
+/// an `EcsBlockWorld` from the identical `Query<(&ChunkKeyTag, &mut BlockStateColumn)>`/
+/// `ChunkIndex` Stage 4 itself dispatches through (`EcsBlockWorld::new`, bumped `pub(crate)` for
+/// this call site), so a comparator's own `on_neighbor_changed` reaches the same live world state
+/// Stage 4 would have left it in this same tick.
+#[allow(clippy::too_many_arguments)]
+fn system_container_signal_notify(
+    query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
+    chunk_index: Res<ChunkIndex>,
+    ownership: Res<RegionOwnership>,
+    mut engine: ResMut<NeighborUpdateEngine>,
+    mut scheduled: ResMut<ScheduledTickQueue>,
+    mut events: ResMut<BlockEventQueue>,
+    behaviors: Res<BlockBehaviorRegistry>,
+    mut region_outbox: ResMut<RegionMessageOutbox>,
+    current_tick: Res<CurrentTick>,
+    // `ResMut`, not `Res` -- `register_stage7`'s own doc comment above has the full ordering
+    // rationale (this system must never run concurrently with `system_block_entity_tick`); never
+    // actually mutated (`Tier1ContainerSignalSource`'s own interior `Mutex`/`take_changed(&self)`
+    // handle that), so the binding itself stays immutable.
+    container_signals: ResMut<ContainerSignalsResource>,
+) {
+    let mut world = EcsBlockWorld::new(query, &chunk_index, &ownership);
+    let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+
+    crate::stage7::run_container_signal_notify(
+        &mut world,
+        &ownership,
+        &mut engine,
+        &mut scheduled,
+        &mut events,
+        &behaviors,
+        &mut outbound,
+        current_tick.0,
+        container_signals.0.as_ref(),
+    );
+
+    for (to, msg) in outbound {
+        region_outbox.send(to, msg);
+    }
+}
+
+fn container_signal_notify_factory() -> SystemFactory {
+    Box::new(|| {
+        Box::new(IntoSystem::into_system(system_container_signal_notify))
+            as Box<dyn System<In = (), Out = ()>>
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

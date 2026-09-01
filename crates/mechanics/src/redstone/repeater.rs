@@ -40,9 +40,20 @@ struct RepeaterState {
 /// `id = 7034 + (delay-1)*16 + facing_idx*4 + locked_idx*2 + powered_idx` (`locked_idx`/
 /// `powered_idx`: `true` -> `0`, `false` -> `1`, blocks.json's own listed value order).
 const REPEATER_BASE: u32 = 7034;
+/// Inclusive upper bound -- this module's own doc comment above already cites the full real
+/// range (`protocol 776, states 7034..=7097`); 64 reachable states (`delay`(4) x `facing`(4) x
+/// `locked`(2) x `powered`(2)).
+const REPEATER_MAX: u32 = 7097;
 /// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
 /// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
 const AIR_ID: BlockStateId = BlockStateId(0);
+
+/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
+/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
+/// identical role.
+pub(crate) fn state_range() -> (u32, u32) {
+    (REPEATER_BASE, REPEATER_MAX)
+}
 
 fn repeater_state_id(
     delay_setting: u8,

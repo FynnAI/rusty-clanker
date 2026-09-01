@@ -3014,6 +3014,7 @@ dependencies = [
  "rc-messaging",
  "rc-nbt",
  "rc-physics",
+ "rc-registries",
  "rc-scheduler",
  "tracing",
 ]

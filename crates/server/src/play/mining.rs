@@ -1263,7 +1263,24 @@ pub fn apply_placement(
             ownership,
             current_tick,
         };
-        ctx.set_block(target, to_storage_id(raw_state));
+        let state = to_storage_id(raw_state);
+        ctx.set_block(target, state);
+        // M3 field-report fix ("production never wires redstone" -- docs/findings-for-planning.md's
+        // own Section A entry, "Task 2's diode re-placement fix ... needs no separate production-
+        // side fix" paragraph, now corrected): a real per-region composition root now dispatches
+        // real tier-1 behaviors (`world.rs`'s `bootstrap_redstone_dispatch`) -- without this call,
+        // `RepeaterBehavior`/`ComparatorBehavior::facing` both `panic!` ("position was never
+        // placed") the first time anything reaches them (`on_neighbor_changed`, fired by literally
+        // any later change to one of this position's own six neighbors) unless something seeds
+        // their own per-position facing/delay/mode side table first. `on_placed` is exactly that
+        // seed, decoded straight off the id just written -- the identical `ctx.set_block`-plus-
+        // `behaviors.resolve(state).on_placed(...)` pattern `crates/testing/gametest/src/replay.rs`'s
+        // own `place_and_settle` already uses for the replay path, mirrored here so a real placed
+        // repeater/comparator no longer panics production's own tick loop the first time something
+        // nearby changes. Called before `settle_neighbor_updates` below, exactly like `place_and_
+        // settle` calls it before its own `engine.drain` -- every dispatch that placement's own
+        // `ctx.set_block` fan-out triggers already sees the reseeded state.
+        behaviors.resolve(state).on_placed(&mut ctx, target);
     }
     settle_neighbor_updates(
         ctx_world,

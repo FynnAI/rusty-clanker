@@ -45,8 +45,14 @@ fn make_ctx<'a>(
 /// Drains `engine` to a fixed point (Context: one `NeighborUpdateEngine::drain` call already
 /// settles a whole reentrant chain by itself), dispatching every popped `PendingUpdate` to the
 /// matching `BlockBehavior` method via `dispatch_pending_update`.
+///
+/// `pub(crate)` (M3 field-report fix, Section C production half): `crate::stage7::run_container_
+/// signal_notify` is this function's second call site -- the Stage-7 -> Stage-4 redstone notify
+/// bridge reuses this exact dispatch/fixed-point-drain logic rather than duplicating it, mirroring
+/// `crates/testing/gametest/src/replay.rs`'s own already-proven `engine.drain(&mut |eng, item| ...
+/// dispatch_one(...))` composition.
 #[allow(clippy::too_many_arguments)]
-fn drain_engine(
+pub(crate) fn drain_engine(
     world: &mut dyn BlockWorldAccess,
     engine: &mut NeighborUpdateEngine,
     scheduled: &mut ScheduledTickQueue,

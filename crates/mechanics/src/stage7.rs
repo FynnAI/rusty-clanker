@@ -12,13 +12,22 @@
 #[cfg(feature = "server-systems")]
 pub mod ecs; // crates/mechanics/src/stage7/ecs.rs
 
+use rc_messaging::{Address, RegionMessage};
+
+use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_entity::container_signal_source::Tier1ContainerSignalSource;
 use crate::block_entity::furnace::{
     FuelTable, FurnaceLitStateResolver, LitStateChange, SmeltingRecipeTable,
 };
 use crate::block_entity::hopper::HopperBlockEntity;
 use crate::block_entity::{BlockEntityKind, BlockEntityWorldAccess};
+use crate::block_event::BlockEventQueue;
+use crate::border::RegionOwnership;
 use crate::container::ItemMaxStackSize;
+use crate::neighbor_update::NeighborUpdateEngine;
+use crate::redstone::notify_neighbor_changed_only;
+use crate::scheduled_tick::ScheduledTickQueue;
+use crate::world_access::BlockWorldAccess;
 
 pub fn run_block_entity_tick(
     world: &mut dyn BlockEntityWorldAccess,
@@ -84,4 +93,55 @@ pub fn run_block_entity_tick(
             }
         }
     }
+}
+
+/// M3 field-report fix (Section C, production half -- `docs/findings-for-planning.md`'s own
+/// "Stage 7 has no path to trigger a Stage-4 redstone re-evaluation when a tier-1 container's
+/// contents change" entry). The production counterpart of `crates/testing/gametest/src/
+/// replay.rs`'s own per-tick `take_changed`/`notify_neighbor_changed_only`/drain loop (that
+/// module's own doc comment has the full vanilla-parity rationale --
+/// `BlockEntity.setChanged -> updateNeighbourForOutputSignal`, no counterpart anywhere in this
+/// crate before this fix). Must run strictly after `run_block_entity_tick` within the same tick
+/// (whose own `container_signals.record` calls are this function's read side, via `take_changed`)
+/// and reuses that same tick's Stage-4 resources/dispatch (`stage4::drain_engine`, module-visible
+/// for this exact call site) so a comparator adjacent to a container whose fullness changed this
+/// tick re-evaluates before the tick ends -- reproducing the replay path's own already-proven
+/// composition exactly: queue a `notify_neighbor_changed_only` fan-out for every position `take_
+/// changed` reports, then drain the resulting `NeighborChanged`/`ShapeUpdate` cascade to a fixed
+/// point once, after the whole batch (never per-position -- matches `replay.rs`'s own identical
+/// two-phase shape, not a naive notify-then-drain-per-position loop).
+#[allow(clippy::too_many_arguments)]
+pub fn run_container_signal_notify(
+    world: &mut dyn BlockWorldAccess,
+    ownership: &RegionOwnership,
+    engine: &mut NeighborUpdateEngine,
+    scheduled: &mut ScheduledTickQueue,
+    events: &mut BlockEventQueue,
+    behaviors: &BlockBehaviorRegistry,
+    outbound: &mut Vec<(Address, RegionMessage)>,
+    current_tick: u64,
+    container_signals: &Tier1ContainerSignalSource,
+) {
+    for pos in container_signals.take_changed() {
+        let mut ctx = UpdateContext {
+            world,
+            engine,
+            scheduled,
+            events,
+            outbound,
+            ownership,
+            current_tick,
+        };
+        notify_neighbor_changed_only(&mut ctx, pos);
+    }
+    crate::stage4::drain_engine(
+        world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        ownership,
+        current_tick,
+        behaviors,
+    );
 }

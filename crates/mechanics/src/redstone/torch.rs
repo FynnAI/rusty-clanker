@@ -46,6 +46,24 @@ struct TorchState {
 /// (6887 = north/lit=true .. 6894 = east/lit=false).
 const TORCH_FLOOR_BASE: u32 = 6885;
 const TORCH_WALL_BASE: u32 = 6887;
+/// Inclusive upper bound -- floor torch has exactly 2 reachable states (`lit` boolean only),
+/// this doc comment's own arithmetic above ("state 6885 = lit=true, 6886 = lit=false").
+const TORCH_FLOOR_MAX: u32 = 6886;
+/// Inclusive upper bound -- wall torch has exactly 8 reachable states (`facing`(4) x `lit`(2)),
+/// this doc comment's own arithmetic above ("6887 = north/lit=true .. 6894 = east/lit=false").
+const TORCH_WALL_MAX: u32 = 6894;
+
+/// `[min, max]` inclusive for the floor variant -- `dispatch_ranges::derive_tier1_state_ids`'s
+/// own read side (M3 field-report fix, "production never wires redstone"), mirroring `wire::
+/// state_range`'s identical role.
+pub(crate) fn floor_state_range() -> (u32, u32) {
+    (TORCH_FLOOR_BASE, TORCH_FLOOR_MAX)
+}
+
+/// `[min, max]` inclusive for the wall variant -- same role as `floor_state_range` above.
+pub(crate) fn wall_state_range() -> (u32, u32) {
+    (TORCH_WALL_BASE, TORCH_WALL_MAX)
+}
 
 /// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
 /// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
