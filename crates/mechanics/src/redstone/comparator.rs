@@ -300,6 +300,13 @@ impl ComparatorBehavior {
     }
 
     pub fn should_turn_on(input: u8, side: u8, mode: ComparatorMode) -> bool {
+        // A zero input never turns the comparator on -- not even via the Compare-mode
+        // tie rule (0 == 0) -- mirroring `calculate_output_signal`'s identical guard.
+        // Oracle-verified via hopper_clock_basic: its comparator reads an empty
+        // container (input 0, side 0) across every drained window and stays unpowered.
+        if input == 0 {
+            return false;
+        }
         input > side || (input == side && mode == ComparatorMode::Compare)
     }
 }
