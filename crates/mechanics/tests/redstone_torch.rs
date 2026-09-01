@@ -538,6 +538,53 @@ fn floor_torch_destruction_clears_its_own_stored_state() {
     );
 }
 
+/// M3 field-report fix: `TorchBehavior`'s own shared `attachment` field is only a *fallback*
+/// now -- for a `Wall`-constructed instance, every read path first tries to decode the real
+/// `facing` straight off the position's own currently-stored raw id (`attachment_at`), exactly
+/// mirroring `RepeaterBehavior`/`ComparatorBehavior`'s own established `on_placed`-arithmetic
+/// pattern (Context: closing the last 17 corpus mismatches, all at `wire_strong_vs_weak_power_
+/// door`'s own wall torch at `(9, 1, 0)`, placed `facing=west` -- state 6891 -- but dispatched
+/// through `registration.rs`'s single shared `Wall(Direction::North)` instance, so it read its
+/// input off its own `South` side (air) instead of its real `East` side (its actual conductor)).
+/// Constructs the behavior with that same mismatched representative orientation
+/// (`Wall(Direction::North)`, deliberately *not* `West`), then places the real `facing=west` id
+/// at `t` -- before the fix, this behavior looks for its input on `South` (nothing there, no
+/// signal ever detected) rather than `East` (where the conductor actually is), so `on_neighbor_
+/// changed` never schedules a re-eval tick even though a real signal sits on `t`'s own actual
+/// input side.
+#[test]
+fn wall_torch_derives_facing_from_its_own_placed_id_not_the_constructor_default() {
+    let torch = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::North)));
+    let support = Arc::new(TestSignalSource::fixed(0));
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        SUPPORT_ID,
+        BlockStateId(SUPPORT_ID.0 + 1),
+        Arc::clone(&support) as Arc<dyn RedstoneSignalSource>,
+    );
+    torch.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    let t = BlockPos::new(9, 1, 0);
+    h.world.set_block(t, BlockStateId(6891)); // facing=west, lit=true -- the real placed id
+    // Its real conductor sits on the East side (`Wall(West).input_direction() == East`) --
+    // `South` (the constructor's mismatched `Wall(North)` fallback direction) is left entirely
+    // unset, so a wrong derivation would find no signal at all.
+    let real_input_side = Direction::East.apply(t);
+    h.world.set_block(real_input_side, SUPPORT_ID);
+
+    support.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        torch.on_neighbor_changed(&mut ctx, t, Direction::East);
+    }
+    assert!(
+        h.scheduled.is_block_tick_pending(t),
+        "a wall torch placed facing=west must read its input off its own real East side, not \
+         off the constructor's mismatched North->South fallback"
+    );
+}
+
 #[test]
 fn wall_torch_reads_from_its_attach_direction() {
     assert_eq!(
