@@ -1272,6 +1272,93 @@ Entries name the milestone that surfaced them and the code they concern.
   specifically does not hold (the `place_and_settle`/action half above is a real, separate,
   already-fixed bug). `comparator_clock_container_fill` now passes outright.
 
+- **`redstone/qc/wire_strong_vs_weak_power_door`'s own `(11, 1, 0)` wire
+  connection shape and `redstone/update_order/wire_climbs_conductor_step_
+  up_down`'s own `(4, 1, 0)` wire connection shape demand opposite answers
+  from the same geometric rule, both confirmed against their own real
+  oracle traces — an apparent genuine contradiction in vanilla's own "wire
+  climbs a step" mechanic that this changeset could not resolve within
+  `wire.rs` alone.** Both positions sit one block below a diagonal wire
+  reached over a sturdy same-height neighbor (`WireBehavior::connection_
+  shape_on_side`'s own "Up" case: `mid` sturdy-on-top, a wire at `mid.
+  above()`), and in both fixtures a conductor is placed directly *above*
+  the lower wire itself partway through the run (`wire_climbs`: stone at
+  `(4, 2, 0)`, tick 4; `wire_strong`: `redstone_block` at `(11, 2, 0)`,
+  tick 3) — structurally identical setups by every geometric property this
+  module currently inspects (`mid`'s own solidity, whether `mid.above()`
+  still holds a wire, `pos`'s own floor support, `pos`'s own other three
+  sides). Gating the "Up" case on `pos`'s own ceiling being open
+  (`!is_conductor(Direction::Up.apply(pos))`, this module's pre-existing
+  check, not introduced by this changeset) makes `wire_climbs`'s `(4, 1, 0)`
+  correctly collapse to the oracle's own all-`Side` "isolated wire" shape
+  once its ceiling closes (`cargo run -p xtask -- parity-check redstone
+  --only redstone/update_order/wire_climbs_conductor_step_up_down` passes)
+  but leaves `wire_strong`'s `(11, 1, 0)` wrongly collapsing the same way
+  (oracle keeps `west = Up` even after its own ceiling closes — expected
+  `4872`, actual `4726`). Removing the gate entirely does the exact
+  opposite: `wire_strong`'s `(11, 1, 0)` matches perfectly for every tick,
+  while `wire_climbs`'s `(4, 1, 0)` regresses to the ungated shape
+  (`4737` instead of the oracle's `4591`) — verified empirically both ways,
+  not merely reasoned about. No other distinguishing factor was found by
+  direct inspection of every neighbor within two Manhattan steps of both
+  positions (the one non-geometric difference — `wire_strong`'s ceiling
+  block is `redstone_block`, `wire_climbs`'s is plain `stone`, and the
+  `redstone_block` placement also happens to freshly power the diagonal
+  wire in the same action — did not change the outcome when tested by
+  substituting the shape-table classification, since both already resolve
+  identically as full-cube conductors). Left gated (matching the far
+  better-known, widely-documented real vanilla mechanic that a solid
+  ceiling directly over the lower wire visually cuts a climbing connection
+  — and matching `wire_climbs`'s own fixture name/quirk text, which exists
+  specifically to pin this exact behavior) rather than trading one passing
+  target fixture for another; `wire_strong_vs_weak_power_door`'s own `(11,
+  1, 0)` mismatch (17 of its 35 total, tick 3 onward) stands as an open,
+  unresolved residual pending either a corrected understanding of the real
+  rule or a second look at whether this fixture's own oracle trace is
+  itself stale relative to a later capture-pipeline fix (the exact failure
+  mode `wire_climbs_conductor_step_up_down`'s own placement-id defect,
+  fixed in an earlier wave, already turned out to be).
+
+- **`WireBehavior`'s own `should_signal` self-exclusion flag (Context §D,
+  `getBlockSignal`'s own doc comment) is scoped to the whole per-region
+  instance, not to the one position actually mid-recompute — confirmed to
+  cause real, oracle-verified mispowering, but narrowing it regressed four
+  other fixtures outright and was reverted in full.** Root-caused via
+  direct tracing (not merely inspection): `wire_strong_vs_weak_power_door`'s
+  own wall torch at `(9, 1, 0)` never detects its attached conductor
+  becoming powered (stays `lit=true`/id `6891` for the whole run; oracle
+  expects `lit=false`/id `6892` from tick 4 onward) because every one of
+  its five `on_neighbor_changed` re-checks fires while `should_signal` is
+  `false` — not because *this* torch's own query is reading back its own
+  signal (torches are not wires), but because a *different* wire tile
+  (`(11, 1, 0)`) happens to have its own `compute_power` self-exclusion
+  window open at that exact moment, and the single instance-wide flag
+  silences every wire's `direct_signal_toward` for the whole window, not
+  only the one position genuinely being recomputed. Confirmed directly:
+  `wire(10,2,0) direct_signal_toward` returns `0` under `should_signal =
+  false` at every one of the torch's five trigger points despite `(10, 2,
+  0)`'s own raw stored id already showing `power = 15`. A local fix
+  (replacing the single `AtomicBool` with a `Mutex<Option<BlockPos>>`
+  naming only the position currently inside `block_signal`, so `weak_
+  signal_toward`/`direct_signal_toward` self-exclude only when queried
+  *at that exact position*) closed this gap but dropped the full-corpus
+  `parity-check redstone` count from 49/52 to 42/52 — `wire_climbs_
+  conductor_step_up_down` (a `redstone/update_order/wire_climbs_conductor_
+  step_up_down` fixture, one of this changeset's own required targets) and
+  four other previously-passing fixtures (`bud_switch_piston_wire`,
+  `comparator_compare_vs_subtract`, `update_order_mc11193_style_staleness`,
+  `wire_cross_shape_connectivity`, `wire_signal_decay_15_chain`) regressed
+  immediately. This means the instance-wide suppression is load-bearing
+  for cases this investigation did not have time to fully map — very
+  likely masking a separate, real double-counting or cyclic-bounce defect
+  elsewhere in the quasi-connectivity walk that only manifests once
+  per-position scoping stops "over-silencing" every other wire during any
+  one wire's own recompute. Reverted in full per "never trade passes";
+  `wire.rs`'s own `should_signal` field carries a short pointer to this
+  entry. `wire_strong_vs_weak_power_door`'s own `(9, 1, 0)` torch mismatch
+  (the remaining 18 of its 35 total) is this same root cause and stands
+  open alongside the `(11, 1, 0)` entry above.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
@@ -1478,6 +1565,55 @@ Entries name the milestone that surfaced them and the code they concern.
   entry above is closed. Needs a decision on the right API shape (an
   interior-mutable facing/delay slot, mirroring `state: Mutex<...>`, is the
   obvious candidate) and which blueprint owns it.
+
+- **M3 field-report fix landed (this changeset): `rc_physics::tier1_shape_
+  table()`'s own repeater/comparator/wall-torch/floor-torch entries are now
+  widened to each component's full reachable id range, closing the
+  `shapes.rs` half of Section B's "own-state writeback landed... but the
+  shape table stayed calibrated only to each fixture's own placement id"
+  entry above (the `replay.rs` dispatch-range half of that same entry was
+  already closed in an earlier wave — `REPEATER_RANGE`/`TORCH_FLOOR_RANGE`/
+  `TORCH_WALL_RANGE`/`COMPARATOR_RANGE` already cover the full space; only
+  `shapes.rs`'s own `is_conductor`-feeding table had not caught up).**
+  Before this fix, `tier1_shape_table()` registered exactly one hand-picked
+  id per repeater/comparator facing (`delay=1, locked=false, powered=false`
+  only — every other `delay`/`locked`/`powered` combination) and one per
+  wall-torch facing (`lit=true` only) plus one floor-torch id (`lit=true`
+  only); every unregistered-but-real id (e.g. any `delay != 1` repeater, any
+  `locked=true` repeater, any `lit=false` torch) fell through `ShapeTable::
+  lookup`'s own `default_full_cube()` fallback — the exact same "conductor
+  misclassification" defect class Section B's own wire-writeback entry
+  already names and the wire fix already closed for `redstone_wire` itself,
+  never generalized to the other three components. Root-caused by direct
+  tracing (not analysis alone): `redstone/pulse/repeater_lock_release_
+  repropagates`'s own locked repeater at delay=3 (id 7069, never one of the
+  four hand-picked rows) got misclassified as a solid conductor the moment
+  its `LOCKED` bit flipped, letting a wire resting against it re-broadcast a
+  permanently-on `redstone_block`'s own direct signal straight through the
+  repeater regardless of its real lock/power state — confirmed by tracing
+  `RepeaterBehavior::weak_signal_toward`/`direct_signal_toward` returning
+  `0` correctly at the exact same moment the wire's own `compute_power`
+  still computed `15` through the misclassified-conductor path.
+  `redstone/qc/wire_strong_vs_weak_power_door`'s own wall torch at `(9, 1,
+  0)` (never one of the four hand-picked `lit=true` rows once it should
+  turn `lit=false`) showed the identical class of gap. Fixed by replacing
+  every hand-picked repeater/comparator/torch row with a full-range loop
+  extension (`7034..=7097`, `11263..=11278`, `6885..=6886`, `6887..=6894`
+  respectively), mirroring the wire fix's own already-established "one row
+  per real reachable id, generated in a loop" pattern exactly — every id in
+  each range shares the identical flat shape regardless of `delay`/`locked`/
+  `powered`/`mode`/`lit`/`facing` (only the box-defining dimensions the
+  Context table names ever change the shape; every state-encoding property
+  is cosmetic to physics). Verified against the real oracle: `cargo run -p
+  xtask -- parity-check redstone` moved from 42/52 to 49/52 with this fix
+  alone (both `redstone/pulse/repeater_lock_release_repropagates` and
+  `redstone/pulse/repeater_chain_delay_sum_2_4_6_8` now pass outright); no
+  previously-passing fixture regressed. Planning reconciliation: none
+  needed at the decision-ID level (`14-performance-engineering.md`/
+  `WS-D15`'s own "no generated per-property registry yet" gap already
+  covers this whole class of hand-maintained-table risk) — but Section B's
+  entry above should be updated/closed to reflect that the `shapes.rs` half
+  is no longer open, only the still-real WS-D15 prerequisite remains.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
