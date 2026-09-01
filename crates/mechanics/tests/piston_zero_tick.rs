@@ -184,9 +184,19 @@ fn setup() -> SetupResult {
 /// shorter_than_commit_window_is_absorbed`, which asserted only the two ticks' own *end* states
 /// (both of which happen to come out identical either way for this particular zero-net pulse) --
 /// too weak to distinguish "absorbed, never visibly extends" from "force-finalized, visibly
-/// extends, then retracts," so it never actually pinned which of the two was real. This test
-/// checks the *intermediate* state, right after tick 0's own block-event pass and before tick
-/// 2's own commit, which is exactly where the two interpretations diverge.
+/// extends, then retracts," so it never actually pinned which of the two was real.
+///
+/// (Update, M3 field-report fix, retract content/base split: `on_block_event`'s retract arm now
+/// applies a retraction's own content half immediately too -- `piston.rs`'s own
+/// `apply_retract_content` doc comment has the full oracle citation -- so the force-finalized
+/// extend's `piston_head` write and the immediately-following retract's own content clear both
+/// land, synchronously, within this same tick-0 `on_block_event` call for `TRIGGER_CONTRACT`; by
+/// the time `run_block_events(0)` returns, `front_pos` already reads `AIR` again, not
+/// `piston_head`. The distinguishing power against "absorbed" survives intact even so: an
+/// absorbed extend would leave `front_pos` at its own untouched pre-test `None` and
+/// `is_extended` at its original `false`, while a force-finalized-then-retracted one leaves
+/// `front_pos` at the real, momentarily-then-overwritten `AIR` and `is_extended` still `true`
+/// (only the retract's own base flip stays deferred to tick 2).
 #[test]
 fn pulse_shorter_than_commit_window_force_finalizes_then_retracts() {
     let (mut h, piston, source, event_ids, piston_pos, front_pos) = setup();
@@ -217,36 +227,40 @@ fn pulse_shorter_than_commit_window_force_finalizes_then_retracts() {
 
     // The force-finalization proof: TRIGGER_CONTRACT's own handling force-finalized the still-
     // in-flight TRIGGER_EXTEND commit *synchronously*, right here in tick 0 -- its real content
-    // (piston_head at front_pos, `extended=true`) has already landed, well before either
-    // trigger's own COMMIT_DELAY_TICKS-later scheduled tick ever fires.
+    // (piston_head at front_pos) actually landed, briefly, before this same on_block_event call's
+    // own retract arm immediately cleared it again (retract content/base split) -- well before
+    // either trigger's own COMMIT_DELAY_TICKS-later scheduled tick ever fires. `is_extended`
+    // stays `true` here: the force-finalized extend's base flip already landed, and the
+    // following retract's own base flip is the one thing still genuinely deferred.
     assert!(
         piston.is_extended(piston_pos),
-        "the force-finalized extend's real content must actually land, not be silently dropped"
-    );
-    assert_eq!(
-        h.world.get_block(front_pos),
-        Some(PISTON_HEAD_EAST),
-        "the force-finalized extend's own piston_head write must be visible before the retract \
-         that immediately follows it commits"
-    );
-    // The retract that force-finalization made way for is itself still in flight, scheduled for
-    // tick 2 -- not yet committed.
-    assert!(piston.has_pending_move(piston_pos));
-
-    // Both TRIGGER_EXTEND's and TRIGGER_CONTRACT's own `schedule_block_tick` calls target
-    // trigger_tick == 2 (both emitted at tick 0); the first fire commits the still-pending
-    // retract (`on_scheduled_tick`'s own "already consumed" no-op guard silently absorbs
-    // whichever due entry, if any, arrives second for the same position).
-    h.run_scheduled(2);
-
-    assert!(
-        !piston.is_extended(piston_pos),
-        "the retract that followed the force-finalized extend settles back to retracted"
+        "the force-finalized extend's own base flip must actually land, not be silently dropped"
     );
     assert_eq!(
         h.world.get_block(front_pos),
         Some(AIR),
-        "the retract's own commit clears the piston_head the force-finalized extend left behind"
+        "the retract's own content half is synchronous too, so it already cleared the \
+         force-finalized extend's own piston_head write within this same tick-0 pass"
+    );
+    // The retract that force-finalization made way for is itself still in flight -- only its own
+    // base flip remains, scheduled for tick 2, not yet committed.
+    assert!(piston.has_pending_move(piston_pos));
+
+    // Both TRIGGER_EXTEND's and TRIGGER_CONTRACT's own `schedule_block_tick` calls target
+    // trigger_tick == 2 (both emitted at tick 0); the first fire commits the still-pending
+    // retract's own base flip (`on_scheduled_tick`'s own "already consumed" no-op guard silently
+    // absorbs whichever due entry, if any, arrives second for the same position).
+    h.run_scheduled(2);
+
+    assert!(
+        !piston.is_extended(piston_pos),
+        "the retract that followed the force-finalized extend settles its own base flip back to \
+         retracted"
+    );
+    assert_eq!(
+        h.world.get_block(front_pos),
+        Some(AIR),
+        "unchanged -- the retract's content already cleared this position back in tick 0"
     );
     assert!(!piston.has_pending_move(piston_pos));
 }
@@ -277,11 +291,23 @@ fn two_events_in_different_ticks_do_not_supersede() {
     }
     h.run_block_events(5);
     assert_eq!(*event_ids.lock().unwrap(), vec![TRIGGER_CONTRACT]);
+    // Retract content/base split (M3 field-report fix): the content half clears `front_pos`
+    // immediately here, at tick 5's own block-event time -- only the base's own `EXTENDED` flip
+    // is genuinely deferred to tick 7 below.
+    assert_eq!(
+        h.world.get_block(front_pos),
+        Some(AIR),
+        "retract content settles immediately, at block-event time"
+    );
+    assert!(
+        piston.is_extended(piston_pos),
+        "only the base flip is deferred -- still true until the commit tick"
+    );
     h.run_scheduled(7);
 
     assert!(
         !piston.is_extended(piston_pos),
-        "the second commit also fired in full, independently"
+        "the second commit's own base flip also fired in full, independently"
     );
     assert_eq!(h.world.get_block(front_pos), Some(AIR));
 }

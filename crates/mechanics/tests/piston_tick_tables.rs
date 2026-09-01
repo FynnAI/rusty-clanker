@@ -493,16 +493,52 @@ fn piston_door_element() {
     assert_eq!(*event_ids.lock().unwrap(), vec![TRIGGER_CONTRACT]);
     assert!(h.scheduled.is_block_tick_pending(piston_pos));
 
-    h.run_scheduled(11);
+    // Retract content/base split (M3 field-report fix, verified against a now-deterministic
+    // real-oracle capture -- `piston.rs`'s own `apply_retract_content` doc comment has the full
+    // per-case citation): a sticky pull settles less immediately than a bare retract. Only the
+    // pulled block's own *source* position (the door) clears right here, synchronously with
+    // tick 10's own triggering block event; the old head itself is left untouched -- still
+    // showing its own pre-retract content (the settled sticky piston_head) -- and only receives
+    // the pulled block's own real content at the deferred commit, alongside the base's own
+    // `EXTENDED` flip.
     assert_eq!(
         h.world.get_block(door_pos),
-        Some(STONE),
-        "unchanged until commit"
+        Some(BlockStateId(0)),
+        "the pulled block's own old position clears immediately, at block-event time"
+    );
+    assert_eq!(
+        h.world.get_block(head_pos),
+        Some(STICKY_PISTON_HEAD_EAST),
+        "the old head is left untouched at trigger time -- still its own pre-retract content"
+    );
+    assert!(
+        piston.is_extended(piston_pos),
+        "only the base's own EXTENDED flip is deferred -- the internal flag stays true until \
+         the commit tick"
+    );
+
+    h.run_scheduled(11);
+    assert!(
+        piston.is_extended(piston_pos),
+        "still unchanged -- the deferred commit is not due until tick 12"
+    );
+    assert_eq!(
+        h.world.get_block(head_pos),
+        Some(STICKY_PISTON_HEAD_EAST),
+        "still unchanged -- the deferred commit is not due until tick 12"
     );
 
     h.run_scheduled(12);
-    assert_eq!(h.world.get_block(door_pos), Some(BlockStateId(0)));
-    assert_eq!(h.world.get_block(head_pos), Some(STONE));
+    assert_eq!(
+        h.world.get_block(door_pos),
+        Some(BlockStateId(0)),
+        "unchanged -- the source already cleared back in tick 10"
+    );
+    assert_eq!(
+        h.world.get_block(head_pos),
+        Some(STONE),
+        "the pulled block's own real content finally settles at the deferred commit"
+    );
     assert!(!piston.is_extended(piston_pos));
 }
 
@@ -548,6 +584,19 @@ fn sticky_retract_with_nothing_to_pull_fires_drop() {
     }
     h.run_block_events(10);
     assert_eq!(*event_ids.lock().unwrap(), vec![TRIGGER_DROP]);
+
+    // Retract content/base split (M3 field-report fix): the content half clears the old head
+    // immediately here too, even with nothing to pull -- `TRIGGER_DROP`'s own "arm retracts
+    // without pulling" case is no exception. Only the base's own EXTENDED flip is deferred.
+    assert_eq!(
+        h.world.get_block(head_pos),
+        Some(BlockStateId(0)),
+        "content clears immediately, at block-event time, even with nothing to pull"
+    );
+    assert!(
+        piston.is_extended(piston_pos),
+        "only the base flip is deferred"
+    );
 
     h.run_scheduled(12);
     assert!(!piston.is_extended(piston_pos));
