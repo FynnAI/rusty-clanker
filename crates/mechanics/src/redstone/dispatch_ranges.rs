@@ -61,7 +61,11 @@ fn exclusive((lo, hi): (u32, u32)) -> (BlockStateId, BlockStateId) {
 /// outside `range` -- a real, actionable startup failure (never a silent mis-dispatch) signaling
 /// that `rc-registries` was regenerated for a different pinned version than this module's own
 /// hand-derived arithmetic was last verified against.
-fn checked(name: &'static str, range: (u32, u32), default: rc_registries::generated_v776::block_states::BlockStateId) -> (u32, u32) {
+fn checked(
+    name: &'static str,
+    range: (u32, u32),
+    default: rc_registries::generated_v776::block_states::BlockStateId,
+) -> (u32, u32) {
     assert!(
         range.0 <= default.0 && default.0 <= range.1,
         "dispatch_ranges: rc-registries' generated default_state for {name} ({}) falls outside \

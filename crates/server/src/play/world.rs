@@ -756,7 +756,9 @@ fn bootstrap_region(world: &mut World) {
 fn bootstrap_redstone_dispatch(world: &mut World) {
     let mut behaviors = world
         .remove_resource::<rc_mechanics::BlockBehaviorRegistry>()
-        .expect("bootstrap_default_stage4_resources (called immediately above) always inserts this");
+        .expect(
+            "bootstrap_default_stage4_resources (called immediately above) always inserts this",
+        );
     let mut signals = rc_mechanics::redstone::SignalSourceRegistry::new();
 
     rc_mechanics::redstone::register_redstone_block(&mut signals);
