@@ -1140,6 +1140,35 @@ impl HardcodedWorld {
             transport.register_region(HARDCODED_REGION_ID);
             let pool = RcWorkerPool::new(4);
             let mut clock = TickClock::<SystemTickWaiter>::new();
+            // M3-B08 (`--tick-log <path>`): opt-in, absent for every ordinary run
+            // (`WorldConfig::tick_log` defaults to `None`, same shape as
+            // `save_event_log` above). One NDJSON line per completed tick-loop
+            // iteration, `{"tick": u64, "elapsed_ms": u64}` -- the exact record
+            // `rc_test_harness::tick_cadence::parse_tick_log` reads (that parser
+            // tolerates a partially-flushed final line, so a per-line
+            // BufWriter-without-explicit-flush would also be legal; flushing per line
+            // keeps the log live for external pollers at a trivial 20-lines/second
+            // cost). `elapsed_ms` is wall-clock since this tick thread started --
+            // `analyze_tps` only ever uses differences, so the epoch choice is
+            // immaterial (tick_cadence.rs's own module doc comment).
+            let tick_log_started = std::time::Instant::now();
+            let mut tick_log_writer = config.tick_log.as_ref().and_then(|path| {
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    Ok(file) => Some(std::io::BufWriter::new(file)),
+                    Err(err) => {
+                        tracing::error!(
+                            path = %path.display(),
+                            error = %err,
+                            "failed to open --tick-log; continuing without tick logging"
+                        );
+                        None
+                    }
+                }
+            });
             // M2-B05 implementation note (a forced, necessary addition, recorded here and
             // in the implementation changeset's commit body): persists across loop
             // iterations -- a `Break`/`Place` action whose target chunk has not yet
@@ -2349,6 +2378,23 @@ impl HardcodedWorld {
                 executor.tick_region(&mut region, &pool, &transport);
                 lifecycle.post_tick();
 
+                // M3-B08: appended immediately after this iteration's own tick work
+                // completes (initialization doc comment above `tick_log_writer`).
+                if let Some(writer) = tick_log_writer.as_mut() {
+                    use std::io::Write;
+                    let entry_ok = writeln!(
+                        writer,
+                        "{{\"tick\":{},\"elapsed_ms\":{}}}",
+                        region.tick_counter,
+                        tick_log_started.elapsed().as_millis() as u64
+                    )
+                    .and_then(|()| writer.flush());
+                    if let Err(err) = entry_ok {
+                        tracing::error!(error = %err, "tick-log write failed; disabling tick logging");
+                        tick_log_writer = None;
+                    }
+                }
+
                 // M2 integration addition (M2-B06's own "Composition-root integration"
                 // recipe step 4): the periodic player-data save sweep -- a plain,
                 // uncoordinated background thread (Context's own "Documented, bounded
@@ -2446,6 +2492,22 @@ impl HardcodedWorld {
         {
             let _ = handle.join();
         }
+    }
+
+    /// M3-B08 (`RC_REGION_COUNT=<n>` stdout contract, printed by `main.rs` immediately
+    /// before the listening socket binds): the number of live region tick threads this
+    /// process actually holds, read from the real handle collection rather than a
+    /// hardcoded literal -- trivially `1` at M3's own single-`HARDCODED_REGION_ID`
+    /// scope (and `0` after `shutdown` has joined it), so the same line stays
+    /// meaningful and self-updating once a real region directory replaces
+    /// `HardcodedWorld`.
+    pub fn region_count(&self) -> u32 {
+        u32::from(
+            self.thread_handle
+                .lock()
+                .expect("the region thread never panics while holding this lock")
+                .is_some(),
+        )
     }
 
     /// New. Enqueues a decoded block action, applied at the start of this region's next

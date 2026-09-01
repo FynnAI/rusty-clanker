@@ -56,6 +56,7 @@ struct ParsedArgs {
     world_dir: Option<std::path::PathBuf>,
     save_interval_ticks: Option<u32>,
     save_event_log: Option<std::path::PathBuf>,
+    tick_log: Option<std::path::PathBuf>,
 }
 
 /// `Err(message)` on an unrecognized argument or a value-taking flag missing its
@@ -71,6 +72,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
     let mut world_dir = None;
     let mut save_interval_ticks = None;
     let mut save_event_log = None;
+    let mut tick_log = None;
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -104,6 +106,32 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
                     .ok_or_else(|| "--save-event-log requires a value".to_string())?;
                 save_event_log = Some(std::path::PathBuf::from(value));
             }
+            // M3-B08's acceptance-harness diagnostics (blueprint §"Assumed server CLI
+            // surface" -- this is that assumed surface's real implementation).
+            "--tick-log" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--tick-log requires a value".to_string())?;
+                tick_log = Some(std::path::PathBuf::from(value));
+            }
+            "--region-lifecycle" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--region-lifecycle requires a value".to_string())?;
+                // `pinned-single` is a no-op today by design (M3-B08 step 1: "a no-op
+                // today, since no lifecycle exists to pin -- becomes the real disable
+                // switch the moment M6 wires RegionManager::after_tick in") and `auto`
+                // is the default behavior; both are accepted, anything else fails loud
+                // per this parser's own contract above.
+                match value.as_str() {
+                    "auto" | "pinned-single" => {}
+                    other => {
+                        return Err(format!(
+                            "--region-lifecycle value {other:?} is not one of \"auto\" | \"pinned-single\""
+                        ));
+                    }
+                }
+            }
             other => return Err(format!("unrecognized argument {other:?}")),
         }
     }
@@ -115,6 +143,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
         world_dir,
         save_interval_ticks,
         save_event_log,
+        tick_log,
     })
 }
 
@@ -125,16 +154,8 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
         world_dir,
         save_interval_ticks,
         save_event_log,
+        tick_log,
     } = parsed;
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(listener) => listener,
-        Err(err) => {
-            eprintln!("rusty-clanker-server: failed to bind {bind_addr}: {err}");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
-    println!("rusty-clanker-server: listening on {bind_addr} (offline={offline})");
-
     let key_pair = match rc_auth::ServerKeyPair::generate() {
         Ok(key_pair) => Arc::new(key_pair),
         Err(err) => {
@@ -157,9 +178,30 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
     if let Some(log_path) = save_event_log {
         world_config.save_event_log = Some(log_path);
     }
+    world_config.tick_log = tick_log;
+    // World construction deliberately precedes the listener bind: M3-B08's stdout
+    // contract prints exactly one `RC_REGION_COUNT=<n>` line immediately BEFORE the
+    // listening socket binds (so a harness that waits for TCP readiness is guaranteed
+    // the line was already written), with `<n>` read from the world's real live-region
+    // handle count -- `HardcodedWorld::region_count`'s own doc comment.
     let world = Arc::new(rusty_clanker_server::play::HardcodedWorld::with_config(
         world_config,
     ));
+    println!("RC_REGION_COUNT={}", world.region_count());
+
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("rusty-clanker-server: failed to bind {bind_addr}: {err}");
+            // The world's tick thread is already live (bind deliberately comes after
+            // world construction now, see above) -- join it cleanly instead of
+            // hard-exiting with a running region thread mid-tick.
+            let world_for_shutdown = Arc::clone(&world);
+            let _ = tokio::task::spawn_blocking(move || world_for_shutdown.shutdown()).await;
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    println!("rusty-clanker-server: listening on {bind_addr} (offline={offline})");
 
     let login_config = rusty_clanker_server::net::ServerLoginConfig {
         online_mode: !offline,

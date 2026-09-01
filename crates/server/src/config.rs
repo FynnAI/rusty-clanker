@@ -36,6 +36,16 @@ pub struct WorldConfig {
     /// never an operator-facing config option.
     #[serde(skip)]
     pub save_event_log: Option<PathBuf>,
+    /// M3-B08 (`main.rs`'s `--tick-log <path>`): when present, the region tick loop
+    /// appends one NDJSON line `{"tick": u64, "elapsed_ms": u64}` after each tick-loop
+    /// iteration completes, where `elapsed_ms` is wall-clock milliseconds since the
+    /// tick thread started -- the black-box TPS source
+    /// `rc_test_harness::tick_cadence::{parse_tick_log, analyze_tps}` reads for
+    /// `xtask m3-report`'s AC2a leg. `#[serde(skip)]` for the same reason as
+    /// `save_event_log` -- an acceptance-harness diagnostic, never an operator-facing
+    /// config option.
+    #[serde(skip)]
+    pub tick_log: Option<PathBuf>,
 }
 
 impl Default for WorldConfig {
@@ -46,6 +56,7 @@ impl Default for WorldConfig {
             world_dir: "world".into(),
             save_interval_ticks_override: None,
             save_event_log: None,
+            tick_log: None,
         }
     }
 }
