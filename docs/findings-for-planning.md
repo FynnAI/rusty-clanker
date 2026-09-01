@@ -389,6 +389,60 @@ Entries name the milestone that surfaced them and the code they concern.
   part of a future changeset, or accept the current ordering as an
   accepted-risk simplification.
 
+- **`executor.tick_region`'s own ongoing per-tick Stage-4 redstone dispatch
+  (scheduled ticks, block events, and neighbor-changed cascades triggered by
+  something other than a direct player block action) has no broadcast path to
+  any connected client at all.** Surfaced while closing the M3 field-report
+  "torches don't pop when their support is broken, wire never powers"
+  symptom: `rc_mechanics::UpdateContext::set_block` (the only way any
+  `BlockBehavior` mutates world state) has no network/broadcast capability of
+  its own — that crate carries no `rc-protocol` dependency at all (WS-D3 rule
+  1) — so *nothing* it writes is ever, by itself, turned into a `Block
+  Update` packet. `crates/server/src/play/world.rs`'s own two direct-action
+  response functions (`respond_place`/`respond_break`) are the *only*
+  broadcast path that exists today, and they fire exactly once, for exactly
+  the one position the acting player directly clicked — never for anything a
+  same-call `mining::settle_neighbor_updates` cascade (a torch popping when
+  its support, a *different* cell, is broken elsewhere in the same call; an
+  already-placed wire recomputing its own connection shape when a new one
+  appears beside it) additionally writes, and *never at all* for a change
+  `executor.tick_region`'s own separate, ongoing Stage-4 pass makes on some
+  later tick (a repeater's scheduled `POWERED` flip two ticks after being
+  triggered; a torch's own delayed re-light; a wire run's power decaying or
+  growing as a distant source changes) — that pipeline runs with no
+  `PlayerMarker`/connection visibility reachable from inside `rc-mechanics`
+  at all. This changeset closed only the first, narrower half: `world.rs`'s
+  new `snapshot_cascade_neighborhood`/`broadcast_cascaded_changes` pair
+  diffs a bounded neighborhood (`CASCADE_BROADCAST_RADIUS_H`/`_V`, currently
+  8/3 blocks) immediately before/after each direct action's own
+  `mining::apply_placement`/`finalize_break` call and broadcasts a `Block
+  Update` for every position that changed — real-client-verified (this
+  changeset's own `play_redstone_field_report.rs`) for a torch's own
+  support-loss pop and a neighboring wire's own reconnection, both firing
+  within the SAME synchronous call as the direct action. This is a bounded,
+  scoped workaround, not the real fix, and does not touch the second,
+  strictly larger gap at all: any block change `executor.tick_region`
+  produces on a tick with no concurrent direct player action (the ordinary,
+  majority case for a running redstone circuit — a delayed repeater flip, a
+  wire's power settling a few ticks after a distant change) is still never
+  broadcast to anyone. The disciplined long-term fix is a real
+  changed-positions output on `UpdateContext` itself (every `set_block` call
+  appends to it, `world.rs`'s tick loop drains and broadcasts it once per
+  tick) — not attempted here because `UpdateContext` is a plain struct
+  literal constructed at many sites across the workspace, several of them
+  `xtask path-guard`-protected (`crates/mechanics/tests/**`,
+  `crates/testing/gametest/src/replay.rs`) and unreachable from an
+  implementation changeset; a new mandatory field would need a coordinated
+  change spanning at least one test-authoring changeset (for the protected
+  sites) plus the accompanying implementation changeset (for `rc-mechanics`
+  itself and every other production call site). Needs a decision on: (a)
+  whether to authorize that coordinated cross-changeset fix now or schedule
+  it as its own milestone item; (b) whether the bounded-radius workaround
+  this changeset ships is an acceptable interim behavior (and, if so, what
+  radius the acceptance/perf budget should actually pin) or should be
+  reverted once the real fix lands, to avoid two competing broadcast paths
+  existing at once.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -499,6 +553,100 @@ Entries name the milestone that surfaced them and the code they concern.
   covers this whole class of hand-maintained-table risk); the `shapes.rs`
   half of this gap is no longer open — only the still-real WS-D15
   prerequisite (a generated per-property state-id registry) remains.
+
+- **`resolve_orientation`'s redstone-torch branch approximates vanilla's real
+  `StandingAndWallBlockItem` placement algorithm by using the client's
+  clicked face directly, instead of vanilla's own look-vector candidate
+  loop.** Surfaced by the M3 field-report research role's own forwarded
+  ground truth: real vanilla iterates `getNearestLookingDirections()`
+  (all 6 directions, ordered by closeness to the player's full 3-axis look
+  vector, skipping `Up`) and returns the FIRST candidate whose own
+  `canSurvive` check passes at the target cell — `Down` becomes a floor
+  torch, any horizontal candidate becomes a wall torch with `FACING =
+  candidate.getOpposite()` — falling through to the next-nearest candidate
+  if the first one has no valid support, and failing placement entirely if
+  none do. This project's own `resolve_orientation` instead uses
+  `clicked_face` directly (`Face::Up` -> floor, `Face::Down` -> reject,
+  any horizontal face -> wall with `FACING = that face`) — the FACING
+  *value*, once a horizontal attachment is chosen, is already correct
+  (confirmed identical to vanilla's own `candidate.getOpposite()` rule for
+  the case where the clicked face IS the candidate direction), but *which*
+  candidate gets chosen, and the look-vector-driven fallback across
+  candidates when the nearest one lacks support, is not modeled at all.
+  Deliberately not implemented this wave: (a) not needed by any of the
+  owner's own reported manual-test symptoms (id arithmetic and placement
+  connection/power resolution, both closed this wave, fully explain them);
+  (b) implementing it properly would also require adding vanilla's own
+  `canSurvive` support gating (see the very next entry below) as a
+  precondition for the candidate loop to make sense at all; (c) this
+  crate's own pre-existing, `xtask path-guard`-protected `crates/server/
+  tests/mining_oriented_shape_table.rs` bakes in the current "clicked_face
+  alone determines torch orientation" assumption (it varies `clicked_face`
+  while holding yaw/pitch fixed and asserts 4 distinct orientations result)
+  and would need a test-authoring changeset of its own to update first.
+  Needs a decision on priority/scheduling for a dedicated changeset (test-
+  authoring first, per this project's own TEST-D45/D46 convention) that
+  implements the real candidate-loop-with-support-fallback algorithm and
+  updates that pre-existing test to match.
+
+- **Redstone torch, repeater, and comparator placement never validates
+  `canSurvive` (support quality) at all — every placement is accepted
+  unconditionally regardless of what (if anything) is beneath/behind it.**
+  Per the same forwarded research: floor torch requires `Block.
+  canSupportCenter(below, UP)` (a `SupportType.CENTER` check — a small
+  2x2-in-16ths center column, not a full face); wall torch requires the
+  attached block to be `isFaceSturdy(FACING, FULL)`; repeater/comparator
+  require the block below to be `isFaceSturdy(UP, RIGID)` (a 12x12-in-16ths
+  inset column, coarser than `CENTER` but finer than `FULL`). None of these
+  three sturdiness predicates (`CENTER`/`RIGID`/`FULL`) exist in this
+  project's own current shape vocabulary — `rc_physics::tier1_shape_table`
+  only ever answers "is this a `default_full_cube()` conductor," used
+  today as a blunt stand-in everywhere a real sturdiness check belongs
+  (`WireBehavior`'s/`TorchBehavior`'s own `should_pop` support-LOSS checks
+  already use this same coarse `is_conductor` proxy, not a real sturdiness
+  predicate, and get away with it only because every tier-1 world surface
+  in this milestone's own superflat scope happens to be a literal full
+  cube). `redstone_wire` is the only tier-1 kind with a real placement-time
+  support gate today (`apply_placement`'s own `NoSolidSupportBelow` check,
+  itself only the `is_conductor` proxy, not vanilla's real wire `canSurvive`
+  either). Not implemented this wave for torch/repeater/comparator: no
+  owner-reported symptom depends on placement-time rejection (only on
+  post-placement id/connection/power correctness, all closed this wave),
+  and every real placement this milestone's own test suite exercises lands
+  on ordinary full-cube superflat terrain, where an `is_conductor`-based
+  gate and a real `CENTER`/`RIGID`/`FULL` sturdiness gate would agree
+  anyway. Needs a decision on (a) whether `rc_physics` should gain real
+  `SupportType`-style sturdiness predicates (a larger shape-vocabulary
+  addition, likely paired with the WS-D15 generated-registry work above),
+  and (b) which blueprint/changeset adds the three missing placement-time
+  `canSurvive` gates once that vocabulary exists.
+
+- **`minecraft:chest` always places `TYPE = single`; the real double-chest
+  merge rule (adopting/becoming `LEFT`/`RIGHT` when placed beside a
+  same-facing single chest, including the sneak+cross-axis special case) is
+  not implemented.** Per the same forwarded research, this is explicitly
+  flagged as a "minimal M3 floor... implement the merge rule if cheap, it's
+  just two neighbor reads" allowance — not implemented this wave because a
+  correct merge also needs to retroactively rewrite the ALREADY-placed
+  neighbor chest's own `TYPE` (a second, different position's block state
+  changing as a side effect of this placement — the same class of
+  "cascade write" `broadcast_cascaded_changes` above now knows how to
+  broadcast, so the client-visibility half is no longer a blocker), and
+  ties directly into `ChestBlockEntity` pairing/inventory, which this wave's
+  own brief explicitly named as separate-wave, do-not-attempt scope. Needs
+  a decision on which future wave (likely the same one that spawns real
+  block entities, per the Stage-7 entry above) implements the merge rule.
+
+- **`minecraft:hopper`'s own `ENABLED` bit is always `true` at placement
+  (vanilla's own literal `getStateForPlacement` behavior) but the
+  immediately-following `onPlace` correction (`ENABLED = !hasNeighborSignal
+  (pos)` when the hopper is placed somewhere already redstone-powered) is
+  not implemented — there is no `HopperBehavior` registered in this
+  project's `BlockBehaviorRegistry`/`SignalSourceRegistry` at all yet.**
+  Ties directly into the Stage-7 block-entity entry above (a real hopper's
+  redstone-lockout behavior is conventionally implemented alongside its own
+  block entity); not attempted here as this wave's own brief explicitly
+  scoped block-entity work to a separate future wave.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 

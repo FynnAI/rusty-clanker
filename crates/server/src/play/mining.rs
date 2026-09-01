@@ -763,12 +763,17 @@ pub fn resolve_orientation(
 }
 
 /// A closed, hand-authored `(PlaceableBlockKind, Orientation) -> raw BlockStateId` table
-/// (Context: "Raw block-state id resolution" — the production-table entries' literal `u32`
-/// values are placeholders pending reconciliation against a real `reports/blocks.json` for
-/// protocol 776, Implementation steps; the lookup *algorithm* and every call site using it
-/// are final). Every non-default-orientation entry's literal id is this file's own
-/// arithmetic placeholder (`<default-state id> + <direction index>`) — internally
-/// consistent for this table's own routing tests, not claimed to be a real vanilla id.
+/// (Context: "Raw block-state id resolution"). M3 field-report fix (Root Cause 1, "placeholder
+/// id table"): every entry below is now real vanilla 26.2 (protocol 776) arithmetic, decoded
+/// directly off the local datagen reference (`docs/research/mc-26.2`'s own reference-source
+/// convention; `mc-research/26.2/datagen/generated/reports/blocks.json`, read-only, never
+/// committed) rather than the former `<default-state id> + <arbitrary direction index>`
+/// placeholder this doc comment used to describe — the former arithmetic silently flipped
+/// unrelated properties (e.g. furnace's `+1` flipped `lit`, not `facing`; hopper's `+10`
+/// landed inside the next block's own id range entirely, becoming quartz). See
+/// `tier1_oriented_entries()`'s own doc comment and per-row comments below for the full
+/// per-block property layout (base id, per-property stride, value order) each entry's
+/// arithmetic implements.
 pub struct OrientedStateTable {
     entries: HashMap<(PlaceableBlockKind, Orientation), u32>,
 }
@@ -809,11 +814,64 @@ const FULL6: [Direction; 6] = [
     Direction::Down,
 ];
 
-fn direction_offset(dir: Direction) -> u32 {
+/// blocks.json's own listed `facing` value order shared by every purely-horizontal tier-1
+/// oriented block this table covers — repeater/comparator/redstone_wall_torch/chest/furnace/
+/// blast_furnace/smoker, plus hopper's four horizontal faces (`hopper_facing_index` below has
+/// hopper's own distinct full order) — `[north, south, west, east]` (blocks.json's own
+/// alphabetical-property-value listing, protocol 776, verified directly against the local
+/// datagen reference for every one of these seven block types). Restated here by hand since it
+/// is identical in spirit to, but not importable from, `rc_mechanics::redstone::signal::
+/// diode_facing_index` (repeater.rs's/comparator.rs's own citation) and `rc_mechanics::
+/// redstone::torch`'s own `wall_facing_from_index` — both `pub(crate)` inside `rc-mechanics`,
+/// invisible across the crate boundary (WS-D3 rule 1's shared-crate isolation, the identical
+/// restatement convention `rc_physics::shapes`'s own module doc comment already documents for
+/// this same boundary).
+fn horizontal4_index(dir: Direction) -> u32 {
     match dir {
         Direction::North => 0,
         Direction::South => 1,
-        Direction::East => 2,
+        Direction::West => 2,
+        Direction::East => 3,
+        Direction::Up | Direction::Down => panic!(
+            "horizontal4_index: called with a non-horizontal direction {dir:?} -- every real \
+             caller here only ever passes a HORIZONTAL4 member"
+        ),
+    }
+}
+
+/// `minecraft:hopper`'s own listed `facing` value order (blocks.json: `[down, north, south,
+/// west, east]`, protocol 776). `enabled` is hopper's other property (the *outer* one, stride
+/// 5) but is always `true` at placement time — matching blocks.json's own default `enabled=
+/// true, facing=down` exactly — so `enabled`'s own stride never enters this table's own
+/// placement-time arithmetic: every hopper entry below is `HOPPER.0 + hopper_facing_index(dir)`
+/// alone.
+fn hopper_facing_index(dir: Direction) -> u32 {
+    match dir {
+        Direction::Down => 0,
+        Direction::North => 1,
+        Direction::South => 2,
+        Direction::West => 3,
+        Direction::East => 4,
+        Direction::Up => panic!(
+            "hopper_facing_index: Up is never a real hopper facing -- resolve_orientation's own \
+             Hopper rule clamps a Face::Up click to Orientation::Full(Direction::Down) before \
+             this table is ever consulted"
+        ),
+    }
+}
+
+/// `minecraft:piston`'s/`minecraft:sticky_piston`'s own listed `facing` value order
+/// (blocks.json: `[north, east, south, west, up, down]`, protocol 776) — distinct from
+/// `horizontal4_index`'s order above since piston's own `facing` property interleaves the two
+/// vertical directions with the horizontal ones (unlike every purely-horizontal block above).
+/// Restated here by hand, identical in spirit to `rc_mechanics::redstone::piston::
+/// piston_facing_index` (`pub(crate)`, same cross-crate restatement rule as `horizontal4_index`
+/// above).
+fn full6_piston_index(dir: Direction) -> u32 {
+    match dir {
+        Direction::North => 0,
+        Direction::East => 1,
+        Direction::South => 2,
         Direction::West => 3,
         Direction::Up => 4,
         Direction::Down => 5,
@@ -824,6 +882,24 @@ fn direction_offset(dir: Direction) -> u32 {
 /// `tier1_oriented_state_table()` (wrapped as an `OrientedStateTable`) and
 /// `raw_state_dig_properties()` below (iterated in reverse, raw id -> `DigProperties`) — one
 /// definition, two consumers, so the two can never drift apart.
+///
+/// M3 field-report fix (Root Cause 1): every entry's arithmetic below is decoded directly off
+/// the local datagen reference (this module's own top-of-file convention) and, for repeater/
+/// comparator/redstone_wall_torch/piston/sticky_piston, is independently cross-checked here for
+/// exact agreement with `rc_mechanics::redstone::{repeater,comparator,torch,piston}`'s own
+/// already-verified own-state arithmetic (`REPEATER_BASE`/`COMPARATOR_BASE`/`TORCH_WALL_BASE`/
+/// `PISTON_BASE`/`STICKY_PISTON_BASE`, none importable across the crate boundary — same
+/// restatement rule as `rc_physics::shapes`) — these five kinds' ids must land inside
+/// `rc_mechanics::redstone::dispatch_ranges`'s own registered dispatch ranges for `world.rs`'s
+/// `bootstrap_redstone_dispatch` to route a real placement to the matching `BlockBehavior`/
+/// `RedstoneSignalSource` at all (Root Cause 3). Furnace/blast_furnace/smoker/chest/hopper have
+/// no dedicated `rc-mechanics` own-state module (tier-1 registers no custom behavior for them —
+/// `NoOpBehavior` dispatch is correct, only the id itself must be real), so this table is their
+/// own sole source of truth, anchored directly on `rc_registries::generated_v776::block_states::
+/// default_state::*`: every formula below is `<generated default-state id> + <property-index> *
+/// <stride>`, so the `index == 0` case always exactly reproduces the generated default by
+/// construction — `crates/server/tests/mining_block_state_ids.rs`'s own literal-id assertions
+/// are the startup/test-time integrity check exercising this for every block this table covers.
 fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
     let mut entries = vec![
         ((PlaceableBlockKind::Stone, Orientation::None), STONE.0),
@@ -837,67 +913,118 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
         ),
     ];
 
+    // Repeater/comparator/redstone_wall_torch/chest/furnace/blast_furnace/smoker: `facing`
+    // (`horizontal4_index`'s own `[north, south, west, east]` order) is each block's own *sole*
+    // varying property at placement time — every other property (repeater's `delay`/`locked`/
+    // `powered`; comparator's `mode`/`powered`; wall-torch's `lit`; chest's `type`/
+    // `waterlogged`; furnace-family's `lit`) already sits at its own placement-time value
+    // (`delay=1`, `locked=false`, `powered=false`, `mode=compare`, `lit=true` for the torch /
+    // `lit=false` for the furnace family, `type=single`, `waterlogged=false`) at `facing=
+    // north`'s own generated default id, so `<default> + facing_idx*stride` covers the full
+    // placement-time state without needing those other properties' own strides at all. Strides
+    // (blocks.json's own alphabetical-property-name nesting, `facing` immediately followed by
+    // the *next* property in that ordering): repeater/comparator's `facing` is followed by two
+    // more 2-valued properties (`locked`+`powered` / `mode`+`powered`) -> stride 4; wall-torch's
+    // `facing` is followed only by `lit` (2 values) -> stride 2; chest's `facing` is followed by
+    // `type`(3) and `waterlogged`(2) -> stride 6; furnace/blast_furnace/smoker's `facing` is
+    // followed only by `lit`(2) -> stride 2 (identical shape to wall-torch).
     for dir in HORIZONTAL4 {
-        let offset = direction_offset(dir);
+        let idx = horizontal4_index(dir);
         entries.push((
             (
                 PlaceableBlockKind::RedstoneTorch,
                 Orientation::Horizontal(dir),
             ),
-            REDSTONE_WALL_TORCH.0 + offset,
+            // REDSTONE_WALL_TORCH default = 6887 (facing=north, lit=true); stride 2
+            // (`rc_mechanics::redstone::torch::TORCH_WALL_BASE`'s own identical formula,
+            // restated). North/South/West/East -> 6887/6889/6891/6893, all `lit=true` (a
+            // freshly-placed torch is always lit — unpowered support).
+            REDSTONE_WALL_TORCH.0 + idx * 2,
         ));
         entries.push((
             (PlaceableBlockKind::Repeater, Orientation::Horizontal(dir)),
-            REPEATER.0 + offset,
+            // REPEATER default = 7037 (delay=1, facing=north, locked=false, powered=false);
+            // stride 4 (`rc_mechanics::redstone::repeater::repeater_state_id`'s own identical
+            // formula at delay=1/locked=false/powered=false, restated).
+            // North/South/West/East -> 7037/7041/7045/7049.
+            REPEATER.0 + idx * 4,
         ));
         entries.push((
             (PlaceableBlockKind::Comparator, Orientation::Horizontal(dir)),
-            COMPARATOR.0 + offset,
+            // COMPARATOR default = 11264 (facing=north, mode=compare, powered=false); stride 4
+            // (`rc_mechanics::redstone::comparator::comparator_state_id`'s own identical formula
+            // at mode=compare/powered=false, restated).
+            // North/South/West/East -> 11264/11268/11272/11276.
+            COMPARATOR.0 + idx * 4,
         ));
         entries.push((
             (PlaceableBlockKind::Chest, Orientation::Horizontal(dir)),
-            CHEST.0 + offset,
+            // CHEST default = 3988 (type=single, facing=north, waterlogged=false); stride 6.
+            // North/South/West/East -> 3988/3994/4000/4006.
+            CHEST.0 + idx * 6,
         ));
         entries.push((
             (PlaceableBlockKind::Furnace, Orientation::Horizontal(dir)),
-            FURNACE.0 + offset,
+            // FURNACE default = 5328 (facing=north, lit=false); stride 2.
+            // North/South/West/East -> 5328/5330/5332/5334.
+            FURNACE.0 + idx * 2,
         ));
         entries.push((
             (
                 PlaceableBlockKind::BlastFurnace,
                 Orientation::Horizontal(dir),
             ),
-            BLAST_FURNACE.0 + offset,
+            // BLAST_FURNACE default = 20763 (facing=north, lit=false); stride 2.
+            // North/South/West/East -> 20763/20765/20767/20769.
+            BLAST_FURNACE.0 + idx * 2,
         ));
         entries.push((
             (PlaceableBlockKind::Smoker, Orientation::Horizontal(dir)),
-            SMOKER.0 + offset,
+            // SMOKER default = 20755 (facing=north, lit=false); stride 2.
+            // North/South/West/East -> 20755/20757/20759/20761.
+            SMOKER.0 + idx * 2,
         ));
         entries.push((
             (PlaceableBlockKind::Hopper, Orientation::Horizontal(dir)),
-            HOPPER.0 + offset,
+            // HOPPER default = 11313 (enabled=true, facing=down); `hopper_facing_index`'s own
+            // `[down, north, south, west, east]` order, stride 1 (the innermost property —
+            // `enabled` is always `true` at placement, matching the default's own value, so it
+            // contributes no term here). North/South/West/East -> 11314/11315/11316/11317.
+            HOPPER.0 + hopper_facing_index(dir),
         ));
     }
-    // Hopper's own clamped-Down case needs a raw id distinct from its 4 horizontal ones —
-    // `+ 10` sits safely past every `direction_offset` value (`0..=5`) any other row here
-    // uses for this same base id.
+    // Hopper's own clamped-Down orientation (`resolve_orientation`'s own Hopper rule: clicked
+    // on the top or bottom face always faces Down, never Up) is `hopper_facing_index(Down) ==
+    // 0`, i.e. `HOPPER.0` itself unchanged — the real generated default id IS this block's own
+    // Down-facing state (vanilla's own hopper default orientation).
     entries.push((
         (
             PlaceableBlockKind::Hopper,
             Orientation::Full(Direction::Down),
         ),
-        HOPPER.0 + 10,
+        HOPPER.0,
     ));
 
+    // Piston/sticky_piston: `extended` is always `false` at placement (a freshly-placed piston
+    // is never mid-extend); `facing` (`full6_piston_index`'s own `[north, east, south, west,
+    // up, down]` order) is the *inner*, faster-varying property (stride 1) since `extended`
+    // (2 values) is outer with stride 6 — `PISTON`/`STICKY_PISTON`'s own generated default is
+    // already `extended=false, facing=north`, so `<default> + facing_idx` covers every
+    // placement orientation directly (`rc_mechanics::redstone::piston::piston_state_id`'s own
+    // identical formula at `extended=false`, restated).
     for dir in FULL6 {
-        let offset = direction_offset(dir);
+        let idx = full6_piston_index(dir);
         entries.push((
             (PlaceableBlockKind::Piston, Orientation::Full(dir)),
-            PISTON.0 + offset,
+            // PISTON default = 2263 (extended=false, facing=north).
+            // North/East/South/West/Up/Down -> 2263/2264/2265/2266/2267/2268.
+            PISTON.0 + idx,
         ));
         entries.push((
             (PlaceableBlockKind::StickyPiston, Orientation::Full(dir)),
-            STICKY_PISTON.0 + offset,
+            // STICKY_PISTON default = 2241 (extended=false, facing=north).
+            // North/East/South/West/Up/Down -> 2241/2242/2243/2244/2245/2246.
+            STICKY_PISTON.0 + idx,
         ));
     }
 
@@ -1331,6 +1458,63 @@ pub fn apply_placement(
         // settle` calls it before its own `engine.drain` -- every dispatch that placement's own
         // `ctx.set_block` fan-out triggers already sees the reseeded state.
         behaviors.resolve(state).on_placed(&mut ctx, target);
+
+        // M3 field-report fix (Root Cause 2, redstone-signal self-resolution at placement --
+        // forwarded research: wire's own "onPlace schedules the evaluator" and repeater's own
+        // "POWERED default false, corrected by a scheduled tick from setPlacedBy if input
+        // already present" / "LOCKED = isLocked() at placement"): vanilla re-evaluates a
+        // freshly placed redstone-signal-relevant block against whatever power ALREADY sits at
+        // its neighbors immediately at placement time -- nothing above does that: `ctx.
+        // set_block`'s own fan-out (`border::fan_out_from_changed_block`) only ever notifies
+        // `target`'s own NEIGHBORS (matching vanilla's own `updateNeighborsAt`, which never
+        // re-notifies the block that just changed), never `target` itself. Left uncorrected, a
+        // freshly placed wire/torch/repeater/comparator sitting directly beside an
+        // already-active power source stays at its own placed default (unpowered wire, lit
+        // torch, unpowered+unlocked diode) forever, until some unrelated LATER event happens to
+        // touch one of its neighbors again. `WireBehavior`/`TorchBehavior`/`RepeaterBehavior`/
+        // `ComparatorBehavior::on_neighbor_changed` are this project's own already-correct
+        // per-kind evaluators (each either writes its own corrected state synchronously, like
+        // wire's power digit, or schedules the matching delayed tick, like a diode's `POWERED`
+        // transition or a torch's `LIT` re-eval) -- invoking the matching one directly here,
+        // once, right after placement, models vanilla's own placement-time evaluator trigger
+        // without duplicating any of that per-kind logic. `Direction::North` is a neutral
+        // placeholder `from` for every one of these four: none of them reads `from` for
+        // anything other than wire's own `Direction::Down` support-loss branch inside `on_
+        // shape_update` (a different method, not called here), so any direction produces the
+        // identical result.
+        match kind {
+            PlaceableBlockKind::RedstoneWire => {
+                // Connection SHAPE first (`on_shape_update` -- see this same doc comment's own
+                // citation above this match for why a freshly placed wire's shape also needs
+                // resolving), then POWER (`on_neighbor_changed`) against the now-correct shape:
+                // both writebacks decode-and-reencode only their own targeted digit(s) (`wire.
+                // rs`'s `new_connections_state_id`/`new_power_state_id`, each preserving the
+                // other), so this ordering is not load-bearing for correctness, only chosen to
+                // mirror "resolve what the wire looks like, then what it outputs."
+                let neighbor_state = ctx
+                    .get_block(Direction::North.apply(target))
+                    .unwrap_or(state);
+                if let Some(resolved) = behaviors.resolve(state).on_shape_update(
+                    &mut ctx,
+                    target,
+                    Direction::North,
+                    neighbor_state,
+                ) {
+                    ctx.set_block(target, resolved);
+                }
+                behaviors
+                    .resolve(state)
+                    .on_neighbor_changed(&mut ctx, target, Direction::North);
+            }
+            PlaceableBlockKind::RedstoneTorch
+            | PlaceableBlockKind::Repeater
+            | PlaceableBlockKind::Comparator => {
+                behaviors
+                    .resolve(state)
+                    .on_neighbor_changed(&mut ctx, target, Direction::North);
+            }
+            _ => {}
+        }
     }
     settle_neighbor_updates(
         ctx_world,
@@ -1343,8 +1527,24 @@ pub fn apply_placement(
         current_tick,
     );
 
+    // M3 field-report fix (Root Cause 2, broadcast staleness): `respond_place` (`world.rs`)
+    // sends this `new_state` straight to every client as the placement's own `Block Update`
+    // packet -- it never re-reads the world itself. `raw_state` is only the id this function
+    // FIRST wrote; the self-resolution step above (wire's shape+power, or a diode's/torch's own
+    // power re-evaluation) and `settle_neighbor_updates`'s own cascade can both have since
+    // overwritten `target` with a different, more correct id (an isolated wire's own "cross"
+    // shape, a wire now connected to an existing neighbor run, a repeater born already-locked
+    // beside an active perpendicular diode, ...). Re-reading `target` here is what makes every
+    // client actually SEE that corrected id, rather than the stale pre-resolution one this
+    // function originally computed -- falls back to `raw_state` only if `target` is somehow no
+    // longer readable (never expected: this function just wrote it).
+    let final_state = ctx_world
+        .get_block(target)
+        .map(|s| s.to_raw())
+        .unwrap_or(raw_state);
+
     PlaceOutcome::Applied {
         pos: target,
-        new_state: raw_state,
+        new_state: final_state,
     }
 }

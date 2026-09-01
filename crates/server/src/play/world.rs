@@ -1734,6 +1734,12 @@ impl HardcodedWorld {
                                     DimensionId::OVERWORLD,
                                     location,
                                 );
+                                let cascade_before = snapshot_cascade_neighborhood(
+                                    &region.world,
+                                    region.world.resource::<ChunkIndex>(),
+                                    DimensionId::OVERWORLD,
+                                    location,
+                                );
                                 let outcome = mining::finalize_break(
                                     &mut DirectBlockWorld {
                                         world: &mut region.world,
@@ -1752,6 +1758,13 @@ impl HardcodedWorld {
                                     tool,
                                 );
                                 respond_break(&region.world, &action, outcome, pre_break);
+                                broadcast_cascaded_changes(
+                                    &region.world,
+                                    region.world.resource::<ChunkIndex>(),
+                                    DimensionId::OVERWORLD,
+                                    &cascade_before,
+                                    location,
+                                );
                             } else {
                                 let props = mining::dig_properties_for_raw_state(read_raw_state(
                                     &region.world,
@@ -1782,6 +1795,12 @@ impl HardcodedWorld {
                                         DimensionId::OVERWORLD,
                                         location,
                                     );
+                                    let cascade_before = snapshot_cascade_neighborhood(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        location,
+                                    );
                                     let outcome = mining::finalize_break(
                                         &mut DirectBlockWorld {
                                             world: &mut region.world,
@@ -1800,6 +1819,13 @@ impl HardcodedWorld {
                                         tool,
                                     );
                                     respond_break(&region.world, &action, outcome, pre_break);
+                                    broadcast_cascaded_changes(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        &cascade_before,
+                                        location,
+                                    );
                                 }
                             }
                         }
@@ -1834,6 +1860,12 @@ impl HardcodedWorld {
                                         DimensionId::OVERWORLD,
                                         location,
                                     );
+                                    let cascade_before = snapshot_cascade_neighborhood(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        location,
+                                    );
                                     let outcome = mining::finalize_break(
                                         &mut DirectBlockWorld {
                                             world: &mut region.world,
@@ -1852,6 +1884,13 @@ impl HardcodedWorld {
                                         tool,
                                     );
                                     respond_break(&region.world, &action, outcome, pre_break);
+                                    broadcast_cascaded_changes(
+                                        &region.world,
+                                        region.world.resource::<ChunkIndex>(),
+                                        DimensionId::OVERWORLD,
+                                        &cascade_before,
+                                        location,
+                                    );
                                 }
                             }
                         }
@@ -1896,6 +1935,12 @@ impl HardcodedWorld {
                                     })
                                     .collect()
                             };
+                            let cascade_before = snapshot_cascade_neighborhood(
+                                &region.world,
+                                region.world.resource::<ChunkIndex>(),
+                                DimensionId::OVERWORLD,
+                                location,
+                            );
                             let outcome = mining::apply_placement(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
@@ -1918,7 +1963,18 @@ impl HardcodedWorld {
                                 motion.pitch,
                                 &player_boxes,
                             );
+                            let outcome_pos = match outcome {
+                                PlaceOutcome::Applied { pos, .. }
+                                | PlaceOutcome::Rejected { pos, .. } => pos,
+                            };
                             respond_place(&region.world, &action, outcome);
+                            broadcast_cascaded_changes(
+                                &region.world,
+                                region.world.resource::<ChunkIndex>(),
+                                DimensionId::OVERWORLD,
+                                &cascade_before,
+                                outcome_pos,
+                            );
                         }
                         BlockActionKind::Ignored => {
                             send_ack(&action);
@@ -2026,6 +2082,12 @@ impl HardcodedWorld {
                                 DimensionId::OVERWORLD,
                                 pos,
                             );
+                            let cascade_before = snapshot_cascade_neighborhood(
+                                &region.world,
+                                region.world.resource::<ChunkIndex>(),
+                                DimensionId::OVERWORLD,
+                                pos,
+                            );
                             let outcome = mining::finalize_break(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
@@ -2052,6 +2114,13 @@ impl HardcodedWorld {
                                     network_entity_id,
                                 );
                             }
+                            broadcast_cascaded_changes(
+                                &region.world,
+                                region.world.resource::<ChunkIndex>(),
+                                DimensionId::OVERWORLD,
+                                &cascade_before,
+                                pos,
+                            );
                         }
                         TickOutcome::Idle
                         | TickOutcome::CancelledBlockChanged
@@ -2704,6 +2773,95 @@ fn read_raw_state(world: &World, index: &ChunkIndex, dimension: DimensionId, pos
             column.get(lx, pos.y, lz).to_raw()
         })
         .unwrap_or(AIR.0)
+}
+
+/// M3 field-report fix (Root Cause 3, "torches don't pop when their support is broken, wire
+/// never powers"): `mining::settle_neighbor_updates`'s own cascade (`NeighborChanged`/
+/// `ShapeUpdate` fan-out from a direct place/break action) can write a DIFFERENT position than
+/// the one the player directly acted on -- a torch popping to air when its own support block
+/// (a different cell) is broken; an already-placed wire recomputing its own connection shape
+/// when a NEW wire is placed beside it. `UpdateContext::set_block` (`rc-mechanics`) has no
+/// broadcast capability of its own (that crate carries no `rc-protocol` dependency, WS-D3 rule
+/// 1), and giving it one would mean a new mandatory field on `UpdateContext`'s own struct
+/// literal, touching every one of its many construction sites across the workspace -- several
+/// under `crates/mechanics/tests/**`/`crates/testing/gametest/src/replay.rs`, both `xtask
+/// path-guard`-protected and unreachable from an implementation changeset. This pair of
+/// functions works around that entirely from this already-unprotected file instead: snapshot a
+/// bounded neighborhood of raw ids immediately before the direct action's own `mining::
+/// apply_placement`/`finalize_break` call, then diff the same neighborhood immediately after
+/// and broadcast a `Block Update` for every position that changed, EXCLUDING `primary` (the one
+/// position `respond_place`/`respond_break` already broadcasts on its own). `primary` is not an
+/// optimization -- a real, `xtask path-guard`-protected regression caught it directly:
+/// `play_block_place_break.rs`'s own `break_and_place_broadcast_and_persist` assumes each of
+/// its own two actions produces exactly one `Block Update` on the bystander's own connection,
+/// in order; an unexcluded duplicate for the break's own position landed second, ahead of the
+/// real placement broadcast, and the bystander read the stale duplicate where the real update
+/// was expected. Bounded, not exhaustive: `CASCADE_BROADCAST_RADIUS_H`/`_V` comfortably cover
+/// every scenario this milestone's own real-client manual test and acceptance tests exercise
+/// (a support-loss pop one hop away; a wire run a few tiles long), but a cascade reaching
+/// farther (e.g. a very long repeater-relayed circuit) is not covered by this bounded scan --
+/// a real, acknowledged limitation, not silently swept under the rug; recorded in `docs/
+/// findings-for-planning.md` alongside the disciplined long-term fix (a real changed-positions
+/// output on `UpdateContext` itself, which needs a coordinated protected-path update across
+/// every construction site above, out of this changeset's own scope). Neither function touches
+/// per-tick Stage-4 redstone ticking (`executor.tick_region`'s own ongoing scheduled-tick/
+/// block-event dispatch, entirely separate from this manual per-action step) -- that pipeline's
+/// own changes still have no broadcast path to any client at all, a second, larger residual
+/// also recorded there rather than attempted here.
+const CASCADE_BROADCAST_RADIUS_H: i32 = 8;
+const CASCADE_BROADCAST_RADIUS_V: i32 = 3;
+
+fn snapshot_cascade_neighborhood(
+    world: &World,
+    index: &ChunkIndex,
+    dimension: DimensionId,
+    center: BlockPos,
+) -> std::collections::HashMap<BlockPos, u32> {
+    let mut snapshot = std::collections::HashMap::new();
+    for dx in -CASCADE_BROADCAST_RADIUS_H..=CASCADE_BROADCAST_RADIUS_H {
+        for dz in -CASCADE_BROADCAST_RADIUS_H..=CASCADE_BROADCAST_RADIUS_H {
+            for dy in -CASCADE_BROADCAST_RADIUS_V..=CASCADE_BROADCAST_RADIUS_V {
+                let pos = BlockPos::new(center.x + dx, center.y + dy, center.z + dz);
+                if !y_in_world_bounds(pos.y) {
+                    continue;
+                }
+                snapshot.insert(pos, read_raw_state(world, index, dimension, pos));
+            }
+        }
+    }
+    snapshot
+}
+
+/// Diffs `before` (`snapshot_cascade_neighborhood`'s own return value, taken immediately before
+/// the direct action) against the world's own current state and broadcasts a `Block Update` to
+/// every connected player for each position that changed, except `primary` (already broadcast
+/// by `respond_place`/`respond_break` -- this pair's own doc comment above has the full
+/// rationale for why that exclusion is load-bearing, not cosmetic).
+fn broadcast_cascaded_changes(
+    world: &World,
+    index: &ChunkIndex,
+    dimension: DimensionId,
+    before: &std::collections::HashMap<BlockPos, u32>,
+    primary: BlockPos,
+) {
+    for (&pos, &before_state) in before {
+        if pos == primary {
+            continue;
+        }
+        let after_state = read_raw_state(world, index, dimension, pos);
+        if after_state == before_state {
+            continue;
+        }
+        let payload = encode_payload(&BlockUpdate {
+            location: pack_position(pos),
+            block_state_id: after_state as i32,
+        });
+        for entity_ref in world.iter_entities() {
+            if let Some(marker) = entity_ref.get::<PlayerMarker>() {
+                let _ = marker.connection.try_send_payload(payload.clone());
+            }
+        }
+    }
 }
 
 /// Sends exactly one `Acknowledge Block Change` to the acting connection (MECH-D63 --

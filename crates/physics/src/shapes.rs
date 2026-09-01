@@ -221,28 +221,25 @@ fn build_tier1_table() -> ShapeTable {
         (3988, flat(chest_shape())),         // chest, facing North (direction_offset 0)
         (11313, flat(hopper_shape.clone())), // hopper, facing North (direction_offset 0)
         // Every other horizontal orientation `play::mining::apply_placement` can actually
-        // write for these five blocks (M3 field-report Defect B) -- `<default-state id> +
-        // direction_offset`, `direction_offset(South) = 1, (East) = 2, (West) = 3`, the
-        // identical arithmetic `play::mining::tier1_oriented_entries()` uses to *write* these
-        // same ids (`direction_offset`'s own doc comment there: North=0, South=1, East=2,
-        // West=3, Up=4, Down=5) -- restated here by hand since this crate cannot import that
-        // function (this table's own doc comment above). Each of these five blocks' own
+        // write for these five blocks (M3 field-report fix, Root Cause 1 re-derivation --
+        // supersedes this table's own former `direction_offset`-based rows, which used the
+        // wrong facing value order/stride and so registered the wrong literal ids): real
+        // vanilla 26.2 (protocol 776) ids, `play::mining::tier1_oriented_entries()`'s own
+        // identical `<default-state id> + facing_idx*stride` arithmetic (chest stride 6,
+        // facing order `[north, south, west, east]`; hopper stride 1, facing order `[down,
+        // north, south, west, east]`) -- restated here by hand since this crate cannot import
+        // that function (this table's own doc comment above). Each of these five blocks' own
         // shape is rotationally identical across every horizontal facing in this milestone's
         // own simplified per-block boxes (Context table) -- only the *id* changes per
-        // facing, never the box -- so every offset row below reuses the same shape value the
-        // facing-North row above already registers.
-        (3989, flat(chest_shape())),         // chest, facing South
-        (3990, flat(chest_shape())),         // chest, facing East
-        (3991, flat(chest_shape())),         // chest, facing West
-        (11314, flat(hopper_shape.clone())), // hopper, facing South
-        (11315, flat(hopper_shape.clone())), // hopper, facing East
+        // facing, never the box -- so every row below reuses the same shape value the
+        // facing-North (chest) / facing-Down (hopper) row above already registers.
+        (3994, flat(chest_shape())),         // chest, facing South
+        (4000, flat(chest_shape())),         // chest, facing West
+        (4006, flat(chest_shape())),         // chest, facing East
+        (11314, flat(hopper_shape.clone())), // hopper, facing North
+        (11315, flat(hopper_shape.clone())), // hopper, facing South
         (11316, flat(hopper_shape.clone())), // hopper, facing West
-        // Hopper's own clamped-Down orientation (`play::mining::resolve_orientation`'s own
-        // Hopper rule: a hopper placed against the top or bottom face of a neighbor always
-        // faces Down, never Up) -- `HOPPER.0 + 10`, matching `tier1_oriented_entries()`'s
-        // own identical `+ 10` offset (chosen there to sit safely past every `direction_
-        // offset` value `0..=5` any *other* row for this same base id uses).
-        (11323, flat(hopper_shape)), // hopper, facing Down
+        (11317, flat(hopper_shape)),         // hopper, facing East
         // piston_head (M3 field-report fix, Task 3: own-state writeback now writes the real
         // `minecraft:piston_head` id -- `crates/mechanics/src/redstone/piston.rs`'s own
         // `piston_head_id`/`PISTON_HEAD_BASE` doc comment has the full arithmetic citation,
