@@ -331,7 +331,7 @@ pub struct BotPlan {
 
 /// Pure, deterministic (Context's exact per-cell centering formula). Returns
 /// `cols * rows` entries, row-major (`index = row * cols + col`), usernames
-/// `format!("rc-load-bot-{index:02}")`.
+/// `format!("rc_load_bot_{index:02}")`.
 pub fn plan_bot_layout(
     cols: u32,
     rows: u32,
@@ -578,7 +578,7 @@ jobs:
 ### `crates/testing/paritybot/tests/load_scenario_layout.rs` (pure, no network)
 
 1. `plan_bot_layout_produces_cols_times_rows_entries` — `plan_bot_layout(5, 4, ARENA_MIN, ARENA_MAX, BASE_Y).len() == 20`.
-2. `every_username_is_unique_and_zero_padded` — the 20 usernames are `rc-load-bot-00` .. `rc-load-bot-19`, all distinct.
+2. `every_username_is_unique_and_zero_padded` — the 20 usernames are `rc_load_bot_00` .. `rc_load_bot_19`, all distinct.
 3. `every_waypoint_and_interaction_post_stays_in_one_grid_cell` — for every plan, `block_grid_cell` applied to all 4 waypoints and the interaction post all return the same `(0, 0)` value, and that value equals `block_grid_cell` applied to the milestone's own established spawn point `(0, 0)` — the mechanical proof of Context's "structurally cannot leave one region" claim, at the layout-planning level.
 4. `interaction_post_sits_outside_its_own_patrol_square` — for every plan, the interaction post's `z` is strictly less than every waypoint's own minimum `z` (south of the square, per Context) — proving it can never obstruct the patrol path.
 5. `start_offset_ticks_are_distinct_and_ascending_by_index` — `plans[i].start_offset_ticks == i as u32 * 2` for every `i`.

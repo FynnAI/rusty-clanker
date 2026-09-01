@@ -124,7 +124,7 @@ pub struct BotPlan {
 
 /// Pure, deterministic (Context's exact per-cell centering formula). Returns
 /// `cols * rows` entries, row-major (`index = row * cols + col`), usernames
-/// `format!("rc-load-bot-{index:02}")`.
+/// `format!("rc_load_bot_{index:02}")`.
 pub fn plan_bot_layout(
     cols: u32,
     rows: u32,
@@ -155,7 +155,7 @@ pub fn plan_bot_layout(
             );
 
             plans.push(BotPlan {
-                username: format!("rc-load-bot-{index:02}"),
+                username: format!("rc_load_bot_{index:02}"),
                 waypoints,
                 interaction_post,
                 start_offset_ticks: index * START_STAGGER_TICKS_PER_BOT,
