@@ -22,7 +22,7 @@ use crate::border::RegionOwnership;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::random_tick::WorldSeed;
 use crate::scheduled_tick::ScheduledTickQueue;
-use crate::stage4::ecs::ChunkIndex;
+use crate::stage4::ecs::{ChunkIndex, TickChangedPositions};
 use crate::world_access::BlockWorldAccess;
 
 struct Stage5BlockWorld<'w, 's> {
@@ -108,7 +108,8 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                   ownership: Res<RegionOwnership>,
                   mut region_outbox: ResMut<RegionMessageOutbox>,
                   chunk_index: Res<ChunkIndex>,
-                  query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>| {
+                  query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
+                  mut tick_changed: ResMut<TickChangedPositions>| {
                 let mut chunks: Vec<(i32, i32)> =
                     chunk_index.0.keys().map(|k| (k.x, k.z)).collect();
                 chunks.sort_unstable();
@@ -119,6 +120,7 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                     ownership: &ownership,
                 };
                 let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+                let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
                 crate::stage5::run_random_tick_phase(
                     &mut world,
@@ -131,12 +133,14 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                     &mut events,
                     &behaviors,
                     &mut outbound,
+                    &mut changed,
                     &ownership,
                 );
 
                 for (to, msg) in outbound {
                     region_outbox.send(to, msg);
                 }
+                tick_changed.merge(changed);
             },
         )) as Box<dyn System<In = (), Out = ()>>
     })

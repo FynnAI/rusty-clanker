@@ -283,7 +283,7 @@ impl TorchBehavior {
         // through the raw world accessor, never `ctx.set_block`.
         if let Some(current) = ctx.get_block(pos) {
             let new_id = self.new_state_id(current.0, target_lit);
-            ctx.world.set_block(pos, new_id);
+            ctx.write_block_state(pos, new_id);
         }
         if !target_lit {
             let count = self.record_and_prune_toggle(pos, ctx.current_tick);

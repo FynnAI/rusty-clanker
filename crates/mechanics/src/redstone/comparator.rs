@@ -422,7 +422,7 @@ impl BlockBehavior for ComparatorBehavior {
             // comment) -- only `POWERED` is ever encoded here.
             let facing = self.facing(pos);
             let id = comparator_state_id(facing, mode, new_should);
-            ctx.world.set_block(pos, id);
+            ctx.write_block_state(pos, id);
             signal::notify_neighbor_changed_only(ctx, pos);
         }
     }

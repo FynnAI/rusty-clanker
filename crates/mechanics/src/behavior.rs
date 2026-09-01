@@ -27,6 +27,18 @@ pub struct UpdateContext<'a> {
     pub scheduled: &'a mut ScheduledTickQueue,
     pub events: &'a mut BlockEventQueue,
     pub outbound: &'a mut Vec<(Address, RegionMessage)>,
+    /// M3 field-report fix ("block-state changes made outside a direct player action never
+    /// reach any client" — `docs/findings-for-planning.md`'s own entry has the full citation):
+    /// every position whose stored block state actually changes anywhere in this context's own
+    /// mutation surface (`set_block`, and `write_block_state` for a behavior's own direct
+    /// writeback — Context below) is recorded here, in first-change order, deduplicated by
+    /// position (a later change to an already-recorded position updates that entry's own state
+    /// in place rather than appending a second entry — the caller-owned collector this crate
+    /// carries no network dependency of its own to broadcast, WS-D3 rule 1; the tick loop that
+    /// *does* have connection visibility, `crates/server/src/play/world.rs`, drains this once
+    /// per tick instead). Mirrors `outbound`'s own identical "bundled `&mut` reference, threaded
+    /// through every call site" shape exactly — one more field in the same pattern.
+    pub changed: &'a mut Vec<(BlockPos, BlockStateId)>,
     pub ownership: &'a RegionOwnership,
     pub current_tick: u64,
 }
@@ -41,9 +53,49 @@ impl<'a> UpdateContext<'a> {
     /// actually changed (a no-op write still fans out — matches vanilla's own unconditional
     /// `updateNeighborsAt` behavior after any `setBlock` call with `UPDATE_NEIGHBORS` set).
     pub fn set_block(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
-        let changed = self.world.set_block(pos, new_state);
+        let changed = self.write_block_state(pos, new_state);
         border::fan_out_from_changed_block(self, pos, new_state);
         changed
+    }
+
+    /// Writes `new_state` at `pos` directly, with **no** neighbor-changed/shape-update fan-out
+    /// of its own — the raw-accessor half of what several redstone behaviors' own post-recompute
+    /// "own-state writeback" already does (torch/wire/repeater/comparator/piston — Context:
+    /// vanilla's own clients-only `setBlock(pos, state, 2)` update flag, which never triggers a
+    /// second cascading notify because the real notify already runs separately, right after,
+    /// via `notify_neighbor_changed_only`/`border::fan_out_from_changed_block` called
+    /// explicitly by the behavior itself). Records `pos` into `self.changed` (`record_changed`)
+    /// exactly like `set_block` does, whenever the write actually changes the stored value — M3
+    /// field-report fix: the changed-positions collector must see every real state write, not
+    /// only ones that happen to go through `set_block`'s own fan-out path, or almost no redstone
+    /// state change would ever reach it (every tier-1 redstone component's own delayed/settled
+    /// state flip — a torch re-lighting, a repeater's `POWERED` flip, a wire's power digit, a
+    /// comparator's output, a piston's base/head — writes through this method, never
+    /// `set_block`, specifically so it does *not* restart its own fan-out). Returns `true` iff
+    /// the stored value actually changed.
+    pub fn write_block_state(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        let did_change = self.world.set_block(pos, new_state);
+        if did_change {
+            Self::record_changed(self.changed, pos, new_state);
+        }
+        did_change
+    }
+
+    /// Shared dedup logic for `changed` (Context: "dedup by position keeping the LAST state, in
+    /// first-change order"). A `Vec` linear scan, not a map — this project's own bounded
+    /// per-tick change volume (Constraints: no legal contraption produces more than a small,
+    /// fixed number of state changes per region per tick) never makes this a hot path, and a
+    /// plain `Vec<(BlockPos, BlockStateId)>` is exactly the shape `outbound` already
+    /// established for every other per-tick collector this context carries.
+    pub(crate) fn record_changed(
+        changed: &mut Vec<(BlockPos, BlockStateId)>,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) {
+        match changed.iter_mut().find(|(p, _)| *p == pos) {
+            Some(entry) => entry.1 = state,
+            None => changed.push((pos, state)),
+        }
     }
 
     pub fn schedule_block_tick(&mut self, pos: BlockPos, delay_ticks: u64, priority: TickPriority) {

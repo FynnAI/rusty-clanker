@@ -6,6 +6,8 @@
 #[cfg(feature = "server-systems")]
 pub mod ecs; // crates/mechanics/src/stage4/ecs.rs
 
+use rc_chunk_storage::BlockStateId;
+use rc_core::BlockPos;
 use rc_messaging::{Address, BorderUpdateEvent, RegionMessage};
 
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
@@ -28,6 +30,7 @@ fn make_ctx<'a>(
     scheduled: &'a mut ScheduledTickQueue,
     events: &'a mut BlockEventQueue,
     outbound: &'a mut Vec<(Address, RegionMessage)>,
+    changed: &'a mut Vec<(BlockPos, BlockStateId)>,
     ownership: &'a RegionOwnership,
     current_tick: u64,
 ) -> UpdateContext<'a> {
@@ -37,6 +40,7 @@ fn make_ctx<'a>(
         scheduled,
         events,
         outbound,
+        changed,
         ownership,
         current_tick,
     }
@@ -58,6 +62,7 @@ pub(crate) fn drain_engine(
     scheduled: &mut ScheduledTickQueue,
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -69,6 +74,7 @@ pub(crate) fn drain_engine(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
         );
@@ -113,7 +119,7 @@ fn dispatch_pending_update(
             };
             let behavior = behaviors.resolve(state);
             if let Some(new_state) = behavior.on_shape_update(ctx, pos, from, neighbor_state) {
-                ctx.world.set_block(pos, new_state);
+                ctx.write_block_state(pos, new_state);
                 if remaining_depth > 0 {
                     ctx.engine
                         .emit_shape_update_fanout_at_depth(pos, remaining_depth - 1);
@@ -130,10 +136,11 @@ fn dispatch_scheduled_tick(
     scheduled: &mut ScheduledTickQueue,
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
-    pos: rc_core::BlockPos,
+    pos: BlockPos,
 ) {
     let Some(state) = world.get_block(pos) else {
         return;
@@ -145,6 +152,7 @@ fn dispatch_scheduled_tick(
         scheduled,
         events,
         outbound,
+        changed,
         ownership,
         current_tick,
     );
@@ -174,6 +182,7 @@ pub fn run_scheduled_phase(
     events: &mut BlockEventQueue,
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     current_tick: u64,
 ) {
     events.begin_scheduled_phase_dispatch();
@@ -184,6 +193,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
         );
@@ -194,6 +204,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,
@@ -208,6 +219,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,
@@ -219,6 +231,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,
@@ -233,6 +246,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,
@@ -244,6 +258,7 @@ pub fn run_scheduled_phase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,
@@ -288,6 +303,7 @@ pub fn run_block_event_subphase(
     events: &mut BlockEventQueue,
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     current_tick: u64,
 ) {
     events.begin_pass();
@@ -315,6 +331,7 @@ pub fn run_block_event_subphase(
                 scheduled,
                 events,
                 outbound,
+                changed,
                 ownership,
                 current_tick,
             );
@@ -326,6 +343,7 @@ pub fn run_block_event_subphase(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
             behaviors,

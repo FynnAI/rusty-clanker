@@ -7,6 +7,7 @@
 #[cfg(feature = "server-systems")]
 pub mod ecs; // crates/mechanics/src/stage5/ecs.rs
 
+use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 use rc_messaging::{Address, RegionMessage};
 
@@ -40,6 +41,7 @@ pub fn run_random_tick_phase(
     events: &mut BlockEventQueue,
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     ownership: &RegionOwnership,
 ) {
     for &(chunk_x, chunk_z) in chunks {
@@ -70,6 +72,7 @@ pub fn run_random_tick_phase(
                 scheduled,
                 events,
                 outbound,
+                changed,
                 ownership,
                 current_tick: tick_counter,
             };
@@ -86,6 +89,7 @@ pub fn run_random_tick_phase(
                     scheduled,
                     events,
                     outbound,
+                    changed,
                     ownership,
                     current_tick: tick_counter,
                 };
@@ -125,7 +129,7 @@ fn dispatch_pending_update(
             };
             let behavior = behaviors.resolve(state);
             if let Some(new_state) = behavior.on_shape_update(ctx, pos, from, neighbor_state) {
-                ctx.world.set_block(pos, new_state);
+                ctx.write_block_state(pos, new_state);
                 if remaining_depth > 0 {
                     ctx.engine
                         .emit_shape_update_fanout_at_depth(pos, remaining_depth - 1);

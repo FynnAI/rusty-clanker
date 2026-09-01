@@ -601,7 +601,7 @@ impl PistonBehavior {
             return;
         }
         let id = piston_state_id(sticky, extended, facing);
-        ctx.world.set_block(pos, id);
+        ctx.write_block_state(pos, id);
         border::fan_out_from_changed_block(ctx, pos, id);
     }
 
@@ -660,8 +660,7 @@ impl PistonBehavior {
             return;
         }
         let sticky = self.is_sticky(piston_pos);
-        ctx.world
-            .set_block(piston_pos, piston_state_id(sticky, true, push_direction));
+        ctx.write_block_state(piston_pos, piston_state_id(sticky, true, push_direction));
         written.push(piston_pos);
 
         // One write per chain element (index 0 = piston_pos itself, producing piston_head;
@@ -690,7 +689,7 @@ impl PistonBehavior {
                     None => continue,
                 }
             };
-            ctx.world.set_block(target, content);
+            ctx.write_block_state(target, content);
             written.push(target);
         }
 
@@ -744,7 +743,7 @@ impl PistonBehavior {
         let old_head = push_direction.apply(piston_pos);
 
         let Some(source) = plan.pulled else {
-            ctx.world.set_block(old_head, AIR_ID);
+            ctx.write_block_state(old_head, AIR_ID);
             if let Some(state) = ctx.world.get_block(old_head) {
                 border::fan_out_from_changed_block(ctx, old_head, state);
             }
@@ -752,7 +751,7 @@ impl PistonBehavior {
         };
 
         let pulled_content = ctx.world.get_block(source);
-        ctx.world.set_block(source, AIR_ID);
+        ctx.write_block_state(source, AIR_ID);
         if let Some(state) = ctx.world.get_block(source) {
             border::fan_out_from_changed_block(ctx, source, state);
         }
@@ -780,7 +779,7 @@ impl PistonBehavior {
         if let Some(content) = pulled_content {
             let old_head = push_direction.apply(piston_pos);
             if state_matches_snapshot(&*ctx.world, snapshot, old_head) {
-                ctx.world.set_block(old_head, content);
+                ctx.write_block_state(old_head, content);
                 if let Some(state) = ctx.world.get_block(old_head) {
                     border::fan_out_from_changed_block(ctx, old_head, state);
                 }

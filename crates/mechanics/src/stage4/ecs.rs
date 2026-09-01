@@ -14,7 +14,7 @@ use rc_scheduler::{
     BorderUpdateInbox, CurrentTick, RcExecutorBuilder, RegionMessageOutbox, SystemFactory,
 };
 
-use crate::behavior::BlockBehaviorRegistry;
+use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEventQueue;
 use crate::border::{BorderHalo, RegionOwnership};
 use crate::neighbor_update::NeighborUpdateEngine;
@@ -25,6 +25,44 @@ use crate::world_access::BlockWorldAccess;
 /// stand-in for ARCH-D24's not-yet-built directory — Context).
 #[derive(Resource, Default)]
 pub struct ChunkIndex(pub std::collections::HashMap<ChunkKey, Entity>);
+
+/// M3 field-report fix ("block-state changes made outside a direct player action never reach
+/// any client" — `docs/findings-for-planning.md`'s own entry has the full citation): the
+/// tick-wide accumulation of every position `UpdateContext::changed` recorded across however
+/// many of this crate's own systems ran THIS tick (Stage 4's scheduled-tick phase, its
+/// block-event sub-phase, and Stage 7's own post-tick container-signal-notify pass, `stage7::
+/// ecs::system_container_signal_notify` — all three merge into this same resource, in the order
+/// they run, `UpdateContext::record_changed`'s own dedup-by-position-keep-last-state rule
+/// applied across that whole merge, not just within one system's own call). Mirrors
+/// `Stage4Counters`'s own already-established "insert as a `Default`-able resource; the
+/// production tick loop reads it back once, right after `executor.tick_region` returns"
+/// pattern (`crates/server/src/play/world.rs`) — the disciplined replacement for that changeset's
+/// own bounded-neighborhood-diff stop-gap (`snapshot_cascade_neighborhood`/
+/// `broadcast_cascaded_changes`), which this resource lets the tick loop retire entirely: every
+/// real state write reaches this resource now, whether it came from a direct player action's own
+/// synchronous cascade or from this tick's ordinary, no-concurrent-action Stage-4/7 dispatch.
+#[derive(Resource, Default)]
+pub struct TickChangedPositions(pub Vec<(BlockPos, BlockStateId)>);
+
+impl TickChangedPositions {
+    /// Merges `incoming` (one system call's own freshly-populated `changed` collector, in
+    /// first-change order) into `self`, applying `UpdateContext::record_changed`'s own identical
+    /// dedup rule per entry — so a position changed by an earlier system this tick and then
+    /// changed AGAIN by a later one within the same tick still appears exactly once, at its
+    /// first-change position in this resource's own iteration order, holding the later system's
+    /// own more-recent state.
+    pub fn merge(&mut self, incoming: Vec<(BlockPos, BlockStateId)>) {
+        for (pos, state) in incoming {
+            UpdateContext::record_changed(&mut self.0, pos, state);
+        }
+    }
+
+    /// Drains every accumulated `(pos, state)` pair, in first-change order, leaving this
+    /// resource empty for the next tick.
+    pub fn drain(&mut self) -> Vec<(BlockPos, BlockStateId)> {
+        std::mem::take(&mut self.0)
+    }
+}
 
 /// A `Query`-backed `BlockWorldAccess` implementation, constructed fresh inside each Stage-4
 /// system call from that system's own `Query`/`Res` parameters — never stored across calls.
@@ -140,6 +178,7 @@ fn system_scheduled_phase(
     mut region_outbox: ResMut<RegionMessageOutbox>,
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
+    mut tick_changed: ResMut<TickChangedPositions>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -147,6 +186,7 @@ fn system_scheduled_phase(
         ownership: &ownership,
     };
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+    let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
     crate::stage4::run_scheduled_phase(
         &mut world,
@@ -158,12 +198,14 @@ fn system_scheduled_phase(
         &mut events,
         &behaviors,
         &mut outbound,
+        &mut changed,
         current_tick.0,
     );
 
     for (to, msg) in outbound {
         region_outbox.send(to, msg);
     }
+    tick_changed.merge(changed);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -177,6 +219,7 @@ fn system_block_event_subphase(
     mut region_outbox: ResMut<RegionMessageOutbox>,
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
+    mut tick_changed: ResMut<TickChangedPositions>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -184,6 +227,7 @@ fn system_block_event_subphase(
         ownership: &ownership,
     };
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+    let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
     crate::stage4::run_block_event_subphase(
         &mut world,
@@ -193,12 +237,14 @@ fn system_block_event_subphase(
         &mut events,
         &behaviors,
         &mut outbound,
+        &mut changed,
         current_tick.0,
     );
 
     for (to, msg) in outbound {
         region_outbox.send(to, msg);
     }
+    tick_changed.merge(changed);
 }
 
 fn scheduled_phase_factory() -> SystemFactory {
@@ -217,17 +263,17 @@ fn block_event_subphase_factory() -> SystemFactory {
 
 /// Registers this blueprint's two Stage-4 systems (`order_tag` 0 then 1, Context: "Sequential
 /// collapse") into `builder`. As a documented side effect the caller must account for, every
-/// region's `World` needs seven resources present before Stage 4 first runs:
+/// region's `World` needs eight resources present before Stage 4 first runs:
 /// `ChunkIndex`/`NeighborUpdateEngine`/`ScheduledTickQueue`/`BlockEventQueue`/
-/// `BlockBehaviorRegistry`/`BorderHalo` (all `Default`) plus `RegionOwnership` (no `Default` —
-/// its `resolve` closure is inherently per-region data). `bootstrap_default_stage4_resources`
-/// (below) inserts the six `Default`-able ones and is meant to be called from the plain
-/// `fn(&mut World)` passed to `RcExecutorBuilder::new` — that function pointer cannot itself
-/// capture per-region data, so it *cannot* insert `RegionOwnership`. Callers instead insert
-/// `RegionOwnership` directly into `region.world` immediately after each `RcExecutor::
-/// spawn_region` call returns, mirroring M0-B06's own identical-shaped precedent for
-/// per-region-tunable data (`SyntheticLoadProfile`, overridden the same way, for the same
-/// reason: uniform `bootstrap` cannot vary data per spawned region).
+/// `BlockBehaviorRegistry`/`BorderHalo`/`TickChangedPositions` (all `Default`) plus
+/// `RegionOwnership` (no `Default` — its `resolve` closure is inherently per-region data).
+/// `bootstrap_default_stage4_resources` (below) inserts the seven `Default`-able ones and is
+/// meant to be called from the plain `fn(&mut World)` passed to `RcExecutorBuilder::new` — that
+/// function pointer cannot itself capture per-region data, so it *cannot* insert
+/// `RegionOwnership`. Callers instead insert `RegionOwnership` directly into `region.world`
+/// immediately after each `RcExecutor::spawn_region` call returns, mirroring M0-B06's own
+/// identical-shaped precedent for per-region-tunable data (`SyntheticLoadProfile`, overridden
+/// the same way, for the same reason: uniform `bootstrap` cannot vary data per spawned region).
 pub fn register_stage4(builder: &mut RcExecutorBuilder) {
     builder.register_system(
         DomainGroup::BlockRedstone,
@@ -243,11 +289,12 @@ pub fn register_stage4(builder: &mut RcExecutorBuilder) {
 
 /// Inserts `ChunkIndex::default()`, `NeighborUpdateEngine::default()`,
 /// `ScheduledTickQueue::default()`, `BlockEventQueue::default()`, `BlockBehaviorRegistry::new()`,
-/// `BorderHalo::default()` into `world` — the complete set of this blueprint's resources that
-/// *do* have a sensible uniform default. Intended to be called from (or to itself serve
-/// directly as) the `bootstrap: fn(&mut World)` passed to `RcExecutorBuilder::new`.
-/// `RegionOwnership` is deliberately **not** inserted here (see `register_stage4`'s own doc
-/// comment) — every caller must insert it separately, per region, after `spawn_region`.
+/// `BorderHalo::default()`, `TickChangedPositions::default()` into `world` — the complete set of
+/// this blueprint's resources that *do* have a sensible uniform default. Intended to be called
+/// from (or to itself serve directly as) the `bootstrap: fn(&mut World)` passed to
+/// `RcExecutorBuilder::new`. `RegionOwnership` is deliberately **not** inserted here (see
+/// `register_stage4`'s own doc comment) — every caller must insert it separately, per region,
+/// after `spawn_region`.
 pub fn bootstrap_default_stage4_resources(world: &mut World) {
     world.insert_resource(ChunkIndex::default());
     world.insert_resource(NeighborUpdateEngine::default());
@@ -255,4 +302,5 @@ pub fn bootstrap_default_stage4_resources(world: &mut World) {
     world.insert_resource(BlockEventQueue::default());
     world.insert_resource(BlockBehaviorRegistry::new());
     world.insert_resource(BorderHalo::default());
+    world.insert_resource(TickChangedPositions::default());
 }

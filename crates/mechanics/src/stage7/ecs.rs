@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
-use rc_chunk_storage::{BlockEntityIndex, BlockStateColumn, ChunkKeyTag};
+use rc_chunk_storage::{BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkKeyTag};
 use rc_core::{BlockPos, ChunkKey};
 use rc_messaging::{Address, RegionMessage};
 use rc_scheduler::{
@@ -27,7 +27,7 @@ use crate::border::RegionOwnership;
 use crate::container::{DefaultMaxStackSize, MaxStackSizeResource, TierOneContainer};
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::scheduled_tick::ScheduledTickQueue;
-use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld};
+use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld, TickChangedPositions};
 
 type BlockEntityQueryData = (
     Entity,
@@ -208,9 +208,11 @@ fn system_container_signal_notify(
     // actually mutated (`Tier1ContainerSignalSource`'s own interior `Mutex`/`take_changed(&self)`
     // handle that), so the binding itself stays immutable.
     container_signals: ResMut<ContainerSignalsResource>,
+    mut tick_changed: ResMut<TickChangedPositions>,
 ) {
     let mut world = EcsBlockWorld::new(query, &chunk_index, &ownership);
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
+    let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
     crate::stage7::run_container_signal_notify(
         &mut world,
@@ -220,6 +222,7 @@ fn system_container_signal_notify(
         &mut events,
         &behaviors,
         &mut outbound,
+        &mut changed,
         current_tick.0,
         container_signals.0.as_ref(),
     );
@@ -227,6 +230,7 @@ fn system_container_signal_notify(
     for (to, msg) in outbound {
         region_outbox.send(to, msg);
     }
+    tick_changed.merge(changed);
 }
 
 fn container_signal_notify_factory() -> SystemFactory {

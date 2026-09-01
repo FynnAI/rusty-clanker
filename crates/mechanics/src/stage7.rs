@@ -28,6 +28,7 @@ pub mod ecs; // crates/mechanics/src/stage7/ecs.rs
 
 use std::collections::HashSet;
 
+use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 use rc_messaging::{Address, RegionMessage};
 
@@ -163,6 +164,7 @@ pub fn run_container_signal_notify(
     events: &mut BlockEventQueue,
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, BlockStateId)>,
     current_tick: u64,
     container_signals: &Tier1ContainerSignalSource,
 ) {
@@ -173,6 +175,7 @@ pub fn run_container_signal_notify(
             scheduled,
             events,
             outbound,
+            changed,
             ownership,
             current_tick,
         };
@@ -184,6 +187,7 @@ pub fn run_container_signal_notify(
         scheduled,
         events,
         outbound,
+        changed,
         ownership,
         current_tick,
         behaviors,

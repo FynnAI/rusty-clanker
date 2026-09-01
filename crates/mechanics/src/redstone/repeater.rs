@@ -257,7 +257,7 @@ impl RepeaterBehavior {
             locked_new.unwrap_or(current_locked),
             powered_new.unwrap_or(current_powered),
         );
-        ctx.world.set_block(pos, id);
+        ctx.write_block_state(pos, id);
     }
 }
 

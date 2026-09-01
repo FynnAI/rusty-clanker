@@ -720,7 +720,7 @@ impl BlockBehavior for WireBehavior {
         // world accessor, never `ctx.set_block`. `new_power_state_id` preserves every
         // connection digit already stored (`side_index`'s own doc comment).
         let new_id = new_power_state_id(current.0, new_power);
-        ctx.world.set_block(pos, new_id);
+        ctx.write_block_state(pos, new_id);
         // The unconditional 7-cell-plus notify (Context §D): `pos` itself first, then its own
         // 6 neighbors in `NEIGHBOR_CHANGED_ORDER` -- no shape update is fired.
         signal::notify_neighbor_changed_only(ctx, pos);
