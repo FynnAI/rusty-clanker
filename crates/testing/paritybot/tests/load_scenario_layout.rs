@@ -22,7 +22,7 @@ fn every_username_is_unique_and_zero_padded() {
     let plans = plans();
     let usernames: Vec<&str> = plans.iter().map(|p| p.username.as_str()).collect();
 
-    let expected: Vec<String> = (0..20).map(|i| format!("rc-load-bot-{i:02}")).collect();
+    let expected: Vec<String> = (0..20).map(|i| format!("rc_load_bot_{i:02}")).collect();
     let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
     assert_eq!(usernames, expected_refs);
 
