@@ -4,14 +4,31 @@
 //! each `(pos, kind)` in `world.block_entities_in_chunk(chunk)` (in `BlockEntityIndex`'s own
 //! stored load order), dispatches by `kind`: `Hopper` calls `HopperBlockEntity::tick`;
 //! `Furnace` calls `FurnaceBlockEntity::tick` then, if it returned a lit-state change, calls
-//! `world.swap_furnace_lit_state`; `Chest` has no per-tick *transfer* behavior at M3. Every one
-//! of the three kinds — including chest — additionally records its own `comparator_signal`
-//! into `container_signals` once, after whatever kind-specific tick logic ran (Context:
-//! "Wiring into M3-B04's `ContainerSignalSource`").
+//! `world.swap_furnace_lit_state`; `Chest` has no per-tick *transfer* behavior at M3.
+//!
+//! **Field-report correction (hopper-cadence wave, `docs/findings-for-planning.md`'s own
+//! `comparator_clock_container_fill` residual, verified against the real oracle):** every kind's
+//! own `comparator_signal` is recorded in a *second*, separate pass over the same visited
+//! positions, only after every position's own kind-specific tick behavior (the loop above) has
+//! finished mutating for this tick — never interleaved position-by-position the way a single
+//! combined loop would. Real vanilla's `BlockEntity.setChanged` fires synchronously, at the
+//! exact moment a container's content changes, regardless of which block entity's own turn it
+//! happens to be. A single interleaved loop cannot reproduce that: a chest recorded (in load
+//! order) *before* the hopper that feeds it still ticks this same pass captures its own
+//! pre-push, stale content — the real push already landed in the chest's actual slots (`world`
+//! is mutated immediately, `container_at_mut`/`move_one_item`), but that content is invisible to
+//! `container_signals` until the *next* pass reaches the chest's own turn again, one whole game
+//! tick later than vanilla's synchronous notify. Splitting signal-recording into its own,
+//! later pass closes this regardless of load order — every recorded signal now reflects this
+//! tick's own final content, exactly once, matching vanilla's per-tick synchronous notify
+//! without this pass's own internal iteration order leaking into observable timing.
 
 #[cfg(feature = "server-systems")]
 pub mod ecs; // crates/mechanics/src/stage7/ecs.rs
 
+use std::collections::HashSet;
+
+use rc_core::BlockPos;
 use rc_messaging::{Address, RegionMessage};
 
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
@@ -37,8 +54,21 @@ pub fn run_block_entity_tick(
     lit_resolver: Option<&dyn FurnaceLitStateResolver>,
     container_signals: &Tier1ContainerSignalSource,
 ) {
+    // Positions of every hopper whose own `tick` has already run within *this* pass (spans
+    // every chunk this call processes, not just the current one) -- `HopperBlockEntity::tick`'s
+    // own chained-hopper cooldown quirk needs to know, for a push landing on another hopper,
+    // whether that other hopper already had its own tick this same game tick (field-report
+    // correction, `hopper.rs`'s own `tick` doc comment has the full citation).
+    let mut already_ticked_hoppers: HashSet<BlockPos> = HashSet::new();
+    // Every position this pass visits, in the same per-chunk load order `block_entities_in_
+    // chunk` returns -- collected here so the second, signal-recording pass below (module doc
+    // comment has the full rationale) can revisit them after every kind-specific tick behavior
+    // in this loop has finished mutating for this tick.
+    let mut visited: Vec<(BlockPos, BlockEntityKind)> = Vec::new();
+
     for chunk in world.region_chunks() {
         for (pos, kind) in world.block_entities_in_chunk(chunk) {
+            visited.push((pos, kind));
             match kind {
                 BlockEntityKind::Hopper => {
                     let Some(hopper_ref) = world.get_hopper_mut(pos) else {
@@ -58,19 +88,16 @@ pub fn run_block_entity_tick(
                     // position via `world`.
                     let mut hopper =
                         std::mem::replace(hopper_ref, HopperBlockEntity::empty(facing));
-                    hopper.tick(pos, world, max_stack);
-                    let signal = hopper.comparator_signal(max_stack);
+                    hopper.tick(pos, world, max_stack, &already_ticked_hoppers);
+                    already_ticked_hoppers.insert(pos);
                     if let Some(slot) = world.get_hopper_mut(pos) {
                         *slot = hopper;
                     }
-                    container_signals.record(pos, signal);
                 }
                 BlockEntityKind::Furnace => {
                     let mut lit_change = LitStateChange::Unchanged;
-                    let mut signal = 0u8;
                     if let Some(furnace) = world.get_furnace_mut(pos) {
                         lit_change = furnace.tick(recipes, fuels, max_stack);
-                        signal = furnace.comparator_signal(max_stack);
                     }
                     if lit_change != LitStateChange::Unchanged {
                         world.swap_furnace_lit_state(
@@ -79,18 +106,35 @@ pub fn run_block_entity_tick(
                             lit_resolver,
                         );
                     }
-                    container_signals.record(pos, signal);
                 }
                 BlockEntityKind::Chest => {
-                    // No per-tick transfer behavior at M3 (Context) -- only the comparator
-                    // query this fix wires in (Context: "Wiring into M3-B04's
-                    // ContainerSignalSource").
-                    if let Some(chest) = world.get_chest_mut(pos) {
-                        let signal = chest.comparator_signal(max_stack);
-                        container_signals.record(pos, signal);
-                    }
+                    // No per-tick transfer behavior at M3 (Context).
                 }
             }
+        }
+    }
+
+    // Second pass (module doc comment has the full rationale): every visited position's own
+    // comparator_signal is queried fresh here, after every position in `visited` has already
+    // finished its own kind-specific tick behavior above -- so a container mutated by another
+    // entity's own push *later* in the first pass's own load order (e.g. a hopper feeding a
+    // chest placed earlier in the fixture's own `blocks:` list) still records this tick's own
+    // final, post-mutation content, not a stale pre-mutation snapshot taken mid-pass (Context:
+    // "Wiring into M3-B04's `ContainerSignalSource`").
+    for (pos, kind) in visited {
+        let signal = match kind {
+            BlockEntityKind::Hopper => world
+                .get_hopper_mut(pos)
+                .map(|hopper| hopper.comparator_signal(max_stack)),
+            BlockEntityKind::Furnace => world
+                .get_furnace_mut(pos)
+                .map(|furnace| furnace.comparator_signal(max_stack)),
+            BlockEntityKind::Chest => world
+                .get_chest_mut(pos)
+                .map(|chest| chest.comparator_signal(max_stack)),
+        };
+        if let Some(signal) = signal {
+            container_signals.record(pos, signal);
         }
     }
 }

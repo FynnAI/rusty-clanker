@@ -2,6 +2,8 @@
 //! restated exactly"). Cross-region hopper chains, hopper minecarts, and item-entity
 //! collection are explicitly out of scope (Constraints (g)).
 
+use std::collections::HashSet;
+
 use bevy_ecs::prelude::Component;
 use rc_chunk_storage::ItemStackRecord;
 use rc_core::BlockPos;
@@ -57,14 +59,36 @@ impl HopperBlockEntity {
     /// gives the inverted `push_target_pos.y > self.pos.y`, which resolves to `false` for a
     /// hopper directly above a furnace (the exact "coal on the side, ore on top" auto-smelter
     /// case Context itself names), routing the push to the fuel slot instead of the input slot.
+    ///
+    /// **Field-report correction to the blueprint's own literal cooldown-gate pseudocode**
+    /// (`docs/findings-for-planning.md`'s own hopper-cadence entry, verified against the real
+    /// oracle via `redstone/clock/hopper_clock_basic`): vanilla decrements `cooldownTime`
+    /// *unconditionally* every tick and re-checks the *post*-decrement value the very same
+    /// call — a cooldown that reaches `0` this tick attempts its transfer this same tick, not
+    /// the next one. The blueprint's own literal pseudocode instead gates the decrement itself
+    /// on the *pre*-decrement value and returns immediately whenever it fired, never re-checking
+    /// post-decrement within the same call — silently adding one whole extra idle tick after
+    /// every cooldown, confirmed to reproduce `hopper_clock_basic`'s exact 21-mismatch pattern
+    /// (periodic 7-tick windows) when combined with the still-modeled-here `7`/`8` push-into-
+    /// empty split below.
+    ///
+    /// **Field-report correction, same entry:** "if either transfer succeeded → `setCooldown(8)`"
+    /// sets the *acting* (pushing/pulling) hopper's own cooldown, always, regardless of whether
+    /// the destination was empty — the blueprint's own pseudocode instead read the 7-tick
+    /// "into empty" exception onto the *source's* own cooldown, which is not what it is: that
+    /// exception is a distinct, destination-side effect (below), triggered only when the
+    /// destination is itself a hopper.
     pub fn tick(
         &mut self,
         pos: BlockPos,
         world: &mut dyn BlockEntityWorldAccess,
         max_stack: &dyn ItemMaxStackSize,
+        already_ticked_hoppers: &HashSet<BlockPos>,
     ) -> HopperTickOutcome {
         if self.transfer_cooldown > 0 {
             self.transfer_cooldown -= 1;
+        }
+        if self.transfer_cooldown > 0 {
             return HopperTickOutcome::OnCooldown;
         }
         if world.is_locked_by_redstone(pos) {
@@ -73,6 +97,8 @@ impl HopperBlockEntity {
 
         // 1. PUSH -- attempted first.
         let push_target_pos = self.facing.apply(pos);
+        let mut pushed = false;
+        let mut pushed_into_empty = false;
         if let Some(destination) = world.container_at_mut(push_target_pos)
             && let Some(src_slot) =
                 crate::container::find_leftmost_extract_slot(&self.slots, &ALL_HOPPER_SLOTS)
@@ -93,9 +119,33 @@ impl HopperBlockEntity {
                     destination.slots_mut(),
                     dst_slot,
                 );
-                self.transfer_cooldown = if destination_was_empty { 7 } else { 8 };
-                return HopperTickOutcome::Pushed;
+                pushed = true;
+                pushed_into_empty = destination_was_empty;
             }
+        }
+        if pushed {
+            // The acting hopper's own cooldown is always 8 on a successful transfer (Context's
+            // own "if either transfer succeeded -> setCooldown(8)", unconditional).
+            self.transfer_cooldown = 8;
+            if pushed_into_empty {
+                // Chained-hopper quirk (Context): pushing into an *empty* hopper additionally
+                // seeds *that* hopper's own cooldown — 7 if it already ticked earlier this same
+                // game tick (this push landing on it only after its own tick already ran this
+                // pass), else 8. `container_at_mut`'s own borrow above has already ended by
+                // this point, so this second, position-keyed lookup is a fresh one, not an
+                // aliasing one — only a hopper destination carries a cooldown to seed at all;
+                // `get_hopper_mut` returns `None` for a chest/furnace destination and this is a
+                // no-op.
+                if let Some(dest_hopper) = world.get_hopper_mut(push_target_pos) {
+                    dest_hopper.transfer_cooldown =
+                        if already_ticked_hoppers.contains(&push_target_pos) {
+                            7
+                        } else {
+                            8
+                        };
+                }
+            }
+            return HopperTickOutcome::Pushed;
         }
 
         // 2. PULL -- only reached if push did not succeed.
