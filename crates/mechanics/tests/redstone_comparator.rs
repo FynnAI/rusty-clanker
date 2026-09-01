@@ -10,7 +10,7 @@ use rc_core::BlockPos;
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::{
     ComparatorBehavior, ComparatorMode, ContainerSignalSource, RedstoneSignalSource,
-    SignalSourceRegistry,
+    SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
 };
 use rc_mechanics::{
     BlockBehavior, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine, PendingUpdate,
@@ -22,6 +22,17 @@ use support::{FakeWorld, TestSignalSource};
 
 const FRONT_ID: BlockStateId = BlockStateId(1);
 const SIDE_ID: BlockStateId = BlockStateId(2);
+const TORCH_ID: BlockStateId = BlockStateId(3);
+/// A real `minecraft:redstone_wire` id (`WIRE_BASE`, `wire.rs`'s own doc comment) rather than an
+/// arbitrary small placeholder -- `rc_physics::tier1_shape_table()` maps every id outside its own
+/// hand-authored entries to `default_full_cube()` (`shapes.rs`'s own `lookup` doc comment), so a
+/// placeholder id here would wrongly read as a *conductor*, letting `signal::emitted_toward`'s
+/// own conductor-relay branch (`direct_signal_to`) accidentally reproduce the same numeric result
+/// the fix's real `raw_wire_power` bypass produces -- silently defeating this test's own
+/// pre-fix/post-fix discrimination. The real wire range genuinely maps to a non-conductor thin
+/// shape (`shapes.rs`'s own `4011u32..=5306` entry), so only the real fix's bypass can surface a
+/// nonzero reading here.
+const WIRE_ID: BlockStateId = BlockStateId(4011);
 
 struct Harness {
     world: FakeWorld,
@@ -633,4 +644,133 @@ fn comparator_on_placed_resets_powered_and_output_to_the_fresh_placement_default
 
     assert!(!comparator.powered(pos));
     assert_eq!(comparator.output(pos), 0);
+}
+
+/// M3 field-report fix (Rule 1, `redstone/clock/comparator_clock_container_fill`): a
+/// comparator's own side reading (`getControlInputSignal(pos, direction, onlyDiodes = false)`)
+/// takes a non-diode neighbor's own DIRECT signal, never its weak one. Before this fix,
+/// `side_input_signal` routed through `signal::signal_into` -- the general quasi-connectivity
+/// *weak*-signal primitive -- so a lit floor torch standing beside a comparator (queried from a
+/// horizontal direction) wrongly contributed its unconditional weak `15`. `TorchBehavior::
+/// direct_signal_toward` is nonzero only straight `Up` from a floor torch (its own doc comment),
+/// so a horizontal side query must now read `0`: subtract-mode `10 - 0 = 10`, not the pre-fix
+/// `10 - 15` clamped to `0`.
+#[test]
+fn comparator_side_input_ignores_a_lit_floor_torchs_weak_signal() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let side_pos = Direction::North.apply(pos); // perpendicular to facing = East
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Subtract);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    // Lit by default (`TorchBehavior::lit`'s own doc comment: "`true` if never observed") --
+    // never bound to a registry of its own, since neither `weak_signal_toward` nor `direct_
+    // signal_toward` reads it (only `has_neighbor_signal`, unused by this test, does).
+    let torch = Arc::new(TorchBehavior::new(TorchAttachment::Floor));
+
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(
+        TORCH_ID,
+        BlockStateId(TORCH_ID.0 + 1),
+        torch as Arc<dyn RedstoneSignalSource>,
+    );
+    comparator.bind_registry(Arc::new(signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+    h.world.set_block(side_pos, TORCH_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(
+        comparator.output(pos),
+        10,
+        "side must read 0 from the horizontally-adjacent lit torch (10 - 0), not its weak 15"
+    );
+}
+
+/// M3 field-report fix (Rule 1): the shared `only_diodes = false` branch's `raw_wire_power`
+/// bypass (Context §F/§C) surfaces a side-adjacent wire's real stored power directly, exactly as
+/// `repeater_input_reads_wire_power_directly`'s own front-input case already established --
+/// never gated by that wire's own `connections` (which stays the unset, all-`false` default
+/// here, since `on_shape_update` never runs): `weak_signal_toward` alone would read `0` from
+/// every direction, so a passing result here proves the bypass, not a coincidence of connectivity.
+#[test]
+fn comparator_side_input_reads_wire_raw_power_bypassing_connections() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let side_pos = Direction::North.apply(pos); // perpendicular to facing = East
+    let wire_source_pos = Direction::North.apply(side_pos);
+
+    let containers = Arc::new(FakeContainerSignalSource(Mutex::new(HashMap::new())));
+    let comparator = ComparatorBehavior::new(containers);
+    comparator.place(pos, Direction::East, ComparatorMode::Subtract);
+    let comparator = Arc::new(comparator);
+
+    let front_source = Arc::new(TestSignalSource::fixed(10));
+    let wire_source = Arc::new(TestSignalSource::fixed(9));
+    let wire = Arc::new(WireBehavior::new());
+
+    let mut signals = SignalSourceRegistry::new();
+    signals.register_range(
+        FRONT_ID,
+        BlockStateId(FRONT_ID.0 + 1),
+        front_source as Arc<dyn RedstoneSignalSource>,
+    );
+    signals.register_range(
+        SIDE_ID,
+        BlockStateId(SIDE_ID.0 + 1),
+        wire_source as Arc<dyn RedstoneSignalSource>,
+    );
+    // The full real `minecraft:redstone_wire` range, not just `WIRE_ID` itself -- `wire.on_
+    // neighbor_changed`'s own writeback below re-encodes `side_pos`'s stored id to reflect its
+    // freshly-computed power (`WireBehavior::new_power_state_id`), landing on a *different* real
+    // wire id than `WIRE_ID`; a narrower registered range would then fail to resolve back to
+    // `wire` on the read below, silently falling through to `NoSignalSource`.
+    signals.register_range(
+        WIRE_ID,
+        BlockStateId(5307), // `wire.rs::WIRE_MAX` (5306) + 1
+        Arc::clone(&wire) as Arc<dyn RedstoneSignalSource>,
+    );
+    let signals = Arc::new(signals);
+    wire.bind_registry(Arc::clone(&signals));
+    comparator.bind_registry(Arc::clone(&signals));
+
+    let mut h = Harness::new();
+    h.world.set_block(front, FRONT_ID);
+    h.world.set_block(side_pos, WIRE_ID);
+    h.world.set_block(wire_source_pos, SIDE_ID);
+
+    {
+        let mut ctx = h.ctx_at(0);
+        wire.on_neighbor_changed(&mut ctx, side_pos, Direction::North);
+    }
+    assert_eq!(wire.power(side_pos), 9);
+    assert_eq!(
+        wire.weak_signal_toward(&h.world, side_pos, Direction::South),
+        0,
+        "connections were never computed (on_shape_update never ran) -- plain weak output must \
+         stay gated shut, so a nonzero comparator reading below can only come from the raw bypass"
+    );
+
+    {
+        let mut ctx = h.ctx_at(0);
+        comparator.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert_eq!(
+        comparator.output(pos),
+        1,
+        "10 - 9 -- side must read the wire's raw stored power (9), not its gated weak output (0)"
+    );
 }
