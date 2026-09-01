@@ -28,6 +28,51 @@
 //! InteractionRejected`, naming the bot/cycle/position) instead of trusting the fire-and-
 //! forget `block_interact`/`mine` call -- a silently-rejecting server can no longer produce a
 //! green load leg that never actually exercised real placement/break/broadcast traffic.
+//!
+//! M3 field-report fix (premature-interaction defect): the fix above still never passed --
+//! evidence-first diagnosis (temporary server-side tracing on the `UseItemOn` dispatch and
+//! movement-resolution paths, `crates/server/src/play/world.rs`, never committed) found every
+//! rejection landing on `mining::is_within_block_interaction_range`'s own reach check, with
+//! the acting player's server-tracked position tens of blocks from `interaction_post` --
+//! confirming the bot was never actually standing there when it clicked. Root cause: the
+//! interaction cadence (`ticks_since_interaction`) accumulated real wall-clock ticks elapsed
+//! across `goto` calls whose own outcome (arrived vs. `STEP_TIMEOUT`-cut-short) was discarded,
+//! so the very first-ever transit -- straight from a freshly-logged-in bot's real spawn to its
+//! own assigned lane, up to ~285 blocks for a far-corner `plan_bot_layout` cell -- almost
+//! always exceeded the cadence threshold before the bot had gotten anywhere near its post; the
+//! scenario clicked anyway, `mining::is_within_block_interaction_range` correctly rejected the
+//! out-of-reach claim (never a server defect -- no real player stands there either), and
+//! `verify_effect`'s own `?` returned early from `run_one_load_bot` without ever disconnecting
+//! the client (`bot_arrived_at`'s own doc comment covers the geometry side of this fix,
+//! `run_one_load_bot`'s own doc comment covers the leaked-connection side) -- each such
+//! abandoned background `ClientBuilder::start` task kept consuming the one shared `LocalSet`'s
+//! own cooperative-scheduling time for the rest of the process's life, compounding the same
+//! failure across the whole 20-bot swarm rather than confining it to the far-corner lanes.
+//! Fixing the premature click alone was not enough: once bots genuinely arrived before
+//! clicking, most still failed with `mining::is_placement_obstructed`'s own `Obstructed`
+//! rejection (temporary server-side tracing, never committed, caught it directly) --
+//! `interaction_target`'s original `1`-block eastward offset assumed a bot centred exactly
+//! on `interaction_post`, but a `BlockPosGoal` is satisfied by any point inside its own unit
+//! cell, and a bot settling near that cell's own eastern edge has a body
+//! (`PLAYER_HALF_WIDTH` = `0.3`) that reaches past a `1`-block offset into the target column
+//! itself. `INTERACTION_TARGET_OFFSET_EAST`'s own doc comment has the margin arithmetic for
+//! why `2` is the fix, paired with `bot_arrived_at`'s own exact-column arrival test (never a
+//! loose radius, which reintroduces the same edge-bleed this paragraph describes).
+//!
+//! M3 field-report fix (transient multi-bot collision): a small residual failure rate
+//! remained even after both fixes above -- roughly one bot in twenty, always on an early
+//! cycle. Temporary server-side tracing (never committed) caught one directly:
+//! `mining::is_placement_obstructed`'s own `Obstructed` rejection, with the OVERLAPPING
+//! `player_boxes` entry belonging to a different bot entirely, standing tens of blocks
+//! from the rejected bot's own lane -- one of the other 19 genuinely transiting through
+//! this bot's own target column at the exact moment of the click, in a 224x224 arena
+//! shared by 20 independently-pathfinding bots. Not a defect in either fix above, and not
+//! weakened here (Fix rules: "the scenario must work WITH [that check]") -- a real
+//! vanilla player clicking at that same instant would see the identical rejection.
+//! `INTERACTION_PLACE_RETRY_ATTEMPTS` (the place-click call site's own doc comment) gives
+//! the interaction cycle a bounded number of re-clicks, each after one more
+//! `ACTION_SETTLE_TICKS` wait for the transiting bot to have moved on, before letting a
+//! rejection propagate as a genuine failure.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -49,11 +94,19 @@ pub const COLS: u32 = 5;
 pub const ROWS: u32 = 4;
 pub const PATROL_HALF_EXTENT: i32 = 3;
 pub const INTERACTION_POST_OFFSET_SOUTH: i32 = 2;
-/// M3 field-report fix (self-placement obstruction): the interaction cycle's own clicked
-/// column sits this many blocks east of `interaction_post` -- `interaction_target`'s own
-/// doc comment has the full geometry writeup. Never `0`: an in-bounds, non-zero offset is
-/// exactly what keeps the resolved placement cell outside the acting bot's own `Aabb`.
-pub const INTERACTION_TARGET_OFFSET_EAST: i32 = 1;
+/// M3 field-report fix (self-placement obstruction, widened by the later "still
+/// obstructed at the cell edge" fix -- `interaction_target`'s own doc comment has the
+/// full geometry writeup): the interaction cycle's own clicked column sits this many
+/// blocks east of `interaction_post`. Never less than `2`: a bot standing anywhere at
+/// all within `interaction_post`'s own unit cell (`bot_arrived_at`'s own "same block
+/// column as post" arrival test never constrains *where* in that cell) has a body
+/// (`PLAYER_HALF_WIDTH` = `0.3`, `crates/physics/src/lib.rs`) that can reach up to `1.3`
+/// blocks east of `interaction_post`'s own western edge in the worst case -- `1` block
+/// of offset left no margin at all (confirmed live: `reason: Obstructed` fired on a real
+/// run with the acting bot's own `x` a mere `0.75` into its own cell), while `2` leaves a
+/// clean `0.7`-block gap between that worst case and the target column's own western
+/// edge.
+pub const INTERACTION_TARGET_OFFSET_EAST: i32 = 2;
 pub const INTERACTION_PERIOD_TICKS: u32 = 40;
 pub const START_STAGGER_TICKS_PER_BOT: u32 = 2;
 /// M3-B03's own `BLOCK_INTERACTION_RANGE_CREATIVE`, restated (Context: this
@@ -66,12 +119,33 @@ const TICK_MS: u64 = 50;
 /// it and moves on to the next step — never lets one stuck bot (a lost connection
 /// mid-path, an unreachable goal) hang the whole load test forever. The patrol
 /// square/interaction post are always a handful of blocks apart, so a healthy
-/// connection completes each step in well under this bound.
+/// connection completes each step in well under this bound. (One deliberate exception:
+/// the very first-ever `goto(post)` a freshly-spawned bot issues, which can span the
+/// whole distance from its real login spawn to a far-corner `plan_bot_layout` cell —
+/// `bot_arrived_at`'s own doc comment covers why that step is retried rather than
+/// bounded by a single one of these.)
 const STEP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Mirrors `restart_persistence.rs`'s own `ACTION_SETTLE_TICKS` — gives the server a
 /// real tick to process and broadcast a `Block Update` before the next action fires.
 const ACTION_SETTLE_TICKS: usize = 5;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// `bot_arrived_at`'s own vertical slack: how far `Client::position`'s own `y` may sit
+/// from `interaction_post.y` and still count as "standing at the post" — accounts for a
+/// still-settling jump/step, never the whole-block horizontal slop the `x`/`z` check
+/// deliberately allows none of (`bot_arrived_at`'s own doc comment).
+const ARRIVAL_Y_TOLERANCE_BLOCKS: f64 = 1.5;
+/// M3 field-report fix (transient multi-bot collision, the interaction cycle's own
+/// place-click call site has the full evidence trail): how many times one interaction
+/// cycle re-clicks `interaction_target` before giving up and propagating a place
+/// rejection as a genuine `LoadBotError`. Never `1`: with 20 bots roaming the same
+/// arena, one of the other 19 can legitimately be transiting through this bot's own
+/// target column at the exact moment of a click (`mining::is_placement_obstructed`
+/// correctly rejects that, exactly as it would for a real vanilla player) -- a single
+/// retry after `ACTION_SETTLE_TICKS`, giving that other bot time to have walked on,
+/// resolves the overwhelming majority of these; bounded rather than unbounded so a
+/// genuinely silently-rejecting server (`verify_effect`'s own original purpose) still
+/// fails loudly once every attempt is exhausted.
+const INTERACTION_PLACE_RETRY_ATTEMPTS: u32 = 3;
 
 /// ARCH-D6's floor-division grid-cell convention, restated locally (module doc
 /// comment).
@@ -99,13 +173,18 @@ pub fn block_grid_cell(x: i32, z: i32) -> (i32, i32) {
 /// this scenario stopped exercising real placement/break/broadcast traffic entirely.
 ///
 /// Right-clicking the block below THIS function's own result instead resolves the placement
-/// one column east of `interaction_post` -- a cell no bot's own `Aabb` (`PLAYER_HALF_WIDTH`,
-/// well under one block) ever overlaps, still trivially within `CREATIVE_REACH`, and (Context,
-/// `plan_bot_layout`'s own per-cell centering) still deep inside this same bot's own arena
-/// lane -- `arena_bounds_stay_at_least_30_blocks_inside_the_cell_edge`'s own margin puts at
-/// least 30 blocks between any waypoint and the lane edge, so a 1-block eastward nudge can
-/// never cross into a neighboring bot's own lane and give two bots' interaction columns a
-/// chance to obstruct one another.
+/// `INTERACTION_TARGET_OFFSET_EAST` columns east of `interaction_post` -- that constant's
+/// own doc comment has the full margin arithmetic for why the offset is `2`, not `1`: a
+/// `BlockPosGoal(interaction_post)` is satisfied by any point inside `interaction_post`'s
+/// own unit cell (`bot_arrived_at`'s own doc comment), so a bot settling near that cell's
+/// own eastern edge still has a clear `0.7`-block gap between its own body
+/// (`PLAYER_HALF_WIDTH`) and the target column at `2`, where `1` left none at all
+/// (confirmed live, that other doc comment's own evidence trail). Still trivially within
+/// `CREATIVE_REACH`, and (Context, `plan_bot_layout`'s own per-cell centering) still deep
+/// inside this same bot's own arena lane -- `arena_bounds_stay_at_least_30_blocks_inside_
+/// the_cell_edge`'s own margin puts at least 30 blocks between any waypoint and the lane
+/// edge, so a 2-block eastward nudge can never cross into a neighboring bot's own lane and
+/// give two bots' interaction columns a chance to obstruct one another.
 pub fn interaction_target(interaction_post: BlockPos) -> BlockPos {
     BlockPos::new(
         interaction_post.x + INTERACTION_TARGET_OFFSET_EAST,
@@ -274,6 +353,47 @@ fn read_raw_block_state(client: &Client, pos: BlockPos) -> Option<u32> {
     )
 }
 
+/// M3 field-report fix (premature-interaction defect, this file's own module doc
+/// comment): `true` iff `client`'s own last-known LOCAL position (`Client::position` —
+/// this bot's own belief, driven by its own GameTick-scheduled physics/pathfinding, never
+/// the server-confirmed `PlayerMotion`) is standing in `post`'s own unit block column --
+/// `pos.x`/`pos.z` each floor to `post.x`/`post.z` exactly, matching azalea's own
+/// `goto_listener`/`player_pos_to_block_pos` "already at goal" test byte-for-byte (a
+/// `BlockPosGoal` is satisfied by *any* point inside its own cell, never a specific
+/// sub-block offset within it) -- `pos.y` only needs `ARRIVAL_Y_TOLERANCE_BLOCKS` of
+/// slack, never the same exactness, since a settling jump/step can leave it briefly
+/// above `post.y` with no corresponding uncertainty on which column the bot is in.
+///
+/// Deliberately an exact column match, not a loose Euclidean radius: an earlier version
+/// of this check accepted "close enough" within a multi-block radius, which let a bot
+/// settle anywhere near the EASTERN edge of its own cell and still pass -- confirmed live
+/// (temporary server-side tracing, never committed) to let the bot's own body
+/// (`PLAYER_HALF_WIDTH` = `0.3`) bleed into `interaction_target`'s own column even at
+/// `INTERACTION_TARGET_OFFSET_EAST`'s pre-widening value of `1`, reproducing `mining::
+/// is_placement_obstructed`'s own `Obstructed` rejection on a genuinely-arrived bot. This
+/// exact check, paired with `INTERACTION_TARGET_OFFSET_EAST >= 2` (that constant's own
+/// doc comment has the full margin arithmetic), closes that hole structurally: every
+/// point inside `post`'s own cell that satisfies this function is provably too far west
+/// to ever reach the target column, independent of exactly where within the cell the
+/// pathfinder happened to settle.
+///
+/// Used only to decide whether an interaction cycle's own `goto(post)` step has actually
+/// landed the bot where its next click is about to be aimed — this is the scenario
+/// checking its own aim, never a restatement of `mining::is_within_block_interaction_
+/// range` (that predicate is server-side and stays exactly as strict as vanilla; this
+/// function exists so the scenario never asks it to validate a click fired from somewhere
+/// the bot never really stood). `false` on any resolution failure (`Client::position`'s
+/// own `AzaleaResult`, e.g. before the very first `Position` component sync) — never
+/// treated as "arrived" by default.
+fn bot_arrived_at(client: &Client, post: BlockPos) -> bool {
+    let Ok(pos) = client.position() else {
+        return false;
+    };
+    pos.x.floor() as i32 == post.x
+        && pos.z.floor() as i32 == post.z
+        && (pos.y - post.y as f64).abs() < ARRIVAL_Y_TOLERANCE_BLOCKS
+}
+
 /// `interaction_target`'s own second half, "close that hole": after one scripted
 /// place/break's own settle wait, confirms `pos` actually holds the state the action implies
 /// instead of silently trusting the fire-and-forget `block_interact`/`mine` call --
@@ -312,11 +432,14 @@ fn verify_effect(
 /// relay — `idle_stability.rs`'s own established reasoning for why applies
 /// identically here), waits for `Event::Spawn` (bounded by `login_timeout`, wrapping
 /// the whole `start()` call per M1-B06's own infinite-retry-guarding discipline),
-/// sleeps `plan.start_offset_ticks × 50ms`, then drives the waypoint-cycle-plus-
-/// interaction loop until `run_duration` elapses or a disconnect is observed, then
-/// performs a clean client-side disconnect. Only a login timeout is `Err` — any later
-/// disconnect is captured in the returned `BotOutcome` (`Ok`), so the caller can keep
-/// the other 19 bots running.
+/// sleeps `plan.start_offset_ticks × 50ms`, then delegates the waypoint-cycle-plus-
+/// interaction loop to `drive_patrol_and_interaction_loop` until `run_duration`
+/// elapses, a disconnect is observed, or a scripted interaction is rejected. Only a
+/// login timeout is `Err` from THIS function — a later interaction rejection still
+/// propagates as `Err` too (the caller records it as this bot's own failure), but
+/// either way the connection is always disconnected before returning (M3 field-report
+/// fix, zombie-connection defect, below), so the caller can keep the other 19 bots
+/// running without leaking this one's own background task.
 ///
 /// Relies on an ambient `tokio::task::LocalSet` context (module doc comment) — never
 /// creates its own; the caller (`run_load_scenario`) provides one.
@@ -367,6 +490,47 @@ pub async fn run_one_load_bot(
         .clone()
         .expect("reached_spawn implies handle() already recorded a client");
 
+    let result = drive_patrol_and_interaction_loop(&client, &progress, plan, run_duration).await;
+
+    // M3 field-report fix (zombie-connection defect): every exit path out of the
+    // patrol/interaction loop above -- a clean `run_deadline` completion or an `Err`
+    // from a rejected interaction (`verify_effect`'s own `?`-propagated
+    // `InteractionRejected`) -- disconnects this bot's own connection and stops its
+    // pathfinder here, unless a server-initiated disconnect was already observed.
+    // Pre-fix, an early `?`-triggered return from inside that loop skipped this
+    // cleanup entirely, leaving the background `ClientBuilder::start` task (`tokio::
+    // task::spawn_local` above, never given a `JoinHandle` to await or abort) running
+    // unsupervised for the rest of this process's life -- still polled every
+    // cooperative-scheduling turn of the one shared `LocalSet` (module doc comment's
+    // own "Forced deviation") this scenario's other 19 bots also depend on, stealing
+    // scheduling time from every one of them. Once the premature-interaction defect
+    // this same field-report fix addresses made a rejection on the very first cycle
+    // the norm rather than the exception, that leak compounded across the whole
+    // swarm — each newly-abandoned zombie task left every remaining bot with less of
+    // the shared thread's own cooperative time, pushing more of them past their own
+    // `STEP_TIMEOUT` budgets in turn, which is why the failure was never confined to
+    // the far-corner lanes alone.
+    let already_disconnected = matches!(&result, Ok(outcome) if outcome.disconnected_at.is_some())
+        || observed_disconnect(&progress).is_some();
+    if !already_disconnected {
+        client.force_stop_pathfinding();
+        client.disconnect();
+    }
+
+    result
+}
+
+/// The waypoint-cycle-plus-interaction loop itself (`run_one_load_bot`'s own doc
+/// comment) — split out so its caller can unconditionally disconnect `client`
+/// afterward regardless of which of this function's own exit paths was taken (`Ok`
+/// from a clean `run_deadline` completion, or the `?`-propagated `Err` from a rejected
+/// interaction).
+async fn drive_patrol_and_interaction_loop(
+    client: &Client,
+    progress: &Arc<Mutex<Progress>>,
+    plan: &BotPlan,
+    run_duration: Duration,
+) -> Result<BotOutcome, LoadBotError> {
     let mut outcome = BotOutcome {
         reached_spawn: true,
         ..Default::default()
@@ -380,7 +544,7 @@ pub async fn run_one_load_bot(
             if Instant::now() >= run_deadline {
                 break 'outer;
             }
-            if let Some(disconnect) = observed_disconnect(&progress) {
+            if let Some(disconnect) = observed_disconnect(progress) {
                 outcome.disconnected_at = Some(disconnect.0);
                 outcome.disconnect_reason = disconnect.1;
                 break 'outer;
@@ -395,18 +559,54 @@ pub async fn run_one_load_bot(
                 ticks_since_interaction.saturating_add(ticks_elapsed_since(step_started).max(1));
 
             if ticks_since_interaction >= INTERACTION_PERIOD_TICKS {
-                if let Some(disconnect) = observed_disconnect(&progress) {
+                if let Some(disconnect) = observed_disconnect(progress) {
                     outcome.disconnected_at = Some(disconnect.0);
                     outcome.disconnect_reason = disconnect.1;
                     break 'outer;
                 }
 
                 let post = plan.interaction_post;
-                let _ = tokio::time::timeout(
-                    STEP_TIMEOUT,
-                    client.goto(BlockPosGoal(to_azalea_pos(post))),
-                )
-                .await;
+                // M3 field-report fix (premature-interaction defect, module doc comment):
+                // `goto`'s own Future resolving — or its `STEP_TIMEOUT` wrapper simply
+                // timing out — is never proof the bot's own tracked position actually
+                // reached `post`. The very first-ever transit, straight from this bot's
+                // real login spawn to its own assigned lane, can span 200+ blocks (a
+                // far-corner `plan_bot_layout` cell), comfortably longer than one
+                // `STEP_TIMEOUT` under this scenario's own forced single-`LocalSet`
+                // cooperative scheduling of 20 concurrent real azalea clients (this
+                // file's own top-of-file "Forced deviation" note). Clicking regardless of
+                // arrival — the pre-fix behaviour — fired from wherever the bot actually
+                // happened to be, which `mining::is_within_block_interaction_range` then
+                // (correctly) rejected as out of reach on literally every run: not a
+                // server defect, since no real player stands there either (Fix rules:
+                // "the scenario must work WITH [reach validation]"). This loop keeps
+                // reissuing the same `goto(post)` goal (idempotent — a fresh `GotoEvent`
+                // simply replaces the pathfinder's current one, `PathfinderClientExt::
+                // start_goto_with_opts`'s own doc comment) and re-checking the bot's own
+                // local position (`bot_arrived_at`) until it is genuinely standing in
+                // `post`'s own cell, or `run_deadline` passes — never firing an
+                // interaction from an unverified position.
+                let mut arrived = bot_arrived_at(client, post);
+                while !arrived && Instant::now() < run_deadline {
+                    if let Some(disconnect) = observed_disconnect(progress) {
+                        outcome.disconnected_at = Some(disconnect.0);
+                        outcome.disconnect_reason = disconnect.1;
+                        break 'outer;
+                    }
+                    let _ = tokio::time::timeout(
+                        STEP_TIMEOUT,
+                        client.goto(BlockPosGoal(to_azalea_pos(post))),
+                    )
+                    .await;
+                    arrived = bot_arrived_at(client, post);
+                }
+                if !arrived {
+                    // Ran out of `run_duration` still trying to genuinely reach its own
+                    // post — not a rejection, not a disconnect, simply no time left for a
+                    // verified interaction attempt; ends the scenario for this bot exactly
+                    // like an ordinary `run_deadline` expiry anywhere else in this loop.
+                    break 'outer;
+                }
 
                 // Right-click the block below `interaction_target(post)`, never below
                 // `post` itself -- `interaction_target`'s own doc comment has the full
@@ -416,22 +616,46 @@ pub async fn run_one_load_bot(
                 // clicked one).
                 let target = interaction_target(post);
                 let target_below = azalea::BlockPos::new(target.x, target.y - 1, target.z);
-                client.block_interact(target_below);
-                client.wait_ticks(ACTION_SETTLE_TICKS).await;
-                verify_effect(
-                    &client,
-                    &plan.username,
-                    outcome.interaction_cycles,
-                    "place",
-                    target,
-                    STONE.0,
-                )?;
+                // M3 field-report fix (transient multi-bot collision): `mining::
+                // is_placement_obstructed` weighs every currently-connected player's own
+                // AABB, not just the acting bot's own (`interaction_target`'s own doc
+                // comment) -- correctly so, and never weakened here (Fix rules: "the
+                // scenario must work WITH [that check]"). With 20 bots roaming the same
+                // 224x224 arena, one of the OTHER 19 can genuinely be transiting through
+                // this bot's own target column at the exact moment of a click (confirmed
+                // live, temporary server-side tracing, never committed: the rejecting
+                // `player_boxes` entry belonged to a different `net_id`, standing exactly
+                // in the target cell, tens of blocks from this bot's own lane -- a real
+                // vanilla player would see the identical rejection in the identical
+                // situation). Retrying the click after `ACTION_SETTLE_TICKS` gives that
+                // other bot -- itself always moving, never parked -- time to have walked
+                // on; `INTERACTION_PLACE_RETRY_ATTEMPTS` bounds this at a handful of
+                // settle-tick waits so a genuinely silently-rejecting server (the original
+                // `verify_effect` fix's own target) still fails loudly once every attempt
+                // is exhausted.
+                let mut place_result = Ok(());
+                for attempt in 0..INTERACTION_PLACE_RETRY_ATTEMPTS {
+                    client.block_interact(target_below);
+                    client.wait_ticks(ACTION_SETTLE_TICKS).await;
+                    place_result = verify_effect(
+                        client,
+                        &plan.username,
+                        outcome.interaction_cycles,
+                        "place",
+                        target,
+                        STONE.0,
+                    );
+                    if place_result.is_ok() || attempt + 1 == INTERACTION_PLACE_RETRY_ATTEMPTS {
+                        break;
+                    }
+                }
+                place_result?;
 
                 let _ =
                     tokio::time::timeout(STEP_TIMEOUT, client.mine(to_azalea_pos(target))).await;
                 client.wait_ticks(ACTION_SETTLE_TICKS).await;
                 verify_effect(
-                    &client,
+                    client,
                     &plan.username,
                     outcome.interaction_cycles,
                     "break",
@@ -443,10 +667,6 @@ pub async fn run_one_load_bot(
                 ticks_since_interaction = 0;
             }
         }
-    }
-
-    if outcome.disconnected_at.is_none() {
-        client.disconnect();
     }
 
     Ok(outcome)
