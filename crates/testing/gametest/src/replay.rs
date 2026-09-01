@@ -257,6 +257,18 @@ pub fn replay_contraption(
         for action in spec.actions.iter().filter(|a| a.tick == t) {
             let pos = BlockPos::new(action.pos.0, action.pos.1, action.pos.2);
             let state = BlockStateId(action.state_id);
+            // M3 field-report governance fix (docs/findings-for-planning.md, the replay.rs
+            // `current_tick` off-by-one entry): a scripted action is applied *before* this
+            // tick's own advance (`ScriptedAction::tick`'s contract — "at the start of this
+            // tick, before that tick's Stage-4 pass"), exactly like the capture pipeline's
+            // own frozen-time `/setblock`, whose synchronous cascade sees the game-time
+            // counter as it stood before the `tick step` that produces this snapshot. Its
+            // `current_tick` is therefore `t - 1`, so a diode's `schedule_block_tick(delay)`
+            // lands at `t - 1 + delay` — the oracle-verified schedule (repeater chain
+            // 2/4/6/8 and both comparator-subtract fixtures match it hop-for-hop, while
+            // every cascade fired from *inside* `run_scheduled_phase`'s own draining
+            // correctly keeps the real `t`). Initial `blocks:` placement (tick-0 snapshot)
+            // already uses `0` under the same convention.
             place_and_settle(
                 &mut world,
                 &mut engine,
@@ -264,7 +276,7 @@ pub fn replay_contraption(
                 &mut events,
                 &mut outbound,
                 &ownership,
-                t,
+                t - 1,
                 behaviors,
                 pos,
                 state,
