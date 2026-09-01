@@ -867,6 +867,75 @@ Entries name the milestone that surfaced them and the code they concern.
   packet-level timing data on the hopper's own per-tick fullness sequence to
   pin down safely); recorded as a residual rather than forced.
 
+  **(Update, M3 field-report hopper-cadence wave: both `hopper.rs`'s own
+  cooldown timing and Stage 7's own container-signal recording order are now
+  fixed, closing `comparator_clock_container_fill` outright — but
+  `hopper_clock_basic`'s own remaining 21 mismatches root-cause to a
+  genuinely different, precisely-diagnosed defect in `comparator.rs`'s own
+  `should_turn_on`, outside this wave's own owned files.)** Two real, verified
+  vanilla-semantics defects were closed in `crates/mechanics/src/block_entity/
+  hopper.rs` and `crates/mechanics/src/stage7.rs` (both files this wave owns):
+  (1) `HopperBlockEntity::tick`'s own cooldown gate checked the *pre*-decrement
+  value and returned immediately on any cooldown fire, never re-checking the
+  *post*-decrement value the same call — vanilla decrements unconditionally
+  and re-checks post-decrement the same call, so a cooldown reaching `0` this
+  tick attempts its transfer this tick, not the next; the same fix also
+  corrected the "pushed into an empty container" 7-tick exception, which the
+  prior code wrongly applied to the *source* hopper's own cooldown (always `8`
+  in real vanilla) instead of the *destination*'s (conditionally `7`/`8`,
+  gated on whether the destination hopper already ticked earlier the same
+  game tick — now threaded through `run_block_entity_tick`'s own new
+  `already_ticked_hoppers` set). (2) `run_block_entity_tick` recorded every
+  block entity's own `comparator_signal` interleaved with its own kind-specific
+  tick behavior, in the same single pass — so a container mutated by
+  *another* entity's own push later in that same pass's load order (a hopper
+  feeding a chest/hopper listed earlier in the fixture's own `blocks:`) had
+  its own cached signal lag one whole game tick behind its real content,
+  because the earlier-visited container's own turn to record already passed
+  before the later push landed. Split into two passes (tick everything first,
+  record every visited position's own signal only after); this closed
+  `comparator_clock_container_fill` outright (confirmed: its single hopper's
+  first push, into a chest, always happened on the correct tick already — the
+  residual was purely the recording-order lag, not a cooldown timing bug at
+  all, ruling out this entry's own "hopper/Stage-7 transfer-cooldown timing"
+  hypothesis for *that* fixture specifically) and corrected
+  `hopper_clock_basic`'s own recorded transition ticks to the real,
+  oracle-matching ones (confirmed via temporary instrumentation, since
+  reverted: hopper A's fullness now flips at ticks 1/8/15/22/29/36, matching
+  the real 7-then-7-tick alternation the two-hopper chain quirk produces).
+
+  `hopper_clock_basic` still fails post-fix, with the *identical* 21-mismatch
+  shape as before (ticks 3-9/17-23/31-37, ours `powered=true` where the
+  oracle expects `false`) — confirmed, via the same temporary instrumentation,
+  to be a real, different, downstream bug: `ComparatorBehavior::should_turn_on`
+  (`crates/mechanics/src/redstone/comparator.rs`) computes
+  `input > side || (input == side && mode == Compare)` with no `input == 0`
+  short-circuit. Real vanilla's own `shouldTurnOn` returns `false` outright
+  whenever the input signal is `0`, *before* considering the side/tie
+  comparison at all — a comparator with genuinely nothing feeding it can never
+  power on merely because its (absent) side input also happens to read `0`.
+  `hopper_clock_basic`'s comparator (compare mode, no side source at all,
+  `side` always `0`) hits exactly this gap every time hopper A's own
+  container-fullness input is legitimately `0` (A empty): `should_turn_on(0,
+  0, Compare)` evaluates `0 == 0 && Compare` to `true`, powering the
+  comparator on from nothing. This fires on the *first* scheduled re-check
+  after each of A's own real "become full" transitions delivers a stale-by-one
+  read (the schedule set by A's own "become empty" notify reads the *still-0*
+  cached signal at execution time, two ticks later, before the *next* real
+  transition's own notify has fired) — reproducing the exact 7-mismatch/
+  7-match/7-mismatch periodicity independently, tick-for-tick, against the
+  real oracle diff. `redstone/comparator/comparator_tie_no_turn_on` (the one
+  corpus fixture whose own name and quirk text target this exact tie rule)
+  never exercises the `input == 0` case — its own tie is `input=15, side=15`
+  throughout (fed by two `redstone_block`s) — so this gap was never caught by
+  the existing suite. Not fixed here: `comparator.rs` is outside this wave's
+  own owned files (`crates/mechanics/src/block_entity/**`,
+  `crates/mechanics/src/stage7/**`) — needs a `should_turn_on` fix (an
+  `if input == 0 { return false; }` guard ahead of the existing comparison,
+  mirroring `calculate_output_signal`'s own already-correct identical guard
+  immediately above it in the same file) from whichever changeset owns
+  `comparator.rs`.
+
 - **A zombie oracle `server.jar` process from an earlier, externally-
   interrupted `fetch-corpus` invocation can keep listening on port 25566
   indefinitely, silently absorbing every subsequent run's bot connection
@@ -1183,6 +1252,25 @@ Entries name the milestone that surfaced them and the code they concern.
   `redstone/pulse/repeater_pulse_stretch_2tick` (4); `redstone/clock/comparator_clock_
   container_fill` carries one further residual mismatch of the same class after Rule 1's own
   fix (this same changeset) resolved the other 37.
+
+  **(Update, M3 field-report hopper-cadence wave): the `place_and_settle` half of this fix
+  (scripted actions at `t - 1`) has since landed** (`crates/testing/gametest/src/replay.rs`,
+  confirmed present in this wave's own worktree) **and closed `comparator_subtract_analog_
+  probe`, `comparator_subtract_zero_clamp`, and `repeater_pulse_stretch_2tick` outright, per
+  that changeset's own commit message — but the Stage-7 container-notify loop's own
+  `current_tick: t` was deliberately left unchanged, on the (reasonable, but as it turned out
+  incorrect) suspicion that `comparator_clock_container_fill`'s own residual was hopper-cooldown
+  timing instead.** It was neither: root-caused instead to a genuine two-pass-ordering gap in
+  `run_block_entity_tick` itself (this entry's own sibling entry, under
+  `comparator_clock_container_fill`'s own dedicated section above, has the full citation) — a
+  container's own comparator_signal recorded *before*, not after, a same-tick push from a
+  hopper visited later in the same load-order pass. Fixed by splitting `run_block_entity_tick`
+  into a tick-everything pass followed by a record-everything pass, with the notify loop's own
+  `current_tick: t` in `replay.rs` untouched throughout — confirming the notify-loop
+  `current_tick` semantics were never the culprit for this specific fixture, and this entry's
+  own "genuinely a `replay.rs`-wide tick-phase-semantics question" framing for the *Stage-7 half*
+  specifically does not hold (the `place_and_settle`/action half above is a real, separate,
+  already-fixed bug). `comparator_clock_container_fill` now passes outright.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
