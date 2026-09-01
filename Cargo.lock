@@ -3062,6 +3062,7 @@ name = "rc-paritybot"
 version = "0.1.0"
 dependencies = [
  "azalea",
+ "azalea-inventory",
  "bytes",
  "rc-core",
  "rc-gametest",

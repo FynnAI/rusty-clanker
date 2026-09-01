@@ -14,6 +14,11 @@ rc-protocol = { path = "../../protocol" }
 bytes = { workspace = true }
 tokio = { workspace = true }
 azalea = { workspace = true } # TEST-D8 — git dependency, see 12-workspace-structure.md
+# M3 field-report harness (`xtask placement-diff`): `placement_capture`'s own
+# `ItemStack::new`/`ItemStackData` construction for `ServerboundSetCreativeModeSlot` —
+# the root workspace `Cargo.toml`'s own doc comment on this dependency has the full
+# "already transitively pulled in by `azalea`, same pinned rev" justification.
+azalea-inventory = { workspace = true }
 thiserror = { workspace = true }
 # M2-B08: `restart_persistence::ExpectedState`'s own `BlockPos`/`DimensionId` fields
 # (in-workspace only, mirrors `rc-protocol`'s own identical justification above).
@@ -85,3 +90,11 @@ path = "src/bin/fetch_corpus_runner.rs"
 [[bin]]
 name = "load_scenario_runner"
 path = "src/bin/load_scenario_runner.rs"
+
+# M3 field-report harness (governance changeset, "a placement differential harness"):
+# `xtask placement-diff` drives `placement_capture::run_capture` (against either a real
+# oracle or our own real server) by spawning this binary as a real OS subprocess,
+# identical forced-deviation precedent to the four bin targets above.
+[[bin]]
+name = "placement_diff_runner"
+path = "src/bin/placement_diff_runner.rs"

@@ -70,6 +70,17 @@ pub enum PacketCaptureError {
 type WorldPos = (i32, i32, i32);
 type AnalogMap = Arc<Mutex<HashMap<WorldPos, u8>>>;
 type ClientSlot = Arc<Mutex<Option<Client>>>;
+/// `xtask placement-diff`'s own addition (governance changeset, "M3 field-report
+/// harness"): every world position this session has ever observed carrying *any*
+/// block entity at all — generalizes `AnalogMap`'s comparator-only `OutputSignal`
+/// tracking to plain presence, for `InteractionScenario::ChestRejoinVisibility`'s own
+/// need (a chest's own block entity carries an `Items` list, never an `OutputSignal`
+/// int, so the existing analog map can never see it). Recorded from the exact same two
+/// delivery paths `AnalogMap` already reads (module doc comment, "Comparator analog
+/// output has no equivalent azalea-side model") — the initial `LevelChunkWithLight`
+/// block-entity list and the delta `BlockEntityData` packet — regardless of a given
+/// entity's own NBT shape.
+type BlockEntityPresenceSet = Arc<Mutex<std::collections::HashSet<WorldPos>>>;
 
 /// A live view over one bot session's observed world state (module doc comment,
 /// "Block-state observation"). Cheap to clone (`Arc`-backed); every clone observes
@@ -78,6 +89,7 @@ type ClientSlot = Arc<Mutex<Option<Client>>>;
 pub struct BlockSnapshotView {
     client: ClientSlot,
     analogs: AnalogMap,
+    block_entities: BlockEntityPresenceSet,
 }
 
 impl BlockSnapshotView {
@@ -87,6 +99,19 @@ impl BlockSnapshotView {
     /// empty-vs-populated state.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The live azalea `Client` this view observes, once the bot has reached
+    /// `Event::Spawn` (`None` before then, mirroring `state_id_at`'s own "not attached
+    /// yet" case). `xtask placement-diff`'s own addition (governance changeset, "M3
+    /// field-report harness"): every prior consumer of this view (`corpus_capture.rs`)
+    /// only ever needed to *observe* state, driving every real action through the
+    /// oracle's own console (`send_console_command`) instead — this harness's own
+    /// `placement_capture` module is the first caller that needs the bot to actually
+    /// *act* (select a hotbar item, aim, place, walk), which needs the underlying
+    /// `Client` directly rather than only this view's own read-only surface.
+    pub fn client(&self) -> Option<Client> {
+        self.client.lock().unwrap().clone()
     }
 
     /// `None` until the bot has both logged in and this exact position's chunk has
@@ -111,6 +136,20 @@ impl BlockSnapshotView {
 
     fn record_analog(&self, pos: (i32, i32, i32), value: u8) {
         self.analogs.lock().unwrap().insert(pos, value);
+    }
+
+    /// `true` iff this session has ever observed a block entity of any kind at `pos`
+    /// (`BlockEntityPresenceSet`'s own doc comment). Never cleared for the lifetime of
+    /// this `BlockSnapshotView` — a caller that needs a fresh, per-connection view
+    /// (`InteractionScenario::ChestRejoinVisibility`'s own reconnect step) gets one
+    /// simply by calling `connect_and_observe` again, which always constructs a brand
+    /// new `SharedView::default()`.
+    pub fn has_block_entity_at(&self, pos: (i32, i32, i32)) -> bool {
+        self.block_entities.lock().unwrap().contains(&pos)
+    }
+
+    fn record_block_entity_presence(&self, pos: (i32, i32, i32)) {
+        self.block_entities.lock().unwrap().insert(pos);
     }
 }
 
@@ -177,10 +216,10 @@ async fn handle(bot: Client, event: Event, state: SharedView) {
 
     match &*packet {
         azalea::protocol::packets::game::ClientboundGamePacket::BlockEntityData(data) => {
+            let pos = (data.pos.x, data.pos.y, data.pos.z);
+            state.view.record_block_entity_presence(pos);
             if let Some(output) = extract_comparator_output(&data.tag) {
-                state
-                    .view
-                    .record_analog((data.pos.x, data.pos.y, data.pos.z), output);
+                state.view.record_analog(pos, output);
             }
         }
         azalea::protocol::packets::game::ClientboundGamePacket::LevelChunkWithLight(chunk) => {
@@ -208,9 +247,6 @@ fn record_chunk_block_entities(
     chunk: &azalea::protocol::packets::game::ClientboundLevelChunkWithLight,
 ) {
     for entity in &chunk.chunk_data.block_entities {
-        let Some(output) = extract_comparator_output(&entity.data) else {
-            continue;
-        };
         let local_x = (entity.packed_xz >> 4) & 0x0F;
         let local_z = entity.packed_xz & 0x0F;
         let pos = (
@@ -218,7 +254,13 @@ fn record_chunk_block_entities(
             entity.y as i32,
             chunk.z * 16 + local_z as i32,
         );
-        view.record_analog(pos, output);
+        // Presence alone (`BlockEntityPresenceSet`'s own doc comment), regardless of
+        // whether this entity's own NBT decodes as a comparator's `OutputSignal` —
+        // every entry in this list is, by construction, a real block entity at `pos`.
+        view.record_block_entity_presence(pos);
+        if let Some(output) = extract_comparator_output(&entity.data) {
+            view.record_analog(pos, output);
+        }
     }
 }
 

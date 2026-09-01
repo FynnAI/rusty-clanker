@@ -8,5 +8,6 @@ pub mod corpus_capture;
 pub mod idle_stability;
 pub mod load_scenario;
 pub mod packet_capture;
+pub mod placement_capture;
 pub mod restart_persistence;
 pub mod vanilla_registry_defaults;

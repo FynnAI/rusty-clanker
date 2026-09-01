@@ -98,6 +98,16 @@ criterion         = "0.8.2"
 # version "0.16.0+mc26.2", azalea-protocol::packets::PROTOCOL_VERSION == 776 -- an
 # exact match for this project's own NET-D1 pin.
 azalea            = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295d353b9b3ef68f665b311cba39211fd19" }
+# `xtask placement-diff` (governance changeset, "M3 field-report harness"): `rc-
+# paritybot::placement_capture` constructs `ServerboundSetCreativeModeSlot.item_stack`
+# by hand (`ItemStack::new`/`azalea_registry::builtin::ItemKind`) to select a tier-1
+# item via the same real hotbar packets `play_creative_hotbar_held_item.rs` decodes —
+# not a new external dependency, the exact same pinned `azalea` git rev already pulls
+# this crate in transitively (mirrors `simdnbt`'s own identical "already in the
+# dependency graph" justification, `crates/testing/paritybot/Cargo.toml`'s doc
+# comment on that dependency). Same `rev` as `azalea` above, never independently
+# floating.
+azalea-inventory  = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295d353b9b3ef68f665b311cba39211fd19" }
 
 [profile.release]
 lto = "fat"
