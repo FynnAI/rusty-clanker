@@ -117,11 +117,18 @@ async fn run_oracle_side(
     let source_jar_sha1 = args[3].clone();
     let only = args.get(4).cloned();
 
+    // Governance fix: a real end-to-end run shares this machine with other real,
+    // CPU-heavy work (other verification sessions, the user's own foreground use) --
+    // 120s (`fetch_corpus.rs`'s own `launch_oracle_server` call site's identical
+    // budget, that verb's own single-purpose machine assumption) was observed live to
+    // be too tight for a genuinely contended JVM cold start; 300s absorbs that
+    // without meaningfully weakening the "the oracle process is actually broken"
+    // signal a real timeout still provides.
     let handle = rc_gametest::capture::launch_oracle_server(
         &jar_path,
         &work_dir,
         ORACLE_PORT,
-        Duration::from_secs(120),
+        Duration::from_secs(300),
     )
     .map_err(|err| format!("failed to launch the oracle server: {err}"))?;
 
@@ -163,6 +170,10 @@ async fn run_ours_side(
 
     let mut config = rc_test_harness::process::ManagedServerConfig::new(server_bin);
     config.world_dir = Some(world_dir);
+    // As the oracle side's own identical fix above: a contended machine can make even
+    // our own (normally near-instant) startup slower than `ManagedServerConfig::new`'s
+    // own single-purpose-machine 30s default.
+    config.startup_timeout = Duration::from_secs(90);
     let managed = rc_test_harness::process::spawn_server_with_world_dir(config)
         .map_err(|err| format!("failed to spawn rusty-clanker-server: {err}"))?;
 

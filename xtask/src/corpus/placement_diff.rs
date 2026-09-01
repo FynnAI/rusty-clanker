@@ -75,6 +75,27 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Governance fix: `run_placement_diff_runner_subprocess` always launches
+/// `placement_diff_runner` with `current_dir` set to `crates/testing/paritybot`
+/// (mirroring `fetch_corpus.rs`'s own identical subprocess-hop pattern) — a
+/// `--server-bin`/`--server-jar` value the caller gave as a path relative to *this*
+/// process's own cwd (the repo root, when `xtask` is invoked the normal way) would
+/// silently resolve against that *different* directory instead once it crosses the
+/// subprocess boundary, producing an opaque "path not found" failure discovered live
+/// against a real run rather than a clean, absolute path failing the same way
+/// regardless of which process interprets it. Every path this file ever hands to the
+/// runner subprocess is passed through this first — relative to `repo_root` for a
+/// relative input (matching every other verb's own convention of resolving a bare
+/// relative CLI path against the repo root), passed through unchanged for an
+/// already-absolute one.
+fn absolutize(repo_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_root.join(path)
+    }
+}
+
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh, uniquely named temp directory, removed best-effort on `Drop` — mirrors
@@ -369,7 +390,8 @@ pub fn run(args: &PlacementDiffArgs) -> std::process::ExitCode {
 
     if args.side.wants_oracle() {
         let jar = if let Some(server_jar) = &args.server_jar {
-            match std::fs::read(server_jar) {
+            let server_jar = absolutize(&repo_root, server_jar);
+            match std::fs::read(&server_jar) {
                 Ok(bytes) => (server_jar.clone(), sha1_hex(&bytes)),
                 Err(err) => {
                     let message = format!("failed to read {}: {err}", server_jar.display());
@@ -454,11 +476,12 @@ pub fn run(args: &PlacementDiffArgs) -> std::process::ExitCode {
     }
 
     if args.side.wants_ours() {
+        let server_bin = absolutize(&repo_root, &args.server_bin);
         let world = TempWorldDir::new("ours");
         let out_path = repo_root.join("target/verify/placement-diff-ours.postcard");
         let mut runner_args = vec![
             "ours".to_string(),
-            args.server_bin.display().to_string(),
+            server_bin.display().to_string(),
             world.path.display().to_string(),
             out_path.display().to_string(),
         ];

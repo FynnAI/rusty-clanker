@@ -67,7 +67,18 @@ const CHEST_BOT_A: &str = "rc_chest_bot_a";
 const CHEST_BOT_B: &str = "rc_chest_bot_b";
 
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
-const WALK_TIMEOUT: Duration = Duration::from_secs(15);
+/// Governance fix (found live, `InteractionScenario::ChestRejoinVisibility`'s own
+/// dedicated bot connections): `load_scenario.rs`'s own `STEP_TIMEOUT` (15s) is sized
+/// for a short hop between two *nearby* points a long-lived, already-positioned bot
+/// takes — every single-step scenario's own walk fits that shape (`SLOT_SPACING`/
+/// `SLOT_ROW_SPACING` are both small). `capture_chest_rejoin_visibility`'s own two
+/// bot connections are the one exception: each spawns fresh at the world's own spawn
+/// point and must reach `interaction_slot_origin`'s own row in a single hop, which a
+/// live run measured at ~150 blocks — comfortably clears 15s only under generous
+/// real-world pathfinding/tick conditions this harness can't assume. 90s absorbs a
+/// real single long walk with real margin without meaningfully weakening "the bot is
+/// actually stuck" as a genuine failure signal.
+const WALK_TIMEOUT: Duration = Duration::from_secs(90);
 /// How many client-side ticks to wait after an action (hotbar select, place, break,
 /// aim) before trusting the resulting observation — mirrors `restart_persistence.rs`'s
 /// own `ACTION_SETTLE_TICKS`/`AIM_SETTLE_TICKS` idiom (that module's own doc comment
