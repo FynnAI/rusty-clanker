@@ -106,3 +106,30 @@ opt-level = 3
 panic = "unwind"
 debug = "line-tables-only"
 strip = false
+
+# M3 field-report governance fix (`crates/testing/paritybot`'s own load-test scenario,
+# `load_scenario.rs`'s module doc comment, "premature-interaction defect"): azalea's own
+# pathfinder (`rc-paritybot`'s vanilla-client stand-in) emits a runtime warning that an
+# unoptimized (`opt-level = 0`, this workspace's own plain `[profile.dev]` default) build
+# gives "significantly reduced pathfinding performance" -- confirmed directly: under a
+# debug-mode `cargo run` of `load_scenario_runner` (`xtask::m3_report`'s own real
+# invocation shape, never `--release` -- `crates/testing/paritybot/src/bin/
+# load_scenario_runner.rs`'s own doc comment), none of the 20 concurrently-pathfinding
+# bots this scenario drives on one shared `LocalSet` (`load_scenario.rs`'s own "Forced
+# deviation" note) reliably completed even the one-time walk from spawn to their own
+# assigned lane inside a 60-second `run_duration`. `[profile.dev.package."*"]` raises
+# every *dependency*'s own opt-level -- azalea and its own dependency tree included --
+# without touching this workspace's own crates (workspace members are governed by plain
+# `[profile.dev]`, left at its own fast-iteration default), exactly azalea's own
+# documented remedy (the warning's own referenced URL). `opt-level = 1`, not `3`: `3`
+# triggers a real `rustc` internal compiler error compiling `tokio` under this project's
+# own pinned nightly toolchain (`nightly-2026-07-25`) combined with this profile's own
+# `debug-assertions = true` default -- confirmed directly, a known class of rustc
+# codegen bug, not something either side of this workspace controls. `1` avoids it and
+# is enough on its own: confirmed live (paired with `load_scenario.rs`'s own fix) to let
+# every one of 20 bots complete real interaction cycles inside a 60-second run. Costs a
+# slower first (cold) debug build of the dependency graph, already budgeted for:
+# `xtask::m3_report`'s own `BUILD_GRACE` constant already allows 300s for "the nested
+# `cargo run`'s own (possibly cold, first-ever) build."
+[profile.dev.package."*"]
+opt-level = 1
