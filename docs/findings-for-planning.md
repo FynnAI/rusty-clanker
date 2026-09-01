@@ -975,6 +975,77 @@ Entries name the milestone that surfaced them and the code they concern.
   planning decision on which of these three is the intended fix before any
   changeset attempts it.
 
+- **`crates/testing/gametest/src/replay.rs`'s own `current_tick` value for a scripted action's
+  synchronous cascade is one game tick ahead of what its own scheduling math needs — a genuine
+  harness `current_tick`-semantics bug, not a diode-mechanics one, confirmed diode-by-diode
+  against the real oracle and out of scope for a diode-family (`comparator.rs`/`repeater.rs`)
+  implementation changeset to fix (`replay.rs` edits that change verification semantics are
+  governance territory).** Surfaced while diagnosing Rule 3's own "comparator flips one tick
+  late" defect (M3 field-report fix-agent brief): `comparator_subtract_analog_probe`'s own
+  redstone-block action lands at `tick: 2`; the oracle trace shows the comparator's flip already
+  visible at snapshot tick 3, one tick after the action, not two (`ComparatorBlock::
+  refreshOutputState`'s own verified fixed `2`-game-tick schedule, `Rule 3`'s own citation).
+  `comparator.rs`/`repeater.rs` themselves already implement every verified rule exactly as
+  specified (confirmed by direct code audit, not just trace-matching) — the discrepancy traces
+  to `replay.rs`'s own tick loop: `place_and_settle`'s `current_tick` parameter for a
+  scripted `spec.actions` entry is the loop's own `t` (the *upcoming* tick, not yet run), while
+  `corpus_capture.rs`'s own doc comment (the capture pipeline's own established design intent,
+  `ScriptedAction::tick`: "applied at the *start* of this tick, before that tick's Stage-4 pass")
+  implies the action's own synchronous `neighborChanged` cascade should see the game-time counter
+  as it stood *before* this tick's own advance — i.e. `t - 1`, not `t`. Feeding a diode's
+  `schedule_block_tick(pos, delay, ..)` call `current_tick = t` schedules it for `t + delay`,
+  one tick later than the oracle's own `t - 1 + delay`. Confirmed identically across two fully
+  independent code paths and every hop of a multi-stage cascade, never merely a single
+  coincidental match:
+  - `redstone/pulse/repeater_chain_delay_sum_2_4_6_8`: action at `tick: 2` feeds a 4-repeater
+    daisy chain, delays 2/4/6/8. Oracle flips: R1 (delay 2) at snapshot tick 3, R2 (delay 4) at
+    tick 7, R3 (delay 6) at tick 13, R4 (delay 8) at tick 21, matching `(2-1)+2=3`,
+    `3+4=7`, `7+6=13`, `13+8=21` exactly — R1's own flip alone carries the `-1` (from the
+    action); every later hop's own cascade (fired from inside `stage4::run_scheduled_phase`,
+    never `place_and_settle`) needs no further adjustment, confirming the `-1` is specific to
+    the action-triggered path, not a general per-hop drift.
+  - `redstone/pulse/repeater_lock_release_repropagates`: two actions (`tick: 2`, `tick: 6`)
+    independently reproduce the identical `-1` pattern at each of their own downstream flips
+    (locking repeater's own turn-off at tick 7 = `(6-1)+2`; the newly-unlocked repeater's own
+    later turn-on at tick 13 = `7 + 6`, `7` itself the tick its own `locked` bit flipped
+    false, synchronously cascaded from the locking repeater's tick — again no further `-1`
+    needed once inside a `run_scheduled_phase`-triggered cascade).
+  - `redstone/clock/comparator_clock_container_fill` (no `actions:` at all — Stage-7-driven):
+    after Rule 1's own side-input fix (this same changeset) resolved 37 of its 38 mismatches,
+    the one residual is this identical "-1" symptom (oracle flips snapshot tick 3, replay tick
+    4) arriving through a *third*, independent code path — the `for pos in container_signals.
+    take_changed()` notify loop, which also builds its own `UpdateContext` with
+    `current_tick: t`. This shows the bug is not specific to `spec.actions` literally, but to
+    any synchronous cascade computed outside `stage4::run_scheduled_phase`'s own internal
+    tick-draining within the same loop iteration (whether it precedes that phase, as an action
+    does, or follows it, as this Stage-7 notify does) — genuinely a `replay.rs`-wide
+    tick-phase-semantics question, not a narrow one-line off-by-one. (This one residual mismatch
+    is very likely hopper/Stage-7 transfer-cooldown timing rather than the comparator itself —
+    consistent with the same root cause, but `hopper.rs`/Stage-7 are outside this changeset's
+    own scope to further isolate.)
+
+  Not fixed here: `replay.rs` is this project's own verification harness (TEST-D45/D46's own
+  tamper-guard rationale, restated in the M3 field-report fix-agent brief's own explicit
+  instruction for this exact scenario — "if the root cause is in the harness's phase ordering
+  itself rather than mechanics, STOP and report... an ordering bug there needs a governance
+  changeset"). The fix most consistent with the evidence above: give `place_and_settle`'s own
+  scripted-action call site (and, per the third data point, the Stage-7 container-notify loop)
+  `current_tick: t.saturating_sub(1)` instead of `t`, while every cascade that fires from
+  *inside* `stage4::run_scheduled_phase`'s own draining keeps using the real `t` unchanged (the
+  repeater-chain evidence above shows that half already matches the oracle with zero
+  adjustment) — but the exact intended tick-phase model deserves a deliberate governance
+  decision (and a fixture-level regression, e.g. re-verifying `torch.rs`'s own `REEVAL_DELAY`
+  timing under the same lens — no currently-committed torch fixture happens to observe a
+  state transition purely from an action within this corpus, so torch's own exposure to this
+  same bug could not be confirmed or ruled out empirically here) rather than a silent one-line
+  patch. Until resolved, five fixtures stay parity-failing for this reason alone, diode-side
+  logic already fully correct: `redstone/comparator/comparator_subtract_analog_probe` (2),
+  `redstone/comparator/comparator_subtract_zero_clamp` (1), `redstone/pulse/repeater_chain_
+  delay_sum_2_4_6_8` (21), `redstone/pulse/repeater_lock_release_repropagates` (8),
+  `redstone/pulse/repeater_pulse_stretch_2tick` (4); `redstone/clock/comparator_clock_
+  container_fill` carries one further residual mismatch of the same class after Rule 1's own
+  fix (this same changeset) resolved the other 37.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
