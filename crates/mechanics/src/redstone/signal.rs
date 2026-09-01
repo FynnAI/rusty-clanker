@@ -411,3 +411,56 @@ pub(crate) fn diode_priority(
         TickPriority::High
     }
 }
+
+/// `getControlInputSignal(pos, direction, onlyDiodes)` (Context §F/§G) — the single shared
+/// side-input reading both `RepeaterBehavior::alternate_signal` (`only_diodes = true`, its own
+/// `sideInputDiodesOnly`) and `ComparatorBehavior::side_input_signal` (`only_diodes = false`)
+/// dispatch through, verified against the decompiled 26.2 reference (M3 field-report fix, Rule
+/// 1): this is deliberately narrower than the general `emitted_toward`/`signal_into` quasi-
+/// connectivity primitive above -- side input never follows `emitted_toward`'s own "conductor
+/// relays its neighbors' direct signal" branch at all (it queries `side`'s own immediate
+/// neighbor block directly, never a further hop through it even when that neighbor happens to be
+/// a conductor), and for a plain (non-diode, non-wire) block it reads that neighbor's own DIRECT
+/// signal, never its weak one -- the distinction the former, buggy `comparator.rs::
+/// side_input_signal` (routed through `signal::signal_into`) collapsed, letting a torch's own
+/// unconditional-except-toward-its-input-direction weak `15` leak into a comparator's side
+/// reading. `only_diodes = true` (repeater): `0` unless the neighbor is itself a diode
+/// (repeater/comparator), in which case its own direct signal counts; plain wire and torches
+/// never lock a repeater. `only_diodes = false` (comparator): `redstone_block` -> `15` and
+/// `redstone_wire` -> its own raw stored `POWER` value both fall out of the same two general
+/// cases below (`raw_wire_power`'s own bypass hook; `redstone_block`'s own `direct_signal_toward`
+/// is an unconditional `15` regardless of query direction) without a literal per-block special
+/// case; any other signal source contributes its own direct signal in that direction (a lit
+/// floor torch's own direct signal is `15` only straight `Up`, `TorchBehavior::direct_signal_
+/// toward`'s own doc comment -- so a torch standing beside a comparator, queried from a
+/// horizontal direction, now correctly contributes `0`); anything else (ordinary terrain, even a
+/// powered conductor with no `is_signal_source` block of its own) contributes `0`.
+pub(crate) fn control_input_signal(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+    side: Direction,
+    only_diodes: bool,
+) -> u8 {
+    let neighbor_pos = side.apply(pos);
+    let towards = side.opposite();
+    let Some(state) = world.get_block(neighbor_pos) else {
+        return 0;
+    };
+    let source = registry.resolve(state);
+    if only_diodes {
+        return if source.is_diode() {
+            source.direct_signal_toward(world, neighbor_pos, towards)
+        } else {
+            0
+        };
+    }
+    if let Some(power) = source.raw_wire_power(world, neighbor_pos) {
+        return power;
+    }
+    if source.is_signal_source() {
+        source.direct_signal_toward(world, neighbor_pos, towards)
+    } else {
+        0
+    }
+}

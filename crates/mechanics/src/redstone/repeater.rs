@@ -174,13 +174,15 @@ impl RepeaterBehavior {
     }
 
     /// `alternate_signal` (Context §F): `max` of the two perpendicular side control-input
-    /// readings, each gated by `sideInputDiodesOnly` (repeater always sets this `true`).
+    /// readings, each gated by `sideInputDiodesOnly` (repeater always sets this `true` —
+    /// `signal::control_input_signal`'s own `only_diodes` parameter, shared with comparator's
+    /// own `false`-gated side reading, M3 field-report fix Rule 1).
     fn alternate_signal(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> u8 {
         let facing = self.facing(pos);
         let (a, b) = signal::perpendicular_pair(facing);
         let registry = self.registry();
-        control_input_signal(world, registry, pos, a)
-            .max(control_input_signal(world, registry, pos, b))
+        signal::control_input_signal(world, registry, pos, a, true)
+            .max(signal::control_input_signal(world, registry, pos, b, true))
     }
 
     fn should_prioritize(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
@@ -245,24 +247,6 @@ impl RepeaterBehavior {
             powered_new.unwrap_or(current_powered),
         );
         ctx.world.set_block(pos, id);
-    }
-}
-
-/// `control_input_signal` (Context §F): `sideInputDiodesOnly` -- `0` unless the neighbor at
-/// `side.apply(pos)` is itself a diode, in which case its full `emitted_toward` reading back
-/// toward `pos` counts.
-fn control_input_signal(
-    world: &dyn BlockWorldAccess,
-    registry: &SignalSourceRegistry,
-    pos: BlockPos,
-    side: Direction,
-) -> u8 {
-    let neighbor_pos = side.apply(pos);
-    match world.get_block(neighbor_pos) {
-        Some(state) if registry.resolve(state).is_diode() => {
-            signal::emitted_toward(world, registry, neighbor_pos, side.opposite())
-        }
-        _ => 0,
     }
 }
 

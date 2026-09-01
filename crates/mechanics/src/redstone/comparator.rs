@@ -247,9 +247,19 @@ impl ComparatorBehavior {
         }
     }
 
-    /// The comparator's own side reading (Context §G): the plain signal from each perpendicular
-    /// neighbor, `max`'d -- never diode-gated (unlike repeater's `alternate_signal`, which only
-    /// feeds a boolean lock; a comparator reads a plain wire's power on its side directly).
+    /// The comparator's own side reading (Context §G, `getControlInputSignal(pos, direction,
+    /// onlyDiodes = false)`): `max` of the two perpendicular neighbors' own `signal::
+    /// control_input_signal` readings -- never diode-gated (unlike repeater's `alternate_signal`,
+    /// which only feeds a boolean lock; a comparator reads a plain wire's raw power, a redstone
+    /// block's constant `15`, or any other signal source's own DIRECT signal on its side
+    /// directly). M3 field-report fix (Rule 1): this used to route through the general `signal::
+    /// signal_into` quasi-connectivity primitive, which reads a non-diode, non-conductor
+    /// neighbor's *weak* signal -- for a torch, unconditional `15` toward every direction except
+    /// its own input side, regardless of query direction, letting a lit floor torch standing
+    /// beside a comparator wrongly contribute a full `15` here. `control_input_signal` reads that
+    /// same neighbor's *direct* signal instead (a floor torch's own direct signal is `15` only
+    /// straight `Up` -- `TorchBehavior::direct_signal_toward`'s own doc comment), correctly
+    /// contributing `0` from a horizontal side.
     fn side_input_signal(
         &self,
         world: &dyn BlockWorldAccess,
@@ -258,8 +268,8 @@ impl ComparatorBehavior {
     ) -> u8 {
         let facing = self.facing(pos);
         let (a, b) = signal::perpendicular_pair(facing);
-        signal::signal_into(world, registry, pos, a)
-            .max(signal::signal_into(world, registry, pos, b))
+        signal::control_input_signal(world, registry, pos, a, false)
+            .max(signal::control_input_signal(world, registry, pos, b, false))
     }
 
     /// `calculate_output_signal` (Context §G) — a pure function, exposed directly for the
