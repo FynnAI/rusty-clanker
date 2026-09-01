@@ -914,6 +914,67 @@ Entries name the milestone that surfaced them and the code they concern.
   points to — not attempted here, a mechanics edit and out of this changeset
   type's own scope.
 
+- **(Update, M3 field-report fix, piston retract commit-timing task: the
+  fix above was attempted, and its own diagnosis needed one refinement once
+  actually implemented against the real per-fixture traces.)** `commit_
+  retract`'s atomic model is split (`crates/mechanics/src/redstone/piston.rs`,
+  `apply_retract_content`/`commit_retract`'s own doc comments have the full
+  citations), but "content settles immediately, base flip is the only
+  genuinely deferred half" turned out too coarse for one of the two retract
+  sub-cases: a **bare** retraction (nothing pulled) does clear its old head
+  to air immediately, confirmed by `basic_piston_door_2x1` now passing
+  outright (0 mismatches). A **sticky pull**, though, settles less
+  immediately than that — only the pulled block's own *source* position
+  clears right away; the old head itself is left completely untouched at
+  trigger time (still showing its own pre-retract content), and the pulled
+  block's own relocated content lands only at the deferred commit, alongside
+  the base's own `EXTENDED=false` flip. `piston_sticky_pull_entity_free`'s
+  own trace is the direct evidence: the old head keeps showing its real,
+  settled `piston_head` content, unchanged, for the two ticks right after
+  the retract trigger, only becoming the pulled block's own real content at
+  the deferred commit — with the refined split, this fixture now also
+  passes outright (0 mismatches). `parity-check redstone`: 38/49 → 40/49.
+
+- **New open question surfaced by the same task: two of the four originally-
+  failing piston fixtures (`piston_retract_pull_sticky_vs_normal`,
+  `sticky_piston_retractor_door_2x2`) still each carry 2 residual mismatches
+  after the retract-timing fix above, and the root cause is a different,
+  pre-existing defect — not a retract-timing gap at all.** Both fixtures
+  declare their piston already extended via the raw `blocks` entry's own
+  `state_id` (e.g. `sticky_piston[facing=east,extended=true]`), with the
+  matching `redstone_block` signal source listed *after* the piston in that
+  same `blocks` list. `rc_gametest::replay::replay_contraption` places
+  `spec.blocks` in list order, each immediately settled — so placing the
+  redstone_block fans out a real `on_neighbor_changed` to the already-placed
+  piston. `PistonBehavior::place` always seeds `should_be_extended: false`
+  regardless of the raw id's own declared `extended` property (`piston.rs`),
+  so this neighbor-changed call sees a genuine `false → true` transition and
+  queues a real `TRIGGER_EXTEND` — confirmed directly via temporary tracing:
+  both fixtures' own pistons receive a real `on_block_event` with
+  `event_id=0` (extend) at tick 1, purely as an artifact of setup order,
+  before either fixture's own scripted `action` (the redstone_block's later
+  removal) ever fires. That spurious extend's own deferred commit lands a
+  real `piston_head` at the old head position at tick 3 — coincidentally the
+  same tick the fixture's own real retract trigger fires — so the retract's
+  own (now-correct) "leave the old head untouched at trigger time" behavior
+  leaves that spurious `piston_head` sitting there for the 2-tick window the
+  mismatch dump reports, where the real oracle (which never ran an actual
+  extend animation — `/setblock`-ing a raw `extended=true` id does not
+  itself trigger one) shows plain `air`. This is orthogonal to retract
+  timing: the same spurious-extend artifact would fire regardless of how
+  `commit_retract` splits its own two halves, and was already present,
+  unfixed, contributing to this same two fixtures' own pre-fix mismatch
+  counts (6 and 4) before this task's retract-timing fix reduced them to 2
+  each. Not fixed here: the fix would touch either `PistonBehavior::place`'s
+  own seeding defaults (derive `should_be_extended`/`extended` from the raw
+  id at placement time — a broader change to placement semantics than this
+  task's own "retract commit timing" scope) or `rc_gametest::replay`'s own
+  seeding order (a verification-tooling file, off-limits to an
+  implementation changeset per the CI path guard) or the two fixtures' own
+  `blocks` list ordering (a corpus fixture, equally off-limits). Needs a
+  planning decision on which of these three is the intended fix before any
+  changeset attempts it.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **M3 field-report fix attempted and reverted: `WireBehavior` own-state
