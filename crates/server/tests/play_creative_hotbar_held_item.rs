@@ -176,7 +176,16 @@ async fn selecting_a_redstone_wire_hotbar_slot_places_wire_not_stone() {
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 0)));
-        assert_eq!(update.block_state_id, blocks::REDSTONE_WIRE.0 as i32);
+        // M3 field-report test-authoring fix (Root Cause 2, wire connection resolution): an
+        // isolated placed wire no longer stays at `blocks::REDSTONE_WIRE.0`'s own raw
+        // all-disconnected default (`5171`) -- `apply_placement` now resolves its real
+        // placement-time connection shape immediately, and a wire with no neighbors at all
+        // settles to the vanilla "plus" (every side auto-promoted to `Side`, `wire.rs`'s own
+        // post-processing pass): `east=side(1), north=side(1), power=0, south=side(1),
+        // west=side(1)` -> `4011 + 1*432 + 1*144 + 0*9 + 1*3 + 1*1 = 4591`
+        // (`mining_block_state_ids.rs`'s/`play_redstone_field_report.rs`'s own identical
+        // literal, cross-verified there).
+        assert_eq!(update.block_state_id, 4591);
     })
     .await
     .unwrap();
@@ -216,9 +225,11 @@ async fn switching_back_to_a_stone_slot_places_stone_again() {
         settle().await;
         place_up_from(&mut a, &mut a_acc, BlockPos::new(1, -60, 0), 2).await;
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        // M3 field-report test-authoring fix: this wire is also isolated (nothing else placed
+        // yet) -- same `4591` "plus" resolution as the previous test's own identical citation.
         assert_eq!(
             decode_one::<BlockUpdate>(body).unwrap().block_state_id,
-            blocks::REDSTONE_WIRE.0 as i32
+            4591
         );
 
         // ...then switch to the stone slot and place again at a fresh column -- must be
