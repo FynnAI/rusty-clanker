@@ -469,10 +469,7 @@ impl WireBehavior {
         ctx: &mut UpdateContext,
         registry: &SignalSourceRegistry,
         pos: BlockPos,
-        east: WireSideShape,
-        north: WireSideShape,
-        south: WireSideShape,
-        west: WireSideShape,
+        (east, north, south, west): (WireSideShape, WireSideShape, WireSideShape, WireSideShape),
     ) {
         for (dir, shape) in [
             (Direction::East, east),
@@ -713,10 +710,7 @@ impl BlockBehavior for WireBehavior {
                         ctx,
                         &registry,
                         pos,
-                        east_shape,
-                        north_shape,
-                        south_shape,
-                        west_shape,
+                        (east_shape, north_shape, south_shape, west_shape),
                     );
                     Some(new_id)
                 }
@@ -749,10 +743,12 @@ impl BlockBehavior for WireBehavior {
             ctx,
             &registry,
             pos,
-            shape_of(east_idx),
-            shape_of(north_idx),
-            shape_of(south_idx),
-            shape_of(west_idx),
+            (
+                shape_of(east_idx),
+                shape_of(north_idx),
+                shape_of(south_idx),
+                shape_of(west_idx),
+            ),
         );
     }
 }
