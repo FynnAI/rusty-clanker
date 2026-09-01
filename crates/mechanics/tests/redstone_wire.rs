@@ -779,7 +779,7 @@ fn wire_does_not_read_its_own_power_back_through_its_supporting_conductor() {
 /// "the replay places the declared id verbatim" contract.
 #[test]
 fn wire_placement_diagonally_above_a_neighbor_queues_a_targeted_shape_update_for_the_settled_wire()
- {
+{
     let wire = setup_wire(vec![]);
     let mut h = Harness::new();
 
