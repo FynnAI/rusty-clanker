@@ -119,6 +119,13 @@ fn comparator_should_turn_on_table() {
     assert!(!ComparatorBehavior::should_turn_on(10, 10, Subtract));
     assert!(!ComparatorBehavior::should_turn_on(4, 10, Compare));
     assert!(!ComparatorBehavior::should_turn_on(4, 10, Subtract));
+    // M3 field-report (hopper_clock_basic root cause): a zero input never turns the
+    // comparator on, even on the Compare-mode 0 == 0 tie -- the same input == 0 guard
+    // `calculate_output_signal` already carries. Oracle evidence: hopper_clock_basic's
+    // comparator reads an empty container (input 0, side 0) across its drained windows
+    // and stays unpowered at every one of those ticks in the captured trace.
+    assert!(!ComparatorBehavior::should_turn_on(0, 0, Compare));
+    assert!(!ComparatorBehavior::should_turn_on(0, 0, Subtract));
 }
 
 /// Defect-1 regression, direct formula-level check (Context/ASSET-D18(f) research verdict):
