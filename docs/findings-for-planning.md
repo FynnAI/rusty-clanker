@@ -280,11 +280,52 @@ Entries name the milestone that surfaced them and the code they concern.
   mode `wire_climbs_conductor_step_up_down`'s own placement-id defect,
   fixed in an earlier wave, already turned out to be).
 
-- **`WireBehavior`'s own `should_signal` self-exclusion flag (Context §D,
-  `getBlockSignal`'s own doc comment) is scoped to the whole per-region
-  instance, not to the one position actually mid-recompute — confirmed to
-  cause real, oracle-verified mispowering, but narrowing it regressed four
-  other fixtures outright and was reverted in full.** Root-caused via
+  </details>
+
+- **CORRECTED (later M3 field-report wave). `WireBehavior`'s own `should_
+  signal` self-exclusion flag (Context §D, `getBlockSignal`'s own doc
+  comment) is scoped to the whole per-region instance, not to the one
+  position actually mid-recompute — confirmed to cause real, oracle-verified
+  mispowering, but narrowing it regressed four other fixtures outright and
+  was reverted in full.** The per-position-scoping regression finding below
+  is still accurate and the fix is still not re-attempted (`wire.rs`'s own
+  `should_signal` field doc comment carries the pointer). Its attribution of
+  `wire_strong_vs_weak_power_door`'s own `(9, 1, 0)` wall-torch mismatch to
+  *this* flag, however, does not hold up under direct re-instrumentation
+  (temporary `eprintln!` tracing of `block_signal`/`direct_signal_toward`/
+  `TorchBehavior::has_neighbor_signal`, not merely re-reading the code): that
+  torch's own `has_neighbor_signal` query never calls into any `WireBehavior`
+  method at all for this fixture, so `should_signal` is never even in the
+  call path — confirmed by the debug trace showing zero `WireBehavior`
+  invocations between that call's own entry and exit. The real cause is
+  `registration.rs`'s (and `crates/testing/gametest/src/replay.rs`'s
+  identical copy's) own already-documented, unrelated scope limitation: one
+  shared `TorchBehavior` instance handles every `minecraft:redstone_wall_
+  torch` id via a single hard-coded representative `TorchAttachment::
+  Wall(Direction::North)`, rather than reading each position's own real
+  `facing` property. `(9, 1, 0)` is placed `facing=west` (attached to,
+  reading input from, the conductor at `(10, 1, 0)` to its east), but the
+  shared instance treats it as `facing=north` regardless, so it reads its
+  input from `(9, 1, 1)` (always air in this fixture) instead — a position
+  that can never carry a signal no matter what `(10, 1, 0)`/`(10, 2, 0)`/
+  `should_signal` compute. This is why the flag's own re-verified bracket
+  (`WireBehavior::block_signal`, the sole set/reset site in `wire.rs`) turns
+  out to already be exactly as narrow as researched (Rule 2 in a later M3
+  field-report wave's own brief: "narrow the bracket to exactly the vanilla
+  shape" — already true, no code change was needed there) — narrowing it
+  further was never going to fix this torch regardless. Genuinely fixing
+  `(9, 1, 0)` needs a per-block-state wall-torch orientation lookup
+  (`registration.rs`'s own "flagged for reconciliation once per-block-state
+  wall orientation is representable" citation, WS-D15's generated-registry
+  prerequisite) — out of `wire.rs`/`signal.rs`'s own scope, so this residual
+  (17 of the original 35 mismatches, all at `(9, 1, 0)`, ticks 4–20) remains
+  open pending that registry. `redstone/qc/wire_strong_vs_weak_power_door`'s
+  own `(11, 1, 0)` companion mismatch is fully resolved — see the corrected
+  entry above.
+
+  <details><summary>Original (partially superseded) finding</summary>
+
+  Root-caused via
   direct tracing (not merely inspection): `wire_strong_vs_weak_power_door`'s
   own wall torch at `(9, 1, 0)` never detects its attached conductor
   becoming powered (stays `lit=true`/id `6891` for the whole run; oracle
@@ -319,6 +360,8 @@ Entries name the milestone that surfaced them and the code they concern.
   entry. `wire_strong_vs_weak_power_door`'s own `(9, 1, 0)` torch mismatch
   (the remaining 18 of its 35 total) is this same root cause and stands
   open alongside the `(11, 1, 0)` entry above.
+
+  </details>
 
 ## B. Shipped deviations and simplifications awaiting a decision
 

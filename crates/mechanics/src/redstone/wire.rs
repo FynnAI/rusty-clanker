@@ -64,6 +64,60 @@ fn should_pop(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
     !signal::is_conductor(world, Direction::Down.apply(pos))
 }
 
+/// M3 field-report fix (Rule 1, step-up/step-down gates): whether `pos`'s own ceiling
+/// (`pos.above()` -- the cell above the ORIGIN wire itself, never `(P+D).above()`) permits the
+/// step-up branch to be considered at all, for every horizontal direction at once
+/// (`connection_shape_on_side`'s own doc comment: "a conductor above P severs the step-up
+/// branch for ALL four horizontal directions"). Shared verbatim by the power walk below
+/// (`incoming_wire_signal`'s own "IDENTICAL two gates" framing, Rule 1) -- one gate, read once
+/// per position, never per-direction.
+///
+/// Open (step-up considered) when `pos.above()` is a NON-conductor, OR -- the one narrow
+/// exception this rule's own literal "conductor severs" wording does not by itself state, but
+/// which cross-checking two oracle traces that otherwise flatly contradict each other forces --
+/// when it *is* a conductor that is *also* itself a registered redstone signal source (the only
+/// such block in this project's current tier-1 scope is `redstone_block`, `is_conductor` via
+/// the shared physics table's `default_full_cube()` fallback, `is_signal_source` via `redstone_
+/// block.rs`'s own `RedstoneBlockSource`). `wire_climbs_conductor_step_up_down`'s plain-stone
+/// ceiling (no signal source) severs the climb the instant it is placed mid-run and stays
+/// severed every tick after (oracle-captured, this project's own already-passing acceptance
+/// bar); `wire_strong_vs_weak_power_door`'s `redstone_block` ceiling, placed in the exact same
+/// geometric relationship (directly above the lower wire, mid-simulation, everything else about
+/// the two scenarios identical down to the dispatch mechanics), instead leaves the climb intact
+/// through every tick after it appears (also oracle-captured) -- the *only* difference between
+/// the two ceilings is that one is a signal source and the other is not, so that is what this
+/// gate keys on. Recorded as a research-role rule refinement, not a planning decision, in
+/// `docs/findings-for-planning.md`.
+fn step_up_gate_open(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+) -> bool {
+    let above = Direction::Up.apply(pos);
+    if !signal::is_conductor(world, above) {
+        return true;
+    }
+    world
+        .get_block(above)
+        .is_some_and(|state| registry.resolve(state).is_signal_source())
+}
+
+/// Rule 1's "connectable (wire/diode/source)" -- any registered tier-1 `RedstoneSignalSource`
+/// counts (`is_signal_source`), which already covers wire (`WireBehavior::is_signal_source` is
+/// unconditionally `true`, so this is a strict superset of the former `wire_power_at(..).
+/// is_some()` check), diodes (repeater/comparator), and plain sources (redstone_block, torch)
+/// alike. Used by both the step-up branch's "`(P+D).above()` holds a connectable" condition and
+/// the step-down branch's identical "`(P+D).below()` holds a connectable" condition below.
+fn connectable_at(
+    world: &dyn BlockWorldAccess,
+    registry: &SignalSourceRegistry,
+    pos: BlockPos,
+) -> bool {
+    world
+        .get_block(pos)
+        .is_some_and(|state| registry.resolve(state).is_signal_source())
+}
+
 /// The real 3-way visual connection shape blocks.json's own `east`/`north`/`south`/`west`
 /// properties each carry (M3 field-report fix, Task 4 -- closes this module's own former
 /// "connected sides are always encoded `side`, never `up`" approximation,
@@ -185,6 +239,24 @@ pub struct WireBehavior {
     /// suppression is evidently load-bearing for cases this investigation did not fully map, not
     /// merely an over-broad side effect. Recorded in `docs/findings-for-planning.md` rather than
     /// re-attempted here.
+    ///
+    /// M3 field-report fix (Rule 2 re-diagnosis): re-verified directly against `block_signal`
+    /// below, the flag's only set/reset site in this file (grepped exhaustively) -- the bracket
+    /// is already exactly as narrow as the researched vanilla shape requires (`false` for the
+    /// duration of exactly one `best_neighbor_signal` call, `true` again before that call's own
+    /// caller does anything else), and Stage-4 dispatch's own strict sequentiality (this doc
+    /// comment's own first paragraph) means nothing can observe the flag mid-bracket regardless.
+    /// `wire_strong_vs_weak_power_door`'s own failing wall torch at `(9,1,0)` -- the case this
+    /// re-diagnosis was run against -- traced to an entirely different, already-documented gap
+    /// instead: `registration.rs`'s own single hard-coded representative `Wall(Direction::
+    /// North)` orientation for every wall-torch id in this project's current scope means a torch
+    /// actually placed `facing=west` (as this fixture's own `9,1,0)` is) reads its input from
+    /// the wrong neighbor entirely (south, not east) -- a query that never reaches this flag at
+    /// all, confirmed by direct instrumentation showing zero calls into this wire's own `direct_
+    /// signal_toward` during that torch's own `has_neighbor_signal` evaluation. Outside this
+    /// file's own scope (a per-block-state wall-torch orientation registry does not exist yet,
+    /// `registration.rs`'s own citation), so left as an honest residual rather than papered over
+    /// here -- recorded in `docs/findings-for-planning.md`.
     should_signal: AtomicBool,
 }
 
@@ -248,10 +320,14 @@ impl WireBehavior {
             .expect("WireBehavior: bind_registry must run before dispatch")
     }
 
-    /// `getIncomingWireSignal` (Context §D): four horizontal neighbors, plus -- for each
-    /// neighbor that is a redstone conductor with a non-conductor ceiling above `pos` -- the
-    /// wire one block above it, and -- for each non-conductor neighbor -- the wire one block
-    /// below it. `max(candidates) - 1`, floored at 0.
+    /// `getIncomingWireSignal` (Context §D, M3 field-report fix Rule 1: "a separate walk with
+    /// the IDENTICAL two gates but FEWER conditions"): four horizontal neighbors, plus -- for
+    /// each neighbor that is a redstone conductor while `pos`'s own step-up gate
+    /// (`step_up_gate_open`, shared verbatim with the connection-shape walk below) is open --
+    /// the wire one block above it, and -- for each non-conductor neighbor -- the wire one
+    /// block below it. Deliberately never touches sturdiness/placeability/connection-shape
+    /// checks at all -- power can flow diagonally even where the visual shape shows none, and
+    /// vice versa (Rule 1). `max(candidates) - 1`, floored at 0.
     fn incoming_wire_signal(
         &self,
         world: &dyn BlockWorldAccess,
@@ -270,7 +346,7 @@ impl WireBehavior {
                 candidates.push(p);
             }
             if signal::is_conductor(world, same_height)
-                && !signal::is_conductor(world, Direction::Up.apply(pos))
+                && step_up_gate_open(world, registry, pos)
                 && let Some(p) = wire_power_at(world, registry, Direction::Up.apply(same_height))
             {
                 candidates.push(p);
@@ -337,24 +413,35 @@ impl WireBehavior {
     /// `shouldConnectTo`/`getConnectionState`/`getConnectingSide` (Context §D): the real 3-way
     /// `NONE`/`SIDE`/`UP` visual connection shape for one horizontal `dir` (M3 field-report fix,
     /// Task 4 -- closes this method's own former "restated as a single boolean" scope
-    /// narrowing, `docs/findings-for-planning.md`'s own "wire up/side" entry). Three geometric
-    /// cases, `08-redstone-ticking.md` §3.1's own citation ("a same-height check first, then a
-    /// check one block up... and one block down..., preferring UP over SIDE when the neighbor's
-    /// top face is sturdy"):
-    /// - **Up** (checked first, matching the documented priority): my own ceiling is open (not
-    ///   a conductor -- `08-redstone-ticking.md`'s own "conductor-occlusion rule," already an
-    ///   established gate elsewhere in this module, e.g. `incoming_wire_signal`) and a wire
-    ///   climbs one block up on the far side (`dir.apply(pos)`'s own `Up` neighbor) -- the
-    ///   classic "wire climbs a step" case; geometrically this and the `Side` case below are
-    ///   mutually exclusive in every legitimate build (a same-height wire/source occupies the
-    ///   space a solid climbable step would need), so checking `Up` unconditionally first never
-    ///   actually overrides a real `Side` connection in practice, only formalizes the documented
-    ///   priority.
+    /// narrowing, `docs/findings-for-planning.md`'s own "wire up/side" entry; M3 field-report
+    /// fix, Rule 1 -- precise step-up/step-down gates, `docs/findings-for-planning.md`'s own
+    /// "redstone_block does not occlude wire step-up" and "wire step-up connectable scope"
+    /// entries). Three geometric cases, `08-redstone-ticking.md` §3.1's own citation ("a
+    /// same-height check first, then a check one block up... and one block down..., preferring
+    /// UP over SIDE when the neighbor's top face is sturdy"):
+    /// - **Up** (checked first, matching the documented priority): `pos`'s own ceiling gate is
+    ///   open (`step_up_gate_open`'s own doc comment -- direction-independent, reads only `pos`,
+    ///   never `dir`), the same-height neighbor (`(P+D)`) is itself sturdy-on-top (this
+    ///   project's own current tier-1 scope registers no partial-shape block that is sturdy on
+    ///   top without also being a full-cube conductor -- e.g. a trapdoor -- so "sturdy-on-top"
+    ///   collapses to `is_conductor(same_height)` here; a real such block would need its own
+    ///   dedicated sturdy-top query this scope does not yet have), and `(P+D).above()` holds a
+    ///   connectable component (`connectable_at`, wire/diode/source alike, not only wire) --
+    ///   the classic "wire climbs a step" case. Rule 1's own further distinction ("`up` if
+    ///   `(P+D)`'s face toward `P` is sturdy, else `side`") also collapses to the identical
+    ///   `is_conductor(same_height)` condition in this project's current scope (a full-cube
+    ///   conductor's every face is sturdy, including the one facing `P`), so this branch always
+    ///   yields `Up` once it is reached at all -- geometrically this and the `Side` case below
+    ///   are mutually exclusive in every legitimate build (a same-height wire/source occupies
+    ///   the space a solid climbable step would need), so checking `Up` unconditionally first
+    ///   never actually overrides a real `Side` connection in practice, only formalizes the
+    ///   documented priority.
     /// - **Side**: the same-height neighbor itself connects back (a wire, or any other signal
     ///   source facing this position), or -- the open-ledge case -- the same-height neighbor is
-    ///   itself non-conductor and a wire sits one block *below* it (a wire descending off a
-    ///   ledge renders `Side` from this ascending tile's own perspective; the *other* wire's own
-    ///   `Up` property, read from its own position looking back, is what renders the climb).
+    ///   itself non-conductor and a connectable component sits one block *below* it (a wire
+    ///   descending off a ledge renders `Side` from this ascending tile's own perspective; the
+    ///   *other* wire's own `Up` property, read from its own position looking back, is what
+    ///   renders the climb).
     /// - **None**: neither of the above.
     ///
     /// The boolean "does this side connect at all" union (`compute_connections`'s own
@@ -369,11 +456,11 @@ impl WireBehavior {
         dir: Direction,
     ) -> WireSideShape {
         let same_height = dir.apply(pos);
-        if !signal::is_conductor(world, Direction::Up.apply(pos)) {
-            let up = Direction::Up.apply(same_height);
-            if wire_power_at(world, registry, up).is_some() {
-                return WireSideShape::Up;
-            }
+        if step_up_gate_open(world, registry, pos)
+            && signal::is_conductor(world, same_height)
+            && connectable_at(world, registry, Direction::Up.apply(same_height))
+        {
+            return WireSideShape::Up;
         }
         if let Some(state) = world.get_block(same_height)
             && registry
@@ -382,11 +469,10 @@ impl WireBehavior {
         {
             return WireSideShape::Side;
         }
-        if !signal::is_conductor(world, same_height) {
-            let down = Direction::Down.apply(same_height);
-            if wire_power_at(world, registry, down).is_some() {
-                return WireSideShape::Side;
-            }
+        if !signal::is_conductor(world, same_height)
+            && connectable_at(world, registry, Direction::Down.apply(same_height))
+        {
+            return WireSideShape::Side;
         }
         WireSideShape::None
     }
