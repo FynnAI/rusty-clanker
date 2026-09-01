@@ -764,3 +764,86 @@ fn wire_does_not_read_its_own_power_back_through_its_supporting_conductor() {
          own previous power back through the conductor it stands on"
     );
 }
+
+/// M3 field-report fix (Rule B -- `updateIndirectNeighbourShapes`): placing a wire whose own
+/// declared connection climbs diagonally over a non-wire neighbor must queue a targeted
+/// `ShapeUpdate` for the settled wire it climbs *to* -- the missing beyond-direct-neighbor relay
+/// confirmed against a real oracle diff (`redstone/update_order/wire_climbs_conductor_step_up_
+/// down`'s own `(1, 1, 0)`, `docs/findings-for-planning.md`). `placed` sits diagonally two
+/// Manhattan steps from `pos1` (one step west, one step up) and is never a direct 6-neighbor of
+/// it, so only `WireBehavior::on_placed`'s own dedicated `diagonal_shape_update_cascade` call
+/// (not the ordinary `border::fan_out_from_changed_block` 6-neighbor fan-out) can ever reach it.
+/// `placed`'s own declared id (`5170`) encodes `west = Side` (its own already-auto-connected
+/// placement shape, Rule C) with every other side/`power` left at `WIRE_ID`'s own bare default --
+/// `on_placed` reads this straight off the stored id, never recomputing it, matching Rule C's own
+/// "the replay places the declared id verbatim" contract.
+#[test]
+fn wire_placement_diagonally_above_a_neighbor_queues_a_targeted_shape_update_for_the_settled_wire()
+ {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+
+    let pos1 = BlockPos::new(0, 0, 0);
+    let placed = BlockPos::new(1, 1, 0); // one step west, one step up from pos1
+    h.world.set_block(pos1, WIRE_ID);
+    // A floor conductor under `pos1` -- required only so `loaded_neighbor_direction` (the
+    // dispatch-guard workaround `wire.rs`'s own doc comment explains: the generic dispatch
+    // machinery requires a real loaded block at `from.apply(target)` before it will even call
+    // `on_shape_update`) has some real neighbor of `pos1` to resolve `from` against; any real
+    // block would do.
+    h.world.set_block(Direction::Down.apply(pos1), CONDUCTOR);
+    // `west = Side` (index 1), every other digit at `WIRE_ID`'s own bare default (`5171`, all
+    // `None`, `power = 0`) -- `5171 - 1 = 5170`.
+    h.world.set_block(placed, BlockStateId(5170));
+
+    let mut ctx = h.ctx();
+    wire.on_placed(&mut ctx, placed);
+
+    let mut found = false;
+    h.engine.drain(&mut |_eng, item| {
+        if let PendingUpdate::ShapeUpdate { pos, .. } = item
+            && pos == pos1
+        {
+            found = true;
+        }
+    });
+    assert!(
+        found,
+        "placing a wire whose own declared shape climbs diagonally toward pos1 must queue a \
+         targeted ShapeUpdate for pos1, even though pos1 is never a direct 6-neighbor of the \
+         freshly-placed wire"
+    );
+}
+
+/// M3 field-report fix (Rule D depower correctness): `on_neighbor_changed`'s own change gate
+/// must compare the freshly-computed power against the *real currently-stored block id's* own
+/// power digit, never against the internal side-table's cached value alone -- a freshly-placed
+/// wire's declared power digit never populates that internal map (`WireState::default`'s own
+/// `power: 0`), so a recompute that happens to *also* land on `0` must still correct a stale
+/// nonzero stored id, not silently treat "matches the untouched internal default" as "already
+/// correct." `pos` is placed directly with a stale declared `power = 15` (`5306`, `WIRE_ID`'s own
+/// all-`None` shape with `power = 15` instead of `0`) but has no real signal source anywhere
+/// nearby, so a genuine recompute must settle it to `0` (`5171`) -- confirmed against a real
+/// oracle diff (`redstone/update_order/wire_climbs_conductor_step_up_down`'s own `(4, 1, 0)`,
+/// `docs/findings-for-planning.md`).
+#[test]
+fn wire_on_neighbor_changed_corrects_a_stale_declared_power_even_when_the_recompute_matches_the_internal_default()
+ {
+    let wire = setup_wire(vec![]);
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 0, 0);
+    // `power = 15`, all-`None` connections -- `WIRE_ID` (`5171`, `power = 0`) plus `15 * 9`.
+    h.world.set_block(pos, BlockStateId(5306));
+    // No signal source anywhere nearby -- a genuine recompute must settle at power = 0.
+
+    let mut ctx = h.ctx();
+    wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(WIRE_ID),
+        "a stale declared power=15 with no real signal source anywhere nearby must be corrected \
+         to power=0 (WIRE_ID, 5171), not left untouched just because the internal side-table's \
+         own untouched default (0) happens to already match the recomputed value"
+    );
+}
