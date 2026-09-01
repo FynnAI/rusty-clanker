@@ -262,6 +262,51 @@ Entries name the milestone that surfaced them and the code they concern.
   concurrent-drain shape to both (and any future piped-subprocess call
   site; worth a lint-tests forbidden-pattern if cheap to express).
 
+- **Owner manual test (2026-09-01 evening) FAILED the M3 real-client leg on the
+  placement path — a whole class the redstone parity corpus structurally
+  cannot see, and one the M3 audit missed because the code itself declares
+  the gap.** `crates/server/src/play/mining.rs`'s `OrientedStateTable`
+  (`tier1_oriented_entries()`) resolves every oriented placement as
+  `default_state_id + direction_offset(dir)` (N/S/E/W/U/D = 0..5, hopper-down
+  `+10`), and its own doc comment says so: "arithmetic placeholder ... not
+  claimed to be a real vanilla id ... pending reconciliation against a real
+  reports/blocks.json" — M3-B03's reconciliation step was never performed.
+  Against the real 26.2 id layout that flips unrelated properties (furnace
+  `+1` = `lit=true`, repeater `+1` = `powered=true`) and overruns ranges
+  (hopper `+10` lands in the next block, quartz) — exactly the owner's "blocks
+  change state depending on which cardinal direction I face", "random lit
+  furnace/repeater/comparator", "hopper becomes quartz". Wire never
+  connecting and torches neither powering nor popping are the same path:
+  placement never runs vanilla's placement-time connection resolution (the
+  replay harness never needed it — corpus fixtures declare oracle-pre-resolved
+  ids), and mis-offset ids fall outside the registered dispatch ranges, so
+  behaviors resolve to no-ops. Chests invisible after rejoin is the already-
+  recorded "nothing spawns a real block entity in production" gap (client
+  renders chests only from block-entity data). **Why 52/52 parity did not
+  catch any of it:** the corpus drives the Stage-4 engine directly with
+  declared ids; the real client→server path (`SetCreativeModeSlot`/
+  `SetCarriedItem` → `UseItemOn` → `resolve_orientation` → id table → chunk
+  write → Stage-4 fan-out → broadcast) had zero differential coverage — the
+  same azalea-blind/harness-blind class as every M1/M2 real-client lesson.
+  **Planning response (decided, in flight as M3 field-report work):** (1) the
+  first concrete TEST-D54 instrument is being built now — `xtask
+  placement-diff`, a real-bot differential harness that performs every
+  `(kind × approach direction × clicked face)` placement plus two-step
+  scenarios (adjacent wire, support break, torch-next-to-wire, chest rejoin)
+  against the vanilla oracle and against this server, diffing resulting
+  states machine-readably; (2) the id table is being reconciled against the
+  real property layouts (per-block base/stride modules with generated-default
+  anchors, the same convention wire/torch/repeater/comparator already use)
+  and `resolve_orientation` against research-verified `getStateForPlacement`
+  rules; (3) production block-entity spawning on placement + chunk
+  block-entity data follows as its own wave once (2) lands (file overlap).
+  M3 stays OPEN until the placement-diff harness is green against the oracle
+  and the owner's re-test passes; the M3 completion report is deferred
+  accordingly. Lesson for every future blueprint audit: grep implementation
+  for "placeholder"/"pending reconciliation" doc comments — a blueprint step
+  that ships as a documented placeholder is an unfinished deliverable, not a
+  finished one.
+
 - **Research-rule refinement for reconciliation into the research corpus
   (`docs/research/mc-26.2/08-redstone-ticking.md` §3.1, the MECH-D11/D12
   citation): the wire step-up gate ("a conductor directly above the lower
