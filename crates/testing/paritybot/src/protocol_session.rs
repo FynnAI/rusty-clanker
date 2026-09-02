@@ -117,9 +117,13 @@ fn slot_for(index: usize) -> (i32, i32, i32) {
 /// early handshake steps (`session/login`/`session/configuration`) can be split out
 /// of one connection's own continuous capture without needing a second live
 /// synchronization point mid-handshake.
+/// `clippy::type_complexity`'s own suggested fix over the bare 3-tuple-of-`Vec`s this
+/// function used to return.
+type RawPacketList = Vec<(i32, Vec<u8>)>;
+
 fn split_handshake_phases(
     packets: &[(i32, Vec<u8>)],
-) -> (Vec<(i32, Vec<u8>)>, Vec<(i32, Vec<u8>)>, Vec<(i32, Vec<u8>)>) {
+) -> (RawPacketList, RawPacketList, RawPacketList) {
     #[derive(PartialEq)]
     enum Phase {
         Login,
@@ -176,7 +180,12 @@ fn to_captured(raw: Vec<(i32, Vec<u8>)>) -> Vec<CapturedPacket> {
         .collect()
 }
 
-fn push_step(out: &mut ProtocolCaptureFile, only: Option<&str>, step_id: &str, raw: Vec<(i32, Vec<u8>)>) {
+fn push_step(
+    out: &mut ProtocolCaptureFile,
+    only: Option<&str>,
+    step_id: &str,
+    raw: Vec<(i32, Vec<u8>)>,
+) {
     if only.is_some_and(|only| only != step_id) {
         return;
     }
@@ -208,14 +217,22 @@ async fn place_at_slot(
     )
     .await
     .map_err(|err| ProtocolSessionError::Azalea(err.to_string()))?;
-    Ok(placement_capture::absolute(floor_y, (slot.0, slot.1 + 1, slot.2)))
+    Ok(placement_capture::absolute(
+        floor_y,
+        (slot.0, slot.1 + 1, slot.2),
+    ))
 }
 
 /// A plain `StartDestroyBlock`/wait/`StopDestroyBlock` sequence, `hold` apart —
 /// `instant_break` (creative speed) needs only the first packet (`placement_capture::
 /// break_block`'s own established shape); this longer form is the one genuine
 /// survival-timed dig this session drives (`SURVIVAL_DIG_HOLD`'s own doc comment).
-async fn timed_break(client: &Client, seq: &mut placement_capture::SeqCounter, pos: (i32, i32, i32), hold: Duration) {
+async fn timed_break(
+    client: &Client,
+    seq: &mut placement_capture::SeqCounter,
+    pos: (i32, i32, i32),
+    hold: Duration,
+) {
     client.write_packet(ServerboundPlayerAction {
         action: PlayerActionKind::StartDestroyBlock,
         pos: AzBlockPos::new(pos.0, pos.1, pos.2),
@@ -291,7 +308,12 @@ pub async fn run_protocol_session(
     recorder.clear();
     let (login_packets, configuration_packets, spawn_seed) = split_handshake_phases(&handshake);
     push_step(&mut out, only, "session/login", login_packets);
-    push_step(&mut out, only, "session/configuration", configuration_packets);
+    push_step(
+        &mut out,
+        only,
+        "session/configuration",
+        configuration_packets,
+    );
 
     // `session/spawn`: seeded with the handshake's own tail, extended with a short
     // settle window's worth of whatever else lands right after (further chunk-batch
@@ -339,7 +361,12 @@ pub async fn run_protocol_session(
     let dig_target = placement_capture::absolute(floor_y, (0, 0, 0));
     timed_break(&client, &mut seq, dig_target, SURVIVAL_DIG_HOLD).await;
     client.wait_ticks(SETTLE_TICKS).await;
-    push_step(&mut out, only, "session/dig_stone_survival", recorder.snapshot());
+    push_step(
+        &mut out,
+        only,
+        "session/dig_stone_survival",
+        recorder.snapshot(),
+    );
     recorder.clear();
     gamemode_creative().await;
     client.wait_ticks(SETTLE_TICKS).await;
@@ -396,7 +423,12 @@ pub async fn run_protocol_session(
                 .client()
                 .expect("connect_and_observe_with_recorder only returns after Event::Spawn");
             reconnect_client.wait_ticks(SETTLE_TICKS).await;
-            push_step(&mut out, only, "session/disconnect_reconnect", recorder.snapshot());
+            push_step(
+                &mut out,
+                only,
+                "session/disconnect_reconnect",
+                recorder.snapshot(),
+            );
             recorder.clear();
 
             // `session/observe_chunk`: walk far enough to force a genuinely new chunk

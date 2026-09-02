@@ -95,7 +95,8 @@ fn load_all_specs() -> Result<Vec<(usize, ContraptionSpec)>, String> {
 
     let mut specs = Vec::with_capacity(paths.len());
     for path in &paths {
-        let spec = load_spec(path).map_err(|err| format!("failed to load {}: {err}", path.display()))?;
+        let spec =
+            load_spec(path).map_err(|err| format!("failed to load {}: {err}", path.display()))?;
         specs.push(spec);
     }
     Ok(specs.into_iter().enumerate().collect())
@@ -164,7 +165,10 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
-async fn run_oracle_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> Result<(), String> {
+async fn run_oracle_side(
+    args: &[String],
+    specs: &[(usize, ContraptionSpec)],
+) -> Result<(), String> {
     if args.len() < 4 || args.len() > 6 {
         return Err(
             "usage: protocol_diff_runner oracle <jar_path> <work_dir> <out_capture_path> <source_jar_sha1> [--debug-hooks] [only_step]"
@@ -221,9 +225,12 @@ async fn run_oracle_side(args: &[String], specs: &[(usize, ContraptionSpec)]) ->
         }
     };
 
+    // The `Ref` from `handle.borrow()` must not live across the `.await` below
+    // (`clippy::await_holding_refcell_ref`) — extracted into an owned `u16` first.
+    let oracle_port = handle.borrow().port;
     let mut capture = protocol_session::run_protocol_session(
         "127.0.0.1",
-        handle.borrow().port,
+        oracle_port,
         &account_name,
         tail.only.as_deref(),
         format!("oracle:{source_jar_sha1}"),
@@ -290,7 +297,9 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
         move || {
             let managed = managed.clone();
             async move {
-                managed.borrow_mut().send_stdin_line("debug-gamemode 1 survival");
+                managed
+                    .borrow_mut()
+                    .send_stdin_line("debug-gamemode 1 survival");
             }
         }
     };
@@ -299,7 +308,9 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
         move || {
             let managed = managed.clone();
             async move {
-                managed.borrow_mut().send_stdin_line("debug-gamemode 1 creative");
+                managed
+                    .borrow_mut()
+                    .send_stdin_line("debug-gamemode 1 creative");
             }
         }
     };

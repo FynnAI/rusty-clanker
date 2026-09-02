@@ -286,11 +286,13 @@ impl<'a> Cur<'a> {
     }
 
     fn i32_be(&mut self) -> Option<i32> {
-        self.take(4).map(|s| i32::from_be_bytes(s.try_into().unwrap()))
+        self.take(4)
+            .map(|s| i32::from_be_bytes(s.try_into().unwrap()))
     }
 
     fn i64_be(&mut self) -> Option<i64> {
-        self.take(8).map(|s| i64::from_be_bytes(s.try_into().unwrap()))
+        self.take(8)
+            .map(|s| i64::from_be_bytes(s.try_into().unwrap()))
     }
 
     /// Minecraft's own VarInt: 7 data bits per byte, MSB continuation flag, capped at
@@ -503,12 +505,13 @@ pub fn normalize_body(packet: &CapturedPacket) -> Vec<u8> {
     }
     match name {
         "login" => try_normalize_login(&packet.body).unwrap_or_default(),
-        "player_position" | "set_entity_data" | "move_entity_pos" | "move_entity_pos_rot"
+        "player_position"
+        | "set_entity_data"
+        | "move_entity_pos"
+        | "move_entity_pos_rot"
         | "move_entity_rot" => normalize_leading_varint(&packet.body),
         "add_entity" => normalize_add_entity(&packet.body),
-        "player_info_update" => {
-            try_normalize_player_info_update(&packet.body).unwrap_or_default()
-        }
+        "player_info_update" => try_normalize_player_info_update(&packet.body).unwrap_or_default(),
         "set_time" => normalize_set_time(&packet.body),
         _ => packet.body.clone(),
     }
@@ -666,11 +669,8 @@ pub fn diff_captures(
         .iter()
         .map(|s| (s.step_id.as_str(), s))
         .collect();
-    let ours_by_step: BTreeMap<&str, &StepCapture> = ours
-        .steps
-        .iter()
-        .map(|s| (s.step_id.as_str(), s))
-        .collect();
+    let ours_by_step: BTreeMap<&str, &StepCapture> =
+        ours.steps.iter().map(|s| (s.step_id.as_str(), s)).collect();
     let all_step_ids: std::collections::BTreeSet<&str> = oracle_by_step
         .keys()
         .chain(ours_by_step.keys())
@@ -916,10 +916,8 @@ mod tests {
 
     #[test]
     fn round_trips_through_postcard_on_disk() {
-        let dir = std::env::temp_dir().join(format!(
-            "protocol-capture-self-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("protocol-capture-self-test-{}", std::process::id()));
         let path = dir.join("capture.postcard");
         let capture = cap(
             "oracle:deadbeef",

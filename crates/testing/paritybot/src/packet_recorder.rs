@@ -8,12 +8,15 @@
 
 use std::sync::{Arc, Mutex};
 
+/// Internal storage shape only — `clippy::type_complexity`'s own suggested fix.
+type RecordedPackets = Vec<(i32, Vec<u8>)>;
+
 /// A shared sink one relay connection's own `pump_and_rewrite` records every
 /// server->client frame's raw `(packet_id, body)` into, **before** any registry
 /// rewrite is applied (`vanilla_registry_defaults::pump_and_rewrite`'s own doc
 /// comment) — cheap to clone, `Arc`-backed.
 #[derive(Clone, Default)]
-pub struct PacketRecorder(Arc<Mutex<Vec<(i32, Vec<u8>)>>>);
+pub struct PacketRecorder(Arc<Mutex<RecordedPackets>>);
 
 impl PacketRecorder {
     pub fn new() -> Self {

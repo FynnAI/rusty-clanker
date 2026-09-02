@@ -24,10 +24,14 @@ use std::time::Duration;
 
 use azalea::Client;
 use rc_gametest::placement_spec::{ApproachDirection, BlockKind, BotPitch, Direction6};
-use rc_gametest::spec::{ContraptionSpec, PlacedBlock, ScriptedAction, bounding_box, world_origin_for};
 use rc_gametest::protocol_capture::{CapturedPacket, StepCapture};
+use rc_gametest::spec::{
+    ContraptionSpec, PlacedBlock, ScriptedAction, bounding_box, world_origin_for,
+};
 
-use crate::packet_capture::{BlockSnapshotView, PacketCaptureError, connect_and_observe_with_recorder};
+use crate::packet_capture::{
+    BlockSnapshotView, PacketCaptureError, connect_and_observe_with_recorder,
+};
 use crate::packet_recorder::PacketRecorder;
 use crate::placement_capture::{self, SeqCounter};
 
@@ -88,7 +92,8 @@ pub fn classify_cell(block: &PlacedBlock) -> CellRealization {
             reason: "triggered=true — not directly placement-reachable",
         };
     }
-    if state.starts_with("minecraft:comparator") && comparator_power(state).is_some_and(|p| p != 0) {
+    if state.starts_with("minecraft:comparator") && comparator_power(state).is_some_and(|p| p != 0)
+    {
         return CellRealization::SetblockPrelude {
             reason: "nonzero default comparator analog — not directly placement-reachable",
         };
@@ -99,7 +104,10 @@ pub fn classify_cell(block: &PlacedBlock) -> CellRealization {
 fn property(vanilla_state: &str, key: &str) -> Option<String> {
     let props = vanilla_state.split('[').nth(1)?.trim_end_matches(']');
     for prop in props.split(',') {
-        if let Some(value) = prop.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+        if let Some(value) = prop
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
             return Some(value.to_string());
         }
     }
@@ -156,10 +164,22 @@ fn approach_and_pitch_for(kind: BlockKind, vanilla_state: &str) -> (f32, f32) {
         return default;
     };
     match dir {
-        Direction6::North => (ApproachDirection::North.yaw_degrees(), BotPitch::Level.pitch_degrees()),
-        Direction6::South => (ApproachDirection::South.yaw_degrees(), BotPitch::Level.pitch_degrees()),
-        Direction6::East => (ApproachDirection::East.yaw_degrees(), BotPitch::Level.pitch_degrees()),
-        Direction6::West => (ApproachDirection::West.yaw_degrees(), BotPitch::Level.pitch_degrees()),
+        Direction6::North => (
+            ApproachDirection::North.yaw_degrees(),
+            BotPitch::Level.pitch_degrees(),
+        ),
+        Direction6::South => (
+            ApproachDirection::South.yaw_degrees(),
+            BotPitch::Level.pitch_degrees(),
+        ),
+        Direction6::East => (
+            ApproachDirection::East.yaw_degrees(),
+            BotPitch::Level.pitch_degrees(),
+        ),
+        Direction6::West => (
+            ApproachDirection::West.yaw_degrees(),
+            BotPitch::Level.pitch_degrees(),
+        ),
         Direction6::Up if kind.pitch_sensitive() => (
             ApproachDirection::North.yaw_degrees(),
             BotPitch::LookingUp.pitch_degrees(),
@@ -232,11 +252,21 @@ where
                          falling back to the setblock prelude for this cell",
                         spec.id, block.pos
                     );
-                    setblock(world_pos(origin, block.pos), block.state_id, &block.vanilla_state).await;
+                    setblock(
+                        world_pos(origin, block.pos),
+                        block.state_id,
+                        &block.vanilla_state,
+                    )
+                    .await;
                 }
             }
             CellRealization::SetblockPrelude { .. } => {
-                setblock(world_pos(origin, block.pos), block.state_id, &block.vanilla_state).await;
+                setblock(
+                    world_pos(origin, block.pos),
+                    block.state_id,
+                    &block.vanilla_state,
+                )
+                .await;
             }
         }
     }
@@ -265,7 +295,12 @@ where
         let gap = action.tick.saturating_sub(previous_tick);
         tokio::time::sleep(Duration::from_millis(gap * NOMINAL_TICK_MS)).await;
         previous_tick = action.tick;
-        setblock(world_pos(origin, action.pos), action.state_id, &action.vanilla_state).await;
+        setblock(
+            world_pos(origin, action.pos),
+            action.state_id,
+            &action.vanilla_state,
+        )
+        .await;
     }
 }
 
@@ -305,7 +340,10 @@ where
     // effect a scripted action (or the placement pass itself) triggers has a real
     // chance to finish producing wire traffic before this contraption's own capture
     // closes.
-    tokio::time::sleep(Duration::from_millis(spec.max_ticks as u64 * NOMINAL_TICK_MS)).await;
+    tokio::time::sleep(Duration::from_millis(
+        spec.max_ticks as u64 * NOMINAL_TICK_MS,
+    ))
+    .await;
 
     let raw = recorder.snapshot();
     recorder.clear();
@@ -324,8 +362,7 @@ where
     // best-effort, run unconditionally regardless of the capture's own outcome
     // above (mirrors `corpus_capture.rs`'s own "Step 10 runs on both the Ok and Err
     // path" discipline).
-    let mut cleanup_positions: Vec<(i32, i32, i32)> =
-        spec.blocks.iter().map(|b| b.pos).collect();
+    let mut cleanup_positions: Vec<(i32, i32, i32)> = spec.blocks.iter().map(|b| b.pos).collect();
     cleanup_positions.extend(spec.actions.iter().map(|a| a.pos));
     cleanup_positions.sort_unstable();
     cleanup_positions.dedup();

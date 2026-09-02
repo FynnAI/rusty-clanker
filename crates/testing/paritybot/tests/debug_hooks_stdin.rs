@@ -107,7 +107,8 @@ fn spawn(label: &str, debug_hooks: bool) -> (ManagedServer, TempWorldDir) {
     config.world_dir = Some(world.path.clone());
     config.debug_hooks = debug_hooks;
     config.startup_timeout = Duration::from_secs(60);
-    let managed = spawn_server(config).expect("rusty-clanker-server should start and accept a connection");
+    let managed =
+        spawn_server(config).expect("rusty-clanker-server should start and accept a connection");
     (managed, world)
 }
 
@@ -140,7 +141,9 @@ async fn discover_floor(
 ) -> (i32, i32, i32) {
     const CEILING: i32 = 24;
     const FLOOR_SCAN_BOTTOM: i32 = -64;
-    let pos = client.position().expect("bot position readable after spawn");
+    let pos = client
+        .position()
+        .expect("bot position readable after spawn");
     let x = pos.x.floor() as i32;
     let z = pos.z.floor() as i32;
 
@@ -236,7 +239,8 @@ fn debug_setblock_applies_the_state_when_the_flag_is_set() {
         // cell already reported `Some(0)` (air) above, so this closes the "stale
         // first observation" race the same way `packet_capture.rs`'s own module doc
         // comment establishes for every other caller of `state_id_at`.
-        let after = wait_for_state_matching(&view, SKY_POS, STONE_STATE_ID, Duration::from_secs(5)).await;
+        let after =
+            wait_for_state_matching(&view, SKY_POS, STONE_STATE_ID, Duration::from_secs(5)).await;
         assert_eq!(
             after,
             Some(STONE_STATE_ID),

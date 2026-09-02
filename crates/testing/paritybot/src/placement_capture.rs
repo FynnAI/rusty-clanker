@@ -296,7 +296,10 @@ pub(crate) async fn break_block(client: &Client, seq: &mut SeqCounter, pos: (i32
 /// 's own `PlayerMarker::position` doc comment — but this module never relies on that
 /// asymmetry, so a future movement-validation addition to our own server can never
 /// silently break this harness).
-pub(crate) async fn walk_to(client: &Client, target: (i32, i32, i32)) -> Result<(), PlacementCaptureError> {
+pub(crate) async fn walk_to(
+    client: &Client,
+    target: (i32, i32, i32),
+) -> Result<(), PlacementCaptureError> {
     let goal = BlockPosGoal(AzBlockPos::new(target.0, target.1, target.2));
     tokio::time::timeout(WALK_TIMEOUT, client.goto(goal))
         .await
