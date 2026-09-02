@@ -1,7 +1,11 @@
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use xtask::forbidden_patterns::{
     LintGate, PatternViolation, check_empty_test_body, check_hardcoded_block_state_literal,
-    check_raw_stdio_piped, check_tautological_assertion, check_undocumented_tier_cfg,
-    check_unlinked_ignore, check_weakened_tests, commit_lint_gate,
+    check_raw_stdio_piped, check_raw_stdio_piped_whole_tree, check_tautological_assertion,
+    check_undocumented_tier_cfg, check_unlinked_ignore, check_weakened_tests, commit_lint_gate,
 };
 use xtask::path_guard::ChangesetType;
 
@@ -328,4 +332,112 @@ fn stdio_piped_mentioned_only_in_a_string_literal_is_not_flagged() {
         &["// never write \"Stdio::piped()\" outside process.rs".to_string()],
     );
     assert_eq!(v.len(), 0);
+}
+
+// --- `check_raw_stdio_piped_whole_tree`: the whole-tree companion (M3.5-B06
+// field-report fix). `check_raw_stdio_piped` above only ever sees one commit's own
+// diff-added lines, so a pre-existing occurrence added by some earlier, already-merged
+// commit is invisible to it forever -- exactly the gap that let `m3_5_be_report.rs`'s
+// own raw pipe survive B06's original centralization undetected. `check_raw_stdio_
+// piped_whole_tree` instead reads every `xtask/src/**/*.rs` file's *current* on-disk
+// content relative to the process's own cwd, so these tests use the same `TempCwd`
+// chdir idiom `xtask/tests/verify_claims_cli.rs` already established for a
+// CWD-relative xtask function, rather than `check_raw_stdio_piped`'s own in-memory
+// `&[String]` fixture style above (there is no line list to hand it — chdir is the
+// fixture).
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// See `xtask/tests/verify_claims_cli.rs`'s own `CWD_LOCK` doc comment: `cargo test`
+/// (libtest) runs every test in this file's binary in one process with thread-based
+/// parallelism by default, so a `std::env::set_current_dir` in one test can otherwise
+/// race another's; `cargo nextest run` gives every `#[test]` its own OS process and
+/// needs no such lock, but this serializes correctly under either runner.
+static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+/// A fresh temp dir containing an empty `xtask/src/` (mirroring the real repo layout
+/// `check_raw_stdio_piped_whole_tree` walks), chdir'd into for the duration of one test
+/// (see `CWD_LOCK`). Restored and removed on `Drop`.
+struct TempCwd {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    original: PathBuf,
+    dir: PathBuf,
+}
+
+impl TempCwd {
+    fn new(label: &str) -> Self {
+        let lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let original = std::env::current_dir().expect("current dir");
+        let dir = std::env::temp_dir().join(format!(
+            "rc-xtask-raw-stdio-piped-whole-tree-{label}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(dir.join("xtask/src")).expect("create fixture xtask/src");
+        std::env::set_current_dir(&dir).expect("chdir into temp dir");
+        Self {
+            _lock: lock,
+            original,
+            dir,
+        }
+    }
+
+    fn write(&self, rel: &str, content: &str) {
+        let path = self.dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create parent dirs");
+        std::fs::write(&path, content).expect("write fixture file");
+    }
+}
+
+impl Drop for TempCwd {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.original);
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn whole_tree_check_flags_a_pre_existing_occurrence_no_commit_diff_would_see() {
+    let cwd = TempCwd::new("flags-pre-existing");
+    // Nothing in `added_lines` for any commit ever mentions this file -- it's simply
+    // sitting on disk, exactly like a violation introduced before this lint existed.
+    cwd.write(
+        "xtask/src/probe.rs",
+        "fn spawn() {\n    Command::new(\"x\").stdout(Stdio::piped());\n}\n",
+    );
+
+    let violations = check_raw_stdio_piped_whole_tree();
+    assert_eq!(violations.len(), 1);
+    match &violations[0] {
+        PatternViolation::RawStdioPiped { file, .. } => {
+            assert_eq!(file, "xtask/src/probe.rs");
+        }
+        other => panic!("expected RawStdioPiped, got {other:?}"),
+    }
+}
+
+#[test]
+fn whole_tree_check_still_excludes_process_rs() {
+    let cwd = TempCwd::new("excludes-process-rs");
+    cwd.write(
+        "xtask/src/process.rs",
+        "fn spawn() {\n    Command::new(\"x\").stdout(Stdio::piped());\n}\n",
+    );
+
+    let violations = check_raw_stdio_piped_whole_tree();
+    assert_eq!(violations, Vec::new());
+}
+
+#[test]
+fn whole_tree_check_passes_a_clean_tree() {
+    let cwd = TempCwd::new("clean-tree");
+    cwd.write(
+        "xtask/src/nested/mod.rs",
+        "fn spawn() {\n    Command::new(\"x\").stdout(Stdio::inherit());\n}\n",
+    );
+
+    let violations = check_raw_stdio_piped_whole_tree();
+    assert_eq!(violations, Vec::new());
 }
