@@ -91,7 +91,7 @@ fn blank_comment_tail(line: &str) -> String {
 /// returns a violation-or-none rather than the span this module needs).
 fn test_fn_spans(content: &str) -> Vec<(String, usize, usize)> {
     let mut spans = Vec::new();
-    for after_attr in crate::forbidden_patterns::test_attr_offsets(content) {
+    for after_attr in crate::case_matrix::test_attr_offsets(content) {
         let Some(fn_pos_rel) = content[after_attr..].find("fn ") else {
             continue;
         };

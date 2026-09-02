@@ -126,6 +126,17 @@ fn check_case_matrix_is_silent_on_a_file_that_does_not_match_the_trigger() {
     assert_eq!(violations, Vec::new());
 }
 
+// `crates/server/tests/` uses `#[tokio::test]` pervasively for its async, real-socket
+// field-report tests -- `forbidden_patterns::test_attr_offsets` only recognizes a bare
+// `#[test]` line, which would make every "yes" category backed by one of these tests
+// spuriously look unbacked. `check_case_matrix` must see `#[tokio::test]` fns too.
+#[test]
+fn check_case_matrix_accepts_a_yes_category_backed_by_a_tokio_test_fn() {
+    let content = "//! test-matrix: boundaries=waived(r1) orientations=yes self=waived(r3) composition=waived(r4) nondefault-state=waived(r5)\n#[tokio::test]\nasync fn checks_wall_torch_facing_case() {}\n";
+    let violations = check_case_matrix("play_block_foo.rs", content);
+    assert_eq!(violations, Vec::new());
+}
+
 #[test]
 fn check_case_matrix_flags_two_candidate_header_lines_as_ambiguous() {
     let content = "//! test-matrix: boundaries=yes orientations=yes self=yes composition=yes nondefault-state=yes\n//! test-matrix: boundaries=yes orientations=yes self=yes composition=yes nondefault-state=yes\n";

@@ -180,6 +180,51 @@ pub fn required_tokens(category: Category) -> &'static [&'static str] {
     }
 }
 
+/// Test-attribute lines this module (and `spec_citation`) treat as marking a test
+/// function. `forbidden_patterns::test_attr_offsets` only recognizes a bare `#[test]`
+/// line -- this repository's own `crates/server/tests/` suite uses `#[tokio::test]`
+/// pervasively for its async, real-socket field-report tests (many of this blueprint's
+/// own §2.6-cited backing tests live there), which that narrower matcher would never
+/// see at all. A local, wider variant, not a change to `forbidden_patterns.rs` itself
+/// (Constraints/Implementation step 1 restrict that module's own change to a
+/// visibility-only bump, no behavior change).
+const TEST_ATTR_LINES: &[&str] = &["#[test]", "#[tokio::test]"];
+
+/// Byte offsets immediately after each physical line whose trimmed content is exactly
+/// one of `TEST_ATTR_LINES` -- widened re-derivation of
+/// `forbidden_patterns::test_attr_offsets`'s own technique, not a call to it. `pub(crate)`
+/// so `spec_citation` (identical need) reuses it.
+pub(crate) fn test_attr_offsets(content: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let line_end = offset + line.len();
+        let trimmed = line.trim_end_matches(['\n', '\r']).trim();
+        if TEST_ATTR_LINES.contains(&trimmed) {
+            offsets.push(line_end);
+        }
+        offset = line_end;
+    }
+    offsets
+}
+
+/// Every test-attributed function name found in `content`, in source order (duplicates
+/// preserved) -- the `#[test]`/`#[tokio::test]`-aware counterpart to
+/// `forbidden_patterns::extract_test_fn_names`.
+fn extract_test_fn_names(content: &str) -> Vec<String> {
+    test_attr_offsets(content)
+        .into_iter()
+        .filter_map(|after_attr| {
+            let fn_pos_rel = content[after_attr..].find("fn ")?;
+            let fn_pos = after_attr + fn_pos_rel;
+            let name_start = fn_pos + "fn ".len();
+            let paren_rel = content[name_start..].find('(')?;
+            let name_end = name_start + paren_rel;
+            Some(content[name_start..name_end].trim().to_string())
+        })
+        .collect()
+}
+
 fn category_label(category: Category) -> &'static str {
     match category {
         Category::Boundaries => "boundaries",
@@ -215,7 +260,7 @@ pub fn check_case_matrix(file: &str, head_content: &str) -> Vec<PatternViolation
         },
     };
 
-    let test_names = crate::forbidden_patterns::extract_test_fn_names(head_content);
+    let test_names = extract_test_fn_names(head_content);
     let mut violations = Vec::new();
     for (category, value) in [
         (Category::Boundaries, &matrix.boundaries),

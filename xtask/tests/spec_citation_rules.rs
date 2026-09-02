@@ -5,6 +5,24 @@ fn wrap_test(body: &str) -> String {
     format!("#[test]\nfn sample() {{\n{body}\n}}\n")
 }
 
+fn wrap_tokio_test(body: &str) -> String {
+    format!("#[tokio::test]\nasync fn sample() {{\n{body}\n}}\n")
+}
+
+// `crates/server/tests/` uses `#[tokio::test]` pervasively for its async, real-socket
+// field-report tests -- the citation scan must find literals inside these fn bodies too,
+// not only bare `#[test]` fns.
+#[test]
+fn check_literal_citations_flags_an_uncited_literal_inside_a_tokio_test_fn() {
+    let content = wrap_tokio_test("    assert_eq!(id, BlockStateId(12345));");
+    let violations = check_literal_citations("play_block_foo.rs", &content);
+    assert_eq!(violations.len(), 1);
+    assert!(matches!(
+        violations[0],
+        PatternViolation::MissingSpecCitation { .. }
+    ));
+}
+
 #[test]
 fn check_literal_citations_passes_a_cited_block_state_id_call() {
     let content = wrap_test("    // source: blocks.json\n    assert_eq!(id, BlockStateId(12345));");
