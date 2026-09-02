@@ -9,12 +9,12 @@
 
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
-use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
+use rc_protocol::{CompressionState, RcPacket, VarInt, VarLong, decode_one, encode_payload};
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, PlayerAction, SetPlayerRotation, UseItemOn, pack_position,
-    unpack_position,
+    KeepAliveServerbound, PlayerAction, SectionBlocksUpdate, SetPlayerRotation, UseItemOn,
+    pack_position, unpack_position,
 };
 use rusty_clanker_server::play::{
     HardcodedWorld, HeldItemStub, PlaceableBlockKind, PlayerProfile, enter_play,
@@ -106,12 +106,50 @@ async fn recv_packet_of_type(
     }
 }
 
-/// Scans clientbound traffic on `socket` for up to `window`, collecting every `Block Update`
-/// whose own `location` matches one of `wanted` -- used to prove a CASCADED change (a position
-/// other than the one the player directly acted on) actually reaches a real client, not merely
-/// the server's own internal world state. Returns once every wanted position has been seen, or
-/// once `window` elapses (whichever first) -- the caller's own `assert_eq!` on the returned
-/// map's length is what actually fails a genuine miss.
+/// M3.5-B06 necessary-exception update (TEST-D45/D46's own "test-first" convention already
+/// carves out this class of update for a pre-existing test whose own observation mechanism, not
+/// assertion, must adapt to a real, correct wire-format change this blueprint introduces --
+/// mirrors `M3.5-B05`'s own identical precedent for `anvil_backend_directory_and_level_dat.rs`):
+/// two or more same-tick, same-section cascaded changes now arrive bundled as one
+/// `SectionBlocksUpdate` instead of separate `Block Update`s (Context §3.1) -- this helper's own
+/// local inverse of `packets::pack_section_position`/`pack_block_in_section` decodes either wire
+/// shape back into the same `(BlockPos, block_state_id)` pairs this file's own assertions have
+/// always keyed on, so every existing assertion's own expected value is completely unchanged.
+fn unpack_section_position(packed: i64) -> (i32, i32, i32) {
+    let raw_x = (packed >> 42) & 0x3F_FFFF;
+    let raw_y = packed & 0xF_FFFF;
+    let raw_z = (packed >> 20) & 0x3F_FFFF;
+    (
+        sign_extend(raw_x, 22) as i32,
+        sign_extend(raw_y, 20) as i32,
+        sign_extend(raw_z, 22) as i32,
+    )
+}
+
+fn sign_extend(value: i64, bits: u32) -> i64 {
+    let sign_bit = 1i64 << (bits - 1);
+    if value >= sign_bit {
+        value - (1i64 << bits)
+    } else {
+        value
+    }
+}
+
+fn unpack_block_in_section(entry: VarLong) -> (u32, u8, u8, u8) {
+    let packed = entry.get() as u64;
+    let state_id = (packed >> 12) as u32;
+    let local_x = ((packed >> 8) & 0xF) as u8;
+    let local_z = ((packed >> 4) & 0xF) as u8;
+    let local_y = (packed & 0xF) as u8;
+    (state_id, local_x, local_z, local_y)
+}
+
+/// Scans clientbound traffic on `socket` for up to `window`, collecting every `Block Update`/
+/// `Section Blocks Update` entry whose own absolute position matches one of `wanted` -- used to
+/// prove a CASCADED change (a position other than the one the player directly acted on) actually
+/// reaches a real client, not merely the server's own internal world state. Returns once every
+/// wanted position has been seen, or once `window` elapses (whichever first) -- the caller's own
+/// `assert_eq!` on the returned map's length is what actually fails a genuine miss.
 async fn collect_block_updates_at(
     socket: &mut TcpStream,
     accumulator: &mut BytesMut,
@@ -131,6 +169,21 @@ async fn collect_block_updates_at(
                 let pos = unpack_position(update.location);
                 if wanted.contains(&pos) {
                     seen.insert(pos, update.block_state_id);
+                }
+            }
+            Ok((id, body)) if id == SectionBlocksUpdate::ID => {
+                let packet = decode_one::<SectionBlocksUpdate>(body).unwrap();
+                let (chunk_x, section_y, chunk_z) = unpack_section_position(packet.section_pos);
+                for entry in packet.states {
+                    let (state_id, local_x, local_z, local_y) = unpack_block_in_section(entry);
+                    let pos = BlockPos::new(
+                        chunk_x * 16 + local_x as i32,
+                        section_y * 16 + local_y as i32,
+                        chunk_z * 16 + local_z as i32,
+                    );
+                    if wanted.contains(&pos) {
+                        seen.insert(pos, state_id as i32);
+                    }
                 }
             }
             Ok(_) => {}
