@@ -1,6 +1,6 @@
 use xtask::claims_gate::{
-    ClaimRow, ClaimsRequirement, Verdict, claims_gate_violations, is_claims_artifact,
-    owning_blueprint, parse_claims_file, parse_claims_to_verify,
+    ClaimRow, ClaimsRequirement, SubjectOwner, Verdict, claims_gate_violations, is_claims_artifact,
+    parse_claims_file, parse_claims_to_verify, subject_owner,
 };
 
 #[test]
@@ -82,60 +82,99 @@ fn is_claims_artifact_matches_a_nested_claims_file() {
 }
 
 #[test]
-fn build_ownership_index_extracts_backtick_slash_terminated_prefixes_only() {
-    let sh = xshell::Shell::new().expect("shell");
-    let dir = std::env::temp_dir().join(format!(
-        "rc-xtask-claims-gate-ownership-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(dir.join("blueprints/M9")).expect("create fixture dirs");
-    let content = "# M9-B01 — Foo\n\n\
-                    | Field | Content |\n\
-                    |---|---|\n\
-                    | ID | `M9-B01` |\n\
-                    | Crates touched | `rc-mechanics` (`crates/mechanics/`) -- new `redstone/` submodule |\n";
-    std::fs::write(dir.join("blueprints/M9/M9-B01-foo.md"), content).expect("write fixture");
-
-    sh.change_dir(&dir);
-    let index = xtask::claims_gate::build_ownership_index(&sh).expect("must build index");
-    let _ = std::fs::remove_dir_all(&dir);
-
-    assert_eq!(index.len(), 1);
-    assert_eq!(index[0].0, "M9-B01");
-    assert_eq!(index[0].1, vec!["crates/mechanics/".to_string()]);
+fn subject_owner_parses_blueprint_and_milestone_forms() {
+    assert_eq!(
+        subject_owner("M3.5-B02 implementation: retire the path-prefix ownership index"),
+        Some(SubjectOwner::Blueprint("M3.5-B02".to_string()))
+    );
+    assert_eq!(
+        subject_owner("M3 field-report implementation: decode a real client's hotbar packets"),
+        Some(SubjectOwner::Milestone("M3".to_string()))
+    );
+    assert_eq!(
+        subject_owner("M4-B01 implementation: probe"),
+        Some(SubjectOwner::Blueprint("M4-B01".to_string()))
+    );
 }
 
 #[test]
-fn owning_blueprint_finds_the_first_matching_prefix() {
-    let index = vec![
-        ("M9-B01".to_string(), vec!["crates/foo/".to_string()]),
-        ("M9-B02".to_string(), vec!["crates/mechanics/".to_string()]),
-    ];
-    let owner = owning_blueprint("crates/mechanics/tests/bar.rs", &index);
-    assert_eq!(owner, Some("M9-B02".to_string()));
+fn subject_owner_is_none_without_a_leading_id() {
+    assert_eq!(
+        subject_owner("CI nightly tier: build the release server before the paritybot tests"),
+        None
+    );
+    assert_eq!(subject_owner("m3.5-b02 implementation: probe"), None);
 }
 
 #[test]
-fn owning_blueprint_returns_none_for_an_unowned_path() {
-    let index = vec![("M9-B01".to_string(), vec!["crates/foo/".to_string()])];
-    let owner = owning_blueprint("crates/bar/src/lib.rs", &index);
-    assert_eq!(owner, None);
+fn claims_gate_violations_flags_an_implementation_subject_without_an_owner() {
+    let violations = claims_gate_violations(
+        "CI nightly tier: build the release server before the paritybot tests",
+        |_| panic!("blueprint_exists must not be consulted without an owner"),
+        |_| panic!("requirement_of must not be consulted without an owner"),
+        |_| panic!("claims_file_of must not be consulted without an owner"),
+    );
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("must name their owning blueprint"));
 }
 
-fn one_entry_index() -> Vec<(String, Vec<String>)> {
-    vec![("M9-B01".to_string(), vec!["crates/mechanics/".to_string()])]
+#[test]
+fn claims_gate_violations_flags_an_unknown_blueprint_id() {
+    let violations = claims_gate_violations(
+        "M3.5-B99 implementation: a blueprint id nothing on disk answers to",
+        |_| false,
+        |_| panic!("requirement_of must not be consulted when the blueprint file is missing"),
+        |_| panic!("claims_file_of must not be consulted when the blueprint file is missing"),
+    );
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("M3.5-B99"));
+}
+
+#[test]
+fn claims_gate_violations_passes_a_pre_m35_blueprint_without_the_heading() {
+    let violations = claims_gate_violations(
+        "M3-B01 implementation: retroactively audited, heading-less work",
+        |_| true,
+        |_| None,
+        |_| panic!("claims_file_of must not be consulted when there's no heading"),
+    );
+    assert_eq!(violations, Vec::<String>::new());
+
+    let violations = claims_gate_violations(
+        "M3.5-B07 implementation: a blueprint missing its required heading",
+        |_| true,
+        |_| None,
+        |_| panic!("claims_file_of must not be consulted when there's no heading"),
+    );
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("M3.5-B07"));
+}
+
+#[test]
+fn claims_gate_violations_passes_a_pre_m35_milestone_owner_and_flags_a_later_one() {
+    let violations = claims_gate_violations(
+        "M3 field-report implementation: decode a real client's hotbar packets",
+        |_| panic!("blueprint_exists must not be consulted for a milestone owner"),
+        |_| panic!("requirement_of must not be consulted for a milestone owner"),
+        |_| panic!("claims_file_of must not be consulted for a milestone owner"),
+    );
+    assert_eq!(violations, Vec::<String>::new());
+
+    let violations = claims_gate_violations(
+        "M4 field-report implementation: probe",
+        |_| panic!("blueprint_exists must not be consulted for a milestone owner"),
+        |_| panic!("requirement_of must not be consulted for a milestone owner"),
+        |_| panic!("claims_file_of must not be consulted for a milestone owner"),
+    );
+    assert_eq!(violations.len(), 1);
+    assert!(violations[0].contains("M4"));
 }
 
 #[test]
 fn claims_gate_violations_passes_a_file_owned_by_an_exempt_blueprint() {
-    let index = one_entry_index();
     let violations = claims_gate_violations(
-        &["crates/mechanics/src/foo.rs".to_string()],
-        &index,
+        "M3.5-B02 implementation: exempt blueprint",
+        |_| true,
         |_| Some(ClaimsRequirement::Exempt),
         |_| panic!("claims_file_of must not be consulted for an exempt blueprint"),
     );
@@ -144,23 +183,21 @@ fn claims_gate_violations_passes_a_file_owned_by_an_exempt_blueprint() {
 
 #[test]
 fn claims_gate_violations_flags_a_missing_claims_file() {
-    let index = one_entry_index();
     let violations = claims_gate_violations(
-        &["crates/mechanics/src/foo.rs".to_string()],
-        &index,
+        "M3.5-B02 implementation: missing CLAIMS.md",
+        |_| true,
         |_| Some(ClaimsRequirement::Required(vec!["claim one".to_string()])),
         |_| None,
     );
     assert_eq!(violations.len(), 1);
-    assert!(violations[0].contains("M9-B01"));
+    assert!(violations[0].contains("M3.5-B02"));
 }
 
 #[test]
 fn claims_gate_violations_flags_an_uncorrected_wrong_row() {
-    let index = one_entry_index();
     let violations = claims_gate_violations(
-        &["crates/mechanics/src/foo.rs".to_string()],
-        &index,
+        "M3.5-B02 implementation: an uncorrected WRONG claim",
+        |_| true,
         |_| Some(ClaimsRequirement::Required(vec!["claim one".to_string()])),
         |_| {
             Some(Ok(vec![ClaimRow {
@@ -177,10 +214,9 @@ fn claims_gate_violations_flags_an_uncorrected_wrong_row() {
 
 #[test]
 fn claims_gate_violations_passes_a_wrong_corrected_row() {
-    let index = one_entry_index();
     let violations = claims_gate_violations(
-        &["crates/mechanics/src/foo.rs".to_string()],
-        &index,
+        "M3.5-B02 implementation: a corrected claim",
+        |_| true,
         |_| Some(ClaimsRequirement::Required(vec!["claim one".to_string()])),
         |_| {
             Some(Ok(vec![ClaimRow {
@@ -196,13 +232,18 @@ fn claims_gate_violations_passes_a_wrong_corrected_row() {
 }
 
 #[test]
-fn claims_gate_violations_is_silent_on_an_unowned_file() {
-    let index = one_entry_index();
+fn claims_gate_violations_never_reads_paths() {
+    // §2.9's corrected design derives ownership from the commit subject alone -- there
+    // is no fourth "changed files" parameter for this function to read at all, unlike
+    // the path-prefix ownership index it replaced. This call -- a subject plus the
+    // three blueprint-file lookups, nothing else -- is itself the evidence: the same
+    // subject always resolves to the same owner and the same violations, regardless of
+    // which files a real commit touched.
     let violations = claims_gate_violations(
-        &["crates/unrelated/src/foo.rs".to_string()],
-        &index,
-        |_| panic!("requirement_of must not be consulted for an unowned file"),
-        |_| panic!("claims_file_of must not be consulted for an unowned file"),
+        "M3.5-B02 implementation: same result no matter what changed",
+        |_| true,
+        |_| Some(ClaimsRequirement::Exempt),
+        |_| panic!("claims_file_of must not be consulted for an exempt blueprint"),
     );
     assert_eq!(violations, Vec::<String>::new());
 }
