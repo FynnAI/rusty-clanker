@@ -233,29 +233,19 @@ Entries name the milestone that surfaced them and the code they concern.
   the Unix equivalent) before trusting any `fetch-corpus` failure as a real
   capture-pipeline defect.
 
-- **`chunk_churn_end_to_end`'s "waiting for chunk churn to settle" budget is
-  too tight for contended CI runners — two independent CI timeouts on the
-  same day (windows-2025 in run 33485-era gates as test 150/150 at 95s under
-  full suite load; ubuntu-24.04 later the same day), while the same commit
-  passes 9/9 consecutive local runs in 1–5s and both CI legs pass on a plain
-  re-run.** Same class as the `play_chunk_streaming_on_move` per-stage
-  budgets already documented as "pure hang guards, deliberately sized for a
-  starved shared runner" — this one's settle deadline
-  (`crates/server/tests/chunk_churn_end_to_end.rs` ~line 171) apparently
-  never got the same sizing pass. Needs a `test-authoring` changeset to
-  raise it to hang-guard scale (and a quick audit of the sibling
-  `synthetic_player_movement...` stage budgets in the same file), or a
-  decision to fold both binaries into a stricter nextest scheduling group;
-  until then the mitigation is `gh run rerun --failed` after confirming the
-  local repro is green. **(Update, same night):** `play_block_break_place_
-  full.rs` belongs to the same class — its `spawn-a`/`spawn-b` 30s stage
-  budgets timed out on windows-2025 CI (run for adb4ec1) and, locally, the
-  six-test file swings between 37s and 60s with one sporadic stage timeout
-  while three cargo builds run concurrently, versus ~5s per test on a quiet
-  machine. Both files should get the same sizing pass in one `test-authoring`
-  changeset: hang-guard-scale stage budgets (minutes, not tens of seconds)
-  plus membership in the nextest heavy-server-integration group, so a
-  contended runner degrades into slower green runs instead of red ones.
+- **CI contention family — resolved 2026-09-02 (kept as one short record because the
+  root causes were three, not one).** (1) the nextest `heavy-server-integration`
+  group was an explicit binary list, so every real-connection test file added on
+  2026-09-01 ran unthrottled — now `package(rusty-clanker-server) & kind(test)`
+  (governance); (2) stage/whole-test wrappers of 30/45/60s across sixteen test
+  files were timing gates in disguise — all raised to hang-guard scale
+  (120s/300s, test-authoring); (3) the real driver of the last four red runs was
+  a hot-path regression, not contention: the block-entity wave's chunk encoder
+  walked every cell of every section per chunk (12.9M kind lookups per join in
+  an unoptimized build), turning ~8s two-player tests into 300s hangs — fixed
+  by a per-section palette pre-check (implementation). CI green on 1c0d5b2-era
+  main. Standing rule recorded in memory: time one two-player test under
+  `nextest -j 1` before/after any change to the join/chunk-send path.
 
 - **`xtask`'s `m1_report.rs` and `corpus/fetch_corpus.rs` carry the same
   latent piped-child stdout/stderr deadlock `m3_report.rs` just had fixed
