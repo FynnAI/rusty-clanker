@@ -51,6 +51,7 @@ pub enum PatternViolation {
         file: String,
         fn_name: String,
         comment: String,
+    },
     HardcodedBlockStateLiteral {
         file: String,
         line: String,
@@ -738,6 +739,7 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
         } => (
             "malformed-spec-citation",
             format!("{file}: fn {fn_name}: malformed citation comment — {comment}"),
+        ),
         PatternViolation::HardcodedBlockStateLiteral { file, line } => (
             "hardcoded-block-state-literal",
             format!("{file}: hardcoded block-state-id literal — {line}"),
