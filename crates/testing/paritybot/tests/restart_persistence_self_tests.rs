@@ -17,6 +17,16 @@
 //! below unmodified — it remains a genuinely valuable regression guard for THIS BOT'S OWN
 //! `click_aim_point` aim logic landing on the intended block, independent of what the server
 //! does with that aim.
+//!
+//! M2 field-report test-authoring (AC3, "the configured save interval fires within ±1 tick of
+//! its cadence"): `churn_schedule` below pins `churn_toggle_count`/`churn_toggle_is_place` —
+//! the new `churn` mode's own pure scheduling arithmetic (`restart_persistence.rs`'s own
+//! module-doc addendum has the full defect writeup). Neither symbol exists yet on this commit
+//! — this file is expected to fail to compile until the paired governance changeset adds them
+//! to `restart_persistence.rs`, mirroring `c7f20ad`'s own established test-first precedent for
+//! this repository ("expected to fail to compile until [implementation] populate[s]" it).
+//! `churn` itself (like `apply_actions`/`observe_state` above) stays exercised only by a real
+//! `m2-report` run — no network/live-server involvement here either.
 
 use rc_paritybot::restart_persistence::{ActionError, compare_state, expected_state};
 
@@ -231,5 +241,76 @@ mod aim_geometry {
                 other => panic!("unexpected scripted click {other:?}"),
             }
         }
+    }
+}
+
+/// M2 field-report fix (AC3): pins `churn_toggle_count`/`churn_toggle_is_place` — the new
+/// `churn` mode's own pure scheduling arithmetic (`restart_persistence.rs`'s own module-doc
+/// addendum). No live server, no `azalea` client involved — `churn` itself is exercised only
+/// by a real `m2-report` run, exactly like `apply_actions`/`observe_state` above.
+mod churn_schedule {
+    use std::time::Duration;
+
+    use rc_paritybot::restart_persistence::{churn_toggle_count, churn_toggle_is_place};
+
+    #[test]
+    fn toggle_count_divides_duration_by_period_exactly() {
+        assert_eq!(
+            churn_toggle_count(Duration::from_secs(30), Duration::from_millis(250)),
+            120
+        );
+    }
+
+    #[test]
+    fn toggle_count_truncates_a_remainder_down() {
+        // 1000ms / 300ms = 3 whole periods, with 100ms left over -- never rounded up.
+        assert_eq!(
+            churn_toggle_count(Duration::from_millis(1000), Duration::from_millis(300)),
+            3
+        );
+    }
+
+    #[test]
+    fn toggle_count_is_zero_when_the_period_exceeds_the_duration() {
+        assert_eq!(
+            churn_toggle_count(Duration::from_millis(100), Duration::from_millis(250)),
+            0
+        );
+    }
+
+    #[test]
+    fn toggle_count_is_zero_for_a_zero_period_rather_than_dividing_by_zero() {
+        assert_eq!(
+            churn_toggle_count(Duration::from_secs(30), Duration::ZERO),
+            0
+        );
+    }
+
+    /// Smoke mode's own `save_interval_ticks` is `20` -- `1000ms` at the real server's `20
+    /// ticks/s` (`xtask::m2_report::Mode::cadence_params`). `CHURN_PERIOD` (`xtask::m2_report`,
+    /// private to that module, never reachable from this crate) is `250ms`; restated here as a
+    /// literal rather than an import, mirroring `restart_persistence.rs`'s own established
+    /// one-way dependency boundary (`xtask` is never a dependency of `rc-paritybot`) — pins
+    /// that a smoke-length run's own period stays comfortably *below* one full interval, giving
+    /// several toggles per interval-length window rather than merely one.
+    #[test]
+    fn the_default_smoke_leg_period_toggles_several_times_per_smoke_interval() {
+        let toggles_per_smoke_interval =
+            churn_toggle_count(Duration::from_millis(1000), Duration::from_millis(250));
+        assert!(
+            toggles_per_smoke_interval >= 3,
+            "expected several toggles within one smoke-mode save interval, got \
+             {toggles_per_smoke_interval}"
+        );
+    }
+
+    #[test]
+    fn toggle_state_alternates_starting_from_place() {
+        let states: Vec<bool> = (0u64..6).map(churn_toggle_is_place).collect();
+        assert_eq!(
+            states,
+            vec![true, false, true, false, true, false],
+            "got {states:?}"
+        );
     }
 }
