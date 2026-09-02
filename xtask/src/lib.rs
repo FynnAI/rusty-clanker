@@ -217,6 +217,37 @@ pub enum Command {
         #[arg(long)]
         accept_eula: bool,
     },
+    /// M3.5-B03: drives the TEST-D54 protocol-differential harness (a scripted bot
+    /// session plus the redstone corpus over the wire) against both a real vanilla
+    /// oracle and our own real `rusty-clanker-server`, diffs the normalized
+    /// clientbound streams per packet type at the byte level, and writes
+    /// `target/verify/protocol-diff.json`. Never runs in Tier 1 (own scheduled CI
+    /// tier, `.github/workflows/ci.yml`).
+    ProtocolDiff {
+        #[arg(long, default_value = "26.2")]
+        version: String,
+        #[arg(long)]
+        server_jar: Option<std::path::PathBuf>,
+        #[arg(long)]
+        server_bin: std::path::PathBuf,
+        /// Restrict to one step id (`session/...` or a redstone corpus id), for
+        /// local iteration.
+        #[arg(long)]
+        only: Option<String>,
+        /// `oracle` (capture/cache only, no diff), `ours` (capture only, no diff), or
+        /// `both` (capture both sides and diff) — default `both`.
+        #[arg(long, default_value = "both")]
+        side: String,
+        /// TEST-D41 legal consent, same flag shape as every other verb that launches
+        /// the real vanilla oracle jar.
+        #[arg(long)]
+        accept_eula: bool,
+        /// M3.5-B03 Constraint (f): passed through to the `ours` side's own
+        /// `rusty-clanker-server --debug-hooks` flag only — the oracle side's
+        /// equivalent hooks are always real console commands regardless.
+        #[arg(long)]
+        debug_hooks: bool,
+    },
     /// TEST-D57: exact-count CLAIMS.md audit for one milestone's blueprints.
     VerifyClaims { milestone: String },
     /// M3.5-B05: drives the block-entity persistence restart round-trip

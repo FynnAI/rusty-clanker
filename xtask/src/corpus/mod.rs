@@ -6,3 +6,4 @@ pub mod blocks_report;
 pub mod fetch_corpus;
 pub mod parity_check;
 pub mod placement_diff;
+pub mod protocol_diff;

@@ -228,6 +228,33 @@ fn main() -> ExitCode {
             };
             xtask::corpus::placement_diff::run(&args)
         }
+        Command::ProtocolDiff {
+            version,
+            server_jar,
+            server_bin,
+            only,
+            side,
+            accept_eula,
+            debug_hooks,
+        } => {
+            let side = match xtask::corpus::placement_diff::Side::parse(&side) {
+                Ok(side) => side,
+                Err(err) => {
+                    eprintln!("protocol-diff: {err}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let args = xtask::corpus::protocol_diff::ProtocolDiffArgs {
+                version,
+                server_jar,
+                server_bin,
+                only,
+                side,
+                accept_eula,
+                debug_hooks,
+            };
+            xtask::corpus::protocol_diff::run(&args)
+        }
         Command::VerifyClaims { milestone } => xtask::verify_claims::run(&milestone),
         Command::M35BeReport { server_bin, mode } => xtask::m3_5_be_report::run(server_bin, mode),
     }

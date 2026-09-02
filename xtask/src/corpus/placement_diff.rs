@@ -45,10 +45,14 @@ impl Side {
         }
     }
 
-    fn wants_oracle(self) -> bool {
+    // `pub(crate)` (M3.5-B03): `xtask::corpus::protocol_diff::run` reuses this same
+    // `Side` type unmodified (never redefined) rather than duplicating its own
+    // oracle/ours dispatch logic — these two were private only because no second
+    // caller existed until now.
+    pub(crate) fn wants_oracle(self) -> bool {
         matches!(self, Side::Oracle | Side::Both)
     }
-    fn wants_ours(self) -> bool {
+    pub(crate) fn wants_ours(self) -> bool {
         matches!(self, Side::Ours | Side::Both)
     }
 }
