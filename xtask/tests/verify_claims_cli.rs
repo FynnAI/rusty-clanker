@@ -1,23 +1,37 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use xtask::tier_result::{Status, TierResult};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// A fresh temp dir, chdir'd into for the duration of one test. `cargo-nextest` gives
-/// every `#[test]` its own OS process, so a real `std::env::set_current_dir` here
-/// cannot race any other concurrently running test (unlike `cargo test`'s
-/// one-process-per-binary, thread-parallel model, which this project does not use --
-/// TEST-D37/CLAUDE.md pin `cargo nextest run` as the sole verification invocation).
+/// `verify_claims::run` resolves `blueprints/<milestone>` relative to the real process
+/// cwd (matching `tier_result::VERIFY_OUT_DIR`'s own "target/verify" convention -- see
+/// that module's own doc comment), so isolating one test's fixture tree means actually
+/// chdir-ing the process. `cargo-nextest` gives every `#[test]` its own OS process, so
+/// that chdir cannot race another test there -- but `cargo test` (libtest) runs every
+/// test in one binary in the SAME process with thread-based parallelism by default, and
+/// this project's own verification commands run both (`cargo nextest run -p xtask` and
+/// `cargo test -p xtask`), so this lock serializes every `TempCwd`-using test
+/// regardless of which runner drives them. A poisoned lock (an earlier test panicked
+/// while holding it) is recovered rather than propagated -- the guarded state is
+/// trivially `()`, so there is nothing to actually be inconsistent.
+static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+/// A fresh temp dir, chdir'd into for the duration of one test (see `CWD_LOCK`).
 /// Restored and removed on `Drop`.
 struct TempCwd {
+    _lock: std::sync::MutexGuard<'static, ()>,
     original: PathBuf,
     dir: PathBuf,
 }
 
 impl TempCwd {
     fn new(label: &str) -> Self {
+        let lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let original = std::env::current_dir().expect("current dir");
         let dir = std::env::temp_dir().join(format!(
             "rc-xtask-verify-claims-{label}-{}-{}",
@@ -26,7 +40,11 @@ impl TempCwd {
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         std::env::set_current_dir(&dir).expect("chdir into temp dir");
-        Self { original, dir }
+        Self {
+            _lock: lock,
+            original,
+            dir,
+        }
     }
 
     fn write(&self, rel: &str, content: &str) {
