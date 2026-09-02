@@ -105,3 +105,12 @@ path = "src/bin/placement_diff_runner.rs"
 [[bin]]
 name = "block_entity_persistence_runner"
 path = "src/bin/block_entity_persistence_runner.rs"
+
+# M3.5-B03 (governance changeset, "protocol-differential harness against the vanilla
+# oracle"): `xtask protocol-diff` drives `protocol_session::run_protocol_session` and
+# `redstone_wire_capture::run_redstone_wire_capture` (against either a real oracle or
+# our own real server) by spawning this binary as a real OS subprocess, identical
+# forced-deviation precedent to every bin target above.
+[[bin]]
+name = "protocol_diff_runner"
+path = "src/bin/protocol_diff_runner.rs"
