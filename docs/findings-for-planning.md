@@ -1268,6 +1268,34 @@ Entries name the milestone that surfaced them and the code they concern.
   for every production path — is corrected in the blueprint itself (§2.9) and
   re-implemented as a governance changeset rather than recorded here.
 
+- **M3-B07 `fetch-corpus` capture is not tick-deterministic on the
+  `ubuntu-24.04` runner (first observed 2026-09-02, the first day the
+  nightly tier ever reached `m3-report`).** Two consecutive `workflow_dispatch`
+  runs each failed `parity-check redstone` on one or two contraptions, a
+  different set each time, and every mismatch sits on the *captured* side:
+  run 33680590475 — `comparator_container_fullness_chest` (oracle 11264 at
+  the comparator position at tick 0, replay air); run 33684584640 —
+  `comparator_compare_vs_subtract` (oracle shows the repeater `locked` at
+  tick 0, 4873, unlocked from tick 1 on, 4871 — the replay has 4871 from tick
+  0) and `basic_piston_door_2x1` (oracle still shows the piston head 2275 at
+  tick 6, air at tick 7 — the replay retracts at tick 6). The replay side is
+  identical across both runs and across five local runs; the `windows-2025`
+  leg of both runs passed all 52 with its own fresh capture, as does every
+  local capture on this machine. So the M3 AC1 evidence stands on Windows
+  (CI and local), and the tick barrier / tick-0 snapshot of the capture
+  pipeline (setup-command log verification, `/time query gametime`
+  log-confirm, alternating marker block) is one tick loose on the Linux
+  runner — a transient tick-0 state and a one-tick-late scripted action are
+  the two symptoms. TEST-D48 forbids the obvious workaround (committing the
+  traces as fixtures), so the fix has to be capture-side: a follow-up
+  hardening task should run `fetch-corpus` on `ubuntu-24.04` repeatedly with
+  per-contraption barrier logging, then make the capture prove tick-0
+  stability (two consecutive barrier cycles with identical volume snapshots
+  before tick 0 is declared) and confirm the action-tick alignment from the
+  oracle's own gametime log rather than from the bot's packet arrival.
+  `format_diff_dump` now writes both full traces so the next occurrence is
+  readable from the CI artifact alone.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s
