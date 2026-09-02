@@ -21,7 +21,7 @@ Rusty Clanker is a from-scratch Rust reimplementation of the Minecraft: Java Edi
 
 - **Subagents run on Sonnet 5 by default** — every `Agent` launch passes `model: "sonnet"` explicitly (the user settings also set `CLAUDE_CODE_SUBAGENT_MODEL=claude-sonnet-5`; pass it anyway so the intent is visible in the call).
 - **Opus 5** only for genuinely hard, diagnosis-heavy or research-role work (root-causing with instrumentation, reference verification per TEST-D57, blueprint authoring, harness design) — escalate deliberately, one task at a time.
-- **Fable agents never** — Fable is the manager session only; a Fable subagent is started solely on the user's explicit request. Spawning Fable agents burns the budget far too fast and is inefficient.
+- **Fable agents never** — a Fable subagent is started solely on the user's explicit request; spawning Fable agents burns the budget far too fast and is inefficient. Fable's job is the **manager session itself**: it briefs the agents, and at the end **reviews everything they delivered and applies the corrections itself** (audit of diffs, reports and claims; conflict resolution; planning corrections). That final Fable review is required, not optional.
 - Working pattern, always: Sonnet in the agent swarm, occasional Opus, Fable as the master. Never assert which model an agent used without checking its transcript (`"model":"claude-…"` in the task output JSONL).
 
 ## Legal red lines (non-negotiable)
