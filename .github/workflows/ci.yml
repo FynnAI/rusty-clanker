@@ -451,3 +451,73 @@ jobs:
             target/verify/parity-check-redstone.json
             target/verify/parity-check-redstone-diffs/**
           if-no-files-found: warn
+
+  protocol-diff:
+    name: protocol-diff (${{ matrix.os }})
+    # M3.5-B03 (TEST-D54): "Runs as its own scheduled CI tier next to m*-acceptance;
+    # never part of Tier 1" — structurally identical to `m3-acceptance` above, never
+    # required to be meaningfully green until the M3.5-B03 blueprint's own final
+    # commit lands (this blueprint's own Tier-1 gate never depends on this job).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      # TEST-D38/D41: a real Java 25+ runtime to run the pinned oracle server.jar.
+      - name: Install Java 25+
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      # `rc-paritybot`'s own transitive `azalea` dependency requires a nightly Rust
+      # toolchain — identical precedent to `m3-acceptance`'s own steps above.
+      - name: rc-paritybot lint (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
+
+      - name: Build rusty-clanker-server (monolithic)
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: protocol-diff
+        shell: bash
+        env:
+          RUSTC_BOOTSTRAP: "1"
+          RC_ORACLE_EULA_ACCEPTED: "1"
+        run: |
+          cargo run -p xtask -- protocol-diff --server-bin target/release/rusty-clanker-server --accept-eula
+
+      - name: Upload protocol-diff report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-diff-${{ matrix.os }}
+          path: |
+            target/verify/protocol-diff.json
+          if-no-files-found: warn
