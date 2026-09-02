@@ -1208,6 +1208,10 @@ pub struct HardcodedWorld {
     debug_survival_tx: tokio::sync::mpsc::UnboundedSender<(i32, bool, oneshot::Sender<()>)>,
     /// New (M3-B03), test/diagnostic only -- `debug_stage4_counters`'s own doc comment.
     stage4_counters_tx: tokio::sync::mpsc::UnboundedSender<oneshot::Sender<Stage4Counters>>,
+    /// New (M3.5-B03), test/diagnostic only, reachable externally only via the
+    /// `--debug-hooks`-gated `debug-setblock` stdin line (`main.rs`'s own doc
+    /// comment) -- `debug_set_block_state`'s own doc comment has the full contract.
+    debug_setblock_tx: tokio::sync::mpsc::UnboundedSender<(BlockPos, u32, oneshot::Sender<()>)>,
 }
 
 /// M3 field-report fix (symptom 2): `HardcodedWorld`'s per-connection channel methods
@@ -1292,6 +1296,8 @@ impl HardcodedWorld {
             tokio::sync::mpsc::unbounded_channel::<(i32, bool, oneshot::Sender<()>)>();
         let (stage4_counters_tx, mut stage4_counters_rx) =
             tokio::sync::mpsc::unbounded_channel::<oneshot::Sender<Stage4Counters>>();
+        let (debug_setblock_tx, mut debug_setblock_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(BlockPos, u32, oneshot::Sender<()>)>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // M2 integration addition (M2-B06's own "Composition-root integration" recipe
@@ -2703,6 +2709,36 @@ impl HardcodedWorld {
                     }
                 }
 
+                // M3.5-B03, test/diagnostic only, reachable externally only via the
+                // `--debug-hooks`-gated `debug-setblock` stdin line
+                // (`debug_set_block_state`'s own doc comment): a raw, unconditional
+                // world-state write bypassing every placement rule, mirroring `/
+                // setblock`'s own console semantics. No "not-yet-spawned actor" carry-
+                // forward is needed here, unlike `debug_held_item_rx`/`debug_survival_rx`
+                // above -- this mutation targets a world position, never a player
+                // entity, so it applies immediately on whichever tick receives it.
+                // Broadcasts via the identical `broadcast_changed_positions` path every
+                // other direct-write call site in this file uses (`primary: None` --
+                // no single connection already saw this write via its own response
+                // packet, unlike a real player-driven place/break), so every connected
+                // client's own world model resyncs exactly as it would for a real
+                // `/setblock`.
+                while let Ok((pos, state_id, ack)) = debug_setblock_rx.try_recv() {
+                    let new_state = StorageBlockStateId::from_raw(state_id);
+                    let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> = Vec::new();
+                    let did_change = DirectBlockWorld {
+                        world: &mut region.world,
+                        dimension: DimensionId::OVERWORLD,
+                        local: Address::Region(HARDCODED_REGION_ID),
+                    }
+                    .set_block(pos, new_state);
+                    if did_change {
+                        direct_changed.push((pos, new_state));
+                    }
+                    broadcast_changed_positions(&region.world, &direct_changed, None);
+                    let _ = ack.send(());
+                }
+
                 while let Ok((pos, reply)) = query_rx.try_recv() {
                     let _ = reply.send(debug_query_block(
                         &region.world,
@@ -2798,6 +2834,7 @@ impl HardcodedWorld {
             debug_held_item_tx,
             debug_survival_tx,
             stage4_counters_tx,
+            debug_setblock_tx,
         }
     }
 
@@ -3041,6 +3078,31 @@ impl HardcodedWorld {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.stage4_counters_tx.send(reply_tx).ok()?;
         reply_rx.await.ok()
+    }
+
+    /// New (M3.5-B03). Test/diagnostic only, reachable only when
+    /// `rusty-clanker-server` was launched with `--debug-hooks` (`main.rs`) -- a
+    /// `/setblock`-equivalent raw world mutation, bypassing every placement rule
+    /// (support checks, orientation, held-item consumption). Never a substitute for
+    /// the real placement path `protocol_session`/`redstone_wire_capture` exercise
+    /// instead -- used only for a cell `redstone_wire_capture::classify_cell` has
+    /// already decided is not placement-reachable. `.await`s the tick loop's own
+    /// drain-and-broadcast step before returning, mirroring `debug_set_survival`'s
+    /// own "ack implies applied" contract -- unlike that method, there is no
+    /// not-yet-spawned-actor race to carry forward (this mutation targets a world
+    /// position, not a player entity), so a dead tick-loop thread is this method's
+    /// only way to never resolve the ack; a `send` failure degrades to a silent
+    /// no-op return, mirroring `queue_join`'s own `RegionUnavailable`-adjacent
+    /// "already gone" handling for every other test/diagnostic method here.
+    pub async fn debug_set_block_state(&self, pos: BlockPos, state_id: u32) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self
+            .debug_setblock_tx
+            .send((pos, state_id, ack_tx))
+            .is_ok()
+        {
+            let _ = ack_rx.await;
+        }
     }
 }
 

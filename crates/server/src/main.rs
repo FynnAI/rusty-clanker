@@ -57,6 +57,11 @@ struct ParsedArgs {
     save_interval_ticks: Option<u32>,
     save_event_log: Option<std::path::PathBuf>,
     tick_log: Option<std::path::PathBuf>,
+    /// M3.5-B03: `--debug-hooks` — off by default. Widens the stdin-line reader
+    /// task's own recognized-line set (below) to include `debug-setblock`/
+    /// `debug-gamemode`; every other line's handling is byte-for-byte unchanged
+    /// whether this is set or not.
+    debug_hooks: bool,
 }
 
 /// `Err(message)` on an unrecognized argument or a value-taking flag missing its
@@ -73,6 +78,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
     let mut save_interval_ticks = None;
     let mut save_event_log = None;
     let mut tick_log = None;
+    let mut debug_hooks = false;
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -132,6 +138,11 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
                     }
                 }
             }
+            // M3.5-B03: the one, explicit, narrow, off-by-default product-code
+            // exception this milestone's harness blueprint makes (M3.5-B03 Constraint
+            // (f)) — see the stdin-line reader task in `run` below for what this
+            // actually widens.
+            "--debug-hooks" => debug_hooks = true,
             other => return Err(format!("unrecognized argument {other:?}")),
         }
     }
@@ -144,6 +155,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
         save_interval_ticks,
         save_event_log,
         tick_log,
+        debug_hooks,
     })
 }
 
@@ -155,6 +167,7 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
         save_interval_ticks,
         save_event_log,
         tick_log,
+        debug_hooks,
     } = parsed;
     let key_pair = match rc_auth::ServerKeyPair::generate() {
         Ok(key_pair) => Arc::new(key_pair),
@@ -228,6 +241,11 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
     // stdin-inherited-and-already-closed test invocation self-shut-down within
     // milliseconds of listening.
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    // M3.5-B03: `debug_hooks_world` gives this same reader task the one additional
+    // thing it needs to widen its recognized-line set below — every other line's
+    // handling (including `shutdown` and the unconditional `Ok(Some(_)) => continue`
+    // fallback) is byte-for-byte unchanged from before this addition.
+    let debug_hooks_world = world.clone();
     tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
@@ -236,6 +254,14 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
                 Ok(Some(line)) if line.trim() == "shutdown" => {
                     let _ = shutdown_tx.send(());
                     return;
+                }
+                // M3.5-B03 (Constraint (f) — the one, explicit, narrow, off-by-default
+                // product-code exception this milestone's harness blueprint makes):
+                // only matched when `debug_hooks == true` — an unrecognized line, or
+                // any `debug-*` line at all when the flag is unset, keeps falling
+                // through unchanged to the `Ok(Some(_)) => continue` arm below.
+                Ok(Some(line)) if debug_hooks => {
+                    handle_debug_hook_line(&debug_hooks_world, line.trim()).await;
                 }
                 Ok(Some(_)) => continue,
                 Ok(None) | Err(_) => {
@@ -311,5 +337,54 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
                 .await;
             }
         });
+    }
+}
+
+/// M3.5-B03: the two recognized `--debug-hooks` stdin lines — reached only when
+/// `debug_hooks == true` (`run`'s own stdin-line reader task, above). Any line that
+/// does not parse as one of these two exact shapes is silently ignored (mirrors the
+/// pre-existing, unconditional `Ok(Some(_)) => continue` fallback's own "unrecognized
+/// line is not an error" contract — a malformed `debug-*` line is simply another
+/// unrecognized line, not a crash or a loud rejection).
+///
+/// `debug-gamemode <network_entity_id> <survival|creative>` and
+/// `debug-setblock <x> <y> <z> <state_id>` — `main.rs`'s own module doc comment names
+/// both.
+async fn handle_debug_hook_line(world: &rusty_clanker_server::play::HardcodedWorld, line: &str) {
+    let mut parts = line.split_whitespace();
+    match parts.next() {
+        Some("debug-gamemode") => {
+            let (Some(id), Some(mode)) = (parts.next(), parts.next()) else {
+                return;
+            };
+            let Ok(network_entity_id) = id.parse::<i32>() else {
+                return;
+            };
+            let survival = match mode {
+                "survival" => true,
+                "creative" => false,
+                _ => return,
+            };
+            world.debug_set_survival(network_entity_id, survival).await;
+        }
+        Some("debug-setblock") => {
+            let (Some(x), Some(y), Some(z), Some(state_id)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return;
+            };
+            let (Ok(x), Ok(y), Ok(z), Ok(state_id)) = (
+                x.parse::<i32>(),
+                y.parse::<i32>(),
+                z.parse::<i32>(),
+                state_id.parse::<u32>(),
+            ) else {
+                return;
+            };
+            world
+                .debug_set_block_state(rc_core::BlockPos::new(x, y, z), state_id)
+                .await;
+        }
+        _ => {}
     }
 }
