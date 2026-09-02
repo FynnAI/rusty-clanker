@@ -132,7 +132,6 @@ fn on_neighbor_changed_re_enables_when_the_neighbor_signal_drops_to_zero() {
     source.set_power(0);
     let mut ctx = scratch.ctx(&mut world);
     behavior.on_neighbor_changed(&mut ctx, pos, Direction::North);
-    drop(ctx);
 
     assert_eq!(
         scratch.changed,
@@ -163,7 +162,6 @@ fn on_neighbor_changed_is_a_no_op_when_enabled_state_already_matches() {
     let mut scratch = Scratch::new(world.local);
     let mut ctx = scratch.ctx(&mut world);
     behavior.on_neighbor_changed(&mut ctx, pos, Direction::North);
-    drop(ctx);
 
     assert!(
         scratch.changed.is_empty(),
@@ -180,7 +178,6 @@ fn on_neighbor_changed_is_a_no_op_when_enabled_state_already_matches() {
     let mut scratch2 = Scratch::new(world2.local);
     let mut ctx2 = scratch2.ctx(&mut world2);
     behavior.on_neighbor_changed(&mut ctx2, pos, Direction::North);
-    drop(ctx2);
 
     assert!(
         scratch2.changed.is_empty(),
