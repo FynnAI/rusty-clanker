@@ -3080,6 +3080,7 @@ name = "rc-physics"
 version = "0.1.0"
 dependencies = [
  "rc-core",
+ "rc-registries",
 ]
 
 [[package]]

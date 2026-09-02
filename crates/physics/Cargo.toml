@@ -6,3 +6,10 @@ publish = false
 
 [dependencies]
 rc-core = { path = "../core" }
+# M3.5-B02 (WS-D3 rule 1's "shared crate" direct-edge ruling, §3.4): `shapes.rs`'s own
+# hand-authored tier-1 literal table is retired against `rc-registries`' M3.5-B01 generated
+# per-block-state-property registry. `rc-physics` and `rc-registries` are both already in
+# `xtask/src/lint_deps.rs`'s `SHARED` list, so this is a sanctioned additional edge between
+# two already-shared crates, not a new exception -- `xtask lint-deps` still reports 0
+# forbidden edges.
+rc-registries = { path = "../registries" }

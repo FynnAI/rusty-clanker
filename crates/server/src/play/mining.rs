@@ -2187,3 +2187,44 @@ pub fn apply_placement_with_redstone(
         new_state: final_state,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M3.5-B02 test-authoring changeset (§3.7 of `blueprints/M3.5/
+    /// M3.5-B02-retire-hand-authored-id-tables.md`): pins the three ids blocks.json's own
+    /// `minecraft:chest`/`minecraft:redstone_wire` entries name for this exact defect --
+    /// `decode_chest_state` anchors its own offset arithmetic on `CHEST.0` (the GENERATED
+    /// DEFAULT state, 3988, `waterlogged=false`), not chest's own real first state (3987,
+    /// `waterlogged=true`) -- so every `waterlogged=true` id decodes wrong, and the boundary
+    /// check (`offset > 23`) accepts one id past chest's own real range (4011,
+    /// `minecraft:redstone_wire`'s own first state) as if it were a chest. Placed as an inline
+    /// unit test rather than under `crates/server/tests/` (the blueprint's own illustrative
+    /// citation) because `decode_chest_state` is a private fn, unreachable from an external
+    /// integration-test crate, and no public signature change is permitted (Deliverables) --
+    /// this mirrors the established inline-`#[cfg(test)]` convention this same crate already
+    /// uses in `chunk.rs`/`movement.rs`/`packets.rs`/`world.rs`.
+    ///
+    /// **Starts red** against today's default-anchored arithmetic; turns green only once the
+    /// Implementation changeset retires `decode_chest_state` against the generated
+    /// per-block-state-property registry (Step 8).
+    #[test]
+    fn chest_decode_covers_waterlogged_ids() {
+        // source: blocks.json -- minecraft:chest state 3987 (first, waterlogged=true):
+        // facing=north, type=single.
+        assert_eq!(
+            decode_chest_state(3987),
+            Some((Direction::North, ChestType::Single))
+        );
+        // source: blocks.json -- minecraft:chest state 3989 (waterlogged=true):
+        // facing=north, type=left.
+        assert_eq!(
+            decode_chest_state(3989),
+            Some((Direction::North, ChestType::Left))
+        );
+        // source: blocks.json -- minecraft:redstone_wire state 4011 (first state, not a
+        // chest id at all).
+        assert_eq!(decode_chest_state(4011), None);
+    }
+}
