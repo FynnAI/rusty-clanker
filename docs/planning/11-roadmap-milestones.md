@@ -109,6 +109,26 @@ flowchart LR
 - A corpus of at least 50 known redstone contraptions (pulse generators, clocks, piston doors, a hopper clock) captured from vanilla and replayed tick-for-tick produces a bit-identical redstone-component state sequence to the recorded vanilla reference trace, checked automatically by `xtask parity-check redstone` on every scheduled CI run (`12`'s WS-D11).
 - 20 TPS sustained for 10 minutes with 20 simulated bot clients performing continuous movement and block interaction concentrated within a single region (a single-region scale baseline — multi-region/hot-region scaling is `M6`'s scope, not this one's).
 
+### M3.5 — Verification Hardening
+
+**Goal:** remove, structurally, the defect classes M3's real-client field tests proved the automated suite could not see (PLAN-D9), before M4 widens the mechanics surface.
+
+**Scope:**
+- WS-D15's generated block-state property registry in `rc-registries`, and the retirement of every hand-authored state-id table it replaces (redstone component constants, `rc-physics` shape rows, dispatch ranges, oriented placement table, replay ranges), guarded by a `lint-tests` rule against new literal state ids outside the generated crate.
+- TEST-D54's protocol-differential harness (`xtask protocol-diff`): one scripted bot session plus the redstone corpus driven over the wire against both the pinned oracle and `rusty-clanker-server`, normalized clientbound streams diffed per packet type at byte level, as its own scheduled CI tier.
+- TEST-D55's case-matrix lint, TEST-D56's spec-citation check, and TEST-D57's claims-list artifact, applied retroactively to the M3 test files and as a hard gate for M4's blueprints.
+- WORLD-D14's `dimensions/<namespace>/<path>/` save layout and WORLD-D6's block-entity records/codec for the tier-1 block entities.
+- The findings-ledger backlog from M3's field-report waves: `SectionBlocksUpdate` with per-viewer view-distance filtering for tick broadcasts, hopper `ENABLED` re-evaluation on neighbor change, concurrent drains for every piped `xtask` subprocess, the corpus fixture prose batch.
+
+**Acceptance criteria:**
+- Zero hand-authored block-state id tables remain outside the generated registry (lint-enforced); `parity-check redstone` 52/52 and `placement-diff` 85/85 unchanged.
+- `xtask protocol-diff`'s first scheduled run is green over the M1–M3 packet surface (session script + redstone corpus over the wire).
+- `lint-tests` enforces the TEST-D55 header/waiver on every mechanic test file; the TEST-D57 claims list exists for every M4 blueprint before any M4 implementation changeset.
+- A chest, furnace and hopper with contents survive a clean server restart under the `dimensions/<namespace>/<path>/` layout, verified by an automated restart round-trip.
+- Tier-1 CI green on the final commit; hard gate — M4 starts only on the owner's explicit go.
+
+**Blueprints:** `blueprints/M3.5/` (B00 index, B01–B06).
+
 ### M4 — Mechanics Tier 2: Entities, AI, Combat, Items
 
 **Goal:** broaden mechanics coverage to entities, exercising the parallel Stage 6/7/8 domains fully and proving cross-region entity transfer for the first time with real players.
