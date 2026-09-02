@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only); no facing dimension in movement itself) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M2 field-report regression test: reach validation (`M2-B07`'s own gate,
 //! `blueprints/M2/M2-B07-block-interaction-minimal.md`) must key off the acting player's
 //! own live position, kept current by the movement-application fix in

@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep, see mining_oriented_shape_table.rs) self=waived(no player/actor entity in this suite's own domain model) composition=yes nondefault-state=yes
 //! M3-B04 — repeater acceptance tests (Context §F).
 
 mod support;
@@ -107,7 +108,7 @@ fn setup_repeater(
 }
 
 #[test]
-fn repeater_delay_matrix() {
+fn repeater_delay_matrix_nondefault_case() {
     let pos = BlockPos::new(0, 0, 0);
     let repeater = RepeaterBehavior::new();
     for (delay_setting, expected) in [(1u8, 2u64), (2, 4), (3, 6), (4, 8)] {
@@ -319,6 +320,7 @@ fn repeater_own_state_writeback_reflects_powered() {
         repeater.on_scheduled_tick(&mut ctx, pos);
     }
     assert!(repeater.powered(pos));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(7048)),
@@ -335,6 +337,7 @@ fn repeater_own_state_writeback_reflects_powered() {
         repeater.on_scheduled_tick(&mut ctx, pos);
     }
     assert!(!repeater.powered(pos));
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(7049)));
 }
 
@@ -373,6 +376,7 @@ fn repeater_own_state_writeback_reflects_locked_immediately() {
     }
 
     assert!(repeater.is_locked(&h.world, pos));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(7035)),
@@ -738,6 +742,7 @@ fn repeater_on_placed_survives_with_no_floor_support() {
     let mut ctx = h.ctx_at(0);
     repeater.on_placed(&mut ctx, pos);
 
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(7037)),
@@ -763,6 +768,7 @@ fn repeater_self_destructs_on_neighbor_changed_with_no_floor_support() {
     let mut ctx = h.ctx_at(0);
     repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
 
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(0)),
@@ -788,6 +794,7 @@ fn repeater_survives_neighbor_changed_with_a_real_floor() {
     let mut ctx = h.ctx_at(0);
     repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
 
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(7037)));
 }
 

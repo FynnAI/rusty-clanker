@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(single canonical value/facing asserted, not a four-way sweep, see play_block_state_orientation_real_client.rs) self=waived(no player/actor entity in this suite's own domain model, see mining_placement_obstruction.rs) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3-B03 acceptance test: the full survival dig-timing state machine, creative instant
 //! break, and held-item-driven placement orientation, all exercised end-to-end over real
 //! loopback connections. Mirrors `M2-B07`'s own `play_block_place_break.rs` shape, extended.
@@ -272,7 +273,8 @@ async fn creative_break_is_still_instant_and_excludes_the_breaker_from_the_level
 }
 
 #[tokio::test]
-async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_stop() {
+async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_stop_nondefault_case()
+ {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);

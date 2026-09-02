@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=yes self=waived(no player/actor entity in this suite's own domain model, see mining_placement_obstruction.rs) composition=waived(single instance in this file, no ≥3-component chain; max two components chained over a real connection; ≥3 pure-domain chains covered in redstone_wire.rs/redstone_repeater.rs) nondefault-state=yes
 //! M3 field-report test-authoring: the owner's own tonight-manual-test redstone scenarios,
 //! end-to-end over real loopback connections (mirrors `play_block_break_place_full.rs`'s own
 //! established shape) -- "redstone wire never connects to neighbors", "torches never power
@@ -335,7 +336,7 @@ async fn isolated_redstone_wire_gets_the_connected_plus_shape_not_a_bare_dot() {
 }
 
 #[tokio::test]
-async fn two_adjacent_wires_connect_to_each_other_on_both_sides() {
+async fn two_adjacent_wires_connect_to_each_other_on_both_sides_orientation_case() {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -456,7 +457,7 @@ async fn a_lit_wall_torch_powers_an_adjacent_wire_to_full_strength() {
 }
 
 #[tokio::test]
-async fn a_floor_torch_pops_when_its_own_support_block_is_broken() {
+async fn a_floor_torch_pops_when_its_own_support_block_is_broken_nondefault_case() {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;

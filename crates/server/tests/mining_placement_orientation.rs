@@ -1,8 +1,9 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=yes self=waived(no player/actor entity in this suite's own domain model) composition=waived(single canonical value/facing asserted, not a four-way sweep; one-neighbor chest merge only) nondefault-state=yes
 //! M3-B03 acceptance test: `resolve_orientation`'s per-block-type table -- pure, no sockets
 //! (every world query it needs is an injected closure, never a real `BlockWorldAccess`/ECS
 //! dependency -- `resolve_orientation`'s own doc comment in `mining.rs`).
 //!
-//! Test 1's own worked example (`repeater_faces_away_from_player`) is this file's own
+//! Test 1's own worked example (`repeater_faces_away_from_player_facing_case`) is this file's own
 //! ground truth for `nearest_horizontal_direction4`'s yaw convention; test 2
 //! (`piston_faces_up_when_player_looks_steeply_down`) is the ground truth for `nearest_
 //! direction6`'s pitch-sign mapping -- both hand-derived directly from `mining.rs`'s own
@@ -29,7 +30,7 @@ use rusty_clanker_server::play::{
 };
 
 #[test]
-fn repeater_faces_away_from_player() {
+fn repeater_faces_away_from_player_facing_case() {
     // yaw = 0.0 -> looking South (this project's own `look_vector` convention); a repeater
     // faces *away* from the player, i.e. North.
     let selection = resolve_orientation(
@@ -126,7 +127,7 @@ fn torch_on_bottom_face_is_rejected_when_no_candidate_has_support() {
 }
 
 #[test]
-fn torch_on_bottom_face_falls_back_to_floor_torch_when_the_floor_below_is_solid() {
+fn torch_on_bottom_face_falls_back_to_floor_torch_when_the_floor_below_is_solid_nondefault_case() {
     // The exact placement-diff regression this fix closes
     // (`redstone_torch/dir_north/face_bottom_of_ceiling/pitch_level`): clicking the underside
     // of a ceiling block front-inserts `Up` (always invalid, skipped), then every horizontal

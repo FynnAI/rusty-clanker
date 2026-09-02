@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit; cross-region test is a partition boundary, not the world Y-height boundary) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain; register_tier1_redstone_wires_all_four_components_into_both_registries registers four components but does not itself assert traversal, see redstone_wire.rs) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only); varies evaluation order, not block state)
 //! M3-B04 — bug-for-bug / MECH-D7 update-order and quasi-connectivity regression tests, plus
 //! the cross-region one-tick-latency contract for `notify_neighbor_changed_only` (Context §I),
 //! and one direct exercise of `register_tier1_redstone`'s own composition path (Context §I½) --
@@ -359,6 +360,7 @@ fn cross_region_redstone_signal_delivered_at_neighbors_next_stage4() {
     };
     rc_mechanics::border::apply_inbound_border_event(&mut ctx_b, &mut halo_b, ev);
 
+    // source: blocks.json
     assert_eq!(halo_b.get(ev.pos), Some(BlockStateId(5306)));
     assert!(
         outbound_b.is_empty(),

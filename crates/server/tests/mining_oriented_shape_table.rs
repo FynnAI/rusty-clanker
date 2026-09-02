@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=yes self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3 field-report regression (Defect B): drives `mining::resolve_orientation` (the exact
 //! function `mining::apply_placement` itself calls) through every real orientation a player can
 //! place a repeater/comparator/wall-torch/chest/hopper in, resolves each one's real raw
@@ -70,7 +71,10 @@ fn placed_shape(
 /// (M3 field-report fix, chest-merge: no neighbor is ever reported here, `placed_shape`'s own
 /// doc comment) rather than `Orientation::Horizontal(dir)` -- both shapes are accepted, and
 /// only the extracted `dir` feeds the "four distinct" check below.
-fn assert_all_four_horizontal_orientations_are_non_full(kind: PlaceableBlockKind, label: &str) {
+fn assert_all_four_horizontal_orientations_are_non_full_orientation_case(
+    kind: PlaceableBlockKind,
+    label: &str,
+) {
     let mut seen = HashSet::new();
     for yaw in [0.0_f32, 90.0, 180.0, 270.0] {
         let (orientation, props) = placed_shape(kind, Face::North, yaw);
@@ -99,12 +103,15 @@ fn assert_all_four_horizontal_orientations_are_non_full(kind: PlaceableBlockKind
 
 #[test]
 fn repeater_is_non_full_in_every_horizontal_orientation() {
-    assert_all_four_horizontal_orientations_are_non_full(PlaceableBlockKind::Repeater, "repeater");
+    assert_all_four_horizontal_orientations_are_non_full_orientation_case(
+        PlaceableBlockKind::Repeater,
+        "repeater",
+    );
 }
 
 #[test]
 fn comparator_is_non_full_in_every_horizontal_orientation() {
-    assert_all_four_horizontal_orientations_are_non_full(
+    assert_all_four_horizontal_orientations_are_non_full_orientation_case(
         PlaceableBlockKind::Comparator,
         "comparator",
     );
@@ -112,7 +119,10 @@ fn comparator_is_non_full_in_every_horizontal_orientation() {
 
 #[test]
 fn chest_is_non_full_in_every_horizontal_orientation() {
-    assert_all_four_horizontal_orientations_are_non_full(PlaceableBlockKind::Chest, "chest");
+    assert_all_four_horizontal_orientations_are_non_full_orientation_case(
+        PlaceableBlockKind::Chest,
+        "chest",
+    );
 }
 
 #[test]
@@ -144,7 +154,7 @@ fn wall_redstone_torch_is_non_full_in_every_horizontal_orientation() {
 }
 
 #[test]
-fn hopper_is_non_full_in_every_orientation_including_facing_down() {
+fn hopper_is_non_full_in_every_orientation_including_facing_down_nondefault_case() {
     // `Face::Up` and `Face::Down` both collapse to `Full(Down)` (`resolve_orientation`'s own
     // Hopper rule -- vanilla hoppers can never face up) -- both are exercised here since either
     // one alone would already prove the `Full(Down)` id (`HOPPER.0 + 10`) is non-full, but

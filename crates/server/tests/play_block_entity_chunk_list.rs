@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain; three kinds placed independently, not a chained transfer) nondefault-state=yes
 //! M3-B0X test-authoring: production block entities end-to-end (owner's real-client field
 //! report, "chest placed, rejoin -> invisible" -- `docs/findings-for-planning.md` §B: "Stage
 //! 7's own production wiring is closed, but nothing yet spawns a real block entity for it to
@@ -397,7 +398,7 @@ async fn comparator_appears_in_the_chunk_block_entity_list_without_a_tracked_ecs
 }
 
 #[tokio::test]
-async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled() {
+async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled_nondefault_case() {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -421,6 +422,7 @@ async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled() {
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Hopper))
             .await;
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, floor(1), 1).await;
+        // source: blocks.json
         assert_eq!(
             id, 11318,
             "hopper placed beside a lit redstone torch -> enabled=false, facing=down \
@@ -444,6 +446,7 @@ async fn hopper_placed_with_no_neighbor_signal_stays_enabled() {
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Hopper))
             .await;
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, floor(0), 1).await;
+        // source: blocks.json
         assert_eq!(
             id, 11313,
             "hopper with no neighbor signal -> enabled=true, facing=down"

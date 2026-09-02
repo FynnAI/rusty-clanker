@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=yes self=waived(no player/actor entity in this suite's own domain model, see mining_placement_obstruction.rs) composition=waived(single canonical value/facing asserted, not a four-way sweep; one-neighbor chest merge only) nondefault-state=yes
 //! M3 field-report test-authoring (the torch-candidate loop, the placement-time survival
 //! refusal, and the chest-merge fixes -- end-to-end over a real loopback connection, mirroring
 //! `play_block_state_orientation_real_client.rs`'s/`play_redstone_field_report.rs`'s own
@@ -201,7 +202,7 @@ const YAW_FACING_NORTH: f32 = 0.0;
 const YAW_FACING_EAST: f32 = 90.0;
 
 #[tokio::test]
-async fn torch_ceiling_click_falls_back_to_floor_torch_over_real_connection() {
+async fn torch_ceiling_click_falls_back_to_floor_torch_over_real_connection_facing_case() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -246,7 +247,7 @@ async fn torch_ceiling_click_falls_back_to_floor_torch_over_real_connection() {
 }
 
 #[tokio::test]
-async fn redstone_wire_on_air_below_is_refused_over_real_connection() {
+async fn redstone_wire_on_air_below_is_refused_over_real_connection_nondefault_case() {
     tokio::time::timeout(Duration::from_secs(60), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;

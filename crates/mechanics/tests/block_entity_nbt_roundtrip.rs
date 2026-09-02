@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3-B06 — block-entity NBT round-trip acceptance tests (Acceptance tests' own
 //! `block_entity_nbt_roundtrip.rs` section, the task's own required acceptance category).
 
@@ -72,7 +73,7 @@ fn chest_with_items_and_custom_name_round_trips() {
 }
 
 #[test]
-fn furnace_with_active_burn_round_trips() {
+fn furnace_with_active_burn_round_trips_nondefault_case() {
     let pos = BlockPos::new(-5, 64, 5);
     let mut original = FurnaceBlockEntity::empty();
     original.slots[FURNACE_SLOT_INPUT] = item("minecraft:cobblestone", 12, None);

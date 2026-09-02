@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep; furnace_face_rule_top_targets_input_side_targets_fuel is one face pairing, not a sweep) self=waived(no player/actor entity in this suite's own domain model) composition=yes nondefault-state=yes
 //! M3-B06 — hand-derived hopper transfer-order tick tables, incl. the classic hopper-chain
 //! timing cases (Acceptance tests' own `hopper_transfer_order.rs` section, the task's own
 //! required acceptance category).
@@ -371,7 +372,8 @@ fn pull_is_attempted_only_when_push_has_nothing_to_move() {
 }
 
 #[test]
-fn locked_hopper_transfers_nothing_but_cooldown_still_decrements_when_already_running() {
+fn locked_hopper_transfers_nothing_but_cooldown_still_decrements_when_already_running_nondefault_case()
+ {
     let h_pos = BlockPos::new(0, 0, 0);
     let mut world = FakeContainerWorld::new();
     world.set_locked(h_pos, true);
@@ -512,4 +514,54 @@ fn idle_hopper_with_nothing_to_move_and_nothing_to_pull_never_enters_cooldown() 
         assert_eq!(outcome, HopperTickOutcome::Idle);
         assert_eq!(h.transfer_cooldown, 0);
     }
+}
+
+// TEST-D55(d) composition case, added retroactively (M3.5-B04, §2.7): every existing
+// test above is a single A -> B pair; this is the file's own first and only ≥3-hopper
+// chain, proving an item actually traverses the full line rather than merely that each
+// pairwise push independently works. Mirrors `single_transfer_takes_exactly_eight_ticks_
+// between_attempts`'s own cooldown-respecting drive loop, driven across `HopperChainWorld`
+// (the same real-`HopperBlockEntity`-backed double the destination-cooldown-seeding tests
+// above already use) instead of `FakeContainerWorld` -- no production code changes: the
+// mechanic already supports chained transfer end-to-end, only the test itself was missing.
+#[test]
+fn hopper_chain_of_three_relays_an_item_end_to_end() {
+    let a_pos = BlockPos::new(0, 1, 0);
+    let b_pos = BlockPos::new(1, 1, 0);
+    let c_pos = BlockPos::new(2, 1, 0);
+
+    let mut world = HopperChainWorld::new();
+    world.insert(a_pos, {
+        let mut a = HopperBlockEntity::empty(Direction::East);
+        a.slots[0] = stack("minecraft:redstone", 1);
+        a
+    });
+    world.insert(b_pos, HopperBlockEntity::empty(Direction::East));
+    world.insert(c_pos, HopperBlockEntity::empty(Direction::East));
+
+    let mut reached_c = false;
+    for _ in 0..32 {
+        let mut already_ticked = HashSet::new();
+        for &pos in &[a_pos, b_pos, c_pos] {
+            let mut hopper = world.hoppers.remove(&pos).unwrap();
+            hopper.tick(pos, &mut world, &DefaultMaxStackSize, &already_ticked);
+            world.hoppers.insert(pos, hopper);
+            already_ticked.insert(pos);
+        }
+        if world.hoppers.get(&c_pos).unwrap().slots[0].is_some() {
+            reached_c = true;
+            break;
+        }
+    }
+
+    assert!(
+        reached_c,
+        "item never reached the third hopper in the chain within 32 simulated ticks"
+    );
+    assert_eq!(
+        world.hoppers.get(&c_pos).unwrap().slots[0],
+        stack("minecraft:redstone", 1)
+    );
+    // The item actually left the source -- C did not merely gain one independently.
+    assert_eq!(world.hoppers.get(&a_pos).unwrap().slots[0], None);
 }

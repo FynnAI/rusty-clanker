@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=yes self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only); redstone_block has exactly one state — no non-default variant exists)
 //! M3 field-report fix — `minecraft:redstone_block` as an always-on `RedstoneSignalSource`
 //! (Task 1): `RedstoneBlockSource`'s own constant-15/all-directions/all-faces output, and
 //! `register_redstone_block`'s own registration wiring through the shared `signal.rs`
@@ -24,7 +25,7 @@ const REDSTONE_BLOCK_ID: BlockStateId = BlockStateId(11311);
 const PLAIN: BlockStateId = BlockStateId(9_999_002);
 
 #[test]
-fn redstone_block_source_emits_constant_fifteen_on_every_face() {
+fn redstone_block_source_emits_constant_fifteen_on_every_face_facing_case() {
     let world = FakeWorld::new();
     let pos = BlockPos::new(0, 0, 0);
     let source = RedstoneBlockSource;

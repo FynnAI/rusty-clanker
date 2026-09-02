@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(every state asserted is that block kind's own default — no non-default property variant exercised)
 //! M2-B07 acceptance test: a scripted place/break exchange over two real loopback
 //! connections -- the actor (`A`) breaks then places a block, an uninvolved observer
 //! (`B`) receives the identical broadcast `Block Update` for each change (Context: "The

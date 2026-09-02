@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3-B06 — hand-derived furnace timing goldens (Acceptance tests' own `furnace_timing.rs`
 //! section, the task's own required acceptance category).
 
@@ -58,7 +59,7 @@ fn cook_completes_at_exactly_two_hundred_ticks() {
 }
 
 #[test]
-fn cook_progress_drains_by_two_per_tick_when_fuel_runs_out_mid_cook() {
+fn cook_progress_drains_by_two_per_tick_when_fuel_runs_out_mid_cook_nondefault_case() {
     let mut furnace = FurnaceBlockEntity::empty();
     furnace.lit_time_remaining = 1;
     furnace.lit_total_time = 1;
@@ -115,6 +116,7 @@ fn furnace_comparator_signal_matches_generic_formula() {
 fn fuel_table_and_recipe_table_minimal_tier1_lookups() {
     let fuels = FuelTable::minimal_tier1();
     assert_eq!(fuels.lookup("minecraft:coal"), Some(1600));
+    // source: blocks.json
     assert_eq!(fuels.lookup("minecraft:lava_bucket"), Some(20000));
     assert_eq!(fuels.lookup("minecraft:diamond"), None);
 

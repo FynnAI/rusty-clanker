@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=yes self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3-B05 — `piston_head` shape-table acceptance tests (Context §D), pure `rc-physics`.
 
 use rc_mechanics::direction::Direction;
@@ -31,7 +32,7 @@ const ALL_FACINGS: [Direction; 6] = [
 ];
 
 #[test]
-fn piston_head_shape_is_non_full_per_facing() {
+fn piston_head_shape_is_non_full_per_facing_case() {
     for facing in ALL_FACINGS {
         let props = tier1_shape_table().lookup(piston_head_id_for(facing));
         let boxes = props.shape.boxes();
@@ -63,7 +64,7 @@ fn piston_head_face_plate_thickness_is_platform_thickness() {
 }
 
 #[test]
-fn extended_piston_base_falls_through_to_default_full_cube() {
+fn extended_piston_base_falls_through_to_default_full_cube_nondefault_case() {
     // No explicit `tier1_shape_table()` entry exists for an extended piston base at all
     // (Context §D) — any id with no entry falls through to the default. `900_999` is not one
     // of this blueprint's own six `piston_head` ids, nor any other tier-1 entry.

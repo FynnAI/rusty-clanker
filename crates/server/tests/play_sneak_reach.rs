@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model; changes the actor's own pose/eye-height, not a build/break-into-self target) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M3 field-report test-authoring (Symptom 2, end-to-end): a real serverbound `player_input`
 //! packet (id `0x2B`, `packets::PlayerInput`) setting the shift bit must lower the acting
 //! player's own eye position (`PLAYER_EYE_HEIGHT_CROUCHING`, `1.27`, vs the standing `1.62`)

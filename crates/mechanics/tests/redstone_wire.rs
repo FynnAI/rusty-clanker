@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=yes self=waived(no player/actor entity in this suite's own domain model) composition=yes nondefault-state=yes
 //! M3-B04 — redstone wire acceptance tests (Context §D, MECH-D11/D12).
 
 mod support;
@@ -112,7 +113,7 @@ impl Harness {
 }
 
 #[test]
-fn wire_signal_falloff_along_a_straight_line() {
+fn wire_signal_falloff_along_a_straight_line_composition_case() {
     let wire = setup_wire(vec![(
         SOURCE_ID,
         BlockStateId(SOURCE_ID.0 + 1),
@@ -168,7 +169,7 @@ fn wire_signal_falloff_along_a_straight_line() {
 /// writeback made real connections observable): once real east/west connectivity is
 /// established between adjacent wire tiles (`on_shape_update`'s own real job — simulated here
 /// via `set_connections`, this file's own established "bypass on_shape_update" convenience,
-/// `wire_output_is_gated_by_connections_horizontally_only`'s own precedent), `compute_power`'s
+/// `wire_output_is_gated_by_connections_horizontally_only_orientation_case`'s own precedent), `compute_power`'s
 /// own `best_neighbor_signal` call must not let a connected neighbor wire's own undecayed
 /// `weak_signal_toward` output count as a "block signal" — real vanilla's own
 /// `getBlockSignal`/`level.getBestNeighborSignal` disables wire's own `isSignalSource` for
@@ -392,7 +393,7 @@ fn wire_write_back_fires_7_cell_plus_notify_only_on_change() {
 }
 
 #[test]
-fn wire_output_is_gated_by_connections_horizontally_only() {
+fn wire_output_is_gated_by_connections_horizontally_only_orientation_case() {
     let wire = setup_wire(vec![(
         SOURCE_ID,
         BlockStateId(SOURCE_ID.0 + 1),
@@ -434,7 +435,7 @@ fn wire_output_is_gated_by_connections_horizontally_only() {
 /// west=none` = state `5306` — `WIRE_ID` (`5171`)'s own identical all-`none` connectivity with
 /// `power=0` instead.
 #[test]
-fn wire_own_state_writeback_reflects_computed_power() {
+fn wire_own_state_writeback_reflects_computed_power_nondefault_case() {
     let wire = setup_wire(vec![(
         SOURCE_ID,
         BlockStateId(SOURCE_ID.0 + 1),
@@ -449,6 +450,7 @@ fn wire_own_state_writeback_reflects_computed_power() {
     wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
 
     assert_eq!(wire.power(pos), 15);
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
 }
 
@@ -471,12 +473,14 @@ fn wire_own_state_writeback_is_a_no_op_when_power_is_unchanged() {
 
     let mut ctx = h.ctx();
     wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
 
     // A second dispatch recomputes the identical power (still 15) -- the stored id must stay
     // exactly what it already was, not be rewritten to the same numeric value again.
     let mut ctx = h.ctx();
     wire.on_neighbor_changed(&mut ctx, pos, Direction::West);
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(5306)));
 }
 
@@ -509,6 +513,7 @@ fn wire_own_state_writeback_reflects_computed_connections() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
 
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(4738)));
 }
 
@@ -540,6 +545,7 @@ fn wire_own_state_writeback_returns_none_once_the_stored_id_already_matches() {
     let first = wire.on_shape_update(&mut ctx, pos, Direction::East, SOURCE_ID);
     // `4738`, not `4739` -- the same straight-line auto-connect (west=side) as
     // `wire_own_state_writeback_reflects_computed_connections`'s own updated doc comment.
+    // source: blocks.json
     assert_eq!(first, Some(BlockStateId(4738)));
     // Simulate `dispatch_one`'s own real caller contract: the returned id is written back
     // before the cascade would continue.
@@ -571,6 +577,7 @@ fn wire_self_destructs_when_its_floor_support_vanishes() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
 
+    // source: blocks.json
     assert_eq!(
         result,
         Some(BlockStateId(0)),
@@ -592,6 +599,7 @@ fn wire_survives_a_down_shape_update_while_its_floor_support_remains() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, CONDUCTOR);
 
+    // source: blocks.json
     assert_ne!(
         result,
         Some(BlockStateId(0)),
@@ -624,6 +632,7 @@ fn wire_ignores_floor_support_on_a_horizontal_shape_update() {
 
     // `4738`, not `4739` -- the same straight-line auto-connect (west=side) as
     // `wire_own_state_writeback_reflects_computed_connections`'s own updated doc comment.
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(4738)));
 }
 
@@ -654,6 +663,7 @@ fn wire_destruction_clears_its_own_stored_state() {
 
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(0)));
 
     assert_eq!(
@@ -691,6 +701,7 @@ fn wire_own_state_writeback_reflects_up_climb_shape() {
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
 
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(4306)));
 }
 
@@ -721,6 +732,7 @@ fn wire_climb_shape_is_gated_by_the_conductor_occlusion_rule() {
     // `pos`'s own already-placed bare `WIRE_ID` (`5171`, all-`none`), so this is a real `Some`,
     // not the no-op `None` this test formerly expected (written before the straight-line default
     // was implemented).
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(4591)));
 }
 
@@ -887,6 +899,7 @@ fn wire_step_up_climb_is_not_occluded_by_a_conductor_that_is_itself_a_signal_sou
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::West, CONDUCTOR);
 
+    // source: blocks.json
     assert_eq!(
         result,
         Some(BlockStateId(4737)),
@@ -924,6 +937,7 @@ fn wire_step_up_connectable_recognizes_a_non_wire_signal_source_above_the_step()
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::East, CONDUCTOR);
 
+    // source: blocks.json
     assert_eq!(
         result,
         Some(BlockStateId(4306)),

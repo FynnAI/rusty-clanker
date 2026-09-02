@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M3-B02 acceptance tests: server-authoritative movement validation (Context, "Server-side
 //! movement validation" / "Teleport / position-sync protocol") -- the speed check, the
 //! teleport-correction state machine, and the NaN-position disconnect rule. Every test

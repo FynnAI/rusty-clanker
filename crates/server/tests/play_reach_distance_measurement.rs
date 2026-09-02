@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M3 field-report regression test (Defect B): the owner's own live-test report -- creative
 //! block placement reaching only "roughly half" of the pinned `BLOCK_INTERACTION_RANGE_
 //! CREATIVE = 5.0` -- measured directly against the real production entry points

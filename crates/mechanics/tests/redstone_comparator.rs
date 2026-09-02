@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep, see mining_oriented_shape_table.rs) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see redstone_repeater.rs/redstone_wire.rs) nondefault-state=yes
 //! M3-B04 — comparator acceptance tests (Context §G).
 
 mod support;
@@ -115,7 +116,7 @@ fn comparator_calculate_output_signal_table() {
 }
 
 #[test]
-fn comparator_should_turn_on_table() {
+fn comparator_should_turn_on_table_nondefault_case() {
     use ComparatorMode::{Compare, Subtract};
     assert!(ComparatorBehavior::should_turn_on(10, 4, Compare));
     assert!(ComparatorBehavior::should_turn_on(10, 10, Compare));
@@ -408,6 +409,7 @@ fn comparator_own_state_writeback_reflects_powered() {
         comparator.on_scheduled_tick(&mut ctx, pos);
     }
     assert!(!comparator.powered(pos));
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(11278)));
 
     front_source.set_power(10);
@@ -416,6 +418,7 @@ fn comparator_own_state_writeback_reflects_powered() {
         comparator.on_scheduled_tick(&mut ctx, pos);
     }
     assert!(comparator.powered(pos));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(11277)),
@@ -428,6 +431,7 @@ fn comparator_own_state_writeback_reflects_powered() {
         comparator.on_scheduled_tick(&mut ctx, pos);
     }
     assert!(!comparator.powered(pos));
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(11278)));
 }
 
@@ -528,6 +532,7 @@ fn comparator_on_placed_survives_with_no_floor_support() {
     let mut ctx = h.ctx_at(0);
     comparator.on_placed(&mut ctx, pos);
 
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(11264)),
@@ -555,6 +560,7 @@ fn comparator_self_destructs_on_neighbor_changed_with_no_floor_support() {
     let mut ctx = h.ctx_at(0);
     comparator.on_neighbor_changed(&mut ctx, pos, Direction::East);
 
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(pos),
         Some(BlockStateId(0)),
@@ -581,6 +587,7 @@ fn comparator_survives_neighbor_changed_with_a_real_floor() {
     let mut ctx = h.ctx_at(0);
     comparator.on_neighbor_changed(&mut ctx, pos, Direction::East);
 
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(11264)));
 }
 
@@ -601,6 +608,7 @@ fn comparator_survives_placement_with_a_real_floor() {
     let mut ctx = h.ctx_at(0);
     comparator.on_placed(&mut ctx, pos);
 
+    // source: blocks.json
     assert_eq!(h.world.get_block(pos), Some(BlockStateId(11264)));
     assert_eq!(comparator.facing(pos), Direction::North);
     assert_eq!(comparator.mode(pos), ComparatorMode::Compare);

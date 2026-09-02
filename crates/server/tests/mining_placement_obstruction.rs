@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=yes composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(every state asserted is that block kind's own default — no non-default property variant exercised)
 //! M3 field-report test-authoring (Defect 1, "a player can place a block inside their own
 //! body"): drives `mining::apply_placement`'s own `is_placement_obstructed` gate directly --
 //! pure, no sockets, mirroring `mining_oriented_shape_table.rs`'s own "the exact function/table
@@ -102,7 +103,7 @@ fn standing_box_at(x: f64, y: f64, z: f64) -> Aabb {
 }
 
 #[test]
-fn placing_a_full_cube_into_the_players_own_feet_cell_is_rejected() {
+fn placing_a_full_cube_into_the_players_own_feet_cell_is_rejected_self_case() {
     let mut world = FakeWorld::new();
     // Standing player, feet at y = -59.0 -- exactly this cell's own y-span [-59, -58).
     let player_boxes = [standing_box_at(0.0, -59.0, 0.0)];

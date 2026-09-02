@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=yes self=waived(no player/actor entity in this suite's own domain model, see mining_placement_obstruction.rs) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=yes
 //! M3 field-report test-authoring (Root Cause 1, "placeholder id table" -- end-to-end over a
 //! real loopback connection, mirroring `play_block_break_place_full.rs`'s own established
 //! shape): drives `PlaceableBlockKind`'s own oriented-placeable set through real `Use Item On`
@@ -450,7 +451,7 @@ async fn piston_and_sticky_piston_orientation_over_real_connection() {
 }
 
 #[tokio::test]
-async fn hopper_orientation_over_real_connection_including_the_down_case() {
+async fn hopper_orientation_over_real_connection_including_the_down_case_nondefault_case() {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -464,6 +465,7 @@ async fn hopper_orientation_over_real_connection_including_the_down_case() {
         // `minecraft:quartz_block`'s own id range (`mining_block_state_ids.rs`'s own doc
         // comment has the full citation).
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, floor(0), 1).await;
+        // source: blocks.json
         assert_eq!(
             id, 11313,
             "hopper clicked on floor -> enabled=true, facing=down"
@@ -487,24 +489,28 @@ async fn hopper_orientation_over_real_connection_including_the_down_case() {
         // direction 3 = South face of the reference stone -> hopper lands south of it,
         // FACING = South.getOpposite() = North.
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, stone_pos, 3).await;
+        // source: blocks.json
         assert_eq!(
             id, 11314,
             "hopper on stone's south face -> enabled=true, facing=north"
         );
         // direction 2 = North face -> FACING = South.
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, stone_pos, 2).await;
+        // source: blocks.json
         assert_eq!(
             id, 11315,
             "hopper on stone's north face -> enabled=true, facing=south"
         );
         // direction 5 = East face -> FACING = West.
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, stone_pos, 5).await;
+        // source: blocks.json
         assert_eq!(
             id, 11316,
             "hopper on stone's east face -> enabled=true, facing=west"
         );
         // direction 4 = West face -> FACING = East.
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, stone_pos, 4).await;
+        // source: blocks.json
         assert_eq!(
             id, 11317,
             "hopper on stone's west face -> enabled=true, facing=east"

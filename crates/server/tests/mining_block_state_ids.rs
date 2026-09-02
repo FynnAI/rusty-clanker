@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep, see mining_oriented_shape_table.rs) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(every state asserted is that block kind's own default — no non-default property variant exercised)
 //! M3 field-report test-authoring (Root Cause 1, "placeholder id table"): pure, no-socket
 //! literal-id regression tests for `mining::tier1_oriented_state_table()`. Before this fix,
 //! every non-default oriented entry was `<default-state id> + <arbitrary direction index>`
@@ -113,6 +114,7 @@ fn comparator_ids_match_blocks_json_mode_compare_powered_false() {
     // COMPARATOR: properties `facing`[north,south,west,east] x `mode`[compare,subtract] x
     // `powered`[true,false]; base 11263 = north,compare,powered=true; default (facing=north)
     // 11264 = north,compare,powered=false.
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Comparator,
@@ -122,6 +124,7 @@ fn comparator_ids_match_blocks_json_mode_compare_powered_false() {
         ),
         11264, // facing=north, mode=compare, powered=false
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Comparator,
@@ -131,6 +134,7 @@ fn comparator_ids_match_blocks_json_mode_compare_powered_false() {
         ),
         11268, // facing=south, mode=compare, powered=false
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Comparator,
@@ -140,6 +144,7 @@ fn comparator_ids_match_blocks_json_mode_compare_powered_false() {
         ),
         11272, // facing=west, mode=compare, powered=false
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Comparator,
@@ -233,6 +238,7 @@ fn furnace_ids_match_blocks_json_lit_false() {
 fn blast_furnace_ids_match_blocks_json_lit_false() {
     // BLAST_FURNACE: identical shape to FURNACE, base 20762 = north,lit=true; default
     // (facing=north) 20763 = north,lit=false.
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::BlastFurnace,
@@ -242,6 +248,7 @@ fn blast_furnace_ids_match_blocks_json_lit_false() {
         ),
         20763,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::BlastFurnace,
@@ -251,6 +258,7 @@ fn blast_furnace_ids_match_blocks_json_lit_false() {
         ),
         20765,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::BlastFurnace,
@@ -260,6 +268,7 @@ fn blast_furnace_ids_match_blocks_json_lit_false() {
         ),
         20767,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::BlastFurnace,
@@ -275,6 +284,7 @@ fn blast_furnace_ids_match_blocks_json_lit_false() {
 fn smoker_ids_match_blocks_json_lit_false() {
     // SMOKER: identical shape to FURNACE, base 20754 = north,lit=true; default (facing=north)
     // 20755 = north,lit=false.
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Smoker,
@@ -284,6 +294,7 @@ fn smoker_ids_match_blocks_json_lit_false() {
         ),
         20755,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Smoker,
@@ -293,6 +304,7 @@ fn smoker_ids_match_blocks_json_lit_false() {
         ),
         20757,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Smoker,
@@ -302,6 +314,7 @@ fn smoker_ids_match_blocks_json_lit_false() {
         ),
         20759,
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(
             PlaceableBlockKind::Smoker,
@@ -360,26 +373,32 @@ fn hopper_ids_match_blocks_json_enabled_true() {
     // the end of `hopper`'s own 10-state range (11313..=11322) entirely, inside the *next*
     // registered block's own id space (`minecraft:quartz_block`) -- exactly the reported "hopper
     // placed facing down becomes QUARTZ" symptom.
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::Up, 0.0, 0.0),
         11313, // enabled=true, facing=down (Face::Up -> clicked top -> opposite Down -> clamped Down)
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::Down, 0.0, 0.0),
         11313, // enabled=true, facing=down (Face::Down -> clicked bottom -> opposite Up -> clamped Down)
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::South, 0.0, 0.0),
         11314, // enabled=true, facing=north (clicked south face -> opposite North)
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::North, 0.0, 0.0),
         11315, // enabled=true, facing=south (clicked north face -> opposite South)
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::East, 0.0, 0.0),
         11316, // enabled=true, facing=west (clicked east face -> opposite West)
     );
+    // source: blocks.json
     assert_eq!(
         placed_id(PlaceableBlockKind::Hopper, Face::West, 0.0, 0.0),
         11317, // enabled=true, facing=east (clicked west face -> opposite East)

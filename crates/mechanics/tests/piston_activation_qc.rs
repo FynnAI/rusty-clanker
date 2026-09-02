@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(signal/push direction varies, not the component's own four-horizontal facing) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see piston_tick_tables.rs) nondefault-state=yes
 //! M3-B05 — piston activation (quasi-connectivity) acceptance tests (Context §A): the exact
 //! set of positions `piston_neighbor_signal` checks, and the "does not re-check until directly
 //! notified" staleness property.
@@ -206,7 +207,7 @@ fn piston_stays_stale_until_directly_notified() {
 /// `/setblock` of an already-extended id; the state is simply already extended, and a signal
 /// that already matches it triggers nothing at all.
 #[test]
-fn already_extended_placement_with_signal_present_queues_no_extend_event() {
+fn already_extended_placement_with_signal_present_queues_no_extend_event_nondefault_case() {
     let mut world = FakeWorld::new();
     let piston_pos = BlockPos::new(0, 0, 0);
     let facing = Direction::East;
@@ -269,7 +270,7 @@ fn already_extended_placement_with_signal_present_queues_no_extend_event() {
     );
 }
 
-/// Companion to `already_extended_placement_with_signal_present_queues_no_extend_event`: an
+/// Companion to `already_extended_placement_with_signal_present_queues_no_extend_event_nondefault_case`: an
 /// already-extended placement whose signal is genuinely absent must still queue a real retract
 /// on the first notify -- the fix narrows seeding to match the placed id's own `extended`
 /// property, it must never suppress a real `true -> false` transition.

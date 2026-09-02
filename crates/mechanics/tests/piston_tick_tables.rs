@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=yes nondefault-state=yes
 //! M3-B05 — hand-derived tick tables for canonical contraptions (Acceptance tests' own
 //! framing): simple extension, two independently-QC-activated pistons, sticky retraction with
 //! and without a block to pull, and Context §G's two re-validation cases.
@@ -247,6 +248,7 @@ fn simple_extension() {
     // 2-tick commit below. This immediate write's own fan-out reaches only `piston_pos`'s own 6
     // direct neighbors (none of which is `watch_pos`, two cells out) -- `log` stays empty here,
     // unchanged from before this fix.
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(piston_pos),
         Some(BlockStateId(2258)), // extended=true, facing=east
@@ -261,6 +263,7 @@ fn simple_extension() {
     // This is the collector's own proof that a scheduled/block-event-driven state change (no
     // concurrent direct player action) reaches the mechanism `crates/server/src/play/world.rs`
     // drains once per tick to broadcast a `Block Update` to every connected client.
+    // source: blocks.json
     assert_eq!(
         h.changed,
         vec![(piston_pos, BlockStateId(2258))],
@@ -272,6 +275,7 @@ fn simple_extension() {
     h.run_scheduled(1);
     assert!(!piston.is_extended(piston_pos));
     assert!(log.lock().unwrap().is_empty());
+    // source: blocks.json
     assert_eq!(
         h.changed,
         vec![(piston_pos, BlockStateId(2258))],
@@ -286,6 +290,7 @@ fn simple_extension() {
     // the base's own already-recorded entry (above) is not re-appended (the second, identical
     // `write_block_state(piston_pos, ..)` call inside `commit_extend` itself is a genuine no-op
     // write -- `did_change` is `false` -- so `record_changed` never touches it a second time).
+    // source: blocks.json
     assert_eq!(
         h.changed,
         vec![
@@ -380,7 +385,7 @@ fn multi_block_push_shifts_each_block_forward_not_duplicated() {
 }
 
 #[test]
-fn qc_double_piston() {
+fn qc_double_piston_composition_case() {
     const PISTON1_ID: BlockStateId = BlockStateId(100);
     const PISTON2_ID: BlockStateId = BlockStateId(101);
 
@@ -538,6 +543,7 @@ fn piston_door_element() {
     // showing its own pre-retract content (the settled sticky piston_head) -- and only receives
     // the pulled block's own real content at the deferred commit, alongside the base's own
     // `EXTENDED` flip.
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(door_pos),
         Some(BlockStateId(0)),
@@ -566,6 +572,7 @@ fn piston_door_element() {
     );
 
     h.run_scheduled(12);
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(door_pos),
         Some(BlockStateId(0)),
@@ -580,7 +587,7 @@ fn piston_door_element() {
 }
 
 #[test]
-fn sticky_retract_with_nothing_to_pull_fires_drop() {
+fn sticky_retract_with_nothing_to_pull_fires_drop_nondefault_case() {
     const PISTON_ID: BlockStateId = BlockStateId(100);
 
     let piston_pos = BlockPos::new(0, 0, 0);
@@ -625,6 +632,7 @@ fn sticky_retract_with_nothing_to_pull_fires_drop() {
     // Retract content/base split (M3 field-report fix): the content half clears the old head
     // immediately here too, even with nothing to pull -- `TRIGGER_DROP`'s own "arm retracts
     // without pulling" case is no exception. Only the base's own EXTENDED flip is deferred.
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(head_pos),
         Some(BlockStateId(0)),
@@ -637,6 +645,7 @@ fn sticky_retract_with_nothing_to_pull_fires_drop() {
 
     h.run_scheduled(12);
     assert!(!piston.is_extended(piston_pos));
+    // source: blocks.json
     assert_eq!(h.world.get_block(head_pos), Some(BlockStateId(0)));
 }
 
@@ -752,6 +761,7 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
     // already reached `WATCH_ID` (a *direct* West neighbor of `piston_pos` here, unlike `simple_
     // extension`'s two-cells-out `watch_pos`), before this test's own "external break"
     // simulation below ever runs.
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(piston_pos),
         Some(BlockStateId(2258)), // extended=true, facing=east

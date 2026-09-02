@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M3-B03 acceptance test: proves Stage 4 (M3-B01's substrate, wired into `HardcodedWorld`'s
 //! live tick loop for the first time by this blueprint) is inert in the steady state under
 //! this milestone's own tier-1 scope, and settles fully within the same tick an ordinary

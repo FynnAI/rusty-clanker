@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only))
 //! M3 field-report test-authoring (MECH-D62 re-supersession): drives `mining::is_within_
 //! block_interaction_range` -- vanilla's own box-distance-from-eye reach predicate, replacing
 //! the retired per-player voxel raycast (Context, AUTHORITATIVE RESEARCH VERDICT) -- and

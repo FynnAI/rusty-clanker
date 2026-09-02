@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see redstone_wire.rs/redstone_repeater.rs) nondefault-state=yes
 //! M3-B04 — redstone torch acceptance tests (Context §E).
 
 mod support;
@@ -80,7 +81,7 @@ fn torch_default_state_is_lit() {
 }
 
 #[test]
-fn torch_inverter_full_cycle() {
+fn torch_inverter_full_cycle_nondefault_case() {
     let (torch, support) = setup_torch_floor();
     let mut h = Harness::new();
     let t = BlockPos::new(0, 1, 0);
@@ -343,6 +344,7 @@ fn torch_own_state_writeback_reflects_lit() {
         torch.on_scheduled_tick(&mut ctx, t);
     }
     assert!(!torch.lit(t));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(t),
         Some(BlockStateId(6886)),
@@ -359,6 +361,7 @@ fn torch_own_state_writeback_reflects_lit() {
         torch.on_scheduled_tick(&mut ctx, t);
     }
     assert!(torch.lit(t));
+    // source: blocks.json
     assert_eq!(h.world.get_block(t), Some(BlockStateId(6885)));
 }
 
@@ -401,6 +404,7 @@ fn wall_torch_own_state_writeback_preserves_facing() {
         torch.on_scheduled_tick(&mut ctx, t);
     }
     assert!(!torch.lit(t));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(t),
         Some(BlockStateId(6892)),
@@ -431,6 +435,7 @@ fn floor_torch_self_destructs_when_its_support_vanishes() {
     let mut ctx = h.ctx_at(0);
     let result = torch.on_shape_update(&mut ctx, t, Direction::Down, BlockStateId(0));
 
+    // source: blocks.json
     assert_eq!(
         result,
         Some(BlockStateId(0)),
@@ -499,6 +504,7 @@ fn wall_torch_self_destructs_when_its_attached_wall_vanishes() {
     let mut ctx = h.ctx_at(0);
     let result = torch.on_shape_update(&mut ctx, t, Direction::East, BlockStateId(0));
 
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(0)));
 }
 
@@ -531,6 +537,7 @@ fn floor_torch_destruction_clears_its_own_stored_state() {
     h.world.set_block(s, BlockStateId(0)); // air -- not a conductor
     let mut ctx = h.ctx_at(2);
     let result = torch.on_shape_update(&mut ctx, t, Direction::Down, BlockStateId(0));
+    // source: blocks.json
     assert_eq!(result, Some(BlockStateId(0)));
 
     assert!(

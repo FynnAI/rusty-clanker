@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit, see world_bounds_fan_out.rs) orientations=waived(signal/push direction varies, not the component's own four-horizontal facing) self=waived(no player/actor entity in this suite's own domain model) composition=yes nondefault-state=yes
 //! M3-B05 — push/pull structure resolution acceptance tests (Context §C): `classify`'s own
 //! tier-1 push/destroy/block table, `resolve_extend`'s 12-block cap and destroy-terminates-the-
 //! walk rule, `resolve_retract`'s one-block sticky pull, and MECH-D14's cross-partition
@@ -124,7 +125,7 @@ fn classify_matches_tier1_table() {
 }
 
 #[test]
-fn push_stops_at_the_first_destroy_class_block() {
+fn push_stops_at_the_first_destroy_class_block_nondefault_case() {
     let mut world = FakeWorld::new();
     let piston = BlockPos::new(0, 0, 0);
     let stones: Vec<BlockPos> = (1..=3).map(|i| step(Direction::East, piston, i)).collect();
@@ -156,7 +157,7 @@ fn push_refuses_entirely_on_an_immovable_block() {
 }
 
 #[test]
-fn push_refuses_at_exactly_thirteen_blocks() {
+fn push_refuses_at_exactly_thirteen_blocks_composition_case() {
     let mut world = FakeWorld::new();
     let piston = BlockPos::new(0, 0, 0);
     for i in 1..=13 {

@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model; about entity-spawn timing, not build/break-into-self) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(every state asserted is that block kind's own default — no non-default property variant exercised)
 //! Regression test for the production race flagged as `task_9ce21947`: `world.rs`'s tick
 //! loop drains two independent, unsynchronized mpsc channels (`join_tx`/`block_action_tx`)
 //! -- a block action can legitimately be processed on a tick before the acting player's own

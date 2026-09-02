@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=yes orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only); varies position at the boundary, not block state)
 //! M3 field-report fix (symptom 1): a block change or a piston push at exactly the world
 //! floor (`WORLD_MIN_Y`) or ceiling (`WORLD_MIN_Y + WORLD_HEIGHT - 1`) must not fan an update
 //! out into an out-of-world neighbour position and panic `rc-chunk-storage`'s own
@@ -176,7 +177,7 @@ fn expected_entries(
 }
 
 #[test]
-fn neighbor_fan_out_skips_the_below_world_neighbour_at_the_world_floor() {
+fn neighbor_fan_out_skips_the_below_world_neighbour_at_the_world_floor_boundary_case() {
     let trigger_pos = BlockPos::new(8, WORLD_MIN_Y, 8);
     let logged = bootstrap_and_run(trigger_pos, BlockStateId(1), BlockStateId(2));
 

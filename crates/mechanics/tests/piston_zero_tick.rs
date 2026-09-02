@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see piston_tick_tables.rs) nondefault-state=yes
 //! M3-B05 — the "zero-tick stance" acceptance test (Context §F): MECH-D7/D11's own binding
 //! bug-for-bug update-order commitment, applied to a piston reversed twice within one tick.
 
@@ -203,7 +204,7 @@ fn setup() -> SetupResult {
 /// `front_pos` at the real, momentarily-then-overwritten `AIR` and `is_extended` still `true`
 /// (only the retract's own base flip stays deferred to tick 2).
 #[test]
-fn pulse_shorter_than_commit_window_force_finalizes_then_retracts() {
+fn pulse_shorter_than_commit_window_force_finalizes_then_retracts_nondefault_case() {
     let (mut h, piston, source, event_ids, piston_pos, front_pos) = setup();
 
     // Within one tick: the signal reads true, then false, both before the block-event
@@ -334,6 +335,7 @@ fn piston_own_state_writeback_reflects_extended() {
     h.run_block_events(0);
     h.run_scheduled(2);
     assert!(piston.is_extended(piston_pos));
+    // source: blocks.json
     assert_eq!(
         h.world.get_block(piston_pos),
         Some(BlockStateId(2258)),
@@ -348,5 +350,6 @@ fn piston_own_state_writeback_reflects_extended() {
     h.run_block_events(5);
     h.run_scheduled(7);
     assert!(!piston.is_extended(piston_pos));
+    // source: blocks.json
     assert_eq!(h.world.get_block(piston_pos), Some(BlockStateId(2264)));
 }

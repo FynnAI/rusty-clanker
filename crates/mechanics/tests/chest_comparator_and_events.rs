@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see hopper_transfer_order.rs) nondefault-state=yes
 //! M3-B06 — chest comparator-signal and open-count/block-event acceptance tests (Acceptance
 //! tests' own `chest_comparator_and_events.rs` section, the task's own required acceptance
 //! category).
@@ -31,7 +32,7 @@ fn single_full_stack_in_one_slot_signal_matches_formula() {
 }
 
 #[test]
-fn completely_full_chest_signal_is_fifteen() {
+fn completely_full_chest_signal_is_fifteen_nondefault_case() {
     let mut chest = ChestBlockEntity::empty();
     for slot in chest.slots.iter_mut() {
         *slot = full_stack("minecraft:item");

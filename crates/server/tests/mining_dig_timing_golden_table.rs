@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(pure/position-agnostic — no world Y-coordinate involved) orientations=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only)) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain) nondefault-state=waived(no facing/orientation dimension in this mechanic's own domain (timing, geometry, or ordering only); hardness varies by kind, not by property)
 //! M3-B03 acceptance test: the survival dig-timing golden table (MECH-D61, Context's own
 //! pinned formula/constants) -- pure, no sockets, calling `destroy_speed`/`ticks_to_break`
 //! directly. See `blueprints/M3/M3-B03-breaking-placing.md`, Acceptance tests,

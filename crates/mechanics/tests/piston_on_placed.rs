@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(fixed/local test-world position, never drives across the real Y=-64/319 world limit) orientations=waived(single canonical value/facing asserted, not a four-way sweep) self=waived(no player/actor entity in this suite's own domain model) composition=waived(single instance in this file, no ≥3-component chain, see piston_tick_tables.rs) nondefault-state=yes
 //! M3 field-report test-authoring: `PistonBehavior::on_placed`
 //! (`crates/mechanics/src/redstone/piston.rs`) — closes `docs/findings-for-planning.md`'s own "a
 //! piston placed by an actual connected player is never wired into `PistonBehavior`'s own
@@ -184,7 +185,7 @@ fn on_placed_seeds_a_fresh_piston_with_no_signal_and_fires_nothing() {
 /// when placed next to an existing signal — vanilla's own `PistonBaseBlock.setPlacedBy` ->
 /// `checkIfExtend`, exercised directly against `PistonBehavior`.
 #[test]
-fn on_placed_extends_immediately_when_placed_beside_an_already_active_signal() {
+fn on_placed_extends_immediately_when_placed_beside_an_already_active_signal_nondefault_case() {
     let piston_pos = BlockPos::new(0, 0, 0);
     let facing = Direction::East;
     let head_pos = facing.apply(piston_pos);
