@@ -47,41 +47,55 @@ enum CitationVerdict {
     Malformed(String),
 }
 
-/// Removes `"…"` string-literal content (mirroring
-/// `forbidden_patterns::strip_string_literals`) and blanks `//`-comment tails from
-/// every line of `content`, preserving total length/line structure exactly (spaces
-/// substituted, nothing removed) so that byte offsets computed against the sanitized
-/// copy stay valid coordinates into the original `content` too (§2.8: "each line is
-/// pre-processed... before scanning").
+/// Removes `"…"` string-literal content and blanks `//`-comment tails from every line
+/// of `content`, preserving the exact byte length (spaces substituted, nothing removed
+/// or added) so that byte offsets computed against the sanitized copy stay valid
+/// coordinates into the original `content` too (§2.8: "each line is pre-processed...
+/// before scanning"). Operates byte-for-byte rather than char-for-char (unlike
+/// `forbidden_patterns::strip_string_literals`, which this module deliberately does not
+/// reuse for this step): `"`, `/` and `\n` are all single-byte ASCII and can never occur
+/// as a continuation byte of a multi-byte UTF-8 sequence, so blanking a byte run
+/// delimited by those bytes -- to the ASCII space 0x20 -- never splits a multi-byte
+/// character and always yields valid UTF-8 of the identical length. A char-for-char
+/// (`for ch in line.chars() { out.push(' ') }`) blank would instead replace each
+/// multi-byte character (e.g. an em dash in this codebase's own prose-heavy comments)
+/// with a single-byte space, silently shrinking the sanitized copy and desyncing every
+/// offset computed from it against the original.
 fn sanitize_for_scanning(content: &str) -> String {
-    let mut out = String::with_capacity(content.len());
-    for line in content.split_inclusive('\n') {
-        let (body, ending) = match line.strip_suffix('\n') {
-            Some(b) => match b.strip_suffix('\r') {
-                Some(b2) => (b2, "\r\n"),
-                None => (b, "\n"),
-            },
-            None => (line, ""),
-        };
-        let no_strings = crate::forbidden_patterns::strip_string_literals(body);
-        out.push_str(&blank_comment_tail(&no_strings));
-        out.push_str(ending);
-    }
-    out
-}
+    let bytes = content.as_bytes();
+    let mut out = vec![0u8; bytes.len()];
 
-fn blank_comment_tail(line: &str) -> String {
-    match line.find("//") {
-        Some(idx) => {
-            let mut out = String::with_capacity(line.len());
-            out.push_str(&line[..idx]);
-            for _ in line[idx..].chars() {
-                out.push(' ');
+    // Pass 1: blank `"…"` string-literal content, byte range delimited by `"`/`\n`.
+    let mut in_string = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\n' => {
+                in_string = false;
+                out[i] = b'\n';
             }
-            out
+            b'"' => {
+                in_string = !in_string;
+                out[i] = b' ';
+            }
+            _ => out[i] = if in_string { b' ' } else { b },
         }
-        None => line.to_string(),
     }
+
+    // Pass 2: blank `//`-comment tails on the already string-stripped bytes.
+    let mut j = 0usize;
+    while j < out.len() {
+        if out[j] == b'/' && out.get(j + 1) == Some(&b'/') {
+            while j < out.len() && out[j] != b'\n' {
+                out[j] = b' ';
+                j += 1;
+            }
+            continue;
+        }
+        j += 1;
+    }
+
+    String::from_utf8(out)
+        .expect("blanking whole ASCII-delimited byte runs of valid UTF-8 stays valid UTF-8")
 }
 
 /// For every `#[test]` fn in (sanitized) `content`, returns `(fn_name, body_start,

@@ -100,6 +100,25 @@ fn check_literal_citations_ignores_a_literal_outside_any_assert_macro() {
     assert_eq!(violations, Vec::new());
 }
 
+// Regression: a multi-byte UTF-8 character (e.g. an em dash "—", 3 bytes) inside an
+// EARLIER `//`/`///` comment must never desync the sanitized copy's byte offsets from
+// the original content's -- a citation genuinely present 1 line above a later assert
+// must still be found even when many multi-byte-laden comment lines precede it.
+#[test]
+fn check_literal_citations_is_not_confused_by_an_earlier_multibyte_comment() {
+    let content = "\
+/// A doc comment with an em dash — and another — right here, well before the test.
+/// Another line — with — several — em dashes — to widen any byte/char mismatch.
+#[test]
+fn sample() {
+    // source: blocks.json
+    assert_eq!(id, BlockStateId(12345));
+}
+";
+    let violations = check_literal_citations("mining_foo.rs", content);
+    assert_eq!(violations, Vec::new());
+}
+
 #[test]
 fn check_literal_citations_is_silent_on_a_file_outside_the_trigger_set() {
     let content = wrap_test("    assert_eq!(id, BlockStateId(12345));");
