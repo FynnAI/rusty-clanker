@@ -1153,6 +1153,37 @@ Entries name the milestone that surfaced them and the code they concern.
   precisely (hopper's own facing rule in particular), or accept the current
   bounded model as permanent for this harness's purposes.
 
+- **M3.5-B03: the first real `xtask protocol-diff` run against the pinned
+  oracle surfaced an unexplained connection race, mitigated but not root-
+  caused.** `redstone_wire_capture::run_redstone_wire_capture`'s own initial
+  bot connection (a fresh account, `rc_wire_bot`) failed with `disconnected
+  before Event::Spawn: None` immediately after `protocol_session::
+  run_protocol_session`'s own final step (`session/observe_chunk`)
+  disconnected its own last player — against the real vanilla oracle, on
+  this project's own development machine, first attempt. No wire-level
+  reason accompanied the disconnect (azalea's own `Event::Disconnect(None)`),
+  and this project has no direct visibility into the oracle's own internal
+  session-teardown timing to confirm the "not-yet-fully-torn-down previous
+  session" hypothesis this fix assumes. Mitigated with a 1.5s settle wait
+  plus a bounded 3-attempt connection retry (governance commit, same wave) —
+  a safe, low-risk change regardless of root cause, but unverified: this
+  session's own remaining time budget did not include a second full real run
+  to confirm the retry actually resolves it (each real run costs upward of
+  20-40 minutes end to end, oracle JVM boot plus the full scripted session
+  plus 51 real contraption placements). Needs a decision: commission a
+  dedicated live-oracle investigation (temporary tracing on the relay/login
+  path, several repeat real runs) to find the actual root cause if the retry
+  mitigation turns out not to be reliable in later scheduled CI runs.
+
+- **M3.5-B03: the first real run's own "ours" side timed out at the
+  originally-budgeted subprocess deadline (1500s)**, corrected in the same
+  governance commit (both sides raised, and the deadline now explicitly
+  accounts for the runner subprocess's own first, uncached `cargo run`
+  compile time, which the original budget never included). Not re-verified
+  against a full second real run within this session's own time budget —
+  flagged so a future CI run's own timing is checked against the new budget
+  rather than assumed correct.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s
