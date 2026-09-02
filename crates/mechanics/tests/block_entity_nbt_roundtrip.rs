@@ -60,7 +60,10 @@ fn chest_with_items_and_custom_name_round_trips() {
     );
     original.slots[26] = item("minecraft:stick", 64, None);
     original.custom_name = Some("Treasure Chest".to_string());
-    original.lock = Some("minecraft:key".to_string());
+    // source: blueprint M3.5-B05 §2.4 (TEST-D57 CLAIMS) -- vanilla 26.2's chest block-entity
+    // NBT has no `Lock: String` key at all (vanilla's own `lock` is lowercase and holds an
+    // ItemPredicate compound, a mechanic this engine does not model), so `ChestBlockEntity`
+    // carries no `lock` field to set here any more.
 
     let bytes = to_bytes(original.to_nbt(pos));
     let (decoded_pos, decoded) =
@@ -100,7 +103,14 @@ fn furnace_with_active_burn_round_trips_nondefault_case() {
 }
 
 #[test]
-fn hopper_with_cooldown_and_facing_round_trips() {
+fn hopper_with_cooldown_round_trips() {
+    // source: blueprint M3.5-B05 §2.4 (TEST-D57 CLAIMS) -- vanilla 26.2's hopper block-entity
+    // NBT has no `RCFacing` key (or any facing key at all): `facing` is a block-*state*
+    // property, never block-*entity* NBT. `to_nbt`/`from_nbt` therefore no longer round-trip
+    // `facing` -- the real value is sourced from the block state by the loader
+    // (`crates/server/src/play/world.rs`'s `ProductionBlockEntitySpawner`), never from this
+    // struct's own NBT encoding, so it is asserted field-by-field below instead of via a
+    // blanket `assert_eq!(decoded, original)`.
     let pos = BlockPos::new(100, 0, -100);
     let mut original = HopperBlockEntity::empty(Direction::East);
     original.transfer_cooldown = 5;
@@ -113,7 +123,9 @@ fn hopper_with_cooldown_and_facing_round_trips() {
         with_borrowed_compound(&bytes, |c| HopperBlockEntity::from_nbt(c).unwrap());
 
     assert_eq!(decoded_pos, pos);
-    assert_eq!(decoded, original);
+    assert_eq!(decoded.slots, original.slots);
+    assert_eq!(decoded.transfer_cooldown, original.transfer_cooldown);
+    assert_eq!(decoded.custom_name, original.custom_name);
 }
 
 #[test]

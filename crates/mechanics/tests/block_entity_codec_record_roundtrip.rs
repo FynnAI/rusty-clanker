@@ -30,7 +30,9 @@ fn chest_to_record_from_record_round_trips() {
         components: None,
     });
     original.custom_name = Some("Treasure Chest".to_string());
-    original.lock = Some("minecraft:key".to_string());
+    // source: blueprint M3.5-B05 §2.4 (TEST-D57 CLAIMS) -- vanilla 26.2's chest block-entity
+    // NBT has no `Lock: String` key at all (see block_entity_nbt_roundtrip.rs's own identical
+    // citation), so `ChestBlockEntity` carries no `lock` field to set here any more.
 
     let record = original.to_record(pos);
     assert_eq!(record.id, "minecraft:chest");
@@ -70,6 +72,11 @@ fn furnace_to_record_from_record_round_trips() {
 
 #[test]
 fn hopper_to_record_from_record_round_trips() {
+    // source: blueprint M3.5-B05 §2.4 (TEST-D57 CLAIMS) -- vanilla 26.2's hopper block-entity
+    // NBT has no `RCFacing`/facing key at all (see block_entity_nbt_roundtrip.rs's own
+    // identical citation): `facing` is a block-state property, sourced by the loader from
+    // `BlockStateColumn`, never from this codec. Asserted field-by-field below instead of via
+    // a blanket `assert_eq!(decoded, original)` for that reason.
     let pos = BlockPos::new(100, -60, -100);
     let mut original = HopperBlockEntity::empty(Direction::East);
     original.transfer_cooldown = 5;
@@ -85,7 +92,9 @@ fn hopper_to_record_from_record_round_trips() {
     assert_eq!(record.pos, pos);
 
     let decoded = HopperBlockEntity::from_record(&record).unwrap();
-    assert_eq!(decoded, original);
+    assert_eq!(decoded.slots, original.slots);
+    assert_eq!(decoded.transfer_cooldown, original.transfer_cooldown);
+    assert_eq!(decoded.custom_name, original.custom_name);
 }
 
 #[test]
