@@ -363,11 +363,22 @@ impl HopperBehavior {
 
 impl BlockBehavior for HopperBehavior {
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        // M3.5-B06 implementation changeset fills in the real body (test-authoring stub,
-        // TEST-D45 -- `hopper_enabled_reeval.rs`'s own tests pin down the exact behavior this
-        // replaces).
-        let _ = (ctx, pos);
-        todo!("M3.5-B06 implementation changeset: HopperBehavior::on_neighbor_changed")
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        if current.0 < HOPPER_BASE || current.0 > HOPPER_MAX {
+            return;
+        }
+        let now_enabled = best_neighbor_signal(ctx.world, &self.registry, pos) == 0;
+        if now_enabled == hopper_enabled_from_raw(current.0) {
+            return;
+        }
+        let new_raw = if now_enabled {
+            current.0 - 5
+        } else {
+            current.0 + 5
+        };
+        ctx.write_block_state(pos, BlockStateId(new_raw));
     }
 }
 

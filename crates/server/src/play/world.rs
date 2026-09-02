@@ -53,8 +53,9 @@ use super::movement::{
 };
 use super::packets::{
     AcknowledgeBlockChange, BlockEntityInfo, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
-    LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent, SetBlockDestroyStage,
-    SetChunkCacheCenter, SynchronizePlayerPosition, pack_position,
+    LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent, SectionBlocksUpdate,
+    SetBlockDestroyStage, SetChunkCacheCenter, SynchronizePlayerPosition, pack_block_in_section,
+    pack_position, pack_section_position,
 };
 use super::persistence::PlayerSessionStore;
 use super::registry_resolvers::McRegistryResolvers;
@@ -809,6 +810,17 @@ fn bootstrap_redstone_dispatch(world: &mut World) {
     // directly -- this is the first call site outside `rc-mechanics` that needs to consult the
     // registry on its own, so no such resource existed before this wave).
     let signals_for_placement = Arc::clone(&signals);
+
+    // M3.5-B06 (Context §3.2): the neighbor-changed half of hopper `ENABLED` re-evaluation --
+    // `mining::apply_placement_with_redstone`'s own placement-time half already reads
+    // `signals_for_placement` above; this registers the matching `on_neighbor_changed` behavior
+    // so the same bit stays correct after placement too.
+    let hopper_ids = rc_mechanics::redstone::derive_hopper_state_ids();
+    rc_mechanics::block_entity::hopper::register_hopper(
+        &mut behaviors,
+        Arc::clone(&signals),
+        &hopper_ids,
+    );
 
     let piston_ids = rc_mechanics::redstone::derive_piston_state_ids();
     rc_mechanics::redstone::register_piston(&mut behaviors, signals, &piston_ids);
@@ -3079,19 +3091,82 @@ fn broadcast_changed_positions(
     changed: &[(BlockPos, StorageBlockStateId)],
     primary: Option<BlockPos>,
 ) {
+    // M3.5-B06 (Context §3.1): groups the remaining (non-`primary`) entries by their own
+    // `(chunk_x, section_y, chunk_z)`, in first-change order (a `Vec` linear scan, not a
+    // `HashMap` -- the same bounded-per-tick-volume reasoning `UpdateContext::record_changed`'s
+    // own doc comment already gives for its own identical shape). A size-1 group still sends
+    // one `BlockUpdate` (unchanged behavior); a size-≥2 group sends exactly one
+    // `SectionBlocksUpdate` instead of one `BlockUpdate` per entry -- vanilla's own
+    // `ChunkHolder.broadcastChanges` rule (Context §3.1, TEST-D57 CONFIRMED).
+    #[allow(clippy::type_complexity)]
+    let mut groups: Vec<((i32, i32, i32), Vec<(BlockPos, StorageBlockStateId)>)> = Vec::new();
     for &(pos, state) in changed {
         if Some(pos) == primary {
             continue;
         }
-        let payload = encode_payload(&BlockUpdate {
-            location: pack_position(pos),
-            block_state_id: state.to_raw() as i32,
-        });
-        for entity_ref in world.iter_entities() {
-            if let Some(marker) = entity_ref.get::<PlayerMarker>() {
-                let _ = marker.connection.try_send_payload(payload.clone());
-            }
+        let key = (pos.chunk_x(), pos.y >> 4, pos.chunk_z());
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, entries)) => entries.push((pos, state)),
+            None => groups.push((key, vec![(pos, state)])),
         }
+    }
+    for ((chunk_x, section_y, chunk_z), entries) in groups {
+        let payload = if let [(pos, state)] = entries[..] {
+            encode_payload(&BlockUpdate {
+                location: pack_position(pos),
+                block_state_id: state.to_raw() as i32,
+            })
+        } else {
+            let states = entries
+                .iter()
+                .map(|&(pos, state)| {
+                    pack_block_in_section(
+                        state.to_raw(),
+                        pos.x.rem_euclid(16) as u8,
+                        pos.z.rem_euclid(16) as u8,
+                        pos.y.rem_euclid(16) as u8,
+                    )
+                })
+                .collect();
+            encode_payload(&SectionBlocksUpdate {
+                section_pos: pack_section_position(chunk_x, section_y, chunk_z),
+                states,
+            })
+        };
+        send_filtered_by_chunk(world, (chunk_x, chunk_z), payload, None);
+    }
+}
+
+/// M3.5-B06 (Context §3.1): sends `payload` to `guaranteed`'s own connection unconditionally
+/// (mirrors `broadcast_to_all`'s own pre-existing "actor may not be spawned yet" fallback --
+/// `broadcast_to_all` itself is now a thin wrapper around this function), and to every other
+/// connected player only if `chunk` is in their own `PlayerMarker::sent_chunks` -- the per-
+/// viewer view-distance filter (Context §3.1's own restated rule: "a player must never receive
+/// a block update for a chunk column not in their own `sent_chunks`").
+fn send_filtered_by_chunk(
+    world: &World,
+    chunk: (i32, i32),
+    payload: bytes::Bytes,
+    guaranteed: Option<(&ConnectionHandle, i32)>,
+) {
+    let mut guaranteed_reached = false;
+    for entity_ref in world.iter_entities() {
+        let Some(marker) = entity_ref.get::<PlayerMarker>() else {
+            continue;
+        };
+        let is_guaranteed =
+            guaranteed.is_some_and(|(_, actor_id)| marker.network_entity_id == actor_id);
+        if is_guaranteed {
+            guaranteed_reached = true;
+        } else if !marker.sent_chunks.contains(&chunk) {
+            continue;
+        }
+        let _ = marker.connection.try_send_payload(payload.clone());
+    }
+    if let Some((actor_connection, _)) = guaranteed
+        && !guaranteed_reached
+    {
+        let _ = actor_connection.try_send_payload(payload);
     }
 }
 
@@ -3117,20 +3192,15 @@ fn broadcast_to_all(
     world: &World,
     actor_connection: &ConnectionHandle,
     actor_network_id: i32,
+    pos: BlockPos,
     payload: bytes::Bytes,
 ) {
-    let mut actor_reached = false;
-    for entity_ref in world.iter_entities() {
-        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
-            let _ = marker.connection.try_send_payload(payload.clone());
-            if marker.network_entity_id == actor_network_id {
-                actor_reached = true;
-            }
-        }
-    }
-    if !actor_reached {
-        let _ = actor_connection.try_send_payload(payload);
-    }
+    send_filtered_by_chunk(
+        world,
+        (pos.chunk_x(), pos.chunk_z()),
+        payload,
+        Some((actor_connection, actor_network_id)),
+    );
 }
 
 /// As `broadcast_to_all`, excluding `exclude_network_id` entirely (Context: `Set Block
@@ -3170,11 +3240,7 @@ fn broadcast_break(
         location: pack_position(pos),
         block_state_id: new_state as i32,
     });
-    for entity_ref in world.iter_entities() {
-        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
-            let _ = marker.connection.try_send_payload(update.clone());
-        }
-    }
+    send_filtered_by_chunk(world, (pos.chunk_x(), pos.chunk_z()), update, None);
     let level_event = encode_payload(&LevelEvent {
         event_id: LEVEL_EVENT_BLOCK_BREAK,
         location: pack_position(pos),
@@ -3205,7 +3271,13 @@ fn respond_break(
                 location: pack_position(pos),
                 block_state_id: AIR.0 as i32,
             });
-            broadcast_to_all(world, &action.connection, action.network_entity_id, update);
+            broadcast_to_all(
+                world,
+                &action.connection,
+                action.network_entity_id,
+                pos,
+                update,
+            );
             let level_event = encode_payload(&LevelEvent {
                 event_id: LEVEL_EVENT_BLOCK_BREAK,
                 location: pack_position(pos),
@@ -3240,7 +3312,13 @@ fn respond_place(world: &World, action: &PendingBlockAction, outcome: PlaceOutco
                 location: pack_position(pos),
                 block_state_id: new_state as i32,
             });
-            broadcast_to_all(world, &action.connection, action.network_entity_id, payload);
+            broadcast_to_all(
+                world,
+                &action.connection,
+                action.network_entity_id,
+                pos,
+                payload,
+            );
         }
         PlaceOutcome::Rejected {
             pos,

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 use rc_chunk_storage::{BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkKeyTag};
-use rc_core::{BlockPos, ChunkKey};
+use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_messaging::{Address, RegionMessage};
 use rc_scheduler::{
     CurrentTick, DomainGroup, RcExecutorBuilder, RegionMessageOutbox, SystemFactory,
@@ -48,6 +48,10 @@ pub struct EcsBlockEntityWorld<'w, 's> {
     chunk_index: &'w ChunkIndex,
     entity_info: HashMap<Entity, (BlockPos, BlockEntityKind)>,
     pos_to_entity: HashMap<BlockPos, Entity>,
+    /// M3.5-B06 (Context §3.2): the raw block-state read `hopper_enabled` needs -- read-only,
+    /// never written by this adapter (mirrors `stage4::ecs::EcsBlockWorld`'s own identical
+    /// `Query<(&ChunkKeyTag, &mut BlockStateColumn)>`, minus the `&mut`).
+    block_state_query: Query<'w, 's, (&'static ChunkKeyTag, &'static BlockStateColumn)>,
 }
 
 impl<'w, 's> EcsBlockEntityWorld<'w, 's> {
@@ -55,6 +59,7 @@ impl<'w, 's> EcsBlockEntityWorld<'w, 's> {
         headers: Query<'w, 's, BlockEntityQueryData>,
         chunk_be_index: Query<'w, 's, &'static BlockEntityIndex>,
         chunk_index: &'w ChunkIndex,
+        block_state_query: Query<'w, 's, (&'static ChunkKeyTag, &'static BlockStateColumn)>,
     ) -> Self {
         let mut entity_info = HashMap::new();
         let mut pos_to_entity = HashMap::new();
@@ -75,6 +80,7 @@ impl<'w, 's> EcsBlockEntityWorld<'w, 's> {
             chunk_index,
             entity_info,
             pos_to_entity,
+            block_state_query,
         }
     }
 }
@@ -139,6 +145,25 @@ impl<'w, 's> BlockEntityWorldAccess for EcsBlockEntityWorld<'w, 's> {
     /// `false` — a documented, named gap, not silently wrong.
     fn is_locked_by_redstone(&self, _pos: BlockPos) -> bool {
         false
+    }
+
+    /// M3.5-B06 (Context §3.2): mirrors `stage4::ecs::EcsBlockWorld::get_block`'s exact
+    /// chunk-lookup shape (via `self.chunk_index`, local coords `pos.x.rem_euclid(16)`/
+    /// `pos.z.rem_euclid(16)`) to read the raw state at `pos`. Returns `true` (the safe
+    /// default, mirroring `is_locked_by_redstone`'s own "test doubles supply a fixed answer"
+    /// philosophy above) if unreadable -- chunk not indexed or the entity lookup fails.
+    fn hopper_enabled(&self, pos: BlockPos) -> bool {
+        let chunk_key = pos.chunk_key(DimensionId::OVERWORLD);
+        let Some(&entity) = self.chunk_index.0.get(&chunk_key) else {
+            return true;
+        };
+        let Ok((_, column)) = self.block_state_query.get(entity) else {
+            return true;
+        };
+        let lx = pos.x.rem_euclid(16) as u8;
+        let lz = pos.z.rem_euclid(16) as u8;
+        let raw = column.get(lx, pos.y, lz);
+        crate::block_entity::hopper::hopper_enabled_from_raw(raw.0)
     }
 
     /// A no-op — this blueprint ships no real `FurnaceLitStateResolver` (Context: "Lit-state
@@ -257,8 +282,10 @@ fn system_block_entity_tick(
     fuels: Res<FuelTable>,
     max_stack: Res<MaxStackSizeResource>,
     container_signals: Res<ContainerSignalsResource>,
+    block_state_query: Query<(&'static ChunkKeyTag, &'static BlockStateColumn)>,
 ) {
-    let mut world = EcsBlockEntityWorld::new(headers, chunk_be_index, &chunk_index);
+    let mut world =
+        EcsBlockEntityWorld::new(headers, chunk_be_index, &chunk_index, block_state_query);
     crate::stage7::run_block_entity_tick(
         &mut world,
         &recipes,

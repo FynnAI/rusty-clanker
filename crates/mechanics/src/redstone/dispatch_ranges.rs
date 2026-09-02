@@ -48,6 +48,8 @@
 use rc_chunk_storage::BlockStateId;
 use rc_registries::generated_v776::block_states::default_state;
 
+use crate::block_entity::hopper::{HopperStateIds, state_range as hopper_state_range};
+
 use super::piston::{self, PistonStateIds};
 use super::registration::Tier1RedstoneStateIds;
 use super::{comparator, repeater, torch, wire};
@@ -127,6 +129,19 @@ pub fn derive_piston_state_ids() -> PistonStateIds {
             "sticky_piston",
             piston::state_range(true),
             default_state::STICKY_PISTON,
+        )),
+    }
+}
+
+/// Derives the hopper dispatch range (module doc comment). Call once per region, alongside
+/// `derive_tier1_state_ids`/`derive_piston_state_ids` (M3.5-B06, `crates/server/src/play/
+/// world.rs`'s own `bootstrap_redstone_dispatch`).
+pub fn derive_hopper_state_ids() -> HopperStateIds {
+    HopperStateIds {
+        hopper: exclusive(checked(
+            "hopper",
+            hopper_state_range(),
+            default_state::HOPPER,
         )),
     }
 }

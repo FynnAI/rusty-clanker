@@ -12,7 +12,9 @@ pub mod torch;
 pub mod wire;
 
 pub use comparator::{ComparatorBehavior, ComparatorMode, ContainerSignalSource};
-pub use dispatch_ranges::{derive_piston_state_ids, derive_tier1_state_ids};
+pub use dispatch_ranges::{
+    derive_hopper_state_ids, derive_piston_state_ids, derive_tier1_state_ids,
+};
 pub use piston::{PistonBehavior, register_piston};
 pub use redstone_block::RedstoneBlockSource;
 pub use registration::{
