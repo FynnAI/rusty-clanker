@@ -3096,11 +3096,7 @@ impl HardcodedWorld {
     /// "already gone" handling for every other test/diagnostic method here.
     pub async fn debug_set_block_state(&self, pos: BlockPos, state_id: u32) {
         let (ack_tx, ack_rx) = oneshot::channel();
-        if self
-            .debug_setblock_tx
-            .send((pos, state_id, ack_tx))
-            .is_ok()
-        {
+        if self.debug_setblock_tx.send((pos, state_id, ack_tx)).is_ok() {
             let _ = ack_rx.await;
         }
     }
