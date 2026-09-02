@@ -1225,6 +1225,23 @@ Entries name the milestone that surfaced them and the code they concern.
   hit, instead of only "did not exit within {deadline} of its own start"
   with no further detail.
 
+- **CI nightly tier (`m1`/`m2`/`m3-acceptance`, `protocol-diff`): every job ran
+  `rc-paritybot test` BEFORE `Build rusty-clanker-server`, so the paritybot
+  integration tests that spawn the release binary
+  (`chunk_decode_diagnostic.rs`, and since M3.5-B03 the four
+  `debug_hooks_stdin.rs` cases) failed with "no release binary" on every
+  scheduled run — red on both runners since at least 2026-08-31 without anyone
+  noticing.** Corrected in the same changeset (build step moved ahead of the
+  paritybot test step in all four jobs). The gap it exposes needs a decision:
+  the scheduled tier has no surfacing rule — nothing in the verification
+  protocol (TEST-D37's own Tier-2 placement) says who reads the nightly result
+  or when a red nightly blocks anything, so a three-day red streak was
+  invisible to every implementation wave that ran meanwhile. Suggested shape:
+  the milestone completion report must quote the latest scheduled run's
+  conclusion per job (green required for the acceptance jobs of every
+  completed milestone), and the manager session checks it at each wave
+  boundary.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s

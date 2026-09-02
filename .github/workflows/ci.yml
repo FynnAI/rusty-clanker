@@ -273,12 +273,12 @@ jobs:
         working-directory: crates/testing/paritybot
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Build rusty-clanker-server (monolithic)
+        run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
       - name: rc-paritybot test (nightly override)
         working-directory: crates/testing/paritybot
         run: cargo nextest run
-
-      - name: Build rusty-clanker-server (monolithic)
-        run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
 
       - name: m1-report
         shell: bash
@@ -329,10 +329,6 @@ jobs:
         working-directory: crates/testing/paritybot
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: rc-paritybot test (nightly override)
-        working-directory: crates/testing/paritybot
-        run: cargo nextest run
-
       - name: Build rusty-clanker-server (monolithic)
         # `RUSTC_BOOTSTRAP=1`: `crates/nbt/Cargo.toml`'s own "KNOWN BLOCKER" note --
         # `simdnbt` 0.10.0 carries an unconditional `#![feature(portable_simd)]`, so
@@ -346,6 +342,10 @@ jobs:
         env:
           RUSTC_BOOTSTRAP: "1"
         run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
 
       - name: m2-report
         shell: bash
@@ -419,10 +419,6 @@ jobs:
         working-directory: crates/testing/paritybot
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: rc-paritybot test (nightly override)
-        working-directory: crates/testing/paritybot
-        run: cargo nextest run
-
       - name: Build rusty-clanker-server (monolithic)
         # `RUSTC_BOOTSTRAP=1`: see `m2-acceptance`'s identical comment above --
         # `simdnbt`'s unconditional `#![feature(portable_simd)]` on this workspace's
@@ -430,6 +426,10 @@ jobs:
         env:
           RUSTC_BOOTSTRAP: "1"
         run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
 
       - name: m3-report
         shell: bash
@@ -496,14 +496,14 @@ jobs:
         working-directory: crates/testing/paritybot
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: rc-paritybot test (nightly override)
-        working-directory: crates/testing/paritybot
-        run: cargo nextest run
-
       - name: Build rusty-clanker-server (monolithic)
         env:
           RUSTC_BOOTSTRAP: "1"
         run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
+
+      - name: rc-paritybot test (nightly override)
+        working-directory: crates/testing/paritybot
+        run: cargo nextest run
 
       - name: protocol-diff
         shell: bash
