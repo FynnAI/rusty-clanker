@@ -198,7 +198,7 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
                 if let Some(parent) = dump_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let dump = format_diff_dump(&spec.id, &report);
+                let dump = format_diff_dump(&spec.id, &report, &expected, &actual);
                 let _ = std::fs::write(&dump_path, &dump);
                 result.push(
                     spec.id.clone(),
@@ -237,7 +237,17 @@ pub fn run(args: &ParityCheckRedstoneArgs) -> std::process::ExitCode {
     crate::tier_result::exit_code_for(result.status)
 }
 
-fn format_diff_dump(id: &str, report: &rc_gametest::trace::DiffReport) -> String {
+/// Governance addition (M3.5 close-out, 2026-09-02): after the mismatch list, both full
+/// traces are appended tick by tick so a failure observed only on a CI runner (the
+/// `ubuntu-24.04` comparator/chest tick-0 divergence that never reproduced locally) can be
+/// read from the uploaded dump alone — a mismatch line names one position; whether the
+/// oracle or the replay lost a block, and at which tick, is only visible in the traces.
+fn format_diff_dump(
+    id: &str,
+    report: &rc_gametest::trace::DiffReport,
+    expected: &rc_gametest::trace::RedstoneTrace,
+    actual: &rc_gametest::trace::RedstoneTrace,
+) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(out, "parity-check redstone — {id}");
@@ -260,6 +270,30 @@ fn format_diff_dump(id: &str, report: &rc_gametest::trace::DiffReport) -> String
             "  tick {} pos {:?}: expected analog {:?}, actual analog {:?}",
             gap.tick, gap.pos, gap.expected_analog, gap.actual_analog
         );
+    }
+    for (label, trace) in [
+        ("expected (captured)", expected),
+        ("actual (replayed)", actual),
+    ] {
+        let _ = writeln!(
+            out,
+            "--- {label} trace: {} tick(s), bounds {:?}..{:?}, source jar {}",
+            trace.ticks.len(),
+            trace.bounds_min,
+            trace.bounds_max,
+            trace.source_jar_sha1
+        );
+        for snapshot in &trace.ticks {
+            let cells: Vec<String> = snapshot
+                .blocks
+                .iter()
+                .map(|b| match b.analog {
+                    Some(a) => format!("{:?}={}/a{a}", b.pos, b.state_id),
+                    None => format!("{:?}={}", b.pos, b.state_id),
+                })
+                .collect();
+            let _ = writeln!(out, "  tick {}: {}", snapshot.tick, cells.join(" "));
+        }
     }
     out
 }
