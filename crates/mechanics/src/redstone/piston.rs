@@ -66,6 +66,18 @@
 //! unconditional-`false` seeding made the redstone_block's own placement look like a genuine
 //! `false -> true` transition, queuing a spurious extend `piston_head` the real oracle never
 //! shows — `place`'s own doc comment has the full citation.
+//!
+//! M3 field-report fix ("a piston placed by an actual connected player is never wired into
+//! `PistonBehavior`'s own internal per-position state at all"): `PistonBehavior` now implements
+//! `on_placed` — real vanilla's own `PistonBaseBlock.setPlacedBy` -> `checkIfExtend`, decoding
+//! `facing`/`sticky`/`extended` straight off the placed id and reseeding via `place`, then
+//! evaluating the current neighbor signal immediately and queuing a real extend/retract if it
+//! disagrees with the freshly-placed state — closing `docs/findings-for-planning.md`'s own
+//! matching entry (every `BlockBehavior` method on this position used to early-return forever,
+//! since no production call site ever seeded `self.state` for a real placement). Guarded by
+//! `on_placed`'s own `previously_matched` idempotency check so the replay corpus's own pre-seeded
+//! positions (`crates/testing/gametest/src/replay.rs`'s `tier1_registry` pre-scan) stay
+//! byte-identical — `on_placed`'s own doc comment has the full citation.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -195,6 +207,44 @@ fn piston_state_id(sticky: bool, extended: bool, facing: Direction) -> BlockStat
     };
     let extended_idx = u32::from(!extended);
     BlockStateId(base + extended_idx * 6 + piston_facing_index(facing))
+}
+
+/// The exact inverse of `piston_facing_index` (Context §D/§E's own `[north, east, south, west,
+/// up, down]` order) — `idx` must be `0..6`, always true for both `decode_piston_state` call
+/// sites below (`rel % 6` off a real piston/sticky_piston raw id).
+fn piston_facing_from_index(idx: u32) -> Direction {
+    match idx {
+        0 => Direction::North,
+        1 => Direction::East,
+        2 => Direction::South,
+        3 => Direction::West,
+        4 => Direction::Up,
+        _ => Direction::Down,
+    }
+}
+
+/// The exact inverse of `piston_state_id` — `on_placed`'s own decode-from-raw-id step (M3
+/// field-report fix, "a piston placed by an actual connected player is never wired into
+/// `PistonBehavior`'s own internal per-position state" — `docs/findings-for-planning.md`'s own
+/// matching entry), mirroring `RepeaterBehavior::on_placed`/`ComparatorBehavior::on_placed`'s
+/// already-established decode-from-raw-id pattern. Returns `(sticky, extended, facing)`, or
+/// `None` if `raw` falls outside both `[PISTON_BASE, PISTON_MAX]` and `[STICKY_PISTON_BASE,
+/// STICKY_PISTON_MAX]` (defensive only — `register_piston` only ever registers exactly these two
+/// ranges, so dispatch never reaches `on_placed` with any other id).
+fn decode_piston_state(raw: u32) -> Option<(bool, bool, Direction)> {
+    let (sticky, base) = if (STICKY_PISTON_BASE..=STICKY_PISTON_MAX).contains(&raw) {
+        (true, STICKY_PISTON_BASE)
+    } else if (PISTON_BASE..=PISTON_MAX).contains(&raw) {
+        (false, PISTON_BASE)
+    } else {
+        return None;
+    };
+    let rel = raw - base;
+    // `piston_state_id`'s own `extended_idx = u32::from(!extended)` encoding, restated in
+    // reverse: `rel < 6` means `extended_idx == 0`, i.e. `extended == true`.
+    let extended = rel < 6;
+    let facing = piston_facing_from_index(rel % 6);
+    Some((sticky, extended, facing))
 }
 
 /// The settled `piston_head` block for `facing`/`sticky` (Context §D/§E) — the real id a commit
@@ -870,6 +920,91 @@ impl BlockBehavior for PistonBehavior {
             // fresh against live state when the event actually fires; a non-sticky piston's own
             // `resolve_retract` always returns `pulled: None` without reading any world state
             // (its own early return), so this call is free in that common case.
+            let pull = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
+            let action = if sticky && pull.pulled.is_none() {
+                TRIGGER_DROP
+            } else {
+                TRIGGER_CONTRACT
+            };
+            ctx.emit_block_event(pos, action, param, block_state);
+        }
+    }
+
+    /// Vanilla's own `PistonBaseBlock.setPlacedBy` -> `checkIfExtend` (Context §A/§E; M3
+    /// field-report fix, "a piston placed by an actual connected player is never wired into
+    /// `PistonBehavior`'s own internal per-position state at all" —
+    /// `docs/findings-for-planning.md`'s own matching entry). Decodes `facing`/`sticky`/
+    /// `extended` straight off the placed id (`decode_piston_state`, the exact inverse of
+    /// `piston_state_id`) and reseeds this position's own per-position state via `place` — never
+    /// duplicated by hand here, so `place`'s own phantom-extend-on-already-extended-placement
+    /// fix keeps applying unchanged.
+    ///
+    /// Then runs vanilla's own placement-time self-check exactly once, but only for a position
+    /// this reseed actually changed something at (`previously_matched` below, compared against
+    /// whatever this position's own state held, if any, the instant before this call). Two call
+    /// sites reach this method with two structurally different meanings:
+    /// - A real player placement (`crates/server/src/play/mining.rs`'s
+    ///   `apply_placement_with_redstone`): `self.state` has never held an entry for this exact
+    ///   position before (placement always targets air — `TargetNotAir`'s own rejection — so a
+    ///   piston can never overwrite a stale entry of its own at the position it was just placed
+    ///   at). `previously_matched` is always `false` here, so the immediate check always runs —
+    ///   the real `checkIfExtend` semantics this method exists to add. Production placement
+    ///   always writes `extended=false` (`tier1_oriented_state_table`'s own doc comment, "a
+    ///   freshly-placed piston is never mid-extend") — real vanilla's own equivalent guarantee,
+    ///   restated: `setPlacedBy` never fires for an already-extended state.
+    /// - `crates/testing/gametest/src/replay.rs`'s own `place_and_settle`, called once per
+    ///   `spec.blocks`/`spec.actions` entry: `tier1_registry`'s own pre-scan (its own doc
+    ///   comment) already called `place` with these exact same decoded properties for every
+    ///   piston position in `spec.blocks`, strictly before `place_and_settle`'s own loop ever
+    ///   reaches that position — so `previously_matched` is always `true` there, and the
+    ///   immediate check is skipped entirely. This is deliberate, not merely corpus-preserving
+    ///   convenience: a raw fixture `blocks:` entry is a `/setblock`-style world-setup snapshot,
+    ///   never a real player's `BlockItem` placement — real vanilla's own `setPlacedBy` callback
+    ///   fires only for the latter, never for a command-driven `setBlock`, so skipping the check
+    ///   for a fixture's own already-known placement is the historically correct behavior, not a
+    ///   workaround. Two of this corpus's own committed fixtures place an already-`extended=true`
+    ///   piston with the triggering `redstone_block` listed afterward in the same batch (`place`'s
+    ///   own doc comment) — this reseed's own `previously_matched` gate keeps them settling
+    ///   exactly as before (`parity-check redstone` is the arbiter).
+    fn on_placed(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        let Some(current) = ctx.get_block(pos) else {
+            return;
+        };
+        let Some((sticky, extended, facing)) = decode_piston_state(current.0) else {
+            return; // not a real piston/sticky_piston id -- defensive only, dispatch never reaches here otherwise
+        };
+
+        let previously_matched = {
+            let state = self.state.lock().unwrap();
+            state.get(&pos).is_some_and(|st| {
+                st.facing == facing && st.sticky == sticky && st.extended == extended
+            })
+        };
+
+        self.place(pos, facing, sticky, extended);
+
+        if previously_matched {
+            return;
+        }
+
+        let new_should = piston_neighbor_signal(ctx.world, &self.registry, pos, facing);
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(st) = state.get_mut(&pos) {
+                st.should_be_extended = new_should;
+            }
+        }
+        if new_should == extended {
+            return; // already matches -- vanilla's own checkIfExtend is a no-op here too
+        }
+
+        let Some(block_state) = ctx.get_block(pos) else {
+            return;
+        };
+        let param = facing.vanilla_ordinal();
+        if new_should {
+            ctx.emit_block_event(pos, TRIGGER_EXTEND, param, block_state);
+        } else {
             let pull = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
             let action = if sticky && pull.pulled.is_none() {
                 TRIGGER_DROP

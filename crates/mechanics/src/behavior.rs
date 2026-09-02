@@ -185,16 +185,18 @@ pub trait BlockBehavior: Send + Sync {
     /// pipeline and this position's own freshly-written `BlockStateId` wants to (re-)seed a
     /// behavior's own per-position placement state (facing/delay/mode — whatever a concrete
     /// implementor's own `place()`-equivalent setup needs) directly off that id, without a
-    /// separate, position-losing `place()` call of its own. Default no-op — most behaviors need
-    /// no such bookkeeping at all (wire/torch/piston already self-heal or take placement
-    /// properties as constructor/`place()` arguments that do not vary per re-placement in this
-    /// project's own current scope). `RepeaterBehavior`/`ComparatorBehavior` override this to
-    /// decode their own facing/delay/mode straight from `pos`'s own current raw id — the same
-    /// arithmetic their own `write_state_id`/`seed_powered_from_world` already use in the other
-    /// direction — closing the "a diode re-placed at an already-registered position has no way
-    /// to update its own facing" gap (`docs/findings-for-planning.md`'s own "diode
-    /// re-placement" entry) without requiring every caller that ever writes a fresh block to
-    /// know which concrete behavior type it just placed.
+    /// separate, position-losing `place()` call of its own. Default no-op — some behaviors need
+    /// no such bookkeeping at all (wire/torch already self-heal, needing no per-position state at
+    /// all beyond what `on_neighbor_changed`/`on_shape_update` already recompute from scratch
+    /// every time). `RepeaterBehavior`/`ComparatorBehavior`/`PistonBehavior` all override this to
+    /// decode their own placement properties (facing/delay/mode; facing/sticky/extended) straight
+    /// from `pos`'s own current raw id — the same arithmetic their own `write_state_id`/
+    /// `seed_powered_from_world`/`piston_state_id` already use in the other direction — closing
+    /// two related gaps: the diode "re-placed at an already-registered position has no way to
+    /// update its own facing" gap, and piston's own "a real player placement is never wired into
+    /// this position's own per-position state at all" gap (`docs/findings-for-planning.md`'s own
+    /// "diode re-placement"/matching piston entries) — without requiring every caller that ever
+    /// writes a fresh block to know which concrete behavior type it just placed.
     fn on_placed(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     /// New (M3-B06): called once per drawn random-tick candidate position (Context:
     /// "Random-tick position selection"). Default no-op — `NoOpBehavior` and every
