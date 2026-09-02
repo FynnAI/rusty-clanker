@@ -1035,32 +1035,6 @@ Entries name the milestone that surfaced them and the code they concern.
   `tags.rs` already gets, M1 registry-sync-fix) so every future re-run
   stays self-consistent, or confirm the long-identifier line-wrap was a
   one-off hand edit that should simply be reverted.
-- **M3.5-B05: chest/furnace/hopper block-entity NBT still writes a non-vanilla
-  `Lock: String`/`RCFacing: Byte` field, deliberately not removed this wave
-  despite the TEST-D57 pass (`M3.5-B05-CLAIMS.md`) confirming both are
-  non-vanilla.** Real vanilla 26.2 has no `Lock`/`RCFacing` on any of these
-  three block entities at all (chest/furnace/hopper's `lock` field, when
-  present, is lowercase and holds a full `ItemPredicate` compound, not a
-  plain string; this engine has no container-locking mechanic, so the field
-  is in practice always absent from real gameplay saves regardless) —
-  removing them cleanly conflicts with two committed, protected M3-B06 tests
-  this blueprint's own implementation changeset is forbidden from touching:
-  `crates/mechanics/tests/block_entity_nbt_roundtrip.rs::chest_with_items_
-  and_custom_name_round_trips` sets `chest.lock = Some(...)` and asserts an
-  exact round trip through `to_nbt`/`from_nbt` alone; `::hopper_with_
-  cooldown_and_facing_round_trips` does the same for `facing` via `RCFacing`,
-  and `HopperBlockEntity::from_nbt`'s own signature has no `world`/chunk
-  context to derive facing from the real block-state property instead (the
-  only sound alternative — `hopper.rs`'s own doc comment already names this
-  as "the not-yet-existing real blockstate-property NBT integration a future
-  blueprint supplies"). Needs a dedicated follow-up blueprint (after WS-D15/
-  M3.5-B01's generated block-state property registry lands, for hopper's own
-  facing-from-blockstate reconstruction) whose own test-authoring changeset
-  updates `block_entity_nbt_roundtrip.rs` itself to retire these two
-  assertions before the code can safely drop the fields — out of this
-  blueprint's own authority to do unilaterally (implementation never touches
-  committed tests outside its own named test-authoring changeset).
-
 - **M3.5-B05: `crates/server/src/play/registry_resolvers.rs::McRegistryResolvers`
   (the real, production `BlockStateNames`/`BiomeNames` resolver
   `rusty-clanker-server`'s own composition root wires into `ChunkNbtResolvers`)
