@@ -40,6 +40,10 @@ fn spawn_server_reports_startup_timeout_for_a_binary_that_never_listens() {
         tick_log: None,
         region_lifecycle: None,
         capture_stdout: false,
+        // M3.5-B03: one more new, purely additive field -- `false` again reproduces
+        // this pre-existing test's own exact prior behavior (no `--debug-hooks` flag
+        // emitted).
+        debug_hooks: false,
     };
 
     let started = Instant::now();
