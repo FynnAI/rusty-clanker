@@ -442,7 +442,10 @@ fn finish(result: TierResult) -> std::process::ExitCode {
 /// (this module's own `tests::tier_result_shape`).
 fn push_diff_cases(
     result: &mut TierResult,
-    report_by_step: &std::collections::BTreeMap<String, rc_gametest::protocol_capture::ProtocolDiffReport>,
+    report_by_step: &std::collections::BTreeMap<
+        String,
+        rc_gametest::protocol_capture::ProtocolDiffReport,
+    >,
 ) {
     for (step_id, report) in report_by_step {
         if report.mismatches.is_empty()
@@ -474,6 +477,24 @@ fn push_diff_cases(
             ));
         }
         result.push(step_id, Status::Fail, Some(detail_parts.join("; ")));
+    }
+}
+
+fn print_case_table(result: &TierResult) {
+    println!(
+        "protocol-diff — {} case(s), overall {:?}",
+        result.cases.len(),
+        result.status
+    );
+    for case in &result.cases {
+        let mark = match case.status {
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+        };
+        match &case.detail {
+            Some(detail) => println!("  [{mark}] {} — {detail}", case.name),
+            None => println!("  [{mark}] {}", case.name),
+        }
     }
 }
 
@@ -527,23 +548,5 @@ mod tests {
         assert_eq!(move_case.status, Status::Pass);
         assert!(move_case.detail.is_none());
         assert_eq!(result.status, Status::Fail);
-    }
-}
-
-fn print_case_table(result: &TierResult) {
-    println!(
-        "protocol-diff — {} case(s), overall {:?}",
-        result.cases.len(),
-        result.status
-    );
-    for case in &result.cases {
-        let mark = match case.status {
-            Status::Pass => "PASS",
-            Status::Fail => "FAIL",
-        };
-        match &case.detail {
-            Some(detail) => println!("  [{mark}] {} — {detail}", case.name),
-            None => println!("  [{mark}] {}", case.name),
-        }
     }
 }
