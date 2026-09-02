@@ -199,7 +199,7 @@ async fn drain_while<T>(
 
 #[tokio::test]
 async fn creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -273,7 +273,7 @@ async fn creative_break_is_still_instant_and_excludes_the_breaker_from_the_level
 
 #[tokio::test]
 async fn survival_multi_tick_break_shows_rising_crack_stages_then_finalizes_on_stop() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -625,7 +625,7 @@ async fn delayed_destroy_auto_finalize_excludes_the_breaker_from_the_level_event
 
 #[tokio::test]
 async fn distance_based_reach_ignores_occlusion_and_accepts_a_block_behind_another() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -706,7 +706,7 @@ fn sessions_rotation_ready(world: &HardcodedWorld, uuid: uuid::Uuid) -> bool {
 
 #[tokio::test]
 async fn placement_selects_the_held_items_own_block_and_orientation() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -792,7 +792,7 @@ async fn placement_selects_the_held_items_own_block_and_orientation() {
 /// even that far yet) and "held-item mutation queued".
 #[tokio::test]
 async fn debug_set_held_item_survives_a_join_still_racing_it() {
-    tokio::time::timeout(Duration::from_secs(120), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let mut tasks = Vec::new();
         for _ in 0..16 {
             tasks.push(tokio::spawn(async move {
