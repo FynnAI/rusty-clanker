@@ -737,3 +737,329 @@ async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_ac
     .await
     .unwrap();
 }
+
+/// M3 field-report test-authoring: closes the piston-specific half of `docs/findings-for-
+/// planning.md`'s own "a piston placed by an actual connected player is never wired into
+/// `PistonBehavior`'s own internal per-position state at all" finding -- `PistonBehavior` now
+/// implements `on_placed` (`crates/mechanics/src/redstone/piston.rs`), seeding its own
+/// per-position `facing`/`sticky`/`extended` state straight off the placed id exactly like
+/// `RepeaterBehavior`/`ComparatorBehavior`/`WireBehavior::on_placed` already do -- closing the
+/// "every `BlockBehavior` method early-returns the instant `self.state.lock().unwrap().get(&pos)`
+/// comes back `None`" gap the finding root-caused.
+///
+/// Proves the full round trip end-to-end over real loopback connections: a real player places a
+/// retracted piston (no signal reaches it yet -- its own placement response still just reads the
+/// plain retracted id), then places a redstone torch adjacent to one of its non-push-direction
+/// sides. The torch's own placement-time fan-out (`border::fan_out_from_changed_block`, the same
+/// mechanism every other tier-1 component's own placement already exercises) reaches the piston's
+/// `on_neighbor_changed`, which now finds a properly seeded `PistonState` instead of silently
+/// early-returning -- queuing a real extend. Then removes the power (breaking the torch) and
+/// watches the piston retract -- entirely without further player action after each triggering
+/// placement/break, both directions of `TickChangedPositions`'s own disciplined broadcast
+/// (previous wave) reach a real, entirely passive bystander connection.
+///
+/// Facing/yaw arithmetic is hand-derived and cross-checked the same way this file's own top
+/// doc-comment already establishes for wire: `nearest_direction6(90.0, 0.0)` resolves to `West`
+/// (`look_vector(90, 0) = (1, 0, 0)`, dominant `+x`), so `.opposite()` -- `resolve_orientation`'s
+/// own piston rule -- gives `facing = East`, matching `mining.rs`'s own `full6_piston_index`/
+/// `piston.rs`'s own `piston_facing_index` shared `[north, east, south, west, up, down]` order
+/// (`East` index `1`).
+#[tokio::test]
+async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_torch() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        // B is a bystander watching for the piston's own extend/retract -- proving both reach a
+        // real, entirely passive client, never merely the acting connection's own traffic.
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let mut seq = 0;
+
+        // S: a Stone the piston is placed against, purely as a placement anchor -- the piston's
+        // own FACING points AWAY from it (East), never into it.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let s_pos = BlockPos::new(2, -59, 0);
+        let s_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 0), 1).await;
+        assert_ne!(s_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The piston, FACING=East, placed by clicking S's own EAST face (direction=5) -- lands
+        // directly east of S, pushing further east, away from S.
+        rotate(&mut a, &world, uuid_a, 90.0, 0.0).await;
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Piston))
+            .await;
+        let piston_pos = BlockPos::new(3, -59, 0);
+        let head_pos = BlockPos::new(4, -59, 0);
+        let piston_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s_pos, 5).await;
+        // PISTON default = 2263 (extended=false, facing=north); `full6_piston_index(East) == 1`:
+        // 2263 + 1 = 2264 -- a plain retracted piston, no signal anywhere near it yet.
+        assert_eq!(
+            piston_id, 2264,
+            "piston facing=east, extended=false -- freshly placed, no signal yet"
+        );
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The driver: a floor torch at the piston's own NORTH neighbor (`piston_neighbor_
+        // signal`'s own candidate list -- North is not this piston's own push direction, East, so
+        // it is a valid activation side), standing on its OWN separate floor support --
+        // deliberately NOT attached to the piston's own face (a wall torch's own `weak_signal_
+        // toward` returns 0 toward its own attachment/input side, `torch.rs`'s own doc comment --
+        // attaching directly to the piston would emit no signal toward it at all).
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let torch_pos = BlockPos::new(3, -59, -1);
+        let torch_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, -1), 1).await;
+        assert_eq!(torch_id, 6885, "floor torch -> lit=true");
+
+        // The torch's OWN placement-time fan-out reaches the piston synchronously, this same
+        // action -- `PistonBehavior::on_placed`'s own earlier seeding (this changeset's own new
+        // production wiring) is what lets `on_neighbor_changed` actually find real state here
+        // instead of silently early-returning. The resulting `TRIGGER_EXTEND` block event is only
+        // QUEUED here, not yet processed -- `run_block_event_subphase` picks it up at the next
+        // real Stage-4 tick, entirely without any further player action.
+        let seen = staged(
+            "piston extends via an adjacent torch, no further player action",
+            Duration::from_secs(5),
+            collect_block_updates_at(
+                &mut b,
+                &mut b_acc,
+                &[piston_pos, head_pos],
+                Duration::from_millis(2500),
+            ),
+        )
+        .await;
+        assert_eq!(
+            seen.get(&piston_pos).copied(),
+            Some(2258),
+            "the piston's own base flips to extended=true (facing=east) -- got {seen:?}"
+        );
+        assert_eq!(
+            seen.get(&head_pos).copied(),
+            Some(2275),
+            "a plain (non-sticky) piston_head, facing=east, settles two ticks later -- got \
+             {seen:?}"
+        );
+        let piston_state = world.debug_query_block(piston_pos).await.unwrap();
+        assert_eq!(piston_state.raw_state, 2258, "extended server-side too");
+        let head_state = world.debug_query_block(head_pos).await.unwrap();
+        assert_eq!(head_state.raw_state, 2275, "head settled server-side too");
+
+        // Now remove the power: breaking the torch (Creative -> instant finalize) synchronously
+        // fans out to the piston's own North face, exactly mirroring `a_floor_torch_pops_when_
+        // its_own_support_block_is_broken`'s own established break-cascade shape -- the resulting
+        // `TRIGGER_CONTRACT` is again only queued here, processed at the next real tick.
+        seq += 1;
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(torch_pos),
+                direction: 1,
+                sequence: seq,
+            },
+        )
+        .await;
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            seq
+        );
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        let torch_update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(torch_update.location, pack_position(torch_pos));
+        assert_eq!(torch_update.block_state_id, 0, "torch -> air");
+
+        let seen = staged(
+            "piston retracts once its power source is broken, no further player action",
+            Duration::from_secs(5),
+            collect_block_updates_at(
+                &mut b,
+                &mut b_acc,
+                &[piston_pos, head_pos],
+                Duration::from_millis(2500),
+            ),
+        )
+        .await;
+        assert_eq!(
+            seen.get(&head_pos).copied(),
+            Some(0),
+            "a bare (non-sticky) retract's content clears to air, immediately at block-event time \
+             -- got {seen:?}"
+        );
+        assert_eq!(
+            seen.get(&piston_pos).copied(),
+            Some(2264),
+            "the base's own EXTENDED=false flip settles two ticks later -- got {seen:?}"
+        );
+        let piston_state = world.debug_query_block(piston_pos).await.unwrap();
+        assert_eq!(piston_state.raw_state, 2264, "retracted server-side too");
+        let head_state = world.debug_query_block(head_pos).await.unwrap();
+        assert_eq!(head_state.raw_state, 0, "head cell is air server-side too");
+    })
+    .await
+    .unwrap();
+}
+
+/// Companion to the extend/retract test above: a STICKY piston, proving the sticky-pull half of
+/// the same real-player-placement wiring -- a stone directly in front of the settled head is
+/// pulled BACK to the head's own old position when the piston retracts (`resolve_retract`'s own
+/// one-block candidate walk), rather than merely clearing to air like a bare retract does.
+///
+/// `nearest_direction6(270.0, 0.0)` resolves to `East` (`mining.rs`'s own `look_vector`:
+/// `yaw_sin = sin(270deg) = -1`, `look.x = -yaw_sin * cos(pitch) = 1`, dominant axis `+x` =
+/// `East`), so `.opposite()` gives `facing = West` for this piston.
+#[tokio::test]
+async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let world = HardcodedWorld::new();
+        let uuid_a = uuid::Uuid::from_u128(1);
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+        let mut seq = 0;
+
+        // S: the sticky piston's own placement anchor -- FACING points away from it (West).
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let s_pos = BlockPos::new(-2, -59, 0);
+        let s_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-2, -60, 0), 1).await;
+        assert_ne!(s_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        rotate(&mut a, &world, uuid_a, 270.0, 0.0).await;
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::StickyPiston))
+            .await;
+        let piston_pos = BlockPos::new(-3, -59, 0);
+        let head_pos = BlockPos::new(-4, -59, 0);
+        let candidate_pos = BlockPos::new(-5, -59, 0);
+        let piston_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s_pos, 4).await;
+        // STICKY_PISTON default = 2241 (extended=false, facing=north); `full6_piston_index(West)
+        // == 3`: 2241 + 3 = 2244.
+        assert_eq!(
+            piston_id, 2244,
+            "sticky piston facing=west, extended=false -- freshly placed, no signal yet"
+        );
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // The driver, at the piston's own NORTH neighbor -- same non-attached, own-support shape
+        // as the companion test above.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let torch_pos = BlockPos::new(-3, -59, -1);
+        let torch_id =
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-3, -60, -1), 1).await;
+        assert_eq!(torch_id, 6885, "floor torch -> lit=true");
+
+        let seen = staged(
+            "sticky piston extends via an adjacent torch, no further player action",
+            Duration::from_secs(5),
+            collect_block_updates_at(
+                &mut b,
+                &mut b_acc,
+                &[piston_pos, head_pos],
+                Duration::from_millis(2500),
+            ),
+        )
+        .await;
+        assert_eq!(
+            seen.get(&piston_pos).copied(),
+            Some(2238),
+            "sticky base flips to extended=true (facing=west) -- got {seen:?}"
+        );
+        assert_eq!(
+            seen.get(&head_pos).copied(),
+            Some(2284),
+            "a STICKY piston_head, facing=west, settles two ticks later -- got {seen:?}"
+        );
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // A Stone placed directly in front of the now-settled head -- `resolve_retract`'s own
+        // one-block sticky-pull candidate, two cells out from the piston along its own push
+        // direction. Clicked on the head's own WEST face (direction=4), which is now a real,
+        // solid `piston_head` block server-side.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+        let stone_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, head_pos, 4).await;
+        assert_ne!(stone_id, 0);
+        drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
+
+        // Remove the power: breaking the torch synchronously fans out to the piston, queuing a
+        // real sticky retract (`TRIGGER_CONTRACT`, `resolve_retract` finds the Stone as a
+        // pushable/pullable Normal-class candidate).
+        seq += 1;
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(torch_pos),
+                direction: 1,
+                sequence: seq,
+            },
+        )
+        .await;
+        let body = recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+        assert_eq!(
+            decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
+            seq
+        );
+        let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
+        let torch_update = decode_one::<BlockUpdate>(body).unwrap();
+        assert_eq!(torch_update.location, pack_position(torch_pos));
+        assert_eq!(torch_update.block_state_id, 0, "torch -> air");
+
+        let seen = staged(
+            "sticky piston pulls the stone back once its power source is broken, no further \
+             player action",
+            Duration::from_secs(5),
+            collect_block_updates_at(
+                &mut b,
+                &mut b_acc,
+                &[candidate_pos, head_pos, piston_pos],
+                Duration::from_millis(2500),
+            ),
+        )
+        .await;
+        assert_eq!(
+            seen.get(&candidate_pos).copied(),
+            Some(0),
+            "the pulled block's own source position clears to air immediately, at block-event \
+             time -- got {seen:?}"
+        );
+        assert_eq!(
+            seen.get(&head_pos).copied(),
+            Some(stone_id),
+            "the pulled Stone's own real content lands at the head's old position, deferred \
+             alongside the base's own EXTENDED flip -- got {seen:?}"
+        );
+        assert_eq!(
+            seen.get(&piston_pos).copied(),
+            Some(2244),
+            "the sticky base flips back to extended=false (facing=west) -- got {seen:?}"
+        );
+
+        let candidate_state = world.debug_query_block(candidate_pos).await.unwrap();
+        assert_eq!(
+            candidate_state.raw_state, 0,
+            "candidate cell is air server-side too"
+        );
+        let head_state = world.debug_query_block(head_pos).await.unwrap();
+        assert_eq!(
+            head_state.raw_state, stone_id as u32,
+            "the pulled Stone settled at the head's old position server-side too"
+        );
+        let piston_state = world.debug_query_block(piston_pos).await.unwrap();
+        assert_eq!(piston_state.raw_state, 2244, "retracted server-side too");
+    })
+    .await
+    .unwrap();
+}
