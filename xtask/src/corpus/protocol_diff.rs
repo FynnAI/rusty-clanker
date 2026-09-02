@@ -351,10 +351,16 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
                 runner_args.push(only.clone());
             }
             // The scripted session's own genuinely survival-timed dig step
-            // (`SURVIVAL_DIG_HOLD`, ~9s) plus 51 real redstone-corpus placements each
-            // dominate this budget far more than `placement-diff`'s own scenario
-            // count ever did — generous enough for a real, contended-machine run.
-            let deadline = Duration::from_secs(600) + Duration::from_secs(15) * 80;
+            // (`SURVIVAL_DIG_HOLD`, ~9s) plus 51 real redstone-corpus placements
+            // (each waiting up to its own `spec.max_ticks * 50ms`, MAX_TICKS capped
+            // at 200 -> up to 10s) dominate this budget far more than `placement-
+            // diff`'s own scenario count ever did. Real-run finding (`docs/findings-
+            // for-planning.md`): a genuinely first, uncached local run also pays this
+            // subprocess's own `cargo run` compile time out of the same deadline
+            // (a real, contended-machine, first-run compile measured well past 10
+            // minutes) — generous enough to absorb that too, not just the scripted
+            // session/corpus wall-clock itself.
+            let deadline = Duration::from_secs(900) + Duration::from_secs(30) * 80;
             match run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline) {
                 RunnerOutcome::Ok => match read_capture(&out_path) {
                     Ok(capture) => {
@@ -396,7 +402,9 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
         if let Some(only) = &args.only {
             runner_args.push(only.clone());
         }
-        let deadline = Duration::from_secs(300) + Duration::from_secs(15) * 80;
+        // As the oracle side's own identical deadline above — real-run finding,
+        // `docs/findings-for-planning.md`.
+        let deadline = Duration::from_secs(600) + Duration::from_secs(30) * 80;
         match run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline) {
             RunnerOutcome::Ok => match read_capture(&out_path) {
                 Ok(capture) => {

@@ -404,15 +404,51 @@ where
     F: Fn((i32, i32, i32), u32, &str) -> Fut + Clone,
     Fut: std::future::Future<Output = ()>,
 {
+    // Real-run finding (M3.5-B03, `docs/findings-for-planning.md`): a bot connecting
+    // immediately after the scripted session's own final player disconnects
+    // (`protocol_session::run_protocol_session`'s own last step,
+    // `session/observe_chunk`) intermittently fails with `disconnected before Event::
+    // Spawn: None` on a first real run — a plausible server-side "session not yet
+    // fully torn down" race this module has no direct visibility into. A short settle
+    // wait plus a bounded retry (mirrors this crate's own established "give the
+    // server a moment" idiom, `placement_capture.rs::capture_chest_rejoin_
+    // visibility`'s doc comment) is a safe, low-risk mitigation regardless of the
+    // exact root cause — never a change to any comparison/normalization logic.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let recorder = PacketRecorder::new();
-    let (view, _observer) = connect_and_observe_with_recorder(
-        host,
-        port,
-        WIRE_CAPTURE_BOT_NAME,
-        LOGIN_TIMEOUT,
-        Some(recorder.clone()),
-    )
-    .await?;
+    const CONNECT_ATTEMPTS: u32 = 3;
+    let mut last_err = None;
+    let mut connected = None;
+    for attempt in 0..CONNECT_ATTEMPTS {
+        match connect_and_observe_with_recorder(
+            host,
+            port,
+            WIRE_CAPTURE_BOT_NAME,
+            LOGIN_TIMEOUT,
+            Some(recorder.clone()),
+        )
+        .await
+        {
+            Ok(pair) => {
+                connected = Some(pair);
+                break;
+            }
+            Err(err) => {
+                eprintln!(
+                    "redstone_wire_capture: connect attempt {}/{CONNECT_ATTEMPTS} failed: {err}",
+                    attempt + 1
+                );
+                last_err = Some(err);
+                if attempt + 1 < CONNECT_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    let (view, _observer) = match connected {
+        Some(pair) => pair,
+        None => return Err(last_err.expect("at least one attempt was made").into()),
+    };
     let client = view
         .client()
         .expect("connect_and_observe_with_recorder only returns after Event::Spawn");

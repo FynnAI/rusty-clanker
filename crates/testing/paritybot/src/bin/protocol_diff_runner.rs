@@ -251,8 +251,13 @@ async fn run_oracle_side(
             }
         }
     };
+    // Governance fix (real-run finding, `docs/findings-for-planning.md`): the redstone-
+    // wire-capture pass's own failure must never discard the scripted session capture
+    // that already succeeded above (which itself costs real minutes to gather) — logged
+    // to stderr and degraded to zero wire steps rather than propagated as a hard `?`
+    // that would abort this whole subprocess before `write_capture` ever runs.
     let port = handle.borrow().port;
-    let wire_steps = redstone_wire_capture::run_redstone_wire_capture(
+    match redstone_wire_capture::run_redstone_wire_capture(
         "127.0.0.1",
         port,
         specs,
@@ -260,8 +265,13 @@ async fn run_oracle_side(
         setblock,
     )
     .await
-    .map_err(|err| format!("redstone wire capture failed: {err}"))?;
-    capture.steps.extend(wire_steps);
+    {
+        Ok(wire_steps) => capture.steps.extend(wire_steps),
+        Err(err) => eprintln!(
+            "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
+             session's own steps only: {err}"
+        ),
+    }
 
     // `handle` is dropped (killing the oracle process) only after every real
     // capture this run needed has already happened.
@@ -338,7 +348,10 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
             }
         }
     };
-    let wire_steps = redstone_wire_capture::run_redstone_wire_capture(
+    // Governance fix (real-run finding, `docs/findings-for-planning.md`) — same as the
+    // oracle side above: never discard the scripted session's own already-succeeded
+    // capture just because the redstone-wire pass failed.
+    match redstone_wire_capture::run_redstone_wire_capture(
         "127.0.0.1",
         port,
         specs,
@@ -346,8 +359,13 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
         setblock,
     )
     .await
-    .map_err(|err| format!("redstone wire capture failed: {err}"))?;
-    capture.steps.extend(wire_steps);
+    {
+        Ok(wire_steps) => capture.steps.extend(wire_steps),
+        Err(err) => eprintln!(
+            "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
+             session's own steps only: {err}"
+        ),
+    }
 
     // `managed` is dropped only after the capture completes — same
     // guaranteed-teardown discipline as the oracle side above.
