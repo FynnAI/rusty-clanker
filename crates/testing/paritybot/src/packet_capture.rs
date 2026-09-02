@@ -290,6 +290,23 @@ pub async fn connect_and_observe(
     account_name: &str,
     login_timeout: Duration,
 ) -> Result<(BlockSnapshotView, ObserverHandle), PacketCaptureError> {
+    connect_and_observe_with_recorder(host, port, account_name, login_timeout, None).await
+}
+
+/// As `connect_and_observe`, additionally routing the connection through
+/// `packet_recorder::spawn_with_recorder` (M3.5-B03) instead of the plain,
+/// non-recording `vanilla_registry_defaults::spawn` — `connect_and_observe` itself
+/// becomes a thin `recorder: None` wrapper over this, zero behavior change for every
+/// pre-existing caller (`corpus_capture`, `placement_capture`, `chunk_decode_check`),
+/// mirroring `vanilla_registry_defaults::spawn`'s own identical
+/// `spawn_with_recorder(.., None)` refactor.
+pub async fn connect_and_observe_with_recorder(
+    host: &str,
+    port: u16,
+    account_name: &str,
+    login_timeout: Duration,
+    recorder: Option<crate::packet_recorder::PacketRecorder>,
+) -> Result<(BlockSnapshotView, ObserverHandle), PacketCaptureError> {
     let state = SharedView::default();
     let view = state.view.clone();
     let client_slot = state.view.client.clone();
@@ -304,7 +321,7 @@ pub async fn connect_and_observe(
     // vanilla oracle exactly as much as of `rusty-clanker-server`, since the gap is
     // in azalea's own client-side knowledge, not in either server's behavior. The
     // relay changes nothing about what the oracle actually sends.
-    let relay = crate::vanilla_registry_defaults::spawn(host.to_string(), port)
+    let relay = crate::packet_recorder::spawn_with_recorder(host.to_string(), port, recorder)
         .await
         .map_err(|err| PacketCaptureError::Azalea(err.to_string()))?;
     let address = relay.local_addr.to_string();

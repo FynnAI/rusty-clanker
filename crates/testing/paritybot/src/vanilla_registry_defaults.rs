@@ -35,7 +35,7 @@ use rc_protocol::{
     SetCompression, VarInt, decode_one, encode_frame, encode_payload, try_decode_frame,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 /// A running relay instance. Dropping this does not stop the relay (it has no shutdown API,
 /// matching `HardcodedWorld::new`'s own "no shutdown API in this blueprint's scope"
@@ -50,53 +50,41 @@ pub struct RelayHandle {
 /// task (never just one -- `azalea::ClientBuilder::start`'s own infinite-retry behavior,
 /// `idle_stability.rs`'s module doc comment, means more than one connection attempt is a
 /// real possibility this relay must keep serving correctly).
+///
+/// M3.5-B03: a thin wrapper over `packet_recorder::spawn_with_recorder(.., None)` --
+/// zero behavior change for every pre-existing caller (`idle_stability`,
+/// `packet_capture`, `corpus_capture`, `placement_capture`), none of which ever needs
+/// the raw pre-rewrite capture that crate's own new relay path adds.
 pub async fn spawn(upstream_host: String, upstream_port: u16) -> std::io::Result<RelayHandle> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_addr = listener.local_addr()?;
-
-    tokio::spawn(async move {
-        loop {
-            let (client_stream, _) = match listener.accept().await {
-                Ok(accepted) => accepted,
-                Err(err) => {
-                    eprintln!("vanilla_registry_defaults relay: accept failed: {err}");
-                    return;
-                }
-            };
-            let upstream_host = upstream_host.clone();
-            tokio::spawn(async move {
-                if let Err(err) =
-                    relay_one_connection(client_stream, &upstream_host, upstream_port).await
-                {
-                    eprintln!("vanilla_registry_defaults relay: connection ended: {err}");
-                }
-            });
-        }
-    });
-
-    Ok(RelayHandle { local_addr })
+    crate::packet_recorder::spawn_with_recorder(upstream_host, upstream_port, None).await
 }
 
-async fn relay_one_connection(
+/// M3.5-B03: `pub(crate)` (was private) so `packet_recorder::spawn_with_recorder`'s
+/// own accept loop can call this per connection, threading `recorder` through to
+/// `pump_and_rewrite` below -- the actual relay/rewrite logic here is otherwise
+/// unchanged.
+pub(crate) async fn relay_one_connection(
     client_stream: TcpStream,
     upstream_host: &str,
     upstream_port: u16,
+    recorder: Option<crate::packet_recorder::PacketRecorder>,
 ) -> std::io::Result<()> {
     let upstream_stream = TcpStream::connect((upstream_host, upstream_port)).await?;
     let (client_read, client_write) = client_stream.into_split();
     let (upstream_read, upstream_write) = upstream_stream.into_split();
 
     // Client -> server: never rewritten, so a plain byte-for-byte pump suffices -- no
-    // framing/compression decode needed on this side at all.
+    // framing/compression decode needed on this side at all. Never recorded either
+    // (`PacketRecorder`'s own doc comment: server -> client frames only).
     let client_to_upstream = async move {
         let mut client_read = client_read;
         let mut upstream_write = upstream_write;
         let _ = tokio::io::copy(&mut client_read, &mut upstream_write).await;
     };
 
-    // Server -> client: the one direction that ever needs a byte rewritten, so this side
-    // has to speak real frames.
-    let upstream_to_client = pump_and_rewrite(upstream_read, client_write);
+    // Server -> client: the one direction that ever needs a byte rewritten (and, now,
+    // recorded), so this side has to speak real frames.
+    let upstream_to_client = pump_and_rewrite(upstream_read, client_write, recorder);
 
     tokio::join!(client_to_upstream, upstream_to_client);
     Ok(())
@@ -118,6 +106,7 @@ enum Phase {
 async fn pump_and_rewrite(
     mut upstream_read: tokio::net::tcp::OwnedReadHalf,
     mut client_write: tokio::net::tcp::OwnedWriteHalf,
+    recorder: Option<crate::packet_recorder::PacketRecorder>,
 ) {
     let mut accumulator = BytesMut::new();
     let mut read_chunk = [0u8; 8192];
@@ -145,6 +134,22 @@ async fn pump_and_rewrite(
                     return;
                 }
             };
+
+            // M3.5-B03: recorded immediately after `try_decode_frame` returns, before
+            // `process_one_packet` (and therefore before any rewrite) ever touches
+            // this payload -- `PacketRecorder`'s own doc comment on why this ordering
+            // is load-bearing (the captured bytes must always be the literal,
+            // unmodified bytes the real process put on the wire, `protocol_diff`
+            // blueprint §3.6). A packet whose own leading `VarInt` this probe cannot
+            // decode is simply never recorded (never a panic, never a crash of the
+            // relay itself) -- the same graceful degrade `process_one_packet`'s own
+            // decode-hiccup fallback already establishes for the rewrite half.
+            if let Some(recorder) = recorder.as_ref() {
+                let mut probe = payload.clone();
+                if let Ok(id) = VarInt::decode(&mut probe).map(|v| v.get()) {
+                    recorder.record(id, &probe);
+                }
+            }
 
             let (rewritten, next_phase, next_compression) =
                 process_one_packet(&payload, phase, compression);

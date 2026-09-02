@@ -140,8 +140,12 @@ pub(crate) fn to_az_direction(direction: Direction6) -> azalea::core::direction:
 ///
 /// `pub(crate)` (M3.5-B05 addition): `block_entity_persistence`'s own placement leg
 /// reuses this exact hotbar-select/aim/`UseItemOn` machinery rather than duplicating
-/// it a second time.
-pub(crate) struct SeqCounter(i32);
+/// it a second time. `pub` (wider still, M3.5-B03): `redstone_wire_capture::
+/// capture_contraption_over_wire`'s own `pub` signature (§4.4) threads a `&mut
+/// SeqCounter` through its own public parameter list, which requires this type (and
+/// its sole field, to construct one) to be at least as visible as that function
+/// itself.
+pub struct SeqCounter(pub i32);
 impl SeqCounter {
     pub(crate) fn next(&mut self) -> i32 {
         self.0 += 1;
@@ -182,7 +186,7 @@ pub(crate) async fn select_item(client: &Client, kind: BlockKind) {
 /// (`restart_persistence.rs`'s own established `look_at_click` idiom) so the resulting
 /// rotation packet has actually reached the server before the caller's own next action
 /// depends on it.
-async fn aim_bot(
+pub(crate) async fn aim_bot(
     client: &Client,
     yaw_degrees: f32,
     pitch_degrees: f32,
@@ -246,7 +250,7 @@ pub(crate) fn send_use_item_on(
 /// Places `kind`'s own item at `clicked`'s `face`, after aiming the bot along
 /// `yaw_degrees`/`pitch_degrees` — the one full placement step every scenario, single-
 /// or multi-step, ultimately bottoms out at.
-async fn place(
+pub(crate) async fn place(
     client: &Client,
     seq: &mut SeqCounter,
     kind: BlockKind,
@@ -273,7 +277,7 @@ async fn place(
 /// mode has the identical single-click-instant-break rule) the block at `pos`.
 /// `direction` is not read by production's own break path at all (only placement
 /// orientation reads a face) — `Up`, arbitrarily but consistently.
-async fn break_block(client: &Client, seq: &mut SeqCounter, pos: (i32, i32, i32)) {
+pub(crate) async fn break_block(client: &Client, seq: &mut SeqCounter, pos: (i32, i32, i32)) {
     client.write_packet(ServerboundPlayerAction {
         action: PlayerActionKind::StartDestroyBlock,
         pos: AzBlockPos::new(pos.0, pos.1, pos.2),
@@ -292,7 +296,7 @@ async fn break_block(client: &Client, seq: &mut SeqCounter, pos: (i32, i32, i32)
 /// 's own `PlayerMarker::position` doc comment — but this module never relies on that
 /// asymmetry, so a future movement-validation addition to our own server can never
 /// silently break this harness).
-async fn walk_to(client: &Client, target: (i32, i32, i32)) -> Result<(), PlacementCaptureError> {
+pub(crate) async fn walk_to(client: &Client, target: (i32, i32, i32)) -> Result<(), PlacementCaptureError> {
     let goal = BlockPosGoal(AzBlockPos::new(target.0, target.1, target.2));
     tokio::time::timeout(WALK_TIMEOUT, client.goto(goal))
         .await
@@ -311,7 +315,7 @@ async fn walk_to(client: &Client, target: (i32, i32, i32)) -> Result<(), Placeme
 /// or `timeout` elapses. A genuinely flat world (both sides' own launch configuration,
 /// `placement_diff_runner`'s own doc comment) reports the identical height at every
 /// column, so this one measurement is valid for every scenario's own slot.
-async fn discover_floor_y(
+pub(crate) async fn discover_floor_y(
     client: &Client,
     view: &BlockSnapshotView,
     timeout: Duration,
@@ -343,7 +347,7 @@ async fn discover_floor_y(
 /// One relative-to-`floor_y` position resolved to an absolute world position — `y == 0`
 /// is the floor's own top solid surface (`discover_floor_y`'s own doc comment), matching
 /// `placement_spec`'s own documented convention for every slot origin.
-fn absolute(floor_y: i32, relative: (i32, i32, i32)) -> (i32, i32, i32) {
+pub(crate) fn absolute(floor_y: i32, relative: (i32, i32, i32)) -> (i32, i32, i32) {
     (relative.0, floor_y + relative.1, relative.2)
 }
 
