@@ -51,4 +51,14 @@ pub enum StorageError {
         "unsupported dimension {0:?} — only the built-in Overworld/Nether/End are mapped to a save folder at this milestone's scope"
     )]
     UnsupportedDimension(rc_core::DimensionId),
+
+    /// WORLD-D14 (M3.5-B05): `world_root` still uses the pre-M3.5 legacy save layout
+    /// (a top-level `region/` directory directly under the world root, with no
+    /// `dimensions/` directory yet present). This engine no longer reads or writes
+    /// that layout at all — refused fast, never silently misread or silently
+    /// double-written under the new layout alongside the old one.
+    #[error(
+        "world at {path} uses the pre-M3.5 legacy save layout (region/ at the world root); this engine no longer reads or writes that layout — delete this directory (or move it aside) and let it regenerate, or migrate it by hand under dimensions/minecraft/overworld/"
+    )]
+    LegacyLayoutDetected { path: PathBuf },
 }

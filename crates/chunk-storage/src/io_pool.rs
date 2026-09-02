@@ -12,7 +12,7 @@ use parking_lot::{Condvar, Mutex};
 use crate::lifecycle::ChunkSaveSnapshot;
 use crate::superflat::SuperflatFiller;
 use crate::{
-    BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockStateColumn, BlockStateId,
+    BiomeColumn, BiomeId, BiomeNames, BlockEntityRecord, BlockStateColumn, BlockStateId,
     BlockStateNames, ChunkNbtCodec, ChunkNbtError, ChunkPersistenceState, ChunkStatus,
     ChunkStorageBackend, HeightmapSet, LightColumn, PaletteThresholds, RegionFileKind,
     StorageError,
@@ -65,17 +65,16 @@ pub enum LoadError {
 }
 
 /// Every load-job result field this blueprint's own Stage-1 spawn hook
-/// (`lifecycle::ChunkLifecycleManager::pre_tick`) needs. `block_entities` is
-/// deliberately absent -- WORLD-D6 keeps it always empty at M2 scope, and
-/// `ChunkNbtCodec::from_nbt`'s own contract guarantees a successfully-decoded document's
-/// `block_entities` is always empty too (Context), so `pre_tick` inserts a fresh
-/// `BlockEntityIndex::new()` directly rather than threading one through here.
+/// (`lifecycle::ChunkLifecycleManager::pre_tick`) needs. `block_entity_records` (M3.5-B05,
+/// WORLD-D6) is the real, decoded on-disk block-entity list, in on-disk load order --
+/// `Vec::new()` on a superflat-filled miss, since a freshly generated chunk never has any.
 pub struct LoadedChunk {
     pub key: rc_core::ChunkKey,
     pub block_states: BlockStateColumn,
     pub biomes: BiomeColumn,
     pub light: LightColumn,
     pub heightmaps: HeightmapSet,
+    pub block_entity_records: Vec<BlockEntityRecord>,
     pub status: ChunkStatus,
     /// Sourced from the real `ChunkNbtDocument.persistence` on a disk hit (`dirty:
     /// false`, `last_saved_tick` restored from `LastUpdate`), or `ChunkPersistenceState
@@ -320,6 +319,7 @@ fn load_one(
                 biomes: doc.biomes,
                 light: doc.light,
                 heightmaps: doc.heightmaps,
+                block_entity_records: doc.block_entity_records,
                 status: doc.status,
                 persistence: doc.persistence,
                 freshly_generated: false,
@@ -333,6 +333,7 @@ fn load_one(
                 biomes,
                 light,
                 heightmaps,
+                block_entity_records: Vec::new(),
                 status,
                 persistence: ChunkPersistenceState {
                     dirty: true,
@@ -368,30 +369,13 @@ fn save_one(
         block_thresholds: resolvers.block_thresholds,
         biome_thresholds: resolvers.biome_thresholds,
     };
-    // M3-B0X block-entity production wiring: `snapshot.block_entities` now legitimately
-    // carries real entries (a chest/furnace/hopper spawned by a real placement, `world.rs`'s
-    // own `spawn_block_entity_for_placement`) -- `to_nbt` still `Err(UnsupportedBlockEntities)`
-    // s on any non-empty index at all (`chunk_nbt.rs`'s own doc comment: "no `BlockEntityCodec`
-    // exists yet, WORLD-D6"), and `SaveError` from here is `tracing::error!`-logged and the
-    // WHOLE chunk save is skipped (this module's own `SaveError` doc comment) -- not merely
-    // the block-entity content. Left unhandled, placing a single chest anywhere would silently
-    // break persistence for its entire containing chunk (blocks/biomes/light included) on
-    // every save from that point on, a materially worse regression than the pre-existing,
-    // already-documented "block entities are not yet persisted" gap alone. Passing a fresh
-    // empty `BlockEntityIndex` here instead of the real one keeps that gap exactly as narrow
-    // as `chunk_nbt.rs`'s own error message already declares it to be (chunk content persists
-    // normally; a placed block entity's own runtime state does not survive a restart yet,
-    // `docs/findings-for-planning.md`'s own matching entry) without touching `chunk_nbt.rs`
-    // itself (a committed file this module's own top-of-file doc comment already treats as
-    // off-limits) or changing `to_nbt`'s own established error contract (`crates/chunk-storage`'s
-    // own existing tests assert that contract directly).
     let compound = codec.to_nbt(
         snapshot.key,
         &snapshot.block_states,
         &snapshot.biomes,
         &snapshot.light,
         &snapshot.heightmaps,
-        &BlockEntityIndex::new(),
+        &snapshot.block_entity_records,
         snapshot.status,
         ChunkPersistenceState {
             dirty: false,

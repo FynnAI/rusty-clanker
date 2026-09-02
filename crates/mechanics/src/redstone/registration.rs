@@ -56,6 +56,13 @@ impl Tier1RedstoneHandles {
         self.repeater.bind_registry(Arc::clone(&registry));
         self.comparator.bind_registry(registry);
     }
+
+    /// M3.5-B05 (Context 2.5): the "lookup" a comparator's own `OutputSignal` is
+    /// sourced from/seeded through at save/load time — the composition root inserts
+    /// this clone into `ComparatorOutputsResource`.
+    pub fn comparator(&self) -> Arc<ComparatorBehavior> {
+        Arc::clone(&self.comparator)
+    }
 }
 
 /// Constructs one fresh instance of each of the four behaviors and registers each into both

@@ -7,6 +7,7 @@ pub mod chest;
 pub mod container_signal_source;
 pub mod furnace;
 pub mod hopper;
+pub mod save_records;
 
 use bevy_ecs::prelude::Component;
 use rc_core::{BlockPos, ChunkKey};

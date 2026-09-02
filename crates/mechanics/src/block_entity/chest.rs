@@ -137,3 +137,35 @@ impl TierOneContainer for ChestBlockEntity {
         &mut self.slots
     }
 }
+
+/// M3.5-B05 (WORLD-D6): a thin wrapper over the already-committed `to_nbt`/`from_nbt`
+/// above, exposing them through `rc-chunk-storage`'s generic persistence contract.
+impl rc_chunk_storage::BlockEntityCodec for ChestBlockEntity {
+    fn to_record(&self, pos: BlockPos) -> rc_chunk_storage::BlockEntityRecord {
+        rc_chunk_storage::BlockEntityRecord {
+            pos,
+            id: "minecraft:chest".to_string(),
+            data: self.to_nbt(pos),
+        }
+    }
+
+    fn from_record(
+        record: &rc_chunk_storage::BlockEntityRecord,
+    ) -> Result<Self, rc_chunk_storage::BlockEntityCodecError> {
+        let bytes = rc_nbt::write_owned(&rc_nbt::owned::BaseNbt::new("", record.data.clone()));
+        let nbt = rc_nbt::read_borrowed_strict(&bytes)?;
+        let base = match nbt {
+            rc_nbt::borrow::Nbt::Some(base) => base,
+            rc_nbt::borrow::Nbt::None => {
+                return Err(rc_nbt::NbtError::from(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "BlockEntityRecord::data round-tripped to an empty NBT document",
+                ))
+                .into());
+            }
+        };
+        let compound = base.as_compound();
+        let (_pos, value) = Self::from_nbt(&compound)?;
+        Ok(value)
+    }
+}

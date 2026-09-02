@@ -16,8 +16,8 @@ use crate::ChunkStorageBackend;
 use crate::io_pool::{ChunkNbtResolvers, IoPool, LoadError, LoadedChunk};
 use crate::superflat::SuperflatFiller;
 use crate::{
-    BiomeColumn, BlockEntityIndex, BlockStateColumn, ChunkKeyTag, ChunkPersistenceState,
-    ChunkStatus, HeightmapSet, LightColumn,
+    BiomeColumn, BlockEntityIndex, BlockEntityRecord, BlockEntitySaveRecords, BlockEntitySpawner,
+    BlockStateColumn, ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn,
 };
 
 /// Stage-9's operator-configured autosave interval, in ticks (Context -- resolved from a
@@ -40,7 +40,7 @@ pub struct ChunkSaveSnapshot {
     pub biomes: BiomeColumn,
     pub light: LightColumn,
     pub heightmaps: HeightmapSet,
-    pub block_entities: BlockEntityIndex,
+    pub block_entity_records: Vec<BlockEntityRecord>,
     pub status: ChunkStatus,
     /// Becomes the saved document's own `LastUpdate` field (`ChunkNbtCodec::to_nbt`'s
     /// `persistence` parameter, Context) and the value a subsequent load restores into
@@ -146,7 +146,7 @@ pub fn chunk_snapshot_system(
         &BiomeColumn,
         &LightColumn,
         &HeightmapSet,
-        &BlockEntityIndex,
+        &BlockEntitySaveRecords,
         &ChunkStatus,
         &mut ChunkPersistenceState,
     )>,
@@ -154,8 +154,16 @@ pub fn chunk_snapshot_system(
     *logical_tick += 1;
     let tick = *logical_tick;
 
-    for (chunk_key, blocks, biomes, light, heightmaps, block_entities, status, mut persistence) in
-        &mut query
+    for (
+        chunk_key,
+        blocks,
+        biomes,
+        light,
+        heightmaps,
+        block_entity_records,
+        status,
+        mut persistence,
+    ) in &mut query
     {
         if !persistence.dirty {
             continue;
@@ -172,7 +180,7 @@ pub fn chunk_snapshot_system(
             biomes: biomes.clone(),
             light: light.clone(),
             heightmaps: heightmaps.clone(),
-            block_entities: block_entities.clone(),
+            block_entity_records: block_entity_records.0.clone(),
             status: *status,
             last_saved_tick: tick,
             is_light_on: false,
@@ -214,9 +222,9 @@ pub fn capture_snapshot(world: &World, entity: Entity, key: ChunkKey) -> ChunkSa
     let heightmaps = world
         .get::<HeightmapSet>(entity)
         .expect("resident chunk entity missing HeightmapSet");
-    let block_entities = world
-        .get::<BlockEntityIndex>(entity)
-        .expect("resident chunk entity missing BlockEntityIndex");
+    let block_entity_records = world
+        .get::<BlockEntitySaveRecords>(entity)
+        .expect("resident chunk entity missing BlockEntitySaveRecords");
     let status = world
         .get::<ChunkStatus>(entity)
         .expect("resident chunk entity missing ChunkStatus");
@@ -230,7 +238,7 @@ pub fn capture_snapshot(world: &World, entity: Entity, key: ChunkKey) -> ChunkSa
         biomes: biomes.clone(),
         light: light.clone(),
         heightmaps: heightmaps.clone(),
-        block_entities: block_entities.clone(),
+        block_entity_records: block_entity_records.0.clone(),
         status: *status,
         last_saved_tick: persistence.last_saved_tick,
         is_light_on: false,
@@ -258,12 +266,20 @@ pub struct ChunkLifecycleManager {
     snapshot_rx: Receiver<Arc<ChunkSaveSnapshot>>,
     /// M2 integration addition -- `SaveEventSink`'s own doc comment.
     save_event_sink: Option<SaveEventSink>,
+    /// M3.5-B05: converts a freshly loaded chunk's on-disk `BlockEntityRecord`s into
+    /// real ECS entities (Context 2.2 step 3). `Arc<dyn BlockEntitySpawner>` rather than
+    /// a generic parameter so this manager's own type stays nameable without threading
+    /// a spawner type parameter through every call site.
+    spawner: Arc<dyn BlockEntitySpawner>,
 }
 
 impl ChunkLifecycleManager {
     /// `resolvers` is the composition root's own `ChunkNbtResolvers` (Context,
     /// `io_pool.rs`) -- constructed once and shared for this manager's whole lifetime,
-    /// since the registry it resolves against never changes at runtime.
+    /// since the registry it resolves against never changes at runtime. `spawner`
+    /// (M3.5-B05) re-spawns a freshly loaded chunk's own real block-entity ECS
+    /// components -- `Arc::new(NoopBlockEntitySpawner)` for a caller with no real
+    /// mechanics-backed spawner available (this crate's own test suite).
     pub fn new(
         backend: Arc<dyn ChunkStorageBackend>,
         dimension: DimensionId,
@@ -271,6 +287,7 @@ impl ChunkLifecycleManager {
         resolvers: Arc<ChunkNbtResolvers>,
         interval_ticks: u32,
         io_queue_capacity: usize,
+        spawner: Arc<dyn BlockEntitySpawner>,
     ) -> Self {
         let (load_tx, load_rx) = crossbeam_channel::unbounded();
         let (snapshot_tx, snapshot_rx) = crossbeam_channel::unbounded();
@@ -288,6 +305,7 @@ impl ChunkLifecycleManager {
             snapshot_tx,
             snapshot_rx,
             save_event_sink: None,
+            spawner,
         }
     }
 
@@ -362,6 +380,7 @@ impl ChunkLifecycleManager {
                         // further to do.
                         continue;
                     }
+                    let block_entity_records = loaded.block_entity_records;
                     let entity = world
                         .spawn((
                             ChunkKeyTag(key),
@@ -370,10 +389,13 @@ impl ChunkLifecycleManager {
                             loaded.light,
                             loaded.heightmaps,
                             BlockEntityIndex::new(),
+                            BlockEntitySaveRecords::default(),
                             loaded.status,
                             loaded.persistence,
                         ))
                         .id();
+                    self.spawner
+                        .spawn_loaded_block_entities(world, entity, &block_entity_records);
                     self.resident.insert(key, entity);
                 }
                 Err(err) => {

@@ -208,6 +208,12 @@ impl FurnaceBlockEntity {
         crate::container::comparator_signal_from_slots(&self.slots, max_stack)
     }
 
+    /// M3.5-B05 (TEST-D57 pass, `M3.5-B05-CLAIMS.md`): real vanilla 26.2's furnace
+    /// block-entity NBT keys its four timing fields `lit_time_remaining`/`lit_total_time`/
+    /// `cooking_time_spent`/`cooking_total_time` (all `Short`) -- the pre-rename
+    /// `BurnTime`/`CookTime`/`CookTimeTotal` spellings this crate wrote through M3 are
+    /// corrected here; `lit_total_time` (tracked in memory since M3-B06 but never
+    /// persisted) is now written for real.
     pub fn to_nbt(&self, pos: BlockPos) -> owned::NbtCompound {
         let mut out = owned::NbtCompound::new();
         out.insert("id", "minecraft:furnace");
@@ -215,9 +221,18 @@ impl FurnaceBlockEntity {
         out.insert("y", pos.y);
         out.insert("z", pos.z);
         out.insert("Items", crate::item_stack::slots_to_items_list(&self.slots));
-        out.insert("BurnTime", self.lit_time_remaining as i16);
-        out.insert("CookTime", self.cook_time as i16);
-        out.insert("CookTimeTotal", self.cook_time_total as i16);
+        out.insert("lit_time_remaining", self.lit_time_remaining as i16);
+        out.insert("lit_total_time", self.lit_total_time as i16);
+        out.insert("cooking_time_spent", self.cook_time as i16);
+        out.insert("cooking_total_time", self.cook_time_total as i16);
+        // `RecipesUsed` (the furnace's real experience-bookkeeping map, a
+        // `Map<ResourceKey<Recipe<?>>, Integer>` in real vanilla) is deliberately not
+        // modeled at M3.5 (no smelting/experience until M4, Context 2.4) -- written as
+        // an empty compound so a vanilla reader still finds the key.
+        out.insert(
+            "RecipesUsed",
+            owned::NbtTag::Compound(owned::NbtCompound::new()),
+        );
         if let Some(name) = &self.custom_name {
             out.insert("CustomName", name.as_str());
         }
@@ -227,18 +242,15 @@ impl FurnaceBlockEntity {
         out
     }
 
-    /// `lit_total_time` and `cooking_recipe_output_id` are not part of vanilla's own furnace
-    /// block-entity NBT schema (Context's own tag-name table lists only `BurnTime`/`CookTime`/
-    /// `CookTimeTotal`) and are therefore not written by `to_nbt` above. On load,
-    /// `lit_total_time` is reconstructed as equal to the freshly-decoded `lit_time_remaining`
-    /// — a safe, harmless placeholder: it is only ever read again once the furnace next
-    /// naturally re-ignites, which immediately overwrites it with the real fuel-derived
-    /// duration (Context: "never needed mid-burn"). `cooking_recipe_output_id` is always
-    /// decoded as `None`; a furnace loaded mid-cook can therefore see one spurious
-    /// cook-progress reset on the very next `tick()` call if the input item's own recipe
-    /// output id differs from what was cooking before save (a real, if minor, vanilla-parity
-    /// gap this blueprint's own NBT schema inherits — flagged in the M3-B06 field report, not
-    /// silently accepted).
+    /// `cooking_recipe_output_id` is not part of vanilla's own furnace block-entity NBT
+    /// schema (real vanilla derives its analog, `RecipesUsed`, from a
+    /// `Map<ResourceKey<Recipe<?>>, Integer>` this engine does not model at M3.5 --
+    /// `M3.5-B05-CLAIMS.md`) and is therefore not written by `to_nbt` above; `from_nbt`
+    /// always decodes it as `None`. A furnace loaded mid-cook can therefore see one
+    /// spurious cook-progress reset on the very next `tick()` call if the input item's
+    /// own recipe output id differs from what was cooking before save (a real, if minor,
+    /// vanilla-parity gap this crate's own NBT schema inherits — flagged in the M3-B06
+    /// field report, not silently accepted).
     pub fn from_nbt(
         compound: &borrow::NbtCompound<'_, '_>,
     ) -> Result<(BlockPos, Self), SchemaError> {
@@ -252,9 +264,10 @@ impl FurnaceBlockEntity {
             std::array::from_fn(|_| None);
         crate::item_stack::items_list_from_nbt(compound, &path, &mut slots)?;
 
-        let lit_time_remaining = compound.require_short(&path, "BurnTime")? as u16;
-        let cook_time = compound.require_short(&path, "CookTime")? as u16;
-        let cook_time_total = compound.require_short(&path, "CookTimeTotal")? as u16;
+        let lit_time_remaining = compound.require_short(&path, "lit_time_remaining")? as u16;
+        let lit_total_time = compound.require_short(&path, "lit_total_time")? as u16;
+        let cook_time = compound.require_short(&path, "cooking_time_spent")? as u16;
+        let cook_time_total = compound.require_short(&path, "cooking_total_time")? as u16;
         let custom_name = compound
             .string("CustomName")
             .map(|s| s.to_str().into_owned());
@@ -265,7 +278,7 @@ impl FurnaceBlockEntity {
             Self {
                 slots,
                 lit_time_remaining,
-                lit_total_time: lit_time_remaining,
+                lit_total_time,
                 cook_time,
                 cook_time_total,
                 cooking_recipe_output_id: None,
@@ -294,5 +307,41 @@ impl TierOneContainer for FurnaceBlockEntity {
     /// Output only — extraction always means "hopper below, pulling up" (Context).
     fn extractable_slots(&self) -> Vec<usize> {
         vec![FURNACE_SLOT_OUTPUT]
+    }
+}
+
+/// M3.5-B05 (WORLD-D6): a thin wrapper over `to_nbt`/`from_nbt` above, exposing them
+/// through `rc-chunk-storage`'s generic persistence contract. Always writes/dispatches
+/// `id: "minecraft:furnace"` — `blast_furnace`/`smoker` share this same component at the
+/// ECS level (`world.rs`'s own `spawn_block_entity_for_placement` precedent); a real
+/// furnace's own actual block kind is derivable from its raw block-state id if a later
+/// blueprint needs it, out of this one's scope.
+impl rc_chunk_storage::BlockEntityCodec for FurnaceBlockEntity {
+    fn to_record(&self, pos: BlockPos) -> rc_chunk_storage::BlockEntityRecord {
+        rc_chunk_storage::BlockEntityRecord {
+            pos,
+            id: "minecraft:furnace".to_string(),
+            data: self.to_nbt(pos),
+        }
+    }
+
+    fn from_record(
+        record: &rc_chunk_storage::BlockEntityRecord,
+    ) -> Result<Self, rc_chunk_storage::BlockEntityCodecError> {
+        let bytes = rc_nbt::write_owned(&rc_nbt::owned::BaseNbt::new("", record.data.clone()));
+        let nbt = rc_nbt::read_borrowed_strict(&bytes)?;
+        let base = match nbt {
+            rc_nbt::borrow::Nbt::Some(base) => base,
+            rc_nbt::borrow::Nbt::None => {
+                return Err(rc_nbt::NbtError::from(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "BlockEntityRecord::data round-tripped to an empty NBT document",
+                ))
+                .into());
+            }
+        };
+        let compound = base.as_compound();
+        let (_pos, value) = Self::from_nbt(&compound)?;
+        Ok(value)
     }
 }

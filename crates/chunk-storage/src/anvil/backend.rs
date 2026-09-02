@@ -88,27 +88,41 @@ pub struct AnvilDiskBackend {
 }
 
 impl AnvilDiskBackend {
-    /// Opens (creating if absent) `world_root` as a world save directory: creates the
-    /// Overworld's `region/`/`entities/`/`poi/` directories eagerly (`DIM-1`/`DIM1`'s
-    /// equivalents lazily, on first write to that dimension — Context); acquires
-    /// `session.lock` (Context's World-level single-writer lock), returning
-    /// `StorageError::WorldAlreadyOpen` if another live `AnvilDiskBackend` (in this or
-    /// another process) already holds it. `compression` is the scheme applied to every
-    /// chunk this instance writes (WORLD-D13) — existing chunks written under a
-    /// different scheme by an earlier config remain correctly readable regardless (the
-    /// on-disk tag byte is always authoritative for reads).
+    /// Opens (creating if absent) `world_root` as a world save directory: refuses fast
+    /// (`StorageError::LegacyLayoutDetected`) if `world_root` still uses the pre-M3.5
+    /// legacy layout (Context 2.6, "Migration decision: refuse, do not migrate");
+    /// otherwise creates the Overworld's `dimensions/minecraft/overworld/{region,
+    /// entities,poi}/` directories eagerly (the Nether's/End's equivalents lazily, on
+    /// first write to that dimension — Context); acquires `session.lock` (Context's
+    /// World-level single-writer lock), returning `StorageError::WorldAlreadyOpen` if
+    /// another live `AnvilDiskBackend` (in this or another process) already holds it.
+    /// `compression` is the scheme applied to every chunk this instance writes
+    /// (WORLD-D13) — existing chunks written under a different scheme by an earlier
+    /// config remain correctly readable regardless (the on-disk tag byte is always
+    /// authoritative for reads).
     pub fn open(world_root: PathBuf, compression: CompressionScheme) -> Result<Self, StorageError> {
+        // WORLD-D14 (M3.5-B05): refuse a legacy-layout world outright, before creating or
+        // touching anything else -- a top-level `region/` directory directly under the world
+        // root, with no `dimensions/` directory yet present, is this engine's own pre-M3.5
+        // layout and is never migrated automatically (Context: "Migration decision: refuse,
+        // do not migrate").
+        if world_root.join("region").exists() && !world_root.join("dimensions").exists() {
+            return Err(StorageError::LegacyLayoutDetected { path: world_root });
+        }
+
         std::fs::create_dir_all(&world_root).map_err(|source| StorageError::Io {
             path: world_root.clone(),
             source,
         })?;
 
+        let overworld_dir =
+            world_root.join(Self::dimension_folder(rc_core::DimensionId::OVERWORLD)?);
         for kind in [
             RegionFileKind::Terrain,
             RegionFileKind::Entities,
             RegionFileKind::Poi,
         ] {
-            let dir = world_root.join(kind.folder_name());
+            let dir = overworld_dir.join(kind.folder_name());
             std::fs::create_dir_all(&dir)
                 .map_err(|source| StorageError::Io { path: dir, source })?;
         }
@@ -200,16 +214,18 @@ impl AnvilDiskBackend {
         self.handles.lock().map.len()
     }
 
-    /// Maps a `DimensionId` to WORLD-D14's fixed per-dimension folder name (empty
-    /// string for the Overworld, which uses the world root itself) — the built-in
-    /// three dimensions only (Context).
-    fn dimension_folder(dim: rc_core::DimensionId) -> Result<&'static str, StorageError> {
-        match dim.0 {
-            0 => Ok(""),
-            1 => Ok("DIM-1"),
-            2 => Ok("DIM1"),
-            _ => Err(StorageError::UnsupportedDimension(dim)),
-        }
+    /// Maps a `DimensionId` to WORLD-D14's real nested `dimensions/minecraft/<name>`
+    /// folder — no empty-string Overworld special case any more (Context 2.6): the
+    /// pinned target resolves every dimension's storage folder as
+    /// `<world_root>/dimensions/<namespace>/<path>/`, uniformly.
+    fn dimension_folder(dim: rc_core::DimensionId) -> Result<PathBuf, StorageError> {
+        let name = match dim.0 {
+            0 => "overworld",
+            1 => "the_nether",
+            2 => "the_end",
+            _ => return Err(StorageError::UnsupportedDimension(dim)),
+        };
+        Ok(Path::new("dimensions").join("minecraft").join(name))
     }
 
     /// The directory a `(dim, kind)` pair's region files live in — computed only, no
@@ -219,12 +235,10 @@ impl AnvilDiskBackend {
         dim: rc_core::DimensionId,
         kind: RegionFileKind,
     ) -> Result<PathBuf, StorageError> {
-        let dim_folder = Self::dimension_folder(dim)?;
-        Ok(if dim_folder.is_empty() {
-            self.world_root.join(kind.folder_name())
-        } else {
-            self.world_root.join(dim_folder).join(kind.folder_name())
-        })
+        Ok(self
+            .world_root
+            .join(Self::dimension_folder(dim)?)
+            .join(kind.folder_name()))
     }
 
     /// The `.mca` path for one region — computed only, no filesystem side effects.

@@ -29,7 +29,10 @@ pub use anvil::{
     StorageError, content_checksum,
 };
 pub use bits::{ceil_log2, pack_bits, read_slot, unpack_bits, write_slot};
-pub use block_entity::BlockEntityIndex;
+pub use block_entity::{
+    BlockEntityCodec, BlockEntityCodecError, BlockEntityIndex, BlockEntityRecord,
+    BlockEntitySaveRecords, BlockEntitySpawner, NoopBlockEntitySpawner,
+};
 pub use chunk_key::ChunkKeyTag;
 pub use chunk_nbt::{
     BiomeNames, BlockStateNames, ChunkNbtCodec, ChunkNbtDocument, ChunkNbtError, DATA_VERSION,

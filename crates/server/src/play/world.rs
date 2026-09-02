@@ -13,9 +13,10 @@ use rc_chunk_storage::io_pool::ChunkNbtResolvers;
 use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    AnvilDiskBackend, BiomeColumn, BlockEntityIndex, BlockStateColumn,
-    BlockStateId as StorageBlockStateId, ChunkKeyTag, ChunkPersistenceState, ChunkStorageBackend,
-    CompressionScheme, FilesystemPlayerDataStore, PaletteThresholds, WORLD_HEIGHT, WORLD_MIN_Y,
+    AnvilDiskBackend, BiomeColumn, BlockEntityCodec, BlockEntityIndex, BlockEntityRecord,
+    BlockEntitySpawner, BlockStateColumn, BlockStateId as StorageBlockStateId, ChunkKeyTag,
+    ChunkPersistenceState, ChunkStorageBackend, CompressionScheme, FilesystemPlayerDataStore,
+    PaletteThresholds, WORLD_HEIGHT, WORLD_MIN_Y,
 };
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::block_entity::{
@@ -794,6 +795,12 @@ fn bootstrap_redstone_dispatch(world: &mut World) {
     let signals = Arc::new(signals);
     handles.bind_registry(Arc::clone(&signals));
 
+    // M3.5-B05 (Context 2.5): the "lookup" a comparator's own `OutputSignal` is
+    // sourced from/seeded through at chunk save/load time.
+    world.insert_resource(
+        rc_mechanics::block_entity::save_records::ComparatorOutputsResource(handles.comparator()),
+    );
+
     // M3-B0X hopper-ENABLED-at-placement fix: `mining::apply_placement`'s own real-connection
     // call site (below) needs this same region's `SignalSourceRegistry` to answer `hasNeighbor
     // Signal` for a freshly placed hopper -- cloned here, before `register_piston` below moves
@@ -921,6 +928,77 @@ fn despawn_block_entity_at(world: &mut World, pos: BlockPos) {
         index.remove(target);
     }
     world.despawn(target);
+}
+
+/// Pushes `entity` onto `chunk_entity`'s own `BlockEntityIndex` -- the shared tail every
+/// `ProductionBlockEntitySpawner` dispatch arm below performs after spawning a real typed
+/// component pair, mirroring `spawn_block_entity_for_placement`'s own identical tail.
+fn push_onto_block_entity_index(world: &mut World, chunk_entity: Entity, entity: Entity) {
+    if let Some(mut index) = world.get_mut::<BlockEntityIndex>(chunk_entity) {
+        index.push(entity);
+    }
+}
+
+/// M3.5-B05 (Context 2.2 step 3): reads/writes ECS block-entity state on chunk load.
+/// Mirrors `spawn_block_entity_for_placement` almost exactly, just fed from disk (a
+/// decoded `BlockEntityRecord`) instead of from a placement action. Stateless -- every
+/// resource it needs (`ComparatorOutputsResource`) is read straight off the `world`
+/// parameter `spawn_loaded_block_entities` already receives. A record whose `id` names
+/// an unrecognized type, or whose NBT fails to decode, is skipped, never panics.
+struct ProductionBlockEntitySpawner;
+
+impl BlockEntitySpawner for ProductionBlockEntitySpawner {
+    fn spawn_loaded_block_entities(
+        &self,
+        world: &mut World,
+        chunk_entity: Entity,
+        records: &[BlockEntityRecord],
+    ) {
+        for record in records {
+            match record.id.as_str() {
+                "minecraft:chest" => {
+                    let Ok(value) = ChestBlockEntity::from_record(record) else {
+                        continue;
+                    };
+                    let entity = world
+                        .spawn((BlockEntityHeader { pos: record.pos }, value))
+                        .id();
+                    push_onto_block_entity_index(world, chunk_entity, entity);
+                }
+                "minecraft:furnace" | "minecraft:blast_furnace" | "minecraft:smoker" => {
+                    let Ok(value) = FurnaceBlockEntity::from_record(record) else {
+                        continue;
+                    };
+                    let entity = world
+                        .spawn((BlockEntityHeader { pos: record.pos }, value))
+                        .id();
+                    push_onto_block_entity_index(world, chunk_entity, entity);
+                }
+                "minecraft:hopper" => {
+                    let Ok(value) = HopperBlockEntity::from_record(record) else {
+                        continue;
+                    };
+                    let entity = world
+                        .spawn((BlockEntityHeader { pos: record.pos }, value))
+                        .id();
+                    push_onto_block_entity_index(world, chunk_entity, entity);
+                }
+                "minecraft:comparator" => {
+                    // No real ECS block entity (Context 2.5) -- seeds `ComparatorBehavior`'s
+                    // own tracked `output` for this position directly instead.
+                    if let Ok(output) =
+                        rc_mechanics::redstone::comparator::comparator_output_from_record(record)
+                    {
+                        world
+                            .resource::<rc_mechanics::block_entity::save_records::ComparatorOutputsResource>()
+                            .0
+                            .seed_output(record.pos, output);
+                    }
+                }
+                _ => {} // unrecognized id -- skipped, never panics (Deliverables)
+            }
+        }
+    }
 }
 
 /// Direct (non-`Query`) `BlockWorldAccess` adapter over `region.world`'s own chunk entities
@@ -1214,6 +1292,7 @@ impl HardcodedWorld {
                 resolvers,
                 config.save_interval_ticks(),
                 4096,
+                Arc::new(ProductionBlockEntitySpawner) as Arc<dyn BlockEntitySpawner>,
             );
             // M2 integration addition: opt-in `--save-event-log` wiring (Context,
             // `SaveEventSink`'s own doc comment) -- absent for every ordinary run

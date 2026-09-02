@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    BiomeColumn, BiomeId, BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkGenStatus,
+    BiomeColumn, BiomeId, BlockEntityRecord, BlockStateColumn, BlockStateId, ChunkGenStatus,
     ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapKind, HeightmapSet, LightColumn,
     LightSection, PaletteThresholds, PalettedContainer,
 };
@@ -77,10 +77,6 @@ pub enum ChunkNbtError {
     MissingSection(i32),
     #[error("malformed palette in field `{0}`: {1}")]
     MalformedPalette(&'static str, String),
-    #[error(
-        "block_entities must be empty at M2 scope (no BlockEntityCodec exists yet, WORLD-D6) — found {0} entries"
-    )]
-    UnsupportedBlockEntities(usize),
     #[error("unknown block state name `{0}` — the supplied BlockStateNames resolver has no match")]
     UnknownBlockStateName(String),
     #[error("unknown biome name `{0}` — the supplied BiomeNames resolver has no match")]
@@ -98,7 +94,7 @@ pub struct ChunkNbtDocument {
     pub biomes: BiomeColumn,
     pub light: LightColumn,
     pub heightmaps: HeightmapSet,
-    pub block_entities: BlockEntityIndex,
+    pub block_entity_records: Vec<BlockEntityRecord>,
     pub status: ChunkStatus,
     pub persistence: ChunkPersistenceState,
     pub is_light_on: bool,
@@ -121,8 +117,10 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
     /// fixed-default/opaque-extra policy). `extra` is re-emitted verbatim, appended
     /// after every known and fixed-default field, in its given order -- pass `&[]` for
     /// a chunk with no captured unknown tags (e.g. one this engine created itself).
-    /// Errors only on a non-empty `block_entities` or an `id` the resolvers cannot
-    /// name.
+    /// `block_entity_records` is written into the `block_entities` list verbatim, in
+    /// the given order (WORLD-D6) -- this crate never interprets a block entity's own
+    /// field semantics, only carries the already-complete `data` compound through.
+    /// Errors only on an `id` the resolvers cannot name.
     #[allow(clippy::too_many_arguments)]
     pub fn to_nbt(
         &self,
@@ -131,18 +129,12 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
         biomes: &BiomeColumn,
         light: &LightColumn,
         heightmaps: &HeightmapSet,
-        block_entities: &BlockEntityIndex,
+        block_entity_records: &[BlockEntityRecord],
         status: ChunkStatus,
         persistence: ChunkPersistenceState,
         is_light_on: bool,
         extra: &[(Mutf8String, owned::NbtTag)],
     ) -> Result<owned::NbtCompound, ChunkNbtError> {
-        if !block_entities.entities().is_empty() {
-            return Err(ChunkNbtError::UnsupportedBlockEntities(
-                block_entities.entities().len(),
-            ));
-        }
-
         let mut fields: Vec<(Mutf8String, owned::NbtTag)> = vec![
             ("DataVersion".into(), owned::NbtTag::Int(DATA_VERSION)),
             ("xPos".into(), owned::NbtTag::Int(chunk_key.x)),
@@ -171,7 +163,12 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
 
         fields.push((
             "block_entities".into(),
-            owned::NbtTag::List(owned::NbtList::Compound(Vec::new())),
+            owned::NbtTag::List(owned::NbtList::Compound(
+                block_entity_records
+                    .iter()
+                    .map(|r| r.data.clone())
+                    .collect(),
+            )),
         ));
 
         fields.push((
@@ -268,7 +265,7 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
 
         let (blocks, biomes, light) = self.read_sections(tag)?;
         let heightmaps = self.read_heightmaps(tag)?;
-        let block_entities = self.read_block_entities(tag)?;
+        let block_entity_records = self.read_block_entities(tag)?;
         let extra = read_extra(tag);
 
         Ok(ChunkNbtDocument {
@@ -277,7 +274,7 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
             biomes,
             light,
             heightmaps,
-            block_entities,
+            block_entity_records,
             status,
             persistence,
             is_light_on,
@@ -611,18 +608,43 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
         Ok(set)
     }
 
+    /// Decodes every `block_entities` list entry into a real `BlockEntityRecord`, in
+    /// on-disk order (WORLD-D6) -- `pos` from `x`/`y`/`z`, `id` from `id`, `data` the
+    /// whole entry compound via `.to_owned()`. This crate never interprets a record's
+    /// own type-specific fields any further than that.
     fn read_block_entities(
         &self,
         tag: &borrow::NbtCompound<'_, '_>,
-    ) -> Result<BlockEntityIndex, ChunkNbtError> {
+    ) -> Result<Vec<BlockEntityRecord>, ChunkNbtError> {
         let list = tag
             .list("block_entities")
             .ok_or(ChunkNbtError::MissingField("block_entities"))?;
-        let len = list.compounds().map(|c| c.len()).unwrap_or(0);
-        if len > 0 {
-            return Err(ChunkNbtError::UnsupportedBlockEntities(len));
+        let Some(entries) = list.compounds() else {
+            return Ok(Vec::new());
+        };
+        let mut records = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let x = entry
+                .int("x")
+                .ok_or(ChunkNbtError::MissingField("block_entities[].x"))?;
+            let y = entry
+                .int("y")
+                .ok_or(ChunkNbtError::MissingField("block_entities[].y"))?;
+            let z = entry
+                .int("z")
+                .ok_or(ChunkNbtError::MissingField("block_entities[].z"))?;
+            let id = entry
+                .string("id")
+                .ok_or(ChunkNbtError::MissingField("block_entities[].id"))?
+                .to_str()
+                .into_owned();
+            records.push(BlockEntityRecord {
+                pos: rc_core::BlockPos::new(x, y, z),
+                id,
+                data: entry.to_owned(),
+            });
         }
-        Ok(BlockEntityIndex::new())
+        Ok(records)
     }
 }
 

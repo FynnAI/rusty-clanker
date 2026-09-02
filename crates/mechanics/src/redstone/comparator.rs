@@ -242,6 +242,34 @@ impl ComparatorBehavior {
             .expect("ComparatorBehavior: bind_registry must run before dispatch")
     }
 
+    /// M3.5-B05 (Context 2.5, save side): every currently-tracked position's own
+    /// `output`, as a plain copy — the source the Stage-7 save-record system reads from
+    /// once per tick.
+    pub fn snapshot_outputs(&self) -> Vec<(BlockPos, u8)> {
+        self.state
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(&pos, state)| (pos, state.output))
+            .collect()
+    }
+
+    /// M3.5-B05 (Context 2.5, load side): seeds `pos`'s own `output` directly — safe to
+    /// call for a position never `place()`d this session (the same defensive
+    /// `entry`/`or_insert` shape `set_output`/`set_powered` already use), never panics.
+    pub fn seed_output(&self, pos: BlockPos, output: u8) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .entry(pos)
+            .or_insert(ComparatorState {
+                powered: false,
+                output: 0,
+                mode: ComparatorMode::Compare,
+                seeded: false,
+            })
+            .output = output;
+    }
+
     /// `get_input_signal` (Context §G): the container-fullness analog reading at the block
     /// directly in front, if any, entirely replacing (never maxed with) the plain diode input.
     fn get_input_signal(
@@ -457,4 +485,36 @@ impl BlockBehavior for ComparatorBehavior {
         };
         self.place(pos, facing, mode);
     }
+}
+
+/// M3.5-B05 (Context 2.4/2.5, TEST-D57 pass — `M3.5-B05-CLAIMS.md` CONFIRMED):
+/// builds a `minecraft:comparator` `BlockEntityRecord` — `output.putInt("OutputSignal",
+/// ...)` is real vanilla 26.2's own exact tag name/type, the only type-specific field
+/// this block entity carries.
+pub fn comparator_record(pos: BlockPos, output_signal: u8) -> rc_chunk_storage::BlockEntityRecord {
+    let mut data = rc_nbt::owned::NbtCompound::new();
+    data.insert("id", "minecraft:comparator");
+    data.insert("x", pos.x);
+    data.insert("y", pos.y);
+    data.insert("z", pos.z);
+    data.insert("OutputSignal", output_signal as i32);
+    rc_chunk_storage::BlockEntityRecord {
+        pos,
+        id: "minecraft:comparator".to_string(),
+        data,
+    }
+}
+
+/// The inverse of `comparator_record`: parses `OutputSignal` back out of a
+/// `minecraft:comparator` record.
+pub fn comparator_output_from_record(
+    record: &rc_chunk_storage::BlockEntityRecord,
+) -> Result<u8, rc_chunk_storage::BlockEntityCodecError> {
+    let value = record.data.int("OutputSignal").ok_or_else(|| {
+        rc_nbt::schema::SchemaError::MissingField {
+            path: rc_nbt::schema::NbtPath::root(),
+            field: "OutputSignal",
+        }
+    })?;
+    Ok(value.clamp(0, 15) as u8)
 }

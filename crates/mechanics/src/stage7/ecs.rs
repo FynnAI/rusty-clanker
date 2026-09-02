@@ -183,6 +183,14 @@ pub fn register_stage7(builder: &mut RcExecutorBuilder) {
         container_signal_notify_factory(),
         vec![],
     );
+    // M3.5-B05: the new save-record system (Context 2.2 step 2) — reads the same
+    // typed block-entity components the two systems above tick/notify through, so it
+    // belongs in this same `DomainGroup::BlockEntity` wave.
+    builder.register_system(
+        DomainGroup::BlockEntity,
+        crate::block_entity::save_records::block_entity_save_records_factory(),
+        vec![],
+    );
 }
 
 /// `crate::stage7::run_container_signal_notify`'s `bevy_ecs`/`rc-scheduler` adapter (M3
