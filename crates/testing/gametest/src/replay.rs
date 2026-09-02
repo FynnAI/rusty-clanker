@@ -934,3 +934,55 @@ fn dispatch_one(ctx: &mut UpdateContext, behaviors: &BlockBehaviorRegistry, item
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rc_registries::block_state_properties::range_of;
+    use rc_registries::generated_v776::block_state_properties::block_id;
+
+    /// M3.5-B02 (WS-D15) governance changeset: pins this module's own seven diode/wire/piston
+    /// `*_RANGE` constants against `rc-registries`' M3.5-B01-generated per-block-state-property
+    /// registry ahead of their own retirement (§5 of `blueprints/M3.5/
+    /// M3.5-B02-retire-hand-authored-id-tables.md`) -- already true today (both the CLAIMS
+    /// file's own research-role pass and this test itself confirm every one of these seven
+    /// constants already matches the generated table exactly), and stays true once the
+    /// retirement below replaces each constant's own literal declaration with a direct
+    /// `range_of` read.
+    #[test]
+    fn wire_torch_repeater_comparator_piston_ranges_match_generated_ranges() {
+        let wire = range_of(block_id::REDSTONE_WIRE);
+        assert_eq!(WIRE_RANGE, (wire.first.0, wire.last.0));
+        let torch_floor = range_of(block_id::REDSTONE_TORCH);
+        assert_eq!(TORCH_FLOOR_RANGE, (torch_floor.first.0, torch_floor.last.0));
+        let torch_wall = range_of(block_id::REDSTONE_WALL_TORCH);
+        assert_eq!(TORCH_WALL_RANGE, (torch_wall.first.0, torch_wall.last.0));
+        let repeater = range_of(block_id::REPEATER);
+        assert_eq!(REPEATER_RANGE, (repeater.first.0, repeater.last.0));
+        let comparator = range_of(block_id::COMPARATOR);
+        assert_eq!(COMPARATOR_RANGE, (comparator.first.0, comparator.last.0));
+        let piston = range_of(block_id::PISTON);
+        assert_eq!(PISTON_RANGE, (piston.first.0, piston.last.0));
+        let sticky_piston = range_of(block_id::STICKY_PISTON);
+        assert_eq!(
+            STICKY_PISTON_RANGE,
+            (sticky_piston.first.0, sticky_piston.last.0)
+        );
+    }
+
+    /// Pins that the generated range agrees with `replay.rs`, not with `mining.rs`'s former
+    /// default-anchored arithmetic (§3.7 of the blueprint named above) -- `CHEST_RANGE` was
+    /// always correct here; `mining.rs`'s own `decode_chest_state` was the defect, already
+    /// retired in the Implementation changeset this governance changeset follows.
+    #[test]
+    fn chest_range_matches_generated_range() {
+        let chest = range_of(block_id::CHEST);
+        assert_eq!(CHEST_RANGE, (chest.first.0, chest.last.0));
+    }
+
+    #[test]
+    fn hopper_range_matches_generated_range() {
+        let hopper = range_of(block_id::HOPPER);
+        assert_eq!(HOPPER_RANGE, (hopper.first.0, hopper.last.0));
+    }
+}

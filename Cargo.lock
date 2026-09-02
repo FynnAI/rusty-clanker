@@ -2997,6 +2997,7 @@ dependencies = [
  "rc-core",
  "rc-mechanics",
  "rc-messaging",
+ "rc-registries",
  "ron",
  "serde",
  "thiserror 2.0.20",

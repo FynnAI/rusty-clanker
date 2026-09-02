@@ -25,6 +25,13 @@ publish = false
 rc-core = { path = "../../core" }
 rc-chunk-storage = { path = "../../chunk-storage" }
 rc-messaging = { path = "../../messaging" }
+# M3.5-B02 (WS-D15): `replay.rs`'s own eight hand-authored `*_RANGE` constants are retired
+# against `rc-registries`' M3.5-B01 generated per-block-state-property registry -- this
+# crate's production code (`replay.rs`), not only its own tests, needs the generated API
+# directly. `rc-registries` is a `SHARED` crate in `xtask/src/lint_deps.rs`'s own WS-D3
+# rule 1 list; `rc-gametest` is not named in any of that file's `SHARED`/`SIM`/`NETRENDER`
+# lists, so this dependency trips no `lint-deps` rule.
+rc-registries = { path = "../../registries" }
 # `default-features = false` is NOT used here (a second forced deviation, final report):
 # current `rc-mechanics::lib.rs` gates its entire `stage4` module -- not merely
 # `stage4::ecs` -- behind `feature = "server-systems"`, so `stage4::run_scheduled_phase`/
