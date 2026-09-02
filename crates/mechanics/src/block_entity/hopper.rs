@@ -25,10 +25,16 @@ pub struct HopperBlockEntity {
     pub slots: [Option<ItemStackRecord>; HOPPER_SLOT_COUNT],
     pub transfer_cooldown: u8,
     /// One of `{Down, North, South, East, West}` — never `Up` (Context; not structurally
-    /// enforced, restated as a caller invariant).
+    /// enforced, restated as a caller invariant). Real vanilla 26.2 never persists this in
+    /// block-entity NBT at all -- it is a block-*state* property (M3.5-B05 §2.4, TEST-D57
+    /// CLAIMS) -- so this in-memory copy is populated by whichever caller has real block-state
+    /// access: `crates/server/src/play/world.rs`'s `spawn_block_entity_for_placement` at
+    /// placement time, and its `ProductionBlockEntitySpawner` at chunk-load time (both via
+    /// `mining::hopper_facing_from_raw_state`). `from_nbt` below cannot recover a real value
+    /// and decodes a placeholder instead -- never trust this field on a value fresh out of
+    /// `from_nbt`/`from_record` alone.
     pub facing: Direction,
     pub custom_name: Option<String>,
-    pub lock: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -52,7 +58,6 @@ impl HopperBlockEntity {
             transfer_cooldown: 0,
             facing,
             custom_name: None,
-            lock: None,
         }
     }
 
@@ -200,6 +205,13 @@ impl HopperBlockEntity {
         crate::container::comparator_signal_from_slots(&self.slots, max_stack)
     }
 
+    /// M3.5-B05 §2.4 (TEST-D57 CLAIMS): no `RCFacing`/`Lock` key -- `facing` is a
+    /// block-*state* property in real vanilla, never block-*entity* NBT (the earlier
+    /// `RCFacing: Byte` non-vanilla tag this crate wrote/read through M3.5-B05 is removed);
+    /// the hopper lock is real vanilla's lowercase `lock`, holding an `ItemPredicate`
+    /// compound, a mechanic this engine does not model at all, so nothing is written for it
+    /// either (and with it goes the in-memory `lock` field, which existed solely to
+    /// round-trip that tag).
     pub fn to_nbt(&self, pos: BlockPos) -> owned::NbtCompound {
         let mut out = owned::NbtCompound::new();
         out.insert("id", "minecraft:hopper");
@@ -208,23 +220,22 @@ impl HopperBlockEntity {
         out.insert("z", pos.z);
         out.insert("Items", crate::item_stack::slots_to_items_list(&self.slots));
         out.insert("TransferCooldown", self.transfer_cooldown as i32);
-        out.insert("RCFacing", direction_to_byte(self.facing));
         if let Some(name) = &self.custom_name {
             out.insert("CustomName", name.as_str());
-        }
-        if let Some(lock) = &self.lock {
-            out.insert("Lock", lock.as_str());
         }
         out
     }
 
     /// `facing` is not itself part of vanilla's own block-*entity* NBT (it is a block*state*
-    /// property, per `07-blocks-blockstates.md`'s own state-vs-entity split) — this blueprint's
-    /// own `to_nbt`/`from_nbt` write/read it as a convenience extra field (`RCFacing: Byte`,
-    /// this blueprint's own non-vanilla tag, clearly namespaced so it never collides with a
-    /// real vanilla tag name) purely so this blueprint's own hopper struct round-trips
-    /// completely without needing the not-yet-existing real blockstate-property NBT
-    /// integration a future blueprint supplies.
+    /// property, per `07-blocks-blockstates.md`'s own state-vs-entity split, and per M3.5-B05
+    /// §2.4/TEST-D57 CLAIMS carries no non-vanilla stand-in tag here either any more) -- this
+    /// function has no `world`/chunk context to consult the real block state, so it decodes
+    /// `Direction::Down` (vanilla's own default hopper facing, `mining.rs`'s own
+    /// `hopper_facing_index` doc comment) as a placeholder only. The caller with real
+    /// block-state access is responsible for immediately overwriting it before this hopper's
+    /// first tick: `crates/server/src/play/world.rs`'s `ProductionBlockEntitySpawner` does so
+    /// via `mining::hopper_facing_from_raw_state`, mirroring `spawn_block_entity_for_
+    /// placement`'s own identical placement-time precedent.
     pub fn from_nbt(
         compound: &borrow::NbtCompound<'_, '_>,
     ) -> Result<(BlockPos, Self), SchemaError> {
@@ -238,50 +249,19 @@ impl HopperBlockEntity {
         crate::item_stack::items_list_from_nbt(compound, &path, &mut slots)?;
 
         let transfer_cooldown = compound.require_int(&path, "TransferCooldown")? as u8;
-        let facing_byte = compound.require_byte(&path, "RCFacing")?;
-        let facing = direction_from_byte(facing_byte, &path)?;
         let custom_name = compound
             .string("CustomName")
             .map(|s| s.to_str().into_owned());
-        let lock = compound.string("Lock").map(|s| s.to_str().into_owned());
 
         Ok((
             pos,
             Self {
                 slots,
                 transfer_cooldown,
-                facing,
+                facing: Direction::Down,
                 custom_name,
-                lock,
             },
         ))
-    }
-}
-
-fn direction_to_byte(d: Direction) -> i8 {
-    match d {
-        Direction::West => 0,
-        Direction::East => 1,
-        Direction::North => 2,
-        Direction::South => 3,
-        Direction::Down => 4,
-        Direction::Up => 5,
-    }
-}
-
-fn direction_from_byte(b: i8, path: &NbtPath) -> Result<Direction, SchemaError> {
-    match b {
-        0 => Ok(Direction::West),
-        1 => Ok(Direction::East),
-        2 => Ok(Direction::North),
-        3 => Ok(Direction::South),
-        4 => Ok(Direction::Down),
-        5 => Ok(Direction::Up),
-        other => Err(SchemaError::InvalidValue {
-            path: path.clone(),
-            field: "RCFacing",
-            reason: format!("unrecognized direction byte {other}"),
-        }),
     }
 }
 

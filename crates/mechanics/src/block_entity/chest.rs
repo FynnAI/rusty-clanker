@@ -20,7 +20,6 @@ pub struct ChestBlockEntity {
     pub slots: [Option<ItemStackRecord>; CHEST_SLOT_COUNT],
     pub open_count: u8,
     pub custom_name: Option<String>,
-    pub lock: Option<String>,
 }
 
 impl ChestBlockEntity {
@@ -29,7 +28,6 @@ impl ChestBlockEntity {
             slots: std::array::from_fn(|_| None),
             open_count: 0,
             custom_name: None,
-            lock: None,
         }
     }
 
@@ -82,8 +80,14 @@ impl ChestBlockEntity {
     }
 
     /// `id: "minecraft:chest"`, `x`/`y`/`z` from `pos`, `Items` (only occupied slots, each with
-    /// its own `Slot: Byte`), `CustomName`/`Lock` if present. DataVersion is the caller's own
+    /// its own `Slot: Byte`), `CustomName` if present. DataVersion is the caller's own
     /// responsibility (this is the block-entity-local compound only, not a full document).
+    ///
+    /// M3.5-B05 §2.4 (TEST-D57 CLAIMS): no `Lock` key -- real vanilla 26.2's own chest lock is
+    /// lowercase `lock`, holding an `ItemPredicate` compound, a container-locking mechanic this
+    /// engine does not model at all, so nothing is written (the earlier `Lock: String`
+    /// non-vanilla tag this crate wrote/read through M3.5-B05 is removed, and with it the
+    /// in-memory `lock` field, which existed solely to round-trip that tag).
     pub fn to_nbt(&self, pos: BlockPos) -> owned::NbtCompound {
         let mut out = owned::NbtCompound::new();
         out.insert("id", "minecraft:chest");
@@ -93,9 +97,6 @@ impl ChestBlockEntity {
         out.insert("Items", crate::item_stack::slots_to_items_list(&self.slots));
         if let Some(name) = &self.custom_name {
             out.insert("CustomName", name.as_str());
-        }
-        if let Some(lock) = &self.lock {
-            out.insert("Lock", lock.as_str());
         }
         out
     }
@@ -115,7 +116,6 @@ impl ChestBlockEntity {
         let custom_name = compound
             .string("CustomName")
             .map(|s| s.to_str().into_owned());
-        let lock = compound.string("Lock").map(|s| s.to_str().into_owned());
 
         Ok((
             pos,
@@ -123,7 +123,6 @@ impl ChestBlockEntity {
                 slots,
                 open_count: 0,
                 custom_name,
-                lock,
             },
         ))
     }

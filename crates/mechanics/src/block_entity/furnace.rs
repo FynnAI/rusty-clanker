@@ -116,7 +116,6 @@ pub struct FurnaceBlockEntity {
     pub cook_time_total: u16,
     pub cooking_recipe_output_id: Option<String>,
     pub custom_name: Option<String>,
-    pub lock: Option<String>,
 }
 
 impl FurnaceBlockEntity {
@@ -129,7 +128,6 @@ impl FurnaceBlockEntity {
             cook_time_total: 0,
             cooking_recipe_output_id: None,
             custom_name: None,
-            lock: None,
         }
     }
 
@@ -214,6 +212,12 @@ impl FurnaceBlockEntity {
     /// `BurnTime`/`CookTime`/`CookTimeTotal` spellings this crate wrote through M3 are
     /// corrected here; `lit_total_time` (tracked in memory since M3-B06 but never
     /// persisted) is now written for real.
+    ///
+    /// M3.5-B05 §2.4 (TEST-D57 CLAIMS): no `Lock` key -- real vanilla 26.2's own furnace lock
+    /// is lowercase `lock`, holding an `ItemPredicate` compound, a container-locking mechanic
+    /// this engine does not model at all, so nothing is written (the earlier `Lock: String`
+    /// non-vanilla tag this crate wrote/read through M3.5-B05 is removed, and with it the
+    /// in-memory `lock` field, which existed solely to round-trip that tag).
     pub fn to_nbt(&self, pos: BlockPos) -> owned::NbtCompound {
         let mut out = owned::NbtCompound::new();
         out.insert("id", "minecraft:furnace");
@@ -235,9 +239,6 @@ impl FurnaceBlockEntity {
         );
         if let Some(name) = &self.custom_name {
             out.insert("CustomName", name.as_str());
-        }
-        if let Some(lock) = &self.lock {
-            out.insert("Lock", lock.as_str());
         }
         out
     }
@@ -271,7 +272,6 @@ impl FurnaceBlockEntity {
         let custom_name = compound
             .string("CustomName")
             .map(|s| s.to_str().into_owned());
-        let lock = compound.string("Lock").map(|s| s.to_str().into_owned());
 
         Ok((
             pos,
@@ -283,7 +283,6 @@ impl FurnaceBlockEntity {
                 cook_time_total,
                 cooking_recipe_output_id: None,
                 custom_name,
-                lock,
             },
         ))
     }

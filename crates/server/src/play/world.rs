@@ -987,9 +987,33 @@ impl BlockEntitySpawner for ProductionBlockEntitySpawner {
                     push_onto_block_entity_index(world, chunk_entity, entity);
                 }
                 "minecraft:hopper" => {
-                    let Ok(value) = HopperBlockEntity::from_record(record) else {
+                    let Ok(mut value) = HopperBlockEntity::from_record(record) else {
                         continue;
                     };
+                    // `facing` is a block-state property, never block-entity NBT
+                    // (`hopper.rs`'s own `from_nbt` doc comment, M3.5-B05 §2.4/TEST-D57
+                    // CLAIMS) -- recovered here from the `BlockStateColumn` `chunk_entity`
+                    // already carries (spawned into it just above, in
+                    // `ChunkLifecycleManager::pre_tick`, before this spawner ever runs),
+                    // mirroring `spawn_block_entity_for_placement`'s own identical
+                    // placement-time precedent. Left at `from_nbt`'s own placeholder
+                    // (`Direction::Down`) if the raw state at this position does not
+                    // actually name a hopper -- a corrupt/stale record, never trusted
+                    // blindly.
+                    if y_in_world_bounds(record.pos.y)
+                        && let Some(column) = world.get::<BlockStateColumn>(chunk_entity)
+                    {
+                        let (lx, lz) = (
+                            record.pos.x.rem_euclid(16) as u8,
+                            record.pos.z.rem_euclid(16) as u8,
+                        );
+                        let raw = column.get(lx, record.pos.y, lz).0;
+                        if mining::block_entity_wire_kind_for_raw_state(raw)
+                            == Some(mining::BlockEntityWireKind::Hopper)
+                        {
+                            value.facing = mining::hopper_facing_from_raw_state(raw);
+                        }
+                    }
                     let entity = world
                         .spawn((BlockEntityHeader { pos: record.pos }, value))
                         .id();
