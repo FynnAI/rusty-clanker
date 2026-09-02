@@ -1184,6 +1184,47 @@ Entries name the milestone that surfaced them and the code they concern.
   flagged so a future CI run's own timing is checked against the new budget
   rather than assumed correct.
 
+- **M3.5-B03: the "ours" side's own real end-to-end run is now fully
+  verified (green); the oracle side's own real capture consistently exceeds
+  even the raised 3300s subprocess deadline on this project's own shared
+  development machine, never confirmed green locally this session.** Four
+  full real attempts were made against the pinned oracle across this
+  implementation session. The connection-race failure mode from the first
+  attempt (`disconnected before Event::Spawn: None`, the earlier finding
+  above) never recurred in any later attempt — every subsequent run
+  progressed cleanly through login/session capture and was instead cut off
+  purely by the subprocess deadline, both with `--side both` and with a
+  dedicated `--side oracle` run given the full 3300s (55 min) on its own.
+  The "ours" side, by contrast, completed for real in full — the whole
+  scripted session (all `SESSION_STEPS`, including the ~9s genuinely
+  survival-timed dig) plus all 51 redstone-corpus contraptions over the
+  wire, `--debug-hooks` included — producing a real ~21.5 MB capture file,
+  and `capture-ours` reads `Status::Pass` in the `TierResult` from that run.
+  The oracle side's own real wall-clock cost (a real vanilla JVM plus the
+  identical scripted session and 51-contraption corpus) is genuinely large
+  and, on this machine — shared with dozens of other concurrent implementation
+  sessions each running their own real builds — was never observed to finish
+  inside an hour. This is exactly the situation TEST-D54's own "runs as its
+  own scheduled CI tier... never Tier 1" placement anticipates: a dedicated,
+  uncontended CI runner is the venue this harness's own real-oracle leg was
+  designed for, not a shared local dev box mid-implementation-wave. Needs a
+  decision: confirm (via the first real scheduled/`workflow_dispatch` CI run,
+  on `windows-2025`/`ubuntu-24.04` runners) whether the 3300s budget is
+  sufficient on an uncontended machine, and raise it further if not — this
+  implementation pass could not do that confirmation itself.
+
+- **M3.5-B03: `protocol_diff_runner`'s own subprocess produces no per-step
+  progress output, which made diagnosing the above timeout attempts purely
+  from the outside (process list, elapsed wall-clock) rather than from the
+  runner's own stderr.** A future governance pass should have `protocol_
+  session::run_protocol_session`/`redstone_wire_capture::run_redstone_wire_
+  capture` (or their own runner-side callers) `eprintln!` one line per
+  completed step/contraption id, so a long real run's own stderr (already
+  captured by `spawn_drained` and surfaced verbatim in a timeout's own
+  failure message) shows exactly how far it got before a future deadline is
+  hit, instead of only "did not exit within {deadline} of its own start"
+  with no further detail.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s
