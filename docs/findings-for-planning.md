@@ -579,6 +579,51 @@ Entries name the milestone that surfaced them and the code they concern.
   entry from an earlier, unrelated placement at the same position) still
   runs the immediate check.
 
+- **M3.5-B04's own TEST-D57 verify-claims gate (§2.9) requires the literal
+  heading `### Claims to verify (TEST-D57)`, but none of the sibling M3.5
+  blueprints' actual "Claims to verify" sections use that exact string.**
+  Confirmed by running `cargo xtask verify-claims M3.5` (M3.5-B04's own
+  Deliverable, implemented strictly to its own §2.9 spec and fixture tests)
+  against the real `blueprints/M3.5/` tree: every one of the six blueprints
+  fails with `no "### Claims to verify (TEST-D57)" heading found`, including
+  B04 itself. The actual headings observed: B01 uses `## 9. Claims to verify
+  (TEST-D57)`; B02/B05/B06 use `## Claims to verify (TEST-D57)` (no
+  numbering, but `##` not `###`); B03 uses no heading markup at all, just
+  the bold-free line `Claims to verify (TEST-D57):` followed by a
+  `1.`/`2.`-numbered list rather than `- `-prefixed bullets; B04 uses
+  `### 2.10 Claims to verify (TEST-D57)`. Needs a decision either way: tighten
+  every sibling blueprint's own heading to the exact literal grammar
+  §2.9 defines (and B04's own acceptance tests already lock in), or relax
+  `claims_gate::parse_claims_to_verify`'s match to tolerate a numbered/
+  un-numbered `##`/`###` heading and either bullet or numbered-list items.
+  `verify-claims M3.5`'s own implementation (`xtask/src/claims_gate.rs`,
+  `xtask/src/verify_claims.rs`) is unmodified from this run and will flip to
+  a clean pass automatically once whichever fix lands.
+
+- **`case_matrix`/`spec_citation`'s "yes"-category test names must be real
+  `#[test]`-attributed functions, but `crates/server/tests/` uses
+  `#[tokio::test]` pervasively (every async, real-socket field-report
+  suite) — and the pre-existing `forbidden_patterns::test_attr_offsets`
+  this blueprint was told to reuse (Implementation step 1) only recognizes
+  a bare `#[test]` line.** Discovered while performing M3.5-B04's own
+  retroactive annotation: several of §2.6's own cited backing tests (e.g.
+  `repeater_and_comparator_orientation_over_real_connection`,
+  `two_adjacent_wires_connect_to_each_other_on_both_sides`) are
+  `#[tokio::test]` fns that `forbidden_patterns::extract_test_fn_names`
+  would never see at all. Worked around locally: `case_matrix.rs` now
+  carries its own `#[test]`/`#[tokio::test]`-aware `test_attr_offsets`/
+  `extract_test_fn_names`, reused by `spec_citation.rs`, leaving
+  `forbidden_patterns.rs` itself untouched (per this blueprint's own
+  Implementation step 1 constraint: visibility-bump only, no behavior
+  change). But `forbidden_patterns.rs`'s own pre-existing TEST-D49 checks
+  (`check_empty_test_body`, `check_weakened_tests`'s deleted-test/
+  assertion-count-regression detection) still only recognize bare
+  `#[test]` — every `#[tokio::test]` fn across `crates/server/tests/`
+  remains structurally invisible to those two checks. Needs a decision on
+  whether `forbidden_patterns.rs` itself should be widened project-wide (a
+  real behavior change to already-shipped, tested lint logic) to close this
+  gap for its own two checks, not just the two this blueprint added.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
