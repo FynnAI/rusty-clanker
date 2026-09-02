@@ -219,6 +219,90 @@ pub fn check_paths(changeset_type: ChangesetType, changed_files: &[String]) -> V
     violations
 }
 
+/// TEST-D57's CLAIMS-artifact protection (§2.9): any `ChangesetType::Implementation`
+/// file that is itself a `<ID>-CLAIMS.md` artifact — implementation changesets must
+/// never self-certify their own claims (test-authoring or governance only). A sibling
+/// check to `check_paths`, not a `PROTECTED_PATHS` row, since that matcher has no
+/// partial-segment wildcard (§2.2/§2.9's own explanation).
+pub fn check_claims_artifact_paths(
+    changeset_type: ChangesetType,
+    changed_files: &[String],
+) -> Vec<String> {
+    if changeset_type != ChangesetType::Implementation {
+        return Vec::new();
+    }
+    changed_files
+        .iter()
+        .filter(|f| crate::claims_gate::is_claims_artifact(f))
+        .map(|f| {
+            format!(
+                "{f}: TEST-D57 claims-verification artifact — implementation changesets \
+                 must not self-certify their own claims (test-authoring or governance only)"
+            )
+        })
+        .collect()
+}
+
+/// TEST-D57's per-commit claims gate (§2.9 steps 2/3): pure given an already-built
+/// ownership index and injected blueprint-claims lookups — `Vec::new()` unconditionally
+/// for non-`Implementation` changesets. Kept separate from `evaluate_commit` (which
+/// stays genuinely pure, no I/O) since this check's own inputs are themselves the
+/// product of reading current-HEAD blueprint files; `run` below builds the index once
+/// and unions this function's violations into the same failure list `evaluate_commit`
+/// already produces.
+pub fn check_claims_gate(
+    changeset_type: ChangesetType,
+    changed_files: &[String],
+    ownership: &[(String, Vec<String>)],
+    requirement_of: impl Fn(&str) -> Option<crate::claims_gate::ClaimsRequirement>,
+    claims_file_of: impl Fn(&str) -> Option<Result<Vec<crate::claims_gate::ClaimRow>, String>>,
+) -> Vec<String> {
+    if changeset_type != ChangesetType::Implementation {
+        return Vec::new();
+    }
+    let mut violations = crate::claims_gate::claims_gate_violations(
+        changed_files,
+        ownership,
+        requirement_of,
+        claims_file_of,
+    );
+    violations.extend(check_claims_artifact_paths(changeset_type, changed_files));
+    violations
+}
+
+/// `id` is `<milestone>-B<nn>` (e.g. `M3.5-B01`) — the milestone segment is everything
+/// before the final `-B<nn>`.
+fn milestone_of(id: &str) -> Option<&str> {
+    id.rfind("-B").map(|pos| &id[..pos])
+}
+
+/// Reads a blueprint's own `blueprints/<milestone>/<ID>-*.md` content by id, needed by
+/// `check_claims_gate`'s injected closures (`run`'s own I/O shell, mirroring
+/// `content_at`-style helpers elsewhere in this module).
+fn read_blueprint_by_id(id: &str) -> Option<String> {
+    let dir = std::path::Path::new("blueprints").join(milestone_of(id)?);
+    let entries = std::fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&format!("{id}-")) && name.ends_with(".md") {
+            return std::fs::read_to_string(&path).ok();
+        }
+    }
+    None
+}
+
+/// Reads a blueprint's own sibling `blueprints/<milestone>/<ID>-CLAIMS.md` content by
+/// id, if present.
+fn read_claims_file_by_id(id: &str) -> Option<String> {
+    let path = std::path::Path::new("blueprints")
+        .join(milestone_of(id)?)
+        .join(format!("{id}-CLAIMS.md"));
+    std::fs::read_to_string(&path).ok()
+}
+
 /// Pure per-commit verdict: `Ok(pass note)` or `Err(failure lines)`. One commit is one
 /// changeset (TEST-D45) — its own `Changeset-Type:` trailer is judged against its own
 /// changed files. A trailer-less commit passes only via `docs_only_exemption`.
@@ -307,6 +391,16 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
         }
     };
 
+    // TEST-D57 (§2.9): the ownership index reflects current-HEAD blueprint state, built
+    // once per `run` invocation, never per historical commit being judged.
+    let ownership_index = match crate::claims_gate::build_ownership_index(&sh) {
+        Ok(index) => index,
+        Err(err) => {
+            eprintln!("path-guard: {err}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
     if commits.is_empty() {
         result.push(
             "commits",
@@ -343,15 +437,45 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
             }
         };
 
+        let changeset_type = parse_changeset_type(&commit_message).ok().flatten();
+        let claims_gate_lines = match changeset_type {
+            Some(t) => check_claims_gate(
+                t,
+                &changed_files,
+                &ownership_index,
+                |id| {
+                    read_blueprint_by_id(id).and_then(|content| {
+                        crate::claims_gate::parse_claims_to_verify(&content).ok()
+                    })
+                },
+                |id| {
+                    let content = read_claims_file_by_id(id)?;
+                    Some(crate::claims_gate::parse_claims_file(&content))
+                },
+            ),
+            None => Vec::new(),
+        };
+
         match evaluate_commit(&commit_message, &changed_files) {
-            Ok(note) => {
+            Ok(note) if claims_gate_lines.is_empty() => {
                 result.push(
                     format!("commit::{short}"),
                     crate::tier_result::Status::Pass,
                     Some(note),
                 );
             }
-            Err(lines) => {
+            Ok(_) => {
+                for line in &claims_gate_lines {
+                    eprintln!("path-guard: commit {short}: {line}");
+                }
+                result.push(
+                    format!("commit::{short}"),
+                    crate::tier_result::Status::Fail,
+                    Some(claims_gate_lines.join("; ")),
+                );
+            }
+            Err(mut lines) => {
+                lines.extend(claims_gate_lines);
                 for line in &lines {
                     eprintln!("path-guard: commit {short}: {line}");
                 }

@@ -29,6 +29,29 @@ pub enum PatternViolation {
         before: usize,
         after: usize,
     },
+    // TEST-D55 (case-matrix header, `crate::case_matrix`):
+    MissingCaseMatrixHeader {
+        file: String,
+    },
+    MalformedCaseMatrixHeader {
+        file: String,
+        error: String,
+    },
+    CaseMatrixCategoryUnbacked {
+        file: String,
+        category: String,
+    },
+    // TEST-D56 (spec citation, `crate::spec_citation`):
+    MissingSpecCitation {
+        file: String,
+        fn_name: String,
+        literal: String,
+    },
+    MalformedSpecCitation {
+        file: String,
+        fn_name: String,
+        comment: String,
+    },
 }
 
 // Each is pure — takes already-extracted text, no I/O — and independently unit
@@ -110,7 +133,7 @@ const TAUTOLOGICAL_SUBSTRINGS: &[&str] = &[
 /// very blueprint's own acceptance-test source — from being mistaken by this same
 /// check for the real tautological-assertion code it merely names as string data;
 /// genuine violation code is never itself written inside a string literal.
-fn strip_string_literals(line: &str) -> String {
+pub(crate) fn strip_string_literals(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut in_string = false;
     for ch in line.chars() {
@@ -153,7 +176,7 @@ pub fn check_tautological_assertion(file: &str, added_lines: &[String]) -> Vec<P
 /// blueprint's own acceptance tests embed as `&str` arguments, and doc-comment prose
 /// that mentions `` `#[test]` `` — both false positives this crate's own source
 /// would otherwise trip on itself.
-fn test_attr_offsets(content: &str) -> Vec<usize> {
+pub(crate) fn test_attr_offsets(content: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
     let mut offset = 0usize;
     for line in content.split_inclusive('\n') {
@@ -283,7 +306,7 @@ pub fn check_undocumented_tier_cfg(file: &str, added_lines: &[String]) -> Vec<Pa
 
 /// Extracts every `#[test]`-annotated function name found in `content`, in source
 /// order (duplicates preserved — callers that need a set convert as needed).
-fn extract_test_fn_names(content: &str) -> Vec<String> {
+pub(crate) fn extract_test_fn_names(content: &str) -> Vec<String> {
     test_attr_offsets(content)
         .into_iter()
         .filter_map(|after_attr| {
@@ -450,6 +473,37 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
             "assertion-count-regression",
             format!("{file}: assertion count regressed from {before} to {after}"),
         ),
+        PatternViolation::MissingCaseMatrixHeader { file } => (
+            "missing-case-matrix-header",
+            format!("{file}: no `//! test-matrix: …` header found (TEST-D55)"),
+        ),
+        PatternViolation::MalformedCaseMatrixHeader { file, error } => (
+            "malformed-case-matrix-header",
+            format!("{file}: malformed `//! test-matrix: …` header — {error}"),
+        ),
+        PatternViolation::CaseMatrixCategoryUnbacked { file, category } => (
+            "case-matrix-category-unbacked",
+            format!("{file}: test-matrix category `{category}=yes` has no backing test name"),
+        ),
+        PatternViolation::MissingSpecCitation {
+            file,
+            fn_name,
+            literal,
+        } => (
+            "missing-spec-citation",
+            format!(
+                "{file}: fn {fn_name}: block-state-id literal {literal} has no `// source: …` \
+                 citation or `// source-waived: …` waiver within the previous 3 lines (TEST-D56)"
+            ),
+        ),
+        PatternViolation::MalformedSpecCitation {
+            file,
+            fn_name,
+            comment,
+        } => (
+            "malformed-spec-citation",
+            format!("{file}: fn {fn_name}: malformed citation comment — {comment}"),
+        ),
     }
 }
 
@@ -570,6 +624,11 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
 
             let head_content = content_at(&sh, sha, file);
             commit_violations.extend(check_empty_test_body(file, &head_content));
+            commit_violations.extend(crate::case_matrix::check_case_matrix(file, &head_content));
+            commit_violations.extend(crate::spec_citation::check_literal_citations(
+                file,
+                &head_content,
+            ));
 
             let base_content = content_at(&sh, &parent, file);
             commit_violations.extend(check_weakened_tests(

@@ -5,6 +5,8 @@
 //! (`Cli`, `Command`) directly, without shelling out to the compiled binary.
 //! `main.rs` is a thin wrapper dispatching on `Command` to each verb's `run()`.
 
+pub mod case_matrix;
+pub mod claims_gate;
 pub mod corpus;
 pub mod datagen;
 pub mod fetch_data;
@@ -20,11 +22,13 @@ pub mod metadata;
 pub mod path_guard;
 pub mod quarantine;
 pub mod setup_oracle;
+pub mod spec_citation;
 pub mod test;
 pub mod tier0;
 pub mod tier1;
 pub mod tier_result;
 pub mod verifier_report;
+pub mod verify_claims;
 pub mod verify_fixtures;
 
 use clap::{Parser, Subcommand};
@@ -211,4 +215,6 @@ pub enum Command {
         #[arg(long)]
         accept_eula: bool,
     },
+    /// TEST-D57: exact-count CLAIMS.md audit for one milestone's blueprints.
+    VerifyClaims { milestone: String },
 }

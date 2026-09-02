@@ -228,5 +228,6 @@ fn main() -> ExitCode {
             };
             xtask::corpus::placement_diff::run(&args)
         }
+        Command::VerifyClaims { milestone } => xtask::verify_claims::run(&milestone),
     }
 }
