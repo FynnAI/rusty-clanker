@@ -1,3 +1,4 @@
+//! test-matrix: boundaries=waived(codec round-trip suite, no world interaction) orientations=waived(codec round-trip suite, no placement) self=waived(codec round-trip suite, no actor) composition=waived(codec round-trip suite, single-record fixtures) nondefault-state=waived(codec round-trip suite, block-entity records carry no block state)
 //! M3.5-B05 acceptance tests (Section 4): exercises the new `BlockEntityCodec` trait
 //! wrapper specifically -- does not duplicate `block_entity_nbt_roundtrip.rs`'s existing
 //! direct `to_nbt`/`from_nbt` coverage.
