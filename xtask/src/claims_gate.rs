@@ -143,142 +143,162 @@ pub(crate) fn extract_blueprint_id(content: &str) -> Option<String> {
     extract_table_cell(content, "ID").map(|v| strip_backticks(&v))
 }
 
-/// Every backtick-delimited substring within `cell` that both ends with `/` and, with
-/// that trailing `/` stripped, still contains a `/` -- i.e. a genuine multi-segment
-/// path prefix (`crates/mechanics/`), never a single bare directory name mentioned in
-/// prose with an incidental trailing slash (`redstone/`, `xtask/`), which is excluded
-/// exactly like a slash-less mention (`rc-mechanics`) is.
-fn extract_owned_prefixes(cell: &str) -> Vec<String> {
-    let mut prefixes = Vec::new();
-    let mut rest = cell;
-    while let Some(start) = rest.find('`') {
-        let after_start = &rest[start + 1..];
-        let Some(end) = after_start.find('`') else {
-            break;
-        };
-        let span = &after_start[..end];
-        if let Some(stripped) = span.strip_suffix('/')
-            && stripped.contains('/')
-        {
-            prefixes.push(span.to_string());
-        }
-        rest = &after_start[end + 1..];
-    }
-    prefixes
+/// The owner an `Implementation` commit's subject names (§2.9, planning-corrected
+/// 2026-09-02): `Blueprint(id)` for a leading `M<n>[.<m>]-B<nn>` token, `Milestone(m)`
+/// for a bare `M<n>[.<m>]` token (a field-report changeset against a whole milestone
+/// rather than one blueprint) -- either form must be followed by whitespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubjectOwner {
+    Blueprint(String),
+    Milestone(String),
 }
 
-fn is_blueprint_filename(name: &str) -> bool {
-    if !name.starts_with('M') || !name.ends_with(".md") {
-        return false;
+/// The byte length of a leading `M<n>` or `M<n>.<m>` milestone token at the start of
+/// `subject` -- `M` itself plus one or more ASCII digits, optionally `.` plus one or
+/// more further ASCII digits. `None` if `subject` doesn't start with `M` followed by at
+/// least one digit (this also rejects a lower-case `m`, since byte `b'M'` and `b'm'`
+/// differ).
+fn milestone_token_len(subject: &str) -> Option<usize> {
+    let bytes = subject.as_bytes();
+    if bytes.first() != Some(&b'M') {
+        return None;
     }
-    let Some(b_pos) = name.find("-B") else {
-        return false;
-    };
-    let after = &name[b_pos + 2..];
-    let digits: usize = after.chars().take_while(char::is_ascii_digit).count();
-    digits == 2 && after.as_bytes().get(2) == Some(&b'-')
-}
-
-/// Enumerates every `blueprints/*/M*-B[0-9][0-9]-*.md` file's path via `sh` (its
-/// relative-path resolution honors `Shell::change_dir`/`push_dir`, giving full test
-/// isolation without a process-wide `std::env::set_current_dir`), excluding
-/// `*-B00-index.md` and `*-COMPLETION-REPORT.md`.
-fn list_blueprint_files(sh: &xshell::Shell) -> Result<Vec<std::path::PathBuf>, String> {
-    let mut out = Vec::new();
-    let top_entries = sh
-        .read_dir("blueprints")
-        .map_err(|err| format!("failed to read blueprints/: {err}"))?;
-    for dir in top_entries {
-        if !dir.is_dir() {
-            continue;
+    let mut idx = 1;
+    while bytes.get(idx).is_some_and(u8::is_ascii_digit) {
+        idx += 1;
+    }
+    if idx == 1 {
+        return None;
+    }
+    if bytes.get(idx) == Some(&b'.') {
+        let mut frac_idx = idx + 1;
+        while bytes.get(frac_idx).is_some_and(u8::is_ascii_digit) {
+            frac_idx += 1;
         }
-        let entries = sh
-            .read_dir(&dir)
-            .map_err(|err| format!("failed to read {}: {err}", dir.display()))?;
-        for entry in entries {
-            let Some(name) = entry.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if name.ends_with("-B00-index.md") || name.ends_with("-COMPLETION-REPORT.md") {
-                continue;
-            }
-            if !is_blueprint_filename(name) {
-                continue;
-            }
-            out.push(entry);
+        if frac_idx > idx + 1 {
+            idx = frac_idx;
         }
     }
-    out.sort();
-    Ok(out)
+    Some(idx)
 }
 
-/// §2.9 step 1: scans every `blueprints/*/M*-B[0-9][0-9]-*.md` file (excluding
-/// `B00-index` and `COMPLETION-REPORT`), extracting `(blueprint_id, owned_path_prefixes)`
-/// from its header table. A blueprint whose `Crates touched` cell contains no
-/// qualifying backtick span owns nothing -- present in no index entry, so it never
-/// gates any file.
-pub fn build_ownership_index(sh: &xshell::Shell) -> Result<Vec<(String, Vec<String>)>, String> {
-    let mut index = Vec::new();
-    for path in list_blueprint_files(sh)? {
-        let content = sh
-            .read_file(&path)
-            .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-        let Some(id) = extract_blueprint_id(&content) else {
-            continue;
-        };
-        let prefixes = extract_table_cell(&content, "Crates touched")
-            .map(|cell| extract_owned_prefixes(&cell))
-            .unwrap_or_default();
-        if !prefixes.is_empty() {
-            index.push((id, prefixes));
+/// §2.9 step 1: parses a leading `M<n>` / `M<n>.<m>` token, optionally immediately
+/// followed by `-B<nn>` (exactly two ASCII digits), followed in either case by
+/// whitespace, from the start of `subject`. Anything else -- no leading token, a
+/// malformed `-B` suffix, no trailing whitespace, lower-case -- is `None`.
+pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
+    let milestone_len = milestone_token_len(subject)?;
+    let after_milestone = &subject[milestone_len..];
+
+    if let Some(rest) = after_milestone.strip_prefix("-B") {
+        let digit_count = rest.chars().take_while(char::is_ascii_digit).count();
+        if digit_count != 2 {
+            return None;
         }
+        let id_len = milestone_len + 2 + digit_count;
+        return subject[id_len..]
+            .starts_with(|c: char| c.is_whitespace())
+            .then(|| SubjectOwner::Blueprint(subject[..id_len].to_string()));
     }
-    Ok(index)
+
+    after_milestone
+        .starts_with(|c: char| c.is_whitespace())
+        .then(|| SubjectOwner::Milestone(subject[..milestone_len].to_string()))
 }
 
-/// Pure: the owning blueprint id for `file` -- the first index entry (index order) any
-/// of whose owned prefixes `file` starts with -- or `None` if none matches.
-pub fn owning_blueprint(file: &str, index: &[(String, Vec<String>)]) -> Option<String> {
-    index
-        .iter()
-        .find(|(_, prefixes)| prefixes.iter().any(|p| file.starts_with(p.as_str())))
-        .map(|(id, _)| id.clone())
+/// `id` is `<milestone>-B<nn>` (e.g. `M3.5-B01`) — the milestone segment is everything
+/// before the final `-B<nn>`. `pub(crate)` so `path_guard` derives the same milestone
+/// directory from a blueprint id rather than re-deriving it.
+pub(crate) fn milestone_of(id: &str) -> Option<&str> {
+    id.rfind("-B").map(|pos| &id[..pos])
 }
 
-/// §2.9 step 2/3, pure given already-read CLAIMS.md content (or `None` if absent) per
-/// owning blueprint id: the claims-gate violations for one Implementation changeset's
-/// changed files. `requirement_of`/`claims_file_of` are never consulted for a file
-/// `owning_blueprint` resolves to `None` for.
+/// Parses a milestone token (`M3`, `M3.5`, `M11`, …) into a `(major, minor)` pair,
+/// minor defaulting to `0` when absent (`M3` == `M3.0`) — gives numeric milestone
+/// ordering (`M3` < `M3.5` < `M4` < `M11`) via ordinary tuple comparison, rather than
+/// the lexicographic-string trap that would put `M11` before `M3`.
+fn parse_milestone(token: &str) -> Option<(u32, u32)> {
+    let rest = token.strip_prefix('M')?;
+    match rest.split_once('.') {
+        Some((major, minor)) => Some((major.parse().ok()?, minor.parse().ok()?)),
+        None => Some((rest.parse().ok()?, 0)),
+    }
+}
+
+/// True iff `token` is `M3` or earlier -- the boundary §2.9 retroactively audits (a
+/// missing Claims-to-verify heading, or a milestone-only implementation-commit subject,
+/// passes for M0..M3); `M3.5` and every later milestone is TEST-D57's hard gate. A
+/// token that fails to parse (shouldn't happen -- `subject_owner`/`milestone_of` only
+/// ever hand this validated milestone tokens) is treated as not-pre-M3.5, i.e. it gates.
+fn milestone_is_pre_m35(token: &str) -> bool {
+    parse_milestone(token).is_some_and(|m| m <= (3, 0))
+}
+
+/// §2.9 steps 1-3, pure given the commit `subject` and injected lookups over the
+/// owning blueprint's own files: the claims-gate violations for one Implementation
+/// commit. `blueprint_exists`/`requirement_of`/`claims_file_of` are only ever consulted
+/// for the one blueprint id the subject itself names -- this function reads no path
+/// list and no changed-file set at all.
 pub fn claims_gate_violations(
-    changed_files: &[String],
-    ownership: &[(String, Vec<String>)],
+    subject: &str,
+    blueprint_exists: impl Fn(&str) -> bool,
     requirement_of: impl Fn(&str) -> Option<ClaimsRequirement>,
     claims_file_of: impl Fn(&str) -> Option<Result<Vec<ClaimRow>, String>>,
 ) -> Vec<String> {
-    let mut violations = Vec::new();
-    for file in changed_files {
-        let Some(id) = owning_blueprint(file, ownership) else {
-            continue;
-        };
-        let Some(requirement) = requirement_of(&id) else {
-            continue;
-        };
-        let ClaimsRequirement::Required(_) = requirement else {
-            continue;
-        };
+    let Some(owner) = subject_owner(subject) else {
+        return vec![
+            "implementation changesets must name their owning blueprint (or milestone, \
+             for field-report changesets) at the start of the subject"
+                .to_string(),
+        ];
+    };
 
-        let uncorrected = match claims_file_of(&id) {
-            None => true,
-            Some(Err(_)) => true,
-            Some(Ok(rows)) => rows.iter().any(|r| r.verdict == Verdict::Wrong),
-        };
-        if uncorrected {
-            violations.push(format!(
-                "{file} is owned by {id}, whose CLAIMS.md is missing/has an uncorrected \
-                 WRONG row — not allowed in an implementation changeset until the claim \
-                 is corrected or confirmed"
-            ));
+    match owner {
+        SubjectOwner::Blueprint(id) => {
+            let milestone = milestone_of(&id).unwrap_or(id.as_str()).to_string();
+            if !blueprint_exists(&id) {
+                return vec![format!(
+                    "{id} names no blueprint file under blueprints/{milestone}/"
+                )];
+            }
+            match requirement_of(&id) {
+                None => {
+                    if milestone_is_pre_m35(&milestone) {
+                        Vec::new()
+                    } else {
+                        vec![format!(
+                            "{id} carries no Claims-to-verify subsection — every M3.5+ \
+                             blueprint must"
+                        )]
+                    }
+                }
+                Some(ClaimsRequirement::Exempt) => Vec::new(),
+                Some(ClaimsRequirement::Required(_)) => {
+                    let uncorrected = match claims_file_of(&id) {
+                        None => true,
+                        Some(Err(_)) => true,
+                        Some(Ok(rows)) => rows.iter().any(|r| r.verdict == Verdict::Wrong),
+                    };
+                    if uncorrected {
+                        vec![format!(
+                            "{subject}: owned by {id}, whose CLAIMS.md is missing/has an \
+                             uncorrected WRONG row — not allowed in an implementation \
+                             changeset until the claim is corrected or confirmed"
+                        )]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            }
+        }
+        SubjectOwner::Milestone(m) => {
+            if milestone_is_pre_m35(&m) {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "implementation changesets for {m} must name their blueprint"
+                )]
+            }
         }
     }
-    violations
 }

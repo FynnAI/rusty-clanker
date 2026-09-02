@@ -243,17 +243,22 @@ pub fn check_claims_artifact_paths(
         .collect()
 }
 
-/// TEST-D57's per-commit claims gate (§2.9 steps 2/3): pure given an already-built
-/// ownership index and injected blueprint-claims lookups — `Vec::new()` unconditionally
-/// for non-`Implementation` changesets. Kept separate from `evaluate_commit` (which
-/// stays genuinely pure, no I/O) since this check's own inputs are themselves the
-/// product of reading current-HEAD blueprint files; `run` below builds the index once
-/// and unions this function's violations into the same failure list `evaluate_commit`
-/// already produces.
+/// TEST-D57's per-commit claims gate (§2.9 steps 1-3, planning-corrected 2026-09-02):
+/// pure given the commit `subject` and injected blueprint-claims lookups — `Vec::new()`
+/// unconditionally for non-`Implementation` changesets. Ownership comes from the
+/// subject alone (`claims_gate::subject_owner`), never from `changed_files` — the
+/// path-prefix ownership this replaced was inert by construction (`crates/mechanics/`
+/// alone is declared `Crates touched` by fourteen blueprints across milestones, so a
+/// prefix index always resolved to the earliest, heading-less M0-M3 blueprint and the
+/// gate never fired). `changed_files` is still consulted here only for the separate,
+/// unrelated CLAIMS-artifact protected-path check. Kept separate from `evaluate_commit`
+/// (which stays genuinely pure, no I/O) since this check's own inputs are themselves
+/// the product of reading current-HEAD blueprint files.
 pub fn check_claims_gate(
     changeset_type: ChangesetType,
+    subject: &str,
     changed_files: &[String],
-    ownership: &[(String, Vec<String>)],
+    blueprint_exists: impl Fn(&str) -> bool,
     requirement_of: impl Fn(&str) -> Option<crate::claims_gate::ClaimsRequirement>,
     claims_file_of: impl Fn(&str) -> Option<Result<Vec<crate::claims_gate::ClaimRow>, String>>,
 ) -> Vec<String> {
@@ -261,8 +266,8 @@ pub fn check_claims_gate(
         return Vec::new();
     }
     let mut violations = crate::claims_gate::claims_gate_violations(
-        changed_files,
-        ownership,
+        subject,
+        blueprint_exists,
         requirement_of,
         claims_file_of,
     );
@@ -270,24 +275,28 @@ pub fn check_claims_gate(
     violations
 }
 
-/// `id` is `<milestone>-B<nn>` (e.g. `M3.5-B01`) — the milestone segment is everything
-/// before the final `-B<nn>`.
-fn milestone_of(id: &str) -> Option<&str> {
-    id.rfind("-B").map(|pos| &id[..pos])
-}
-
-/// Reads a blueprint's own `blueprints/<milestone>/<ID>-*.md` content by id, needed by
+/// Reads a blueprint's own `blueprints/<milestone>/<ID>-*.md` content by id (§2.9 step
+/// 2's own `blueprints/<milestone>/<id>-*.md` (excluding `-CLAIMS.md`) rule), needed by
 /// `check_claims_gate`'s injected closures (`run`'s own I/O shell, mirroring
-/// `content_at`-style helpers elsewhere in this module).
+/// `content_at`-style helpers elsewhere in this module). The `-CLAIMS.md` exclusion is
+/// load-bearing, not cosmetic: `<id>-CLAIMS.md` itself always starts with `<id>-` and
+/// ends with `.md`, so without it a directory listing that happens to return the CLAIMS
+/// file before the real blueprint file (`std::fs::read_dir` makes no ordering
+/// guarantee) reads the wrong file entirely -- the CLAIMS table has no Claims-to-verify
+/// heading, so `parse_claims_to_verify` on it always errors, misreporting a real
+/// blueprint's heading as absent.
 fn read_blueprint_by_id(id: &str) -> Option<String> {
-    let dir = std::path::Path::new("blueprints").join(milestone_of(id)?);
+    let dir = std::path::Path::new("blueprints").join(crate::claims_gate::milestone_of(id)?);
     let entries = std::fs::read_dir(&dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if name.starts_with(&format!("{id}-")) && name.ends_with(".md") {
+        if name.starts_with(&format!("{id}-"))
+            && name.ends_with(".md")
+            && !name.ends_with("-CLAIMS.md")
+        {
             return std::fs::read_to_string(&path).ok();
         }
     }
@@ -298,7 +307,7 @@ fn read_blueprint_by_id(id: &str) -> Option<String> {
 /// id, if present.
 fn read_claims_file_by_id(id: &str) -> Option<String> {
     let path = std::path::Path::new("blueprints")
-        .join(milestone_of(id)?)
+        .join(crate::claims_gate::milestone_of(id)?)
         .join(format!("{id}-CLAIMS.md"));
     std::fs::read_to_string(&path).ok()
 }
@@ -391,16 +400,6 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
         }
     };
 
-    // TEST-D57 (§2.9): the ownership index reflects current-HEAD blueprint state, built
-    // once per `run` invocation, never per historical commit being judged.
-    let ownership_index = match crate::claims_gate::build_ownership_index(&sh) {
-        Ok(index) => index,
-        Err(err) => {
-            eprintln!("path-guard: {err}");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
-
     if commits.is_empty() {
         result.push(
             "commits",
@@ -437,12 +436,14 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
             }
         };
 
+        let subject = commit_message.lines().next().unwrap_or("");
         let changeset_type = parse_changeset_type(&commit_message).ok().flatten();
         let claims_gate_lines = match changeset_type {
             Some(t) => check_claims_gate(
                 t,
+                subject,
                 &changed_files,
-                &ownership_index,
+                |id| read_blueprint_by_id(id).is_some(),
                 |id| {
                     read_blueprint_by_id(id).and_then(|content| {
                         crate::claims_gate::parse_claims_to_verify(&content).ok()
