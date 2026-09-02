@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use xtask::datagen::codegen::{WORLDGEN_REGISTRIES, generate};
 use xtask::datagen::reports::{
-    BlockReport, BlockStateReport, BlocksReport, RegistriesReport, RegistryEntryReport,
-    RegistryReport,
+    BlockReport, BlockStateReport, BlocksReport, OrderedProperties, OrderedValueList,
+    RegistriesReport, RegistryEntryReport, RegistryReport,
 };
 
 fn file_content<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
@@ -205,7 +205,12 @@ fn output_is_independent_of_input_insertion_order() {
             blocks.insert(
                 name.to_string(),
                 BlockReport {
-                    states: vec![BlockStateReport { id, default: true }],
+                    states: vec![BlockStateReport {
+                        id,
+                        default: true,
+                        properties: OrderedProperties::default(),
+                    }],
+                    properties: OrderedValueList::default(),
                 },
             );
         }
@@ -230,7 +235,9 @@ fn block_states_module_reports_correct_counts_and_default_ids() {
             states: vec![BlockStateReport {
                 id: 0,
                 default: true,
+                properties: OrderedProperties::default(),
             }],
+            properties: OrderedValueList::default(),
         },
     );
     blocks.insert(
@@ -240,16 +247,20 @@ fn block_states_module_reports_correct_counts_and_default_ids() {
                 BlockStateReport {
                     id: 5655,
                     default: false,
+                    properties: OrderedProperties::default(),
                 },
                 BlockStateReport {
                     id: 5680,
                     default: true,
+                    properties: OrderedProperties::default(),
                 },
                 BlockStateReport {
                     id: 5718,
                     default: false,
+                    properties: OrderedProperties::default(),
                 },
             ],
+            properties: OrderedValueList::default(),
         },
     );
 
@@ -287,7 +298,9 @@ fn generated_files_compile_standalone() {
             states: vec![BlockStateReport {
                 id: 0,
                 default: true,
+                properties: OrderedProperties::default(),
             }],
+            properties: OrderedValueList::default(),
         },
     );
 
@@ -482,7 +495,9 @@ fn generate_still_emits_three_files_and_existing_two_unchanged() {
             states: vec![BlockStateReport {
                 id: 0,
                 default: true,
+                properties: OrderedProperties::default(),
             }],
+            properties: OrderedValueList::default(),
         },
     );
 

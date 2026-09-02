@@ -1,5 +1,6 @@
 use xtask::datagen::reports::{
-    BlockReport, BlockStateReport, RegistriesReport, find_default_state_id,
+    BlockReport, BlockStateReport, OrderedProperties, OrderedValueList, RegistriesReport,
+    find_default_state_id,
 };
 
 #[test]
@@ -70,12 +71,15 @@ fn find_default_state_id_returns_none_when_unflagged() {
             BlockStateReport {
                 id: 0,
                 default: false,
+                properties: OrderedProperties::default(),
             },
             BlockStateReport {
                 id: 1,
                 default: false,
+                properties: OrderedProperties::default(),
             },
         ],
+        properties: OrderedValueList::default(),
     };
     assert_eq!(find_default_state_id(&block), None);
 }

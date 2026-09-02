@@ -11,3 +11,7 @@
 /// (`rusty_clanker_server::net::run_configuration`'s own `worldgen_registries` parameter).
 #[path = "../generated/v776/mod.rs"]
 pub mod generated_v776;
+
+/// WS-D15 (M3.5-B01): hand-written id<->properties accessor API over
+/// `generated_v776::block_state_properties`.
+pub mod block_state_properties;

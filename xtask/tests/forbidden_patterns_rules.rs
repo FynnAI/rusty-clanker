@@ -1,6 +1,7 @@
 use xtask::forbidden_patterns::{
-    LintGate, PatternViolation, check_empty_test_body, check_tautological_assertion,
-    check_undocumented_tier_cfg, check_unlinked_ignore, check_weakened_tests, commit_lint_gate,
+    LintGate, PatternViolation, check_empty_test_body, check_hardcoded_block_state_literal,
+    check_tautological_assertion, check_undocumented_tier_cfg, check_unlinked_ignore,
+    check_weakened_tests, commit_lint_gate,
 };
 use xtask::path_guard::ChangesetType;
 
@@ -193,5 +194,100 @@ fn assertion_count_increase_is_allowed() {
     let base = "assert_eq!(1, 1);\n";
     let head = "assert_eq!(1, 1);\nassert_eq!(2, 2);\n";
     let v = check_weakened_tests("f.rs", base, head, ChangesetType::Implementation);
+    assert_eq!(v.len(), 0);
+}
+
+// --- M3.5-B01's own cases: check 6, `check_hardcoded_block_state_literal`. ---
+
+#[test]
+fn block_state_id_constructor_literal_is_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/registration.rs",
+        &["pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(11311);".to_string()],
+    );
+    assert_eq!(v.len(), 1);
+}
+
+#[test]
+fn block_state_id_constructor_with_variable_arg_is_not_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/registration.rs",
+        &["BlockStateId(default.0)".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn bare_u32_const_with_block_state_comment_is_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/wire.rs",
+        &[
+            "// redstone_wire block-state ids, protocol 776".to_string(),
+            "const WIRE_MAX: u32 = 5306;".to_string(),
+        ],
+    );
+    assert_eq!(v.len(), 1);
+}
+
+#[test]
+fn bare_u32_const_with_unrelated_comment_is_not_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/server/src/net/limits.rs",
+        &["const MAX_PLAYERS: u32 = 5306;".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn literal_range_with_block_state_comment_is_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/repeater.rs",
+        &[
+            "// repeater block-state range".to_string(),
+            "const REPEATER_RANGE: (u32, u32) = (7034, 7097);".to_string(),
+        ],
+    );
+    assert_eq!(v.len(), 1);
+}
+
+#[test]
+fn generated_path_is_never_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/registries/generated/v776/block_states.rs",
+        &["pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(11311);".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn tests_path_is_never_flagged() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/tests/redstone_repeater.rs",
+        &["pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(11311);".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn waiver_comment_on_same_line_suppresses() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/wire.rs",
+        &[
+            "const WIRE_MAX: u32 = 5306; // block-state-id-lint-waiver: pending M3.5-B02 retirement"
+                .to_string(),
+        ],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn waiver_comment_on_preceding_line_suppresses() {
+    let v = check_hardcoded_block_state_literal(
+        "crates/mechanics/src/redstone/wire.rs",
+        &[
+            "// block-state-id-lint-waiver: pending M3.5-B02 retirement".to_string(),
+            "const WIRE_MAX: u32 = 5306; // redstone_wire".to_string(),
+        ],
+    );
     assert_eq!(v.len(), 0);
 }

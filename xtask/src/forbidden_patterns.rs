@@ -51,6 +51,9 @@ pub enum PatternViolation {
         file: String,
         fn_name: String,
         comment: String,
+    HardcodedBlockStateLiteral {
+        file: String,
+        line: String,
     },
 }
 
@@ -390,6 +393,238 @@ pub fn check_weakened_tests(
     violations
 }
 
+/// Check 6's file-level exemption (Constraints (d), M3.5-B01): a generated-output
+/// path, or any path with a `/tests/` path segment, is never linted — the generated
+/// registry itself, and every protected test fixture that merely *names* a real id as
+/// string/literal data (per this same file's own `strip_string_literals`-style
+/// precedent for check 2).
+const HARDCODED_BLOCK_STATE_WAIVER_MARKER: &str = "block-state-id-lint-waiver:";
+
+fn is_block_state_lint_exempt_file(file: &str) -> bool {
+    file.starts_with("crates/registries/generated/") || file.contains("/tests/")
+}
+
+/// True iff `added_lines[i]` or its immediately preceding added line (if any) carries
+/// the waiver marker (Constraints (d)) — checked before either violating-shape test,
+/// never after.
+fn is_block_state_lint_waived(added_lines: &[String], i: usize) -> bool {
+    added_lines[i].contains(HARDCODED_BLOCK_STATE_WAIVER_MARKER)
+        || (i > 0 && added_lines[i - 1].contains(HARDCODED_BLOCK_STATE_WAIVER_MARKER))
+}
+
+/// Skips leading ASCII whitespace (space/tab) off `s`.
+fn skip_ascii_ws(s: &str) -> &str {
+    s.trim_start_matches([' ', '\t'])
+}
+
+/// Skips a leading Rust identifier (ASCII alphanumeric/underscore, at least one char)
+/// off `s`. `None` if `s` doesn't start with an identifier character.
+fn skip_ident(s: &str) -> Option<&str> {
+    let end = s
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_')
+        .last()
+        .map(|(i, c)| i + c.len_utf8())?;
+    Some(&s[end..])
+}
+
+/// Skips one or more leading ASCII digits off `s`. `None` if `s` doesn't start with a
+/// digit.
+fn skip_digits(s: &str) -> Option<&str> {
+    let end = s
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_digit())
+        .last()
+        .map(|(i, c)| i + c.len_utf8())?;
+    Some(&s[end..])
+}
+
+/// True iff `line` contains `BlockStateId(` immediately followed (skipping ASCII
+/// whitespace) by one or more ASCII digits then `)`, with nothing else between — a
+/// literal integer constructor argument (Constraints (d)). `BlockStateId(id)`,
+/// `BlockStateId(raw)`, `BlockStateId(default.0)` never match (no digit immediately
+/// follows the paren after whitespace-skipping).
+fn contains_block_state_id_literal_constructor(line: &str) -> bool {
+    const CTOR: &str = "BlockStateId(";
+    let mut search_from = 0usize;
+    while let Some(rel) = line[search_from..].find(CTOR) {
+        let after_paren = search_from + rel + CTOR.len();
+        let rest = skip_ascii_ws(&line[after_paren..]);
+        if let Some(after_digits) = skip_digits(rest)
+            && after_digits.starts_with(')')
+        {
+            return true;
+        }
+        search_from = after_paren;
+    }
+    false
+}
+
+/// Parses `const <IDENT>: u32 = <digits>;` off the start of `rest` (`rest` is the
+/// slice immediately following one `"const "` occurrence). `Some(())` on a match.
+fn try_match_const_u32_literal(rest: &str) -> Option<()> {
+    let rest = skip_ident(rest)?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(':')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix("u32")?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix('=')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = skip_digits(rest)?;
+    rest.strip_prefix(';').map(|_| ())
+}
+
+/// True iff `line` contains a `const <IDENT>: u32 = <digits>;` shape anywhere in it
+/// (Constraints (d)).
+fn contains_const_u32_literal(line: &str) -> bool {
+    const KW: &str = "const ";
+    let mut search_from = 0usize;
+    while let Some(rel) = line[search_from..].find(KW) {
+        let pos = search_from + rel;
+        if try_match_const_u32_literal(&line[pos + KW.len()..]).is_some() {
+            return true;
+        }
+        search_from = pos + KW.len();
+    }
+    false
+}
+
+/// Parses `const <IDENT>: (u32, u32) = (<digits>, <digits>);` off the start of `rest`.
+/// `Some(())` on a match.
+fn try_match_const_tuple_u32_literal(rest: &str) -> Option<()> {
+    let rest = skip_ident(rest)?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(':')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix('(')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix("u32")?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(',')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix("u32")?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(')')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix('=')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix('(')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = skip_digits(rest)?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(',')?;
+    let rest = skip_ascii_ws(rest);
+    let rest = skip_digits(rest)?;
+    let rest = skip_ascii_ws(rest);
+    let rest = rest.strip_prefix(')')?;
+    let rest = skip_ascii_ws(rest);
+    rest.strip_prefix(';').map(|_| ())
+}
+
+/// True iff `line` contains a `const <IDENT>: (u32, u32) = (<digits>, <digits>);`
+/// shape anywhere in it (Constraints (d)).
+fn contains_const_tuple_u32_literal(line: &str) -> bool {
+    const KW: &str = "const ";
+    let mut search_from = 0usize;
+    while let Some(rel) = line[search_from..].find(KW) {
+        let pos = search_from + rel;
+        if try_match_const_tuple_u32_literal(&line[pos + KW.len()..]).is_some() {
+            return true;
+        }
+        search_from = pos + KW.len();
+    }
+    false
+}
+
+/// True iff `line` contains a `<digits>..=<digits>` substring — a literal inclusive
+/// range (Constraints (d)).
+fn contains_range_literal(line: &str) -> bool {
+    const OP: &str = "..=";
+    let bytes = line.as_bytes();
+    let mut search_from = 0usize;
+    while let Some(rel) = line[search_from..].find(OP) {
+        let op_pos = search_from + rel;
+        let digit_before = op_pos > 0 && bytes[op_pos - 1].is_ascii_digit();
+        let digit_after = line[op_pos + OP.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit());
+        if digit_before && digit_after {
+            return true;
+        }
+        search_from = op_pos + OP.len();
+    }
+    false
+}
+
+const BLOCK_STATE_KEYWORDS: &[&str] = &[
+    "state_id",
+    "state id",
+    "blockstate",
+    "block-state",
+    "block state",
+];
+
+/// Case-insensitive: true iff `line` contains any `BLOCK_STATE_KEYWORDS` member.
+fn contains_block_state_keyword(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    BLOCK_STATE_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
+/// True iff `added_lines[i]`, its immediately preceding added line, or its
+/// immediately following added line (case-insensitive) carries a block-state
+/// keyword — the proximity requirement the two const-literal shapes need (never the
+/// `BlockStateId(` constructor shape, which fires unconditionally) — Constraints (d).
+fn has_nearby_block_state_keyword(added_lines: &[String], i: usize) -> bool {
+    contains_block_state_keyword(&added_lines[i])
+        || (i > 0 && contains_block_state_keyword(&added_lines[i - 1]))
+        || (i + 1 < added_lines.len() && contains_block_state_keyword(&added_lines[i + 1]))
+}
+
+/// Check 6 (TEST-D49-style, WS-D15 follow-on, M3.5-B01): a new hardcoded
+/// block-state-id literal outside `crates/registries/generated/` and outside any
+/// `/tests/`-rooted file. Two independent violating shapes: (1) a `BlockStateId(<int
+/// literal>)` constructor call, unconditionally; (2) a bare `u32`/`(u32, u32)`
+/// const-literal or a `<digits>..=<digits>` range literal, but only when block-state
+/// vocabulary appears on the same line or an adjacent added line (Constraints (d) —
+/// this narrowness avoids flagging an unrelated numeric const, e.g. "connection
+/// state"/"game state" prose never qualifies on the word "state" alone). A
+/// `block-state-id-lint-waiver:` marker on the violating line or the immediately
+/// preceding added line suppresses either shape.
+pub fn check_hardcoded_block_state_literal(
+    file: &str,
+    added_lines: &[String],
+) -> Vec<PatternViolation> {
+    if is_block_state_lint_exempt_file(file) {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for i in 0..added_lines.len() {
+        if is_block_state_lint_waived(added_lines, i) {
+            continue;
+        }
+        let trimmed = added_lines[i].trim();
+        if contains_block_state_id_literal_constructor(trimmed) {
+            violations.push(PatternViolation::HardcodedBlockStateLiteral {
+                file: file.to_string(),
+                line: trimmed.to_string(),
+            });
+            continue;
+        }
+        let literal_shape = contains_const_u32_literal(trimmed)
+            || contains_const_tuple_u32_literal(trimmed)
+            || contains_range_literal(trimmed);
+        if literal_shape && has_nearby_block_state_keyword(added_lines, i) {
+            violations.push(PatternViolation::HardcodedBlockStateLiteral {
+                file: file.to_string(),
+                line: trimmed.to_string(),
+            });
+        }
+    }
+    violations
+}
+
 /// Per-commit gate mirroring `path_guard::evaluate_commit`'s decision shape (one
 /// commit is one changeset, TEST-D45): `Skip` for an empty or docs-only-exempt
 /// commit, `Lint(t)` to run every check under that commit's own declared type,
@@ -503,6 +738,9 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
         } => (
             "malformed-spec-citation",
             format!("{file}: fn {fn_name}: malformed citation comment — {comment}"),
+        PatternViolation::HardcodedBlockStateLiteral { file, line } => (
+            "hardcoded-block-state-literal",
+            format!("{file}: hardcoded block-state-id literal — {line}"),
         ),
     }
 }
@@ -621,6 +859,7 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
             commit_violations.extend(check_unlinked_ignore(file, &added_lines));
             commit_violations.extend(check_tautological_assertion(file, &added_lines));
             commit_violations.extend(check_undocumented_tier_cfg(file, &added_lines));
+            commit_violations.extend(check_hardcoded_block_state_literal(file, &added_lines));
 
             let head_content = content_at(&sh, sha, file);
             commit_violations.extend(check_empty_test_body(file, &head_content));

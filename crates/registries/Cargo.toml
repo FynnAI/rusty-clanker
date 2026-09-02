@@ -7,3 +7,17 @@ publish = false
 [dependencies]
 rc-core = { path = "../core" }
 rc-nbt = { path = "../nbt" }
+
+[dev-dependencies]
+# M3.5-B01: `tests/block_state_properties.rs`'s own manifest-integrity check
+# (TEST-D47) reads and SHA-256-verifies `generated/v776/MANIFEST.json` directly --
+# never a dependency on `xtask` itself, which would create a WS-D3 rule-2 violation
+# (`rc-mechanics`, a SIM crate, already depends on `rc-registries` as a normal
+# dependency; `xtask` depends on `rc-auth`, a NETRENDER crate, so a `rc-registries`
+# dev-dependency on `xtask` would put a NETRENDER crate in a SIM crate's transitive
+# dev-closure). Both are already-pinned `[workspace.dependencies]` entries used
+# elsewhere in this workspace for the identical purpose (`xtask`'s own
+# `fixture_manifest.rs`, TEST-D47) -- reused here, not newly introduced.
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

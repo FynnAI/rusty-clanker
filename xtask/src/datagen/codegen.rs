@@ -4,6 +4,65 @@
 
 use super::reports::{BlocksReport, RegistriesReport, find_default_state_id};
 
+/// WS-D15 (M3.5-B01) §3.5 candidate replaceable-block list (local names, no
+/// namespace) — the 28 non-snow members of the 26.2 `minecraft:replaceable` block
+/// tag, verified by the TEST-D57 research pass against the local datagen export
+/// `data/minecraft/tags/block/replaceable.json` (`blueprints/M3.5/M3.5-B01-
+/// CLAIMS.md`) — not a reading of the wiki. Kept in the tag file's own order so a
+/// re-verification is a plain diff. See this blueprint's own Claims-to-verify list
+/// before trusting it for anything gameplay-relevant beyond what TEST-D57 already
+/// confirmed.
+pub const REPLACEABLE_BLOCKS: &[&str] = &[
+    "air",
+    "water",
+    "lava",
+    "short_grass",
+    "fern",
+    "dead_bush",
+    "bush",
+    "short_dry_grass",
+    "tall_dry_grass",
+    "seagrass",
+    "tall_seagrass",
+    "fire",
+    "soul_fire",
+    "vine",
+    "glow_lichen",
+    "resin_clump",
+    "light",
+    "tall_grass",
+    "large_fern",
+    "structure_void",
+    "void_air",
+    "cave_air",
+    "bubble_column",
+    "warped_roots",
+    "nether_sprouts",
+    "crimson_roots",
+    "leaf_litter",
+    "hanging_roots",
+];
+
+/// `true` iff `block_name` (local, unnamespaced) is `REPLACEABLE_BLOCKS`-listed, with
+/// the one hand-coded exception: `"snow"` is replaceable only when `state_props`
+/// contains `("layers", "1")` — WS-D15 §3.5. `minecraft:snow`'s own static
+/// `replaceable` flag is actually `true` uniformly across all of its states (TEST-D57
+/// research pass, `M3.5-B01-CLAIMS.md`); the `layers == 1`-only restriction modeled
+/// here is the correct behavior for a generic state-only replaceable query, matching
+/// vanilla's default (non-snow-item-in-hand) placement path exactly.
+///
+/// `pub`, not `pub(crate)` — `xtask/tests/datagen_block_state_properties_codegen.rs`'s
+/// own `is_state_replaceable_*` cases call this directly (not through
+/// `generate_block_state_properties_rs`), which requires external visibility from that
+/// separate integration-test crate, mirroring `generate_registry_entries_rs`'s own
+/// identical `pub`-for-external-test-visibility rationale earlier in this file.
+pub fn is_state_replaceable(block_name: &str, state_props: &[(String, String)]) -> bool {
+    if block_name == "snow" {
+        return state_props.iter().any(|(k, v)| k == "layers" && v == "1");
+    }
+    REPLACEABLE_BLOCKS.contains(&block_name)
+}
+
 /// `xtask`'s own crate version, tagged as this codegen format's identity — written
 /// into every `MANIFEST.json` entry's `generator_tool_version` field.
 pub const CODEGEN_TOOL_VERSION: &str = concat!("xtask-codegen/", env!("CARGO_PKG_VERSION"));
@@ -289,6 +348,20 @@ pub fn generate_registry_entries_rs(registries: &RegistriesReport) -> String {
     out.push_str("];\n");
 
     out
+}
+
+/// WS-D15 (M3.5-B01): pure, `blocks: &BlocksReport` in, `block_state_properties.rs`'s
+/// full source text out — every block's own state-id range/default state
+/// (`BLOCK_RANGES`), every state's own resolved property list/owning block/
+/// `replaceable` flag (`STATE_PROPERTIES`/`STATE_BLOCK`/`STATE_REPLACEABLE`), and a
+/// per-block, property-sorted state index (`BLOCK_STATE_INDEX`) for `state_id`'s own
+/// binary search. State ids and property values are read straight from each block's
+/// own `states[]` entries (§3.2 — the report's own generation order), never
+/// recomputed from the block-level `properties` value-list cartesian product. See
+/// Implementation step 8 for the exact emission algorithm.
+pub fn generate_block_state_properties_rs(blocks: &BlocksReport) -> String {
+    let _ = blocks;
+    todo!("M3.5-B01 Changeset 2: real emission algorithm, Implementation step 8")
 }
 
 /// Pure transform: `--reports` data in, generated Rust source out. No filesystem
