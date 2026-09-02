@@ -26,6 +26,16 @@ pub const MECHANIC_TEST_PREFIXES: &[&str] = &[
 ];
 
 /// True iff `basename` (file name without directory or `.rs`) matches §2.4.
+/// M3.5 governance fix: the TEST-D55/D56 file-name triggers apply to *test files* only --
+/// a mechanic-pattern basename under `crates/<crate>/src/` (e.g. `crates/chunk-storage/src/
+/// block_entity.rs`) or under `crates/testing/*/src/` is production/harness code, never a
+/// suite that owes a matrix header. Bare basenames (no directory component -- the shape the
+/// lint's own fixture tests pass) keep their historical meaning of "a test file".
+pub fn is_crate_test_path(path: &str) -> bool {
+    let p = path.replace('\\', "/");
+    !p.contains('/') || (p.starts_with("crates/") && p.contains("/tests/"))
+}
+
 pub fn file_requires_case_matrix(basename: &str) -> bool {
     MECHANIC_TEST_PREFIXES
         .iter()
@@ -239,6 +249,9 @@ fn category_label(category: Category) -> &'static str {
 /// header missing/ambiguous, malformed, or a `Yes` category unbacked by any matching
 /// test name. Gated by `file_requires_case_matrix` -- silent on an exempt file.
 pub fn check_case_matrix(file: &str, head_content: &str) -> Vec<PatternViolation> {
+    if !is_crate_test_path(file) {
+        return Vec::new();
+    }
     if !file_requires_case_matrix(basename_of(file)) {
         return Vec::new();
     }

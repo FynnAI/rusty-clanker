@@ -265,6 +265,9 @@ fn check_citation_for(original_content: &str, abs_offset: usize) -> CitationVerd
 /// TEST-D56: every bare block-state-id literal inside a triggered file's (§2.4, reused
 /// from `case_matrix`) assert invocations must cite a source or carry a waiver.
 pub fn check_literal_citations(file: &str, head_content: &str) -> Vec<PatternViolation> {
+    if !crate::case_matrix::is_crate_test_path(file) {
+        return Vec::new();
+    }
     if !crate::case_matrix::file_requires_case_matrix(crate::case_matrix::basename_of(file)) {
         return Vec::new();
     }
