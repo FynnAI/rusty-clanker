@@ -26,15 +26,29 @@ use rusty_clanker_server::play::{
 
 /// `resolve_orientation` + `tier1_oriented_state_table().lookup` in one step -- the identical
 /// two-step lookup `mining::apply_placement` itself performs for a block placed by clicking
-/// `clicked_face` while looking at `(yaw_degrees, pitch_degrees)`.
+/// `clicked_face` while looking at `(yaw_degrees, pitch_degrees)`. M3 field-report
+/// test-authoring (torch-candidate loop + chest-merge): every neighbor is reported as a
+/// full-cube conductor (`&mut |_| true`) and no chest neighbor is ever reported (`&mut |_|
+/// None`) -- every id this file asserts is reachable via each kind's own FIRST candidate
+/// under those permissive conditions (this file's own per-block comments already establish
+/// which single orientation each literal corresponds to), so this permissive stand-in
+/// reproduces every one of this file's own pre-existing literal-id assertions unchanged.
 fn placed_id(
     kind: PlaceableBlockKind,
     clicked_face: Face,
     yaw_degrees: f32,
     pitch_degrees: f32,
 ) -> u32 {
-    let selection = resolve_orientation(kind, clicked_face, yaw_degrees, pitch_degrees)
-        .expect("every (kind, face, yaw, pitch) combination this file passes is a legal placement");
+    let selection = resolve_orientation(
+        kind,
+        clicked_face,
+        yaw_degrees,
+        pitch_degrees,
+        false,
+        &mut |_| true,
+        &mut |_| None,
+    )
+    .expect("every (kind, face, yaw, pitch) combination this file passes is a legal placement");
     tier1_oriented_state_table().lookup(selection.kind, selection.orientation)
 }
 

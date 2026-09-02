@@ -91,6 +91,9 @@ fn place_stone(world: &mut FakeWorld, target: BlockPos, player_boxes: &[Aabb]) -
         0.0,
         0.0,
         player_boxes,
+        // Not sneaking -- irrelevant to this file's own obstruction-only coverage (Stone
+        // ignores `sneaking` entirely, `resolve_orientation`'s own `Stone` arm).
+        false,
     )
 }
 

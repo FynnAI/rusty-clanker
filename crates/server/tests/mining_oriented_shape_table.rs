@@ -20,7 +20,8 @@ use std::collections::HashSet;
 
 use rc_physics::{BlockPhysicsProperties, Vec3, tier1_shape_table};
 use rusty_clanker_server::play::{
-    Face, Orientation, PlaceableBlockKind, resolve_orientation, tier1_oriented_state_table,
+    ChestType, Face, Orientation, PlaceableBlockKind, resolve_orientation,
+    tier1_oriented_state_table,
 };
 
 /// `true` iff `props`'s own shape is exactly the single-box full unit cube -- the wrong answer
@@ -36,43 +37,63 @@ fn is_full_cube(props: &BlockPhysicsProperties) -> bool {
 /// input via `resolve_orientation` (unwrapped -- every input this file passes is a legal one,
 /// per `resolve_orientation`'s own per-kind rules), then the real raw state id via
 /// `tier1_oriented_state_table()` -- the identical two-step lookup `mining::apply_placement`
-/// itself performs.
+/// itself performs. M3 field-report test-authoring (torch-candidate loop + chest-merge):
+/// every neighbor is reported as a full-cube conductor and no chest neighbor is ever reported
+/// -- `mining_block_state_ids.rs`'s own identical `placed_id` helper doc comment has the full
+/// "why this reproduces every pre-existing case unchanged" reasoning.
 fn placed_shape(
     kind: PlaceableBlockKind,
     clicked_face: Face,
     yaw_degrees: f32,
 ) -> (Orientation, BlockPhysicsProperties) {
-    let selection = resolve_orientation(kind, clicked_face, yaw_degrees, 0.0)
-        .expect("every (kind, face, yaw) pair this test passes is a legal placement");
+    let selection = resolve_orientation(
+        kind,
+        clicked_face,
+        yaw_degrees,
+        0.0,
+        false,
+        &mut |_| true,
+        &mut |_| None,
+    )
+    .expect("every (kind, face, yaw) pair this test passes is a legal placement");
     let raw_id = tier1_oriented_state_table().lookup(selection.kind, selection.orientation);
     (selection.orientation, tier1_shape_table().lookup(raw_id))
 }
 
 /// Repeater/comparator/chest all resolve orientation from yaw alone (`resolve_orientation`'s
-/// own shared match arm) -- `clicked_face` is irrelevant to them, so `Face::North` here is
-/// arbitrary. Sweeping a full rotation's worth of yaw values must produce all four `Horizontal`
-/// orientations (proving real coverage, not four repeats of the one orientation this table
-/// happened to already register before this fix) and every one of them must be non-full.
+/// own shared match arm, for repeater/comparator; chest's own dedicated -- but yaw-driven-base
+/// -- merge algorithm for chest, `resolve_chest_placement`) -- `clicked_face` is irrelevant to
+/// them, so `Face::North` here is arbitrary. Sweeping a full rotation's worth of yaw values
+/// must produce all four distinct FACINGs (proving real coverage, not four repeats of the one
+/// orientation this table happened to already register before this fix) and every one of them
+/// must be non-full. Chest's own orientation is `Orientation::Chest(dir, ChestType::Single)`
+/// (M3 field-report fix, chest-merge: no neighbor is ever reported here, `placed_shape`'s own
+/// doc comment) rather than `Orientation::Horizontal(dir)` -- both shapes are accepted, and
+/// only the extracted `dir` feeds the "four distinct" check below.
 fn assert_all_four_horizontal_orientations_are_non_full(kind: PlaceableBlockKind, label: &str) {
     let mut seen = HashSet::new();
     for yaw in [0.0_f32, 90.0, 180.0, 270.0] {
         let (orientation, props) = placed_shape(kind, Face::North, yaw);
-        assert!(
-            matches!(orientation, Orientation::Horizontal(_)),
-            "{label} at yaw {yaw} must resolve to a Horizontal orientation, got {orientation:?}"
-        );
+        let facing = match orientation {
+            Orientation::Horizontal(dir) => dir,
+            Orientation::Chest(dir, ChestType::Single) => dir,
+            other => panic!(
+                "{label} at yaw {yaw} must resolve to a Horizontal or Chest(_, Single) \
+                 orientation, got {other:?}"
+            ),
+        };
         assert!(
             !is_full_cube(&props),
             "{label} at yaw {yaw} (orientation {orientation:?}) resolved to a full cube -- \
              Defect B: only this table's own default orientation was ever registered"
         );
-        seen.insert(orientation);
+        seen.insert(facing);
     }
     assert_eq!(
         seen.len(),
         4,
-        "{label}: the four yaw values above must produce four DISTINCT orientations, not \
-         fewer -- got {seen:?}"
+        "{label}: the four yaw values above must produce four DISTINCT facings, not fewer -- \
+         got {seen:?}"
     );
 }
 
