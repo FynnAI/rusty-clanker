@@ -15,6 +15,7 @@
 pub mod capture;
 pub mod placement_spec;
 pub mod placement_trace;
+pub mod protocol_capture;
 pub mod replay;
 pub mod spec;
 pub mod trace;
@@ -26,6 +27,10 @@ pub use placement_spec::{
 pub use placement_trace::{
     CAPTURE_FORMAT_VERSION, CellMismatch, CellObservation, PlacementCaptureFile,
     PlacementDiffReport, ScenarioCapture,
+};
+pub use protocol_capture::{
+    CapturedPacket, PROTOCOL_CAPTURE_FORMAT_VERSION, ProtocolCaptureFile, ProtocolDiffReport,
+    StepCapture,
 };
 pub use replay::replay_contraption;
 pub use spec::{Category, ContraptionSpec, PlacedBlock, ScriptedAction};
