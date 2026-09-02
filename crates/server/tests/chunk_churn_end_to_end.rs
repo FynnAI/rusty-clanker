@@ -22,10 +22,10 @@ use rc_chunk_storage::io_pool::ChunkNbtResolvers;
 use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    AnvilDiskBackend, BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockStateColumn,
-    BlockStateId, BlockStateNames, ChunkGenStatus, ChunkKeyTag, ChunkPersistenceState, ChunkStatus,
-    ChunkStorageBackend, CompressionScheme, HeightmapSet, LightColumn, PaletteThresholds,
-    RegionFileKind, StorageError,
+    AnvilDiskBackend, BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockEntitySaveRecords,
+    BlockStateColumn, BlockStateId, BlockStateNames, ChunkGenStatus, ChunkKeyTag,
+    ChunkPersistenceState, ChunkStatus, ChunkStorageBackend, CompressionScheme, HeightmapSet,
+    LightColumn, NoopBlockEntitySpawner, PaletteThresholds, RegionFileKind, StorageError,
 };
 use rc_core::{ChunkKey, DimensionId};
 use rc_messaging::RegionId;
@@ -138,6 +138,7 @@ fn synthetic_player_movement_drives_real_load_unload_and_persistence() {
         resolvers(),
         6000,
         4096,
+        Arc::new(NoopBlockEntitySpawner),
     );
     let mut ticket_manager = TicketManager::new();
 
@@ -321,6 +322,7 @@ fn real_tick_region_never_observes_a_slow_chunk_write() {
         resolvers(),
         1,
         16,
+        Arc::new(NoopBlockEntitySpawner),
     );
 
     let executor = build_executor();
@@ -336,6 +338,7 @@ fn real_tick_region_never_observes_a_slow_chunk_write() {
         LightColumn::new_uninitialized(),
         HeightmapSet::new_uniform(-59),
         BlockEntityIndex::new(),
+        BlockEntitySaveRecords::default(),
         ChunkStatus(ChunkGenStatus::Full),
         ChunkPersistenceState {
             dirty: true,

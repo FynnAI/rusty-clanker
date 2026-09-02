@@ -5,8 +5,8 @@ mod common;
 
 use common::{codec, thresholds};
 use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkGenStatus,
-    ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn, WORLD_MIN_Y,
+    BiomeColumn, BiomeId, BlockStateColumn, BlockStateId, ChunkGenStatus, ChunkKeyTag,
+    ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn, WORLD_MIN_Y,
 };
 use rc_core::{ChunkKey, DimensionId};
 
@@ -20,7 +20,7 @@ fn fixture_with_block_section(setup: impl FnOnce(&mut BlockStateColumn)) -> comm
         biomes: BiomeColumn::new(BiomeId(0), biome_thresholds),
         light: LightColumn::new_uninitialized(),
         heightmaps: HeightmapSet::new_uniform(WORLD_MIN_Y),
-        block_entities: BlockEntityIndex::new(),
+        block_entity_records: Vec::new(),
         status: ChunkStatus(ChunkGenStatus::Full),
         persistence: ChunkPersistenceState {
             dirty: false,
@@ -39,7 +39,7 @@ fn fixture_with_biome_section(setup: impl FnOnce(&mut BiomeColumn)) -> common::F
         biomes,
         light: LightColumn::new_uninitialized(),
         heightmaps: HeightmapSet::new_uniform(WORLD_MIN_Y),
-        block_entities: BlockEntityIndex::new(),
+        block_entity_records: Vec::new(),
         status: ChunkStatus(ChunkGenStatus::Full),
         persistence: ChunkPersistenceState {
             dirty: false,
@@ -56,7 +56,7 @@ fn encode(fixture: &common::Fixture) -> rc_nbt::owned::NbtCompound {
             &fixture.biomes,
             &fixture.light,
             &fixture.heightmaps,
-            &fixture.block_entities,
+            &fixture.block_entity_records,
             fixture.status,
             fixture.persistence,
             false,

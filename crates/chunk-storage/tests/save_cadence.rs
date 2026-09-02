@@ -10,7 +10,7 @@ use rc_chunk_storage::lifecycle::{
     ChunkSaveSnapshot, SaveIntervalTicks, SnapshotOutbox, chunk_snapshot_system,
 };
 use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkGenStatus,
+    BiomeColumn, BiomeId, BlockEntitySaveRecords, BlockStateColumn, BlockStateId, ChunkGenStatus,
     ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn, PaletteThresholds,
 };
 use rc_core::{ChunkKey, DimensionId};
@@ -25,7 +25,7 @@ fn spawn_dirty_chunk(world: &mut World) -> Entity {
             BiomeColumn::new(BiomeId(0), biome_thresholds),
             LightColumn::new_uninitialized(),
             HeightmapSet::new_uniform(-59),
-            BlockEntityIndex::new(),
+            BlockEntitySaveRecords::default(),
             ChunkStatus(ChunkGenStatus::Full),
             ChunkPersistenceState {
                 dirty: true,
@@ -135,8 +135,8 @@ mod soak {
         ChunkSaveSnapshot, SaveIntervalTicks, SnapshotOutbox, chunk_snapshot_system,
     };
     use rc_chunk_storage::{
-        BiomeColumn, BiomeId, BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkGenStatus,
-        ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn,
+        BiomeColumn, BiomeId, BlockEntitySaveRecords, BlockStateColumn, BlockStateId,
+        ChunkGenStatus, ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapSet, LightColumn,
         PaletteThresholds,
     };
     use rc_core::{ChunkKey, DimensionId};
@@ -174,7 +174,7 @@ mod soak {
                 BiomeColumn::new(BiomeId(0), biome_thresholds),
                 LightColumn::new_uninitialized(),
                 HeightmapSet::new_uniform(-59),
-                BlockEntityIndex::new(),
+                BlockEntitySaveRecords::default(),
                 ChunkStatus(ChunkGenStatus::Full),
                 ChunkPersistenceState {
                     dirty: true,

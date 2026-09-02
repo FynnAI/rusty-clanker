@@ -80,7 +80,7 @@ fn round_trip(fixture: &common::Fixture, extra: &[(Mutf8String, NbtTag)]) -> Chu
             &fixture.biomes,
             &fixture.light,
             &fixture.heightmaps,
-            &fixture.block_entities,
+            &fixture.block_entity_records,
             fixture.status,
             fixture.persistence,
             false,
@@ -100,7 +100,7 @@ fn assert_document_matches_fixture(document: &ChunkNbtDocument, fixture: &common
     assert_biomes_equal(&fixture.biomes, &document.biomes);
     assert_light_equal(&fixture.light, &document.light);
     assert_heightmaps_equal(&fixture.heightmaps, &document.heightmaps);
-    assert!(document.block_entities.entities().is_empty());
+    assert!(document.block_entity_records.is_empty());
     assert_eq!(document.status, ChunkStatus(ChunkGenStatus::Full));
     assert_eq!(
         document.persistence,

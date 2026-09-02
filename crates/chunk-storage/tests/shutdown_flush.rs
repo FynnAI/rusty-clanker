@@ -11,8 +11,8 @@ use rc_chunk_storage::lifecycle::ChunkLifecycleManager;
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
     AnvilDiskBackend, BiomeId, BiomeNames, BlockStateId, BlockStateNames, ChunkKeyTag,
-    ChunkPersistenceState, ChunkStorageBackend, CompressionScheme, PaletteThresholds,
-    RegionFileKind,
+    ChunkPersistenceState, ChunkStorageBackend, CompressionScheme, NoopBlockEntitySpawner,
+    PaletteThresholds, RegionFileKind,
 };
 use rc_core::{ChunkKey, DimensionId};
 
@@ -123,6 +123,7 @@ fn clean_shutdown_flushes_every_dirty_resident_chunk() {
         resolvers(),
         6000,
         16,
+        std::sync::Arc::new(NoopBlockEntitySpawner),
     );
     let mut world = World::new();
     manager.install_resources(&mut world);
@@ -182,6 +183,7 @@ fn crash_without_shutdown_may_lose_the_most_recent_dirty_change_and_this_is_the_
         resolvers(),
         6000,
         16,
+        std::sync::Arc::new(NoopBlockEntitySpawner),
     );
     let mut world = World::new();
     manager.install_resources(&mut world);

@@ -13,10 +13,10 @@ use rc_chunk_storage::lifecycle::{
 };
 use rc_chunk_storage::superflat::SuperflatFiller;
 use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockStateColumn, BlockStateId,
+    BiomeColumn, BiomeId, BiomeNames, BlockEntitySaveRecords, BlockStateColumn, BlockStateId,
     BlockStateNames, ChunkGenStatus, ChunkKeyTag, ChunkPersistenceState, ChunkStatus,
-    ChunkStorageBackend, HeightmapSet, LightColumn, PaletteThresholds, RegionFileKind,
-    StorageError,
+    ChunkStorageBackend, HeightmapSet, LightColumn, NoopBlockEntitySpawner, PaletteThresholds,
+    RegionFileKind, StorageError,
 };
 use rc_core::{ChunkKey, DimensionId};
 use rc_nbt::{Mutf8Str, Mutf8String};
@@ -146,7 +146,7 @@ fn spawn_chunk(world: &mut World, key: ChunkKey, dirty: bool) -> Entity {
             BiomeColumn::new(BiomeId(0), biome_thresholds),
             LightColumn::new_uninitialized(),
             HeightmapSet::new_uniform(-59),
-            BlockEntityIndex::new(),
+            BlockEntitySaveRecords::default(),
             ChunkStatus(ChunkGenStatus::Full),
             ChunkPersistenceState {
                 dirty,
@@ -267,6 +267,7 @@ fn pre_tick_force_saves_a_dirty_chunk_before_despawning_it_on_unload() {
         resolvers(),
         6000,
         16,
+        std::sync::Arc::new(NoopBlockEntitySpawner),
     );
     let mut world = World::new();
     manager.install_resources(&mut world);
@@ -313,6 +314,7 @@ fn pre_tick_does_not_save_a_clean_chunk_on_unload() {
         resolvers(),
         6000,
         16,
+        std::sync::Arc::new(NoopBlockEntitySpawner),
     );
     let mut world = World::new();
     manager.install_resources(&mut world);

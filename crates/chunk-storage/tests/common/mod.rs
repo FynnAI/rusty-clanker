@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockStateColumn, BlockStateId,
+    BiomeColumn, BiomeId, BiomeNames, BlockEntityRecord, BlockStateColumn, BlockStateId,
     BlockStateNames, ChunkGenStatus, ChunkKeyTag, ChunkNbtCodec, ChunkPersistenceState,
     ChunkStatus, HeightmapSet, LightColumn, PaletteThresholds, WORLD_MIN_Y,
 };
@@ -151,7 +151,7 @@ pub struct Fixture {
     pub biomes: BiomeColumn,
     pub light: LightColumn,
     pub heightmaps: HeightmapSet,
-    pub block_entities: BlockEntityIndex,
+    pub block_entity_records: Vec<BlockEntityRecord>,
     pub status: ChunkStatus,
     pub persistence: ChunkPersistenceState,
 }
@@ -193,7 +193,7 @@ pub fn superflat_fixture_at(key: ChunkKey) -> Fixture {
         biomes,
         light,
         heightmaps,
-        block_entities: BlockEntityIndex::new(),
+        block_entity_records: Vec::new(),
         status: ChunkStatus(ChunkGenStatus::Full),
         persistence: ChunkPersistenceState {
             dirty: false,
@@ -221,7 +221,7 @@ pub fn all_air_fixture_at(key: ChunkKey) -> Fixture {
         biomes,
         light,
         heightmaps,
-        block_entities: BlockEntityIndex::new(),
+        block_entity_records: Vec::new(),
         status: ChunkStatus(ChunkGenStatus::Full),
         persistence: ChunkPersistenceState {
             dirty: false,

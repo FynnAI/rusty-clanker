@@ -27,7 +27,7 @@ use rc_chunk_storage::lifecycle::{
     ChunkSaveSnapshot, SaveIntervalTicks, SnapshotOutbox, chunk_snapshot_system,
 };
 use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BiomeNames, BlockEntityIndex, BlockStateColumn, BlockStateId,
+    BiomeColumn, BiomeId, BiomeNames, BlockEntitySaveRecords, BlockStateColumn, BlockStateId,
     BlockStateNames, ChunkGenStatus, ChunkKeyTag, ChunkPersistenceState, ChunkStatus,
     ChunkStorageBackend, HeightmapSet, LightColumn, PaletteThresholds, RegionFileKind,
     StorageError,
@@ -130,7 +130,7 @@ fn spawn_dirty_chunk(world: &mut World) -> Entity {
             BiomeColumn::new(BiomeId(0), biome_thresholds),
             LightColumn::new_uninitialized(),
             HeightmapSet::new_uniform(-59),
-            BlockEntityIndex::new(),
+            BlockEntitySaveRecords::default(),
             ChunkStatus(ChunkGenStatus::Full),
             ChunkPersistenceState {
                 dirty: true,
@@ -184,7 +184,7 @@ fn drain_barrier_does_observe_the_slow_write_and_returns_only_after_it_completes
         biomes: BiomeColumn::new(BiomeId(0), biome_thresholds),
         light: LightColumn::new_uninitialized(),
         heightmaps: HeightmapSet::new_uniform(-59),
-        block_entities: BlockEntityIndex::new(),
+        block_entity_records: Vec::new(),
         status: ChunkStatus(ChunkGenStatus::Full),
         last_saved_tick: 1,
         is_light_on: false,
