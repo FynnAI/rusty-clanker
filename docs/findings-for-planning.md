@@ -1021,6 +1021,77 @@ Entries name the milestone that surfaced them and the code they concern.
   `tags.rs` already gets, M1 registry-sync-fix) so every future re-run
   stays self-consistent, or confirm the long-identifier line-wrap was a
   one-off hand edit that should simply be reverted.
+- **M3.5-B05: chest/furnace/hopper block-entity NBT still writes a non-vanilla
+  `Lock: String`/`RCFacing: Byte` field, deliberately not removed this wave
+  despite the TEST-D57 pass (`M3.5-B05-CLAIMS.md`) confirming both are
+  non-vanilla.** Real vanilla 26.2 has no `Lock`/`RCFacing` on any of these
+  three block entities at all (chest/furnace/hopper's `lock` field, when
+  present, is lowercase and holds a full `ItemPredicate` compound, not a
+  plain string; this engine has no container-locking mechanic, so the field
+  is in practice always absent from real gameplay saves regardless) —
+  removing them cleanly conflicts with two committed, protected M3-B06 tests
+  this blueprint's own implementation changeset is forbidden from touching:
+  `crates/mechanics/tests/block_entity_nbt_roundtrip.rs::chest_with_items_
+  and_custom_name_round_trips` sets `chest.lock = Some(...)` and asserts an
+  exact round trip through `to_nbt`/`from_nbt` alone; `::hopper_with_
+  cooldown_and_facing_round_trips` does the same for `facing` via `RCFacing`,
+  and `HopperBlockEntity::from_nbt`'s own signature has no `world`/chunk
+  context to derive facing from the real block-state property instead (the
+  only sound alternative — `hopper.rs`'s own doc comment already names this
+  as "the not-yet-existing real blockstate-property NBT integration a future
+  blueprint supplies"). Needs a dedicated follow-up blueprint (after WS-D15/
+  M3.5-B01's generated block-state property registry lands, for hopper's own
+  facing-from-blockstate reconstruction) whose own test-authoring changeset
+  updates `block_entity_nbt_roundtrip.rs` itself to retire these two
+  assertions before the code can safely drop the fields — out of this
+  blueprint's own authority to do unilaterally (implementation never touches
+  committed tests outside its own named test-authoring changeset).
+
+- **M3.5-B05: `crates/server/src/play/registry_resolvers.rs::McRegistryResolvers`
+  (the real, production `BlockStateNames`/`BiomeNames` resolver
+  `rusty-clanker-server`'s own composition root wires into `ChunkNbtResolvers`)
+  extended, hand-written, to also name `minecraft:chest`(type=single)/
+  `furnace`/`hopper` at every placement-time state `mining.rs::
+  build_orientation_table` can produce for them.** Forced, not optional: WORLD-D6's
+  own block-entity persistence is moot if the *chunk* holding a placed block
+  entity never reaches disk at all, and `ChunkNbtCodec::to_nbt` errors (skipping
+  the whole chunk's save, not merely the block-entity list) the instant any
+  block state present in that chunk cannot be named — this resolver's own
+  pre-M3.5 scope (Context, that file's own module doc comment) was a
+  deliberately-closed five-block set (air/bedrock/dirt/grass/stone) that never
+  included any of the three tier-1 block-entity kinds, a gap this blueprint's
+  own real-restart acceptance test surfaced directly. The added table hand-
+  derives chest(single)/furnace's four `facing`-only orientations and hopper's
+  one `Face::Up`-click (`Down`-facing) state from `mining.rs`'s own already-
+  committed id arithmetic — correct for every state this engine's own tier-1
+  placement path can currently produce, but still a hand-written, closed table,
+  not a general one. WS-D15/M3.5-B01's generated block-state property registry
+  should supersede this table (and `ReportRegistryResolvers`'s matching,
+  independent duplicate in `xtask/src/m3_5_be_report.rs`) wholesale, exactly as
+  this file's own doc comment already anticipated for its original five-block
+  set.
+
+- **M3.5-B05: the pre-existing "redstone component re-seeding on chunk load"
+  gap (comparator's own `facing`/`mode`) is real, broader than comparator
+  alone, and still open — not closed by this wave, per its own task brief.**
+  `ComparatorBehavior::seed_output` (this wave's own new load-side hook) only
+  ever writes a tracked position's `output` via the same defensive `entry`/
+  `or_insert` pattern every other setter already uses, so it never itself
+  panics — but a comparator's other two properties (`facing`/`mode`, decoded
+  from the raw block-state id via `on_placed`) are never re-seeded when a
+  chunk loads from disk rather than being placed live in the same server
+  session: `ComparatorBehavior::facing()`/`mode()` still panic/fall back
+  respectively for a position that was never `place()`d this session. A
+  comparator loaded from disk and then interacted with (a neighbor change,
+  `weak_signal_toward`) before anything else ever touches its `facing`/`mode`
+  in that same session can still hit the pre-existing panic. The identical gap
+  applies to repeaters (`RepeaterBehavior`'s own analogous `facing`/`delay`
+  state), never covered by any M3.5-B05 load-side hook either. Needs a
+  dedicated blueprint: on chunk load, re-derive every resident redstone
+  component's own placement-decoded properties from its already-loaded raw
+  block-state id (the exact same `on_placed`-style decode `mining.rs`'s own
+  placement path already performs), for every tier-1 component, not only
+  comparator's analog output.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
