@@ -240,12 +240,18 @@ fn block_states_module_reports_correct_counts_and_default_ids() {
             properties: OrderedValueList::default(),
         },
     );
+    // Contiguous ids 5679..=5681 (M3.5-B01: `generate_block_state_properties_rs`, now
+    // also invoked by this same `generate()` call, defensively requires every block's
+    // own states to be contiguous -- Implementation step 8's malformed-report check).
+    // The default state (5680) still sits at Vec position 1, not position 0, so this
+    // still proves `find_default_state_id` reads the `default` flag rather than
+    // assuming Vec-first.
     blocks.insert(
         "minecraft:oak_door".to_string(),
         BlockReport {
             states: vec![
                 BlockStateReport {
-                    id: 5655,
+                    id: 5679,
                     default: false,
                     properties: OrderedProperties::default(),
                 },
@@ -255,7 +261,7 @@ fn block_states_module_reports_correct_counts_and_default_ids() {
                     properties: OrderedProperties::default(),
                 },
                 BlockStateReport {
-                    id: 5718,
+                    id: 5681,
                     default: false,
                     properties: OrderedProperties::default(),
                 },
@@ -315,17 +321,50 @@ fn generated_files_compile_standalone() {
     for (name, content) in &generated.files {
         let file_path = out_dir.join(name);
         std::fs::write(&file_path, content).unwrap();
+    }
 
-        let status = std::process::Command::new("rustc")
-            .arg("--edition")
-            .arg("2024")
-            .arg("--crate-type")
-            .arg("lib")
-            .arg("--out-dir")
-            .arg(&out_dir)
-            .arg(&file_path)
-            .status()
-            .expect("failed to invoke rustc");
+    for (name, _) in &generated.files {
+        // `block_state_properties.rs` (M3.5-B01) is the first generated file with a
+        // cross-file dependency (`use super::block_states::BlockStateId;`, Deliverables
+        // Sec4.3) -- unlike every other file here, it cannot be compiled as its own
+        // standalone crate root (there is no `super` for a crate root). Its own
+        // dedicated compile check
+        // (`datagen_block_state_properties_codegen.rs`'s
+        // `generated_block_state_properties_compiles_standalone`) already proves this
+        // exact file compiles against a real `block_states` sibling; here it is
+        // compiled the same way, via a tiny wrapper crate root declaring both modules,
+        // rather than skipped outright -- so this loop still proves every one of
+        // `generate()`'s own four real outputs compiles.
+        let file_path = out_dir.join(name);
+        let status = if name == "block_state_properties.rs" {
+            let wrapper_path = out_dir.join("block_state_properties_wrapper_lib.rs");
+            std::fs::write(
+                &wrapper_path,
+                "mod block_states;\nmod block_state_properties;\n",
+            )
+            .unwrap();
+            std::process::Command::new("rustc")
+                .arg("--edition")
+                .arg("2024")
+                .arg("--crate-type")
+                .arg("lib")
+                .arg("--out-dir")
+                .arg(&out_dir)
+                .arg(&wrapper_path)
+                .status()
+                .expect("failed to invoke rustc")
+        } else {
+            std::process::Command::new("rustc")
+                .arg("--edition")
+                .arg("2024")
+                .arg("--crate-type")
+                .arg("lib")
+                .arg("--out-dir")
+                .arg(&out_dir)
+                .arg(&file_path)
+                .status()
+                .expect("failed to invoke rustc")
+        };
         assert!(status.success(), "rustc failed to compile {name}");
     }
 }
@@ -468,7 +507,7 @@ fn registry_entries_panics_on_missing_worldgen_registry() {
 }
 
 #[test]
-fn generate_still_emits_three_files_and_existing_two_unchanged() {
+fn generate_still_emits_four_files_and_existing_three_unchanged() {
     let mut registries = RegistriesReport::new();
     let mut entries = BTreeMap::new();
     entries.insert(
@@ -502,14 +541,19 @@ fn generate_still_emits_three_files_and_existing_two_unchanged() {
     );
 
     let generated = generate(&registries, &blocks);
+    // M3.5-B01's own new fourth file, appended after the pre-existing three -- this
+    // test's own name and count updated in lockstep with `generate()`'s own
+    // Deliverables Sec4.2 change, the one necessary follow-on fix this blueprint's
+    // Constraints Sec7(a) permits alongside the struct-literal compile fixes.
     assert_eq!(
         generated.files.len(),
-        3,
-        "expected registries.rs, block_states.rs, and registry_entries.rs"
+        4,
+        "expected registries.rs, block_states.rs, registry_entries.rs, and block_state_properties.rs"
     );
     assert_eq!(generated.files[0].0, "registries.rs");
     assert_eq!(generated.files[1].0, "block_states.rs");
     assert_eq!(generated.files[2].0, "registry_entries.rs");
+    assert_eq!(generated.files[3].0, "block_state_properties.rs");
 
     // `generate_registries_rs`/`generate_block_states_rs` themselves are untouched by this
     // blueprint's addition — the same fixed content shape M0-B07's own tests already pin

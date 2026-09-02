@@ -4,3 +4,10 @@
 # files failed manifest verification on Windows purely through LF->CRLF rewriting).
 crates/testing/gametest/corpus/** text eol=lf
 crates/testing/rc-golden-data/fixtures/** -text
+# M3.5-B01: same class of bug, same fix -- `crates/registries/generated/**` is the
+# other TEST-D47 hash-manifested tree (MANIFEST.json + its generated Rust), and was
+# missing this rule (confirmed live on this machine: registries.rs/block_states.rs/
+# tags.rs, all pre-dating this blueprint, already failed manifest verification here
+# purely through LF->CRLF checkout rewriting, before this blueprint's own new fourth
+# file was ever generated).
+crates/registries/generated/** text eol=lf

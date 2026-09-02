@@ -953,6 +953,75 @@ Entries name the milestone that surfaced them and the code they concern.
   "same box, only the id varies per orientation" precedent for every other
   oriented block it covers).
 
+- **M3.5-B01: `cargo xtask codegen` (the full CLI verb) cannot complete
+  end-to-end against the real local `--reports` data — confirmed live, not
+  theoretical.** `xtask::datagen::codegen::generate`'s third element,
+  `generate_registry_entries_rs(registries)` (M1-B04), unconditionally panics
+  on the very first `WORLDGEN_REGISTRIES` entry (`minecraft:banner_pattern`)
+  because the real `registries.json` report structurally contains only
+  *static* built-in registries (95 entries, verified: `block`, `item`,
+  `particle_type`, … — every one of `WORLDGEN_REGISTRIES`'s ~29 names,
+  `banner_pattern` through `zombie_nautilus_variant`, is *absent*, not just
+  that one). `registry_entries.rs` was never actually written to
+  `crates/registries/generated/v776/` or listed in `MANIFEST.json` despite
+  `generate_registry_entries_rs` and its own passing unit tests existing
+  since M1-B04 — direct evidence `cargo xtask codegen` has never been run to
+  completion against real data since that blueprint landed (its own unit
+  tests only ever exercise synthetic fixtures that pre-populate every
+  `WORLDGEN_REGISTRIES` name). M3.5-B01's own Constraints (§7(f)) forbid
+  touching `WORLDGEN_REGISTRIES`, so this blueprint did not fix it: its own
+  new fourth file (`block_state_properties.rs`) was produced instead by
+  calling `generate_block_state_properties_rs` directly against the real
+  report (bypassing the broken `generate()`/`codegen::run()` call), verified
+  byte-correct via `rc-registries`'s own real-table test suite (13/13
+  passing, including all ten WS-D15 anchor blocks) and TEST-D47 manifest
+  hash. Needs a decision on `generate_registry_entries_rs`'s real data
+  source: either drop `WORLDGEN_REGISTRIES` reliance on `registries.json`
+  entirely and read the actual dynamic/datapack registry ids from wherever
+  the local data generator really exposes them (a different `--reports`
+  file, or the `codegen-tags`-style `data/minecraft/**` tree), or determine
+  those registries now have no fixed protocol id at all in 26.2 (matching
+  `minecraft:dimension_type`/`minecraft:worldgen/biome`'s own already-
+  excluded status per `rc-registries`'s `lib.rs` doc comment) and retire
+  `registry_entries.rs`'s premise altogether.
+
+- **M3.5-B01: `crates/registries/generated/**` was missing the
+  `.gitattributes` `text eol=lf` rule the sibling `crates/testing/gametest/
+  corpus/**` tree already carries for the identical reason (TEST-D47 hash
+  custody breaking under `core.autocrlf=true` Windows checkouts) — confirmed
+  live: `registries.rs`/`block_states.rs`/`tags.rs`, none of them touched by
+  this blueprint, already failed `xtask verify-generated` on this machine
+  purely through LF→CRLF checkout rewriting, before this blueprint's own new
+  file ever existed. Added the missing `.gitattributes` line as part of this
+  blueprint's own governance changeset (a build-hygiene fix, not a design
+  decision) since it directly blocked this blueprint's own Done-definition
+  (`verify-generated` passing) — recorded here so planning can fold it into
+  whatever future pass audits TEST-D47 coverage completeness, in case other
+  hash-manifested trees carry the same latent gap.
+
+- **M3.5-B01: `registries.rs`'s committed content does not match what
+  `generate_registries_rs` produces today from the real local
+  `registries.json`** — confirmed independently of the `.gitattributes`
+  finding above (line-ending-normalized on both sides before comparing): a
+  fresh call wraps nothing across lines (one `pub const` per physical line,
+  regardless of identifier length), while the committed file has at least
+  one long identifier (`SERVERSETTINGS_OPERATOR_USER_PERMISSION_LEVEL_SET`)
+  rustfmt-wrapped across two lines — meaning `registries.rs` (unlike
+  `block_states.rs`, which matches a fresh call exactly) was rustfmt'd by
+  some past one-time manual step `codegen::run()` itself never reproduces,
+  and `MANIFEST.json`'s `registries.rs` entry recorded a hash for that
+  formatted version, not the raw generator output. This blueprint corrected
+  only the manifest entry to the real committed file's own true hash (a data
+  correction, zero bytes of `registries.rs` itself touched — out of scope
+  per Constraints §7(a)/(e)) so `verify-generated` passes; `registries.rs`'s
+  actual content is unaffected either way. Needs a decision: either make
+  `codegen::run()` rustfmt `registries.rs`/`block_states.rs`/
+  `registry_entries.rs` in place too (mirroring the treatment
+  `block_state_properties.rs` now gets, M3.5-B01 Deliverables, and
+  `tags.rs` already gets, M1 registry-sync-fix) so every future re-run
+  stays self-consistent, or confirm the long-identifier line-wrap was a
+  one-off hand edit that should simply be reverted.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 (empty — no pending blueprint-correction reconciliations)
