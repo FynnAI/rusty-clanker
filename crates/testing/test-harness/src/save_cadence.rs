@@ -59,24 +59,37 @@ pub fn parse_save_event_log(path: &Path) -> std::io::Result<Vec<SaveEvent>> {
 /// `actual = events[i].tick as i64 - events[i-1].tick as i64` and records a
 /// `CadenceViolation` whenever `(actual - expected_interval_ticks as i64).abs() > 1`
 /// (AC3's own literal "±1 tick" tolerance). The very first event for a given
-/// `region_id` never produces a violation.
+/// `region_id` never produces a violation, and neither does the first *gap*: a chunk's
+/// first save fires immediately once it is dirty (`ChunkLifecycleManager`'s never-saved
+/// rule), so the gap to its first interval-elapsed save is decided by when the harness's
+/// dirty driver first touched the chunk again -- bot login, recenter, aim settle -- not by
+/// the save timer. Only from the second gap on is the chunk continuously dirty across the
+/// whole interval, which is the one situation the cadence is actually measurable in.
 pub fn analyze_cadence(events: &[SaveEvent], expected_interval_ticks: u64) -> CadenceReport {
-    let mut last_tick_by_region: std::collections::HashMap<&str, u64> =
+    use std::collections::hash_map::Entry;
+    // Per region: the previous event's tick and how many gaps have been seen so far.
+    let mut state_by_region: std::collections::HashMap<&str, (u64, u32)> =
         std::collections::HashMap::new();
     let mut violations = Vec::new();
 
     for (index, event) in events.iter().enumerate() {
-        if let Some(&last_tick) = last_tick_by_region.get(event.region_id.as_str()) {
-            let actual = event.tick as i64 - last_tick as i64;
-            if (actual - expected_interval_ticks as i64).abs() > 1 {
-                violations.push(CadenceViolation {
-                    at_index: index,
-                    expected_interval_ticks,
-                    actual_interval_ticks: actual,
-                });
+        match state_by_region.entry(event.region_id.as_str()) {
+            Entry::Occupied(mut slot) => {
+                let (last_tick, gaps_seen) = *slot.get();
+                let actual = event.tick as i64 - last_tick as i64;
+                if gaps_seen >= 1 && (actual - expected_interval_ticks as i64).abs() > 1 {
+                    violations.push(CadenceViolation {
+                        at_index: index,
+                        expected_interval_ticks,
+                        actual_interval_ticks: actual,
+                    });
+                }
+                *slot.get_mut() = (event.tick, gaps_seen + 1);
+            }
+            Entry::Vacant(slot) => {
+                slot.insert((event.tick, 0));
             }
         }
-        last_tick_by_region.insert(event.region_id.as_str(), event.tick);
     }
 
     CadenceReport {
