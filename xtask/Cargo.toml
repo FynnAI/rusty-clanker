@@ -45,3 +45,12 @@ uuid = { workspace = true }
 # `rc-paritybot`'s new `fetch_corpus_runner` bin target as a subprocess instead,
 # mirroring `m1_report`/`m2_report`'s own already-established pattern exactly.
 rc-gametest = { path = "../crates/testing/gametest" }
+# M3.5-B05: `m3_5_be_report`'s own direct on-disk block-entity seeding/verification
+# legs (Context 2.2: "the only way, absent a container-open channel, to establish
+# 'a player filled these containers' as a starting condition") — real production
+# `BlockEntityCodec` impls, called in-process exactly like `m2_report.rs`'s own
+# `ChunkNbtCodec` disk-comparison leg above. `rc-mechanics` never depends on
+# `azalea`/nightly-only code (unlike `rc-paritybot`), so linking it into `xtask.exe`
+# is safe under this project's pinned stable toolchain (WS-D4), identical reasoning
+# to `rc-chunk-storage` above.
+rc-mechanics = { path = "../crates/mechanics" }

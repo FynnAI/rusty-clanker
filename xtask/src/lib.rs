@@ -17,6 +17,7 @@ pub mod lint;
 pub mod lint_deps;
 pub mod m1_report;
 pub mod m2_report;
+pub mod m3_5_be_report;
 pub mod m3_report;
 pub mod metadata;
 pub mod path_guard;
@@ -217,4 +218,14 @@ pub enum Command {
     },
     /// TEST-D57: exact-count CLAIMS.md audit for one milestone's blueprints.
     VerifyClaims { milestone: String },
+    /// M3.5-B05: drives the block-entity persistence restart round-trip
+    /// (`AC_block_entities_survive_restart`) and the WORLD-D14 save-layout check
+    /// (`AC_world_d14_save_layout`) against a real, freshly-spawned
+    /// `rusty-clanker-server`, and writes `target/verify/m3.5-block-entity-acceptance.json`.
+    M35BeReport {
+        #[arg(long)]
+        server_bin: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = m3_5_be_report::Mode::Smoke)]
+        mode: m3_5_be_report::Mode,
+    },
 }

@@ -103,7 +103,7 @@ const AIM_TARGET_DISTANCE: f64 = 100.0;
 /// reverse mapping — same 12-entry closed set, restated here against azalea's own
 /// independently-generated `ItemKind`, both pinned to the identical protocol-776
 /// registry snapshot, cross-checked live in this harness's own implementation report).
-fn item_kind_for(kind: BlockKind) -> ItemKind {
+pub(crate) fn item_kind_for(kind: BlockKind) -> ItemKind {
     match kind {
         BlockKind::Stone => ItemKind::Stone,
         BlockKind::RedstoneWire => ItemKind::Redstone,
@@ -120,7 +120,7 @@ fn item_kind_for(kind: BlockKind) -> ItemKind {
     }
 }
 
-fn to_az_direction(direction: Direction6) -> azalea::core::direction::Direction {
+pub(crate) fn to_az_direction(direction: Direction6) -> azalea::core::direction::Direction {
     use azalea::core::direction::Direction as AzDirection;
     match direction {
         Direction6::Down => AzDirection::Down,
@@ -137,11 +137,21 @@ fn to_az_direction(direction: Direction6) -> azalea::core::direction::Direction 
 /// vanilla wire protocol's own opaque, client-chosen "interaction sequence" echoed
 /// back verbatim by `AcknowledgeBlockChange`, never independently validated —
 /// `play_creative_hotbar_held_item.rs`'s own established convention).
-struct SeqCounter(i32);
+///
+/// `pub(crate)` (M3.5-B05 addition): `block_entity_persistence`'s own placement leg
+/// reuses this exact hotbar-select/aim/`UseItemOn` machinery rather than duplicating
+/// it a second time.
+pub(crate) struct SeqCounter(i32);
 impl SeqCounter {
-    fn next(&mut self) -> i32 {
+    pub(crate) fn next(&mut self) -> i32 {
         self.0 += 1;
         self.0
+    }
+}
+
+impl SeqCounter {
+    pub(crate) fn new() -> Self {
+        Self(0)
     }
 }
 
@@ -152,7 +162,7 @@ impl SeqCounter {
 /// `InventoryMenu.USE_ROW_SLOT_START` (that test's own doc comment has the full
 /// citation) — the full-container index for hotbar slot 0, which `SetCarriedItem`
 /// then addresses directly as bare index `0`.
-async fn select_item(client: &Client, kind: BlockKind) {
+pub(crate) async fn select_item(client: &Client, kind: BlockKind) {
     client.write_packet(ServerboundSetCreativeModeSlot {
         slot_num: 36,
         item_stack: ItemStack::new(item_kind_for(kind), 1),
@@ -207,7 +217,7 @@ async fn aim_bot(
 /// the bot's own *real* look direction/position to satisfy production's own
 /// yaw/pitch-driven orientation rule and reach check respectively (`aim_bot`/
 /// `walk_to` are always called before this).
-fn send_use_item_on(
+pub(crate) fn send_use_item_on(
     client: &Client,
     seq: &mut SeqCounter,
     clicked: (i32, i32, i32),

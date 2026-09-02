@@ -98,3 +98,10 @@ path = "src/bin/load_scenario_runner.rs"
 [[bin]]
 name = "placement_diff_runner"
 path = "src/bin/placement_diff_runner.rs"
+
+# M3.5-B05's own necessary addition, identical forced-deviation precedent to the five
+# bin targets above: `xtask m35-be-report` drives `block_entity_persistence::
+# apply_placements`/`observe_presence` by spawning this binary as a real OS subprocess.
+[[bin]]
+name = "block_entity_persistence_runner"
+path = "src/bin/block_entity_persistence_runner.rs"

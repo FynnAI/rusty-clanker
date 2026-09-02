@@ -229,5 +229,6 @@ fn main() -> ExitCode {
             xtask::corpus::placement_diff::run(&args)
         }
         Command::VerifyClaims { milestone } => xtask::verify_claims::run(&milestone),
+        Command::M35BeReport { server_bin, mode } => xtask::m3_5_be_report::run(server_bin, mode),
     }
 }

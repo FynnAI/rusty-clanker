@@ -4835,6 +4835,7 @@ dependencies = [
  "rc-chunk-storage",
  "rc-core",
  "rc-gametest",
+ "rc-mechanics",
  "rc-nbt",
  "rc-registries",
  "rc-test-harness",
