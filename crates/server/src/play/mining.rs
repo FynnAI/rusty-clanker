@@ -52,9 +52,11 @@ use rc_mechanics::{
 };
 use rc_messaging::{Address, RegionMessage};
 use rc_physics::Vec3;
+use rc_registries::block_state_properties::{properties, range_of, state_id};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::BlockStateId as GenStateId;
 use rc_registries::generated_v776::block_states::default_state::{
-    AIR, BEDROCK, BLAST_FURNACE, CHEST, COMPARATOR, DIRT, FURNACE, GRASS_BLOCK, HOPPER, PISTON,
-    REDSTONE_TORCH, REDSTONE_WALL_TORCH, REDSTONE_WIRE, REPEATER, SMOKER, STICKY_PISTON, STONE,
+    AIR, BEDROCK, DIRT, GRASS_BLOCK, HOPPER, REDSTONE_TORCH, REDSTONE_WIRE, STONE,
 };
 
 use super::block_action::{Face, resolve_place_position, to_storage_id};
@@ -1102,118 +1104,98 @@ const FULL6: [Direction; 6] = [
     Direction::Down,
 ];
 
-/// blocks.json's own listed `facing` value order shared by every purely-horizontal tier-1
-/// oriented block this table covers — repeater/comparator/redstone_wall_torch/chest/furnace/
-/// blast_furnace/smoker, plus hopper's four horizontal faces (`hopper_facing_index` below has
-/// hopper's own distinct full order) — `[north, south, west, east]` (blocks.json's own
-/// alphabetical-property-value listing, protocol 776, verified directly against the local
-/// datagen reference for every one of these seven block types). Restated here by hand since it
-/// is identical in spirit to, but not importable from, `rc_mechanics::redstone::signal::
-/// diode_facing_index` (repeater.rs's/comparator.rs's own citation) and `rc_mechanics::
-/// redstone::torch`'s own `wall_facing_from_index` — both `pub(crate)` inside `rc-mechanics`,
-/// invisible across the crate boundary (WS-D3 rule 1's shared-crate isolation, the identical
-/// restatement convention `rc_physics::shapes`'s own module doc comment already documents for
-/// this same boundary).
-fn horizontal4_index(dir: Direction) -> u32 {
+/// A `Direction`'s own generated-registry property-value spelling (M3.5-B02, WS-D15) — a
+/// single canonical mapping now suffices for every block this module places (chest/hopper/
+/// piston/repeater/comparator/wall-torch/furnace-family alike): `state_id`/`with_property`/
+/// `properties` all key properties by *name*, never by a hand-derived per-block stride order,
+/// so the three former per-block index/from_index stride helpers (`horizontal4_index`,
+/// `hopper_facing_index`, `full6_piston_index`) are retired outright, not merely reimplemented
+/// -- ordinary, un-magic string mapping, not itself an id table
+/// (`blueprints/M3.5/M3.5-B02-retire-hand-authored-id-tables.md` §3.2).
+fn direction_str(dir: Direction) -> &'static str {
     match dir {
-        Direction::North => 0,
-        Direction::South => 1,
-        Direction::West => 2,
-        Direction::East => 3,
-        Direction::Up | Direction::Down => panic!(
-            "horizontal4_index: called with a non-horizontal direction {dir:?} -- every real \
-             caller here only ever passes a HORIZONTAL4 member"
-        ),
+        Direction::Down => "down",
+        Direction::Up => "up",
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::East => "east",
     }
 }
 
-/// `minecraft:hopper`'s own listed `facing` value order (blocks.json: `[down, north, south,
-/// west, east]`, protocol 776). `enabled` is hopper's other property (the *outer* one, stride
-/// 5) but is always `true` at placement time — matching blocks.json's own default `enabled=
-/// true, facing=down` exactly — so `enabled`'s own stride never enters this table's own
-/// placement-time arithmetic: every hopper entry below is `HOPPER.0 + hopper_facing_index(dir)`
-/// alone.
-fn hopper_facing_index(dir: Direction) -> u32 {
-    match dir {
-        Direction::Down => 0,
-        Direction::North => 1,
-        Direction::South => 2,
-        Direction::West => 3,
-        Direction::East => 4,
-        Direction::Up => panic!(
-            "hopper_facing_index: Up is never a real hopper facing -- resolve_orientation's own \
-             Hopper rule clamps a Face::Up click to Orientation::Full(Direction::Down) before \
-             this table is ever consulted"
-        ),
+fn direction_from_str(s: &str) -> Direction {
+    match s {
+        "down" => Direction::Down,
+        "up" => Direction::Up,
+        "north" => Direction::North,
+        "south" => Direction::South,
+        "west" => Direction::West,
+        "east" => Direction::East,
+        other => panic!("direction_from_str: unrecognized direction value {other:?}"),
     }
 }
 
-/// `minecraft:piston`'s/`minecraft:sticky_piston`'s own listed `facing` value order
-/// (blocks.json: `[north, east, south, west, up, down]`, protocol 776) — distinct from
-/// `horizontal4_index`'s order above since piston's own `facing` property interleaves the two
-/// vertical directions with the horizontal ones (unlike every purely-horizontal block above).
-/// Restated here by hand, identical in spirit to `rc_mechanics::redstone::piston::
-/// piston_facing_index` (`pub(crate)`, same cross-crate restatement rule as `horizontal4_index`
-/// above).
-fn full6_piston_index(dir: Direction) -> u32 {
-    match dir {
-        Direction::North => 0,
-        Direction::East => 1,
-        Direction::South => 2,
-        Direction::West => 3,
-        Direction::Up => 4,
-        Direction::Down => 5,
-    }
-}
-
-/// `minecraft:chest`'s own listed `type` value order (blocks.json: `[single, left, right]`,
-/// protocol 776), M3 field-report fix (chest-merge) -- stride 2 (`type`'s own stride sits one
-/// level inside `facing`'s own stride-6; `waterlogged`, this table's own innermost property,
-/// is always `false` in this tier-1 no-fluids scope and so contributes no term, exactly as
-/// `tier1_oriented_entries()`'s own pre-existing chest doc comment already established for
-/// `facing`'s stride).
-fn chest_type_index(chest_type: ChestType) -> u32 {
+/// `minecraft:chest`'s own `type` property-value spelling (M3 field-report fix, chest-merge).
+fn chest_type_str(chest_type: ChestType) -> &'static str {
     match chest_type {
-        ChestType::Single => 0,
-        ChestType::Left => 1,
-        ChestType::Right => 2,
+        ChestType::Single => "single",
+        ChestType::Left => "left",
+        ChestType::Right => "right",
     }
 }
 
-/// `<CHEST default id> + facing_idx*6 + type_idx*2` (M3 field-report fix, chest-merge) --
-/// `waterlogged` stays at its own default (`false`) always in this tier-1 scope, contributing
-/// no term. `decode_chest_state` below is this function's own exact inverse, used by
-/// `apply_placement`'s own `chest_neighbor_at` closure to read an existing chest's own
-/// `(facing, type)` back out of a raw id, and by the chest-merge writeback to compute the
-/// EXISTING neighbor's own new id after a merge.
-pub fn chest_state_id(facing: Direction, chest_type: ChestType) -> u32 {
-    CHEST.0 + horizontal4_index(facing) * 6 + chest_type_index(chest_type) * 2
+fn chest_type_from_str(s: &str) -> ChestType {
+    match s {
+        "single" => ChestType::Single,
+        "left" => ChestType::Left,
+        "right" => ChestType::Right,
+        other => panic!("chest_type_from_str: unrecognized chest type value {other:?}"),
+    }
 }
 
-/// `chest_state_id`'s own exact inverse (M3 field-report fix, chest-merge) -- `None` for any
-/// raw id outside chest's own reachable `facing in [north,south,west,east] x type in
-/// [single,left,right] x waterlogged in [true,false]` range (`CHEST.0 ..= CHEST.0 + 23`); a
-/// `waterlogged=true` id (an odd offset within its own 6-wide facing group) still decodes
-/// correctly since `type`'s own stride-2 groups each contain exactly one `waterlogged=true`/
-/// `false` pair -- this tier-1 world never itself creates one (no fluids), but a defensive
-/// correct decode costs nothing.
+/// M3.5-B02 (WS-D15): built on the generated registry's own name-based `state_id` API instead
+/// of hand-derived stride arithmetic -- `waterlogged` defaults to `false` (this tier-1 world's
+/// only real value, no fluids) via `state_id`'s own partial-set defaulting. `decode_chest_state`
+/// below is this function's own exact inverse, used by `apply_placement`'s own
+/// `chest_neighbor_at` closure to read an existing chest's own `(facing, type)` back out of a
+/// raw id, and by the chest-merge writeback to compute the EXISTING neighbor's own new id after
+/// a merge.
+pub fn chest_state_id(facing: Direction, chest_type: ChestType) -> u32 {
+    state_id(
+        block_id::CHEST,
+        &[
+            ("facing", direction_str(facing)),
+            ("type", chest_type_str(chest_type)),
+        ],
+    )
+    .expect("chest_state_id: every (facing,chest_type) combination is legal")
+    .0
+}
+
+/// `chest_state_id`'s own exact inverse (M3 field-report fix, chest-merge; M3.5-B02, §3.7:
+/// retired against the generated registry's own real `[first, last]` range -- `CHEST.0` is
+/// chest's own generated *default* state (`waterlogged=false`), not its first state
+/// (`waterlogged=true`), so anchoring this decode's own bound check on `CHEST.0` the way the
+/// pre-M3.5-B02 arithmetic did rejected chest's own real `waterlogged=true` ids and, one worse,
+/// accepted the *next* block's own first id (`minecraft:redstone_wire`'s `4011`) as if it were
+/// a chest -- both defects close by construction once the bound check reads the real
+/// `range_of`-derived range instead). `None` for any raw id outside chest's own real reachable
+/// range.
 fn decode_chest_state(raw: u32) -> Option<(Direction, ChestType)> {
-    let offset = raw.checked_sub(CHEST.0)?;
-    if offset > 23 {
+    let range = range_of(block_id::CHEST);
+    if !(range.first.0..=range.last.0).contains(&raw) {
         return None;
     }
-    let facing = match offset / 6 {
-        0 => Direction::North,
-        1 => Direction::South,
-        2 => Direction::West,
-        3 => Direction::East,
-        _ => return None,
+    let props = properties(GenStateId(raw));
+    let value_of = |name: &str| -> &str {
+        props
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| *v)
+            .unwrap_or_else(|| panic!("decode_chest_state: raw id {raw} has no {name} property"))
     };
-    let chest_type = match (offset % 6) / 2 {
-        0 => ChestType::Single,
-        1 => ChestType::Left,
-        _ => ChestType::Right,
-    };
+    let facing = direction_from_str(value_of("facing"));
+    let chest_type = chest_type_from_str(value_of("type"));
     Some((facing, chest_type))
 }
 
@@ -1222,24 +1204,38 @@ fn decode_chest_state(raw: u32) -> Option<(Direction, ChestType)> {
 /// `raw_state_dig_properties()` below (iterated in reverse, raw id -> `DigProperties`) — one
 /// definition, two consumers, so the two can never drift apart.
 ///
-/// M3 field-report fix (Root Cause 1): every entry's arithmetic below is decoded directly off
-/// the local datagen reference (this module's own top-of-file convention) and, for repeater/
-/// comparator/redstone_wall_torch/piston/sticky_piston, is independently cross-checked here for
-/// exact agreement with `rc_mechanics::redstone::{repeater,comparator,torch,piston}`'s own
-/// already-verified own-state arithmetic (`REPEATER_BASE`/`COMPARATOR_BASE`/`TORCH_WALL_BASE`/
-/// `PISTON_BASE`/`STICKY_PISTON_BASE`, none importable across the crate boundary — same
-/// restatement rule as `rc_physics::shapes`) — these five kinds' ids must land inside
-/// `rc_mechanics::redstone::dispatch_ranges`'s own registered dispatch ranges for `world.rs`'s
+/// M3.5-B02 (WS-D15): every entry below is computed directly against `rc-registries`'
+/// M3.5-B01-generated per-block-state-property registry (`state_id`), superseding this
+/// function's own former "decoded directly off the local datagen reference, independently
+/// cross-checked for exact agreement with `rc_mechanics::redstone::{repeater,comparator,torch,
+/// piston}`'s own hand-derived arithmetic" era — there is no longer a second, independently
+/// hand-derived arithmetic to cross-check against; both this table and `rc-mechanics`' own
+/// dispatch ranges (`rc_mechanics::redstone::dispatch_ranges`) now read the identical generated
+/// source. These five kinds' ids must still land inside those dispatch ranges for `world.rs`'s
 /// `bootstrap_redstone_dispatch` to route a real placement to the matching `BlockBehavior`/
-/// `RedstoneSignalSource` at all (Root Cause 3). Furnace/blast_furnace/smoker/chest/hopper have
-/// no dedicated `rc-mechanics` own-state module (tier-1 registers no custom behavior for them —
+/// `RedstoneSignalSource` at all (Root Cause 3) — guaranteed by construction now, not merely by
+/// independent verification. Furnace/blast_furnace/smoker/chest/hopper have no dedicated
+/// `rc-mechanics` own-state module (tier-1 registers no custom behavior for them —
 /// `NoOpBehavior` dispatch is correct, only the id itself must be real), so this table is their
-/// own sole source of truth, anchored directly on `rc_registries::generated_v776::block_states::
-/// default_state::*`: every formula below is `<generated default-state id> + <property-index> *
-/// <stride>`, so the `index == 0` case always exactly reproduces the generated default by
+/// own sole source of truth: every entry with only `facing` overridden leaves every other
+/// property at that block's own generated default value (`state_id`'s own partial-set
+/// defaulting), so the default-facing case always exactly reproduces the generated default by
 /// construction — `crates/server/tests/mining_block_state_ids.rs`'s own literal-id assertions
 /// are the startup/test-time integrity check exercising this for every block this table covers.
 fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
+    fn id_of(
+        block: rc_registries::generated_v776::block_state_properties::BlockId,
+        props: &[(&str, &str)],
+    ) -> u32 {
+        state_id(block, props)
+            .unwrap_or_else(|| {
+                panic!(
+                    "tier1_oriented_entries: {props:?} is not a legal property set for {block:?}"
+                )
+            })
+            .0
+    }
+
     let mut entries = vec![
         ((PlaceableBlockKind::Stone, Orientation::None), STONE.0),
         (
@@ -1252,56 +1248,31 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
         ),
     ];
 
-    // Repeater/comparator/redstone_wall_torch/chest/furnace/blast_furnace/smoker: `facing`
-    // (`horizontal4_index`'s own `[north, south, west, east]` order) is each block's own *sole*
-    // varying property at placement time — every other property (repeater's `delay`/`locked`/
-    // `powered`; comparator's `mode`/`powered`; wall-torch's `lit`; chest's `type`/
-    // `waterlogged`; furnace-family's `lit`) already sits at its own placement-time value
-    // (`delay=1`, `locked=false`, `powered=false`, `mode=compare`, `lit=true` for the torch /
-    // `lit=false` for the furnace family, `type=single`, `waterlogged=false`) at `facing=
-    // north`'s own generated default id, so `<default> + facing_idx*stride` covers the full
-    // placement-time state without needing those other properties' own strides at all. Strides
-    // (blocks.json's own alphabetical-property-name nesting, `facing` immediately followed by
-    // the *next* property in that ordering): repeater/comparator's `facing` is followed by two
-    // more 2-valued properties (`locked`+`powered` / `mode`+`powered`) -> stride 4; wall-torch's
-    // `facing` is followed only by `lit` (2 values) -> stride 2; chest's `facing` is followed by
-    // `type`(3) and `waterlogged`(2) -> stride 6; furnace/blast_furnace/smoker's `facing` is
-    // followed only by `lit`(2) -> stride 2 (identical shape to wall-torch).
+    // Repeater/comparator/redstone_wall_torch/chest/furnace/blast_furnace/smoker: `facing` is
+    // each block's own *sole* varying property at placement time — every other property
+    // (repeater's `delay`/`locked`/`powered`; comparator's `mode`/`powered`; wall-torch's
+    // `lit`; chest's `waterlogged`; furnace-family's `lit`) stays at that block's own
+    // placement-time default value via `state_id`'s own partial-set defaulting.
     for dir in HORIZONTAL4 {
-        let idx = horizontal4_index(dir);
+        let facing = direction_str(dir);
         entries.push((
             (
                 PlaceableBlockKind::RedstoneTorch,
                 Orientation::Horizontal(dir),
             ),
-            // REDSTONE_WALL_TORCH default = 6887 (facing=north, lit=true); stride 2
-            // (`rc_mechanics::redstone::torch::TORCH_WALL_BASE`'s own identical formula,
-            // restated). North/South/West/East -> 6887/6889/6891/6893, all `lit=true` (a
-            // freshly-placed torch is always lit — unpowered support).
-            REDSTONE_WALL_TORCH.0 + idx * 2,
+            id_of(block_id::REDSTONE_WALL_TORCH, &[("facing", facing)]),
         ));
         entries.push((
             (PlaceableBlockKind::Repeater, Orientation::Horizontal(dir)),
-            // REPEATER default = 7037 (delay=1, facing=north, locked=false, powered=false);
-            // stride 4 (`rc_mechanics::redstone::repeater::repeater_state_id`'s own identical
-            // formula at delay=1/locked=false/powered=false, restated).
-            // North/South/West/East -> 7037/7041/7045/7049.
-            REPEATER.0 + idx * 4,
+            id_of(block_id::REPEATER, &[("facing", facing)]),
         ));
         entries.push((
             (PlaceableBlockKind::Comparator, Orientation::Horizontal(dir)),
-            // COMPARATOR default = 11264 (facing=north, mode=compare, powered=false); stride 4
-            // (`rc_mechanics::redstone::comparator::comparator_state_id`'s own identical formula
-            // at mode=compare/powered=false, restated).
-            // North/South/West/East -> 11264/11268/11272/11276.
-            COMPARATOR.0 + idx * 4,
+            id_of(block_id::COMPARATOR, &[("facing", facing)]),
         ));
         // M3 field-report fix (chest-merge): all three `TYPE` values per facing, not only
         // `Single` -- a merged placement's own `Orientation::Chest(dir, Left | Right)` needs a
-        // real table row too (`chest_state_id`'s own doc comment has the full stride
-        // derivation). CHEST default = 3988 (type=single, facing=north, waterlogged=false);
-        // facing stride 6, type stride 2. North/South/West/East, Single -> 3988/3994/4000/4006
-        // (unchanged from before this fix); Left -> +2 of each; Right -> +4 of each.
+        // real table row too.
         for chest_type in [ChestType::Single, ChestType::Left, ChestType::Right] {
             entries.push((
                 (
@@ -1313,38 +1284,29 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
         }
         entries.push((
             (PlaceableBlockKind::Furnace, Orientation::Horizontal(dir)),
-            // FURNACE default = 5328 (facing=north, lit=false); stride 2.
-            // North/South/West/East -> 5328/5330/5332/5334.
-            FURNACE.0 + idx * 2,
+            id_of(block_id::FURNACE, &[("facing", facing)]),
         ));
         entries.push((
             (
                 PlaceableBlockKind::BlastFurnace,
                 Orientation::Horizontal(dir),
             ),
-            // BLAST_FURNACE default = 20763 (facing=north, lit=false); stride 2.
-            // North/South/West/East -> 20763/20765/20767/20769.
-            BLAST_FURNACE.0 + idx * 2,
+            id_of(block_id::BLAST_FURNACE, &[("facing", facing)]),
         ));
         entries.push((
             (PlaceableBlockKind::Smoker, Orientation::Horizontal(dir)),
-            // SMOKER default = 20755 (facing=north, lit=false); stride 2.
-            // North/South/West/East -> 20755/20757/20759/20761.
-            SMOKER.0 + idx * 2,
+            id_of(block_id::SMOKER, &[("facing", facing)]),
         ));
         entries.push((
             (PlaceableBlockKind::Hopper, Orientation::Horizontal(dir)),
-            // HOPPER default = 11313 (enabled=true, facing=down); `hopper_facing_index`'s own
-            // `[down, north, south, west, east]` order, stride 1 (the innermost property —
-            // `enabled` is always `true` at placement, matching the default's own value, so it
-            // contributes no term here). North/South/West/East -> 11314/11315/11316/11317.
-            HOPPER.0 + hopper_facing_index(dir),
+            // `enabled` is always `true` at placement, matching hopper's own generated
+            // default value, so it contributes no override here.
+            id_of(block_id::HOPPER, &[("facing", facing)]),
         ));
     }
     // Hopper's own clamped-Down orientation (`resolve_orientation`'s own Hopper rule: clicked
-    // on the top or bottom face always faces Down, never Up) is `hopper_facing_index(Down) ==
-    // 0`, i.e. `HOPPER.0` itself unchanged — the real generated default id IS this block's own
-    // Down-facing state (vanilla's own hopper default orientation).
+    // on the top or bottom face always faces Down, never Up) is hopper's own real generated
+    // default state (`facing=down, enabled=true`) directly.
     entries.push((
         (
             PlaceableBlockKind::Hopper,
@@ -1354,25 +1316,24 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
     ));
 
     // Piston/sticky_piston: `extended` is always `false` at placement (a freshly-placed piston
-    // is never mid-extend); `facing` (`full6_piston_index`'s own `[north, east, south, west,
-    // up, down]` order) is the *inner*, faster-varying property (stride 1) since `extended`
-    // (2 values) is outer with stride 6 — `PISTON`/`STICKY_PISTON`'s own generated default is
-    // already `extended=false, facing=north`, so `<default> + facing_idx` covers every
-    // placement orientation directly (`rc_mechanics::redstone::piston::piston_state_id`'s own
-    // identical formula at `extended=false`, restated).
+    // is never mid-extend); `PISTON`/`STICKY_PISTON`'s own generated default is already
+    // `extended=false, facing=north`, so overriding only `facing` covers every placement
+    // orientation directly.
     for dir in FULL6 {
-        let idx = full6_piston_index(dir);
+        let facing = direction_str(dir);
         entries.push((
             (PlaceableBlockKind::Piston, Orientation::Full(dir)),
-            // PISTON default = 2263 (extended=false, facing=north).
-            // North/East/South/West/Up/Down -> 2263/2264/2265/2266/2267/2268.
-            PISTON.0 + idx,
+            id_of(
+                block_id::PISTON,
+                &[("extended", "false"), ("facing", facing)],
+            ),
         ));
         entries.push((
             (PlaceableBlockKind::StickyPiston, Orientation::Full(dir)),
-            // STICKY_PISTON default = 2241 (extended=false, facing=north).
-            // North/East/South/West/Up/Down -> 2241/2242/2243/2244/2245/2246.
-            STICKY_PISTON.0 + idx,
+            id_of(
+                block_id::STICKY_PISTON,
+                &[("extended", "false"), ("facing", facing)],
+            ),
         ));
     }
 
@@ -1520,12 +1481,12 @@ static RAW_STATE_BLOCK_ENTITY_KIND: OnceLock<HashMap<u32, BlockEntityWireKind>> 
 /// Every raw block-state id this project's own placement/redstone systems can ever leave one
 /// of the six `BlockEntityWireKind`s' blocks in, mapped to that kind -- built from `tier1_
 /// oriented_entries()` (the placement-time defaults for chest/furnace/blast_furnace/smoker/
-/// hopper) plus two hand-added ranges `tier1_oriented_entries()` alone does not cover: hopper's
-/// own `enabled=false` variants (this same wave's own ENABLED-at-placement fix, stride 5) and
-/// comparator's full `facing`x`mode`x`powered` reachable range (`ComparatorBehavior` mutates
-/// `powered` dynamically via Stage-4 redstone after placement, unlike every other of these six
-/// kinds -- `crates/physics/src/shapes.rs`'s own identical `(11263u32..=11278)` row is this
-/// exact same range, restated here by hand since this crate cannot import that table either).
+/// hopper) plus two additional cases `tier1_oriented_entries()` alone does not cover, both now
+/// computed directly against the generated registry (M3.5-B02, WS-D15) instead of a hand-added
+/// literal range: hopper's own `enabled=false` variants (this same wave's own
+/// ENABLED-at-placement fix) and comparator's full `facing`x`mode`x`powered` reachable range
+/// (`ComparatorBehavior` mutates `powered` dynamically via Stage-4 redstone after placement,
+/// unlike every other of these six kinds).
 fn raw_state_block_entity_kind_table() -> &'static HashMap<u32, BlockEntityWireKind> {
     RAW_STATE_BLOCK_ENTITY_KIND.get_or_init(|| {
         let mut map = HashMap::new();
@@ -1534,14 +1495,29 @@ fn raw_state_block_entity_kind_table() -> &'static HashMap<u32, BlockEntityWireK
                 map.insert(raw_id, wire_kind);
             }
         }
-        // Hopper `enabled=false` (this wave's own placement-time ENABLED fix): outer property,
-        // stride 5, over the same five `hopper_facing_index` values `tier1_oriented_entries()`
-        // already registered at `enabled=true`.
-        for facing_idx in 0..5u32 {
-            map.insert(HOPPER.0 + 5 + facing_idx, BlockEntityWireKind::Hopper);
+        // Hopper `enabled=false` (this wave's own placement-time ENABLED fix), over the same
+        // five real hopper facings `tier1_oriented_entries()` already registered at
+        // `enabled=true`.
+        for dir in [
+            Direction::Down,
+            Direction::North,
+            Direction::South,
+            Direction::West,
+            Direction::East,
+        ] {
+            let id = state_id(
+                block_id::HOPPER,
+                &[("facing", direction_str(dir)), ("enabled", "false")],
+            )
+            .expect(
+                "raw_state_block_entity_kind_table: every hopper facing has an enabled=false state",
+            )
+            .0;
+            map.insert(id, BlockEntityWireKind::Hopper);
         }
         // Comparator's full reachable range (this function's own doc comment above).
-        for id in 11263u32..=11278 {
+        let comparator_range = range_of(block_id::COMPARATOR);
+        for id in comparator_range.first.0..=comparator_range.last.0 {
             map.insert(id, BlockEntityWireKind::Comparator);
         }
         map
@@ -1555,28 +1531,30 @@ pub fn block_entity_wire_kind_for_raw_state(raw: u32) -> Option<BlockEntityWireK
     raw_state_block_entity_kind_table().get(&raw).copied()
 }
 
-/// Recovers a placed hopper's own `facing` from its final written raw block-state id --
-/// `facing` is the innermost, stride-1 property (`hopper_facing_index`'s own doc comment
-/// above), so `(raw - HOPPER.0) % 5` always recovers it regardless of the outer `enabled` term
-/// this same wave's own ENABLED-at-placement fix can add. Used by `world.rs`'s own
-/// block-entity spawn wiring: `HopperBlockEntity::empty(facing)` needs a real `Direction`, and
-/// `PlaceOutcome` carries only the final id, never the `Orientation` `apply_placement` resolved
-/// it from. Panics if `raw` is not a real hopper id (a config-time defect at the call site,
-/// mirroring `OrientedStateTable::lookup`'s own panic-on-defect convention) -- every real
-/// caller only ever passes a `new_state` this same module just wrote for a `Hopper` placement.
+/// Recovers a placed hopper's own `facing` from its final written raw block-state id (M3.5-B02,
+/// WS-D15: reads the generated registry's own decoded `facing` property directly instead of
+/// hand-derived `% 5` stride arithmetic) -- regardless of the outer `enabled` term this same
+/// wave's own ENABLED-at-placement fix can add. Used by `world.rs`'s own block-entity spawn
+/// wiring: `HopperBlockEntity::empty(facing)` needs a real `Direction`, and `PlaceOutcome`
+/// carries only the final id, never the `Orientation` `apply_placement` resolved it from.
+/// Panics if `raw` is not a real hopper id (a config-time defect at the call site, mirroring
+/// `OrientedStateTable::lookup`'s own panic-on-defect convention) -- every real caller only
+/// ever passes a `new_state` this same module just wrote for a `Hopper` placement.
 pub fn hopper_facing_from_raw_state(raw: u32) -> Direction {
+    let range = range_of(block_id::HOPPER);
     assert!(
-        (HOPPER.0..=HOPPER.0 + 9).contains(&raw),
-        "hopper_facing_from_raw_state: {raw} is not a real hopper id (HOPPER.0..=HOPPER.0+9)"
+        (range.first.0..=range.last.0).contains(&raw),
+        "hopper_facing_from_raw_state: {raw} is not a real hopper id"
     );
-    match (raw - HOPPER.0) % 5 {
-        0 => Direction::Down,
-        1 => Direction::North,
-        2 => Direction::South,
-        3 => Direction::West,
-        4 => Direction::East,
-        _ => unreachable!("(raw - HOPPER.0) % 5 is always < 5"),
-    }
+    let props = properties(GenStateId(raw));
+    let facing_str = props
+        .iter()
+        .find(|(name, _)| *name == "facing")
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| {
+            panic!("hopper_facing_from_raw_state: raw id {raw} has no facing property")
+        });
+    direction_from_str(facing_str)
 }
 
 // --- Top-level action application ---

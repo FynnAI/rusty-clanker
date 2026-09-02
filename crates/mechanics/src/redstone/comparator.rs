@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
+use rc_registries::block_state_properties::{properties, state_id};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, UpdateContext};
 use crate::direction::Direction;
@@ -50,44 +53,64 @@ struct ComparatorState {
     seeded: bool,
 }
 
-/// Own-state id arithmetic for `minecraft:comparator` (M3 field-report fix: own-state
-/// writeback; WS-D15's generated per-property registry is future work, so this constant is
-/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
-/// `minecraft:comparator` entry, protocol 776, states 11263..=11278). `facing` (`signal::
-/// diode_facing_index`, the same `[north,south,west,east]` order/stride repeater.rs's own id
-/// arithmetic shares) is the slowest-varying property, stride 4; then `mode` (`[compare,
-/// subtract]`), stride 2; then `powered` (`[true,false]`), stride 1. The analog `output` value
-/// (comparator's own held `0..=15` signal strength) has no `BlockStateId` representation at all
-/// -- blocks.json's own `minecraft:comparator` entry lists only `facing`/`mode`/`powered`; real
-/// vanilla stores it in a separate `ComparatorBlockEntity`, out of this changeset's own scope
-/// (Stage-7/block-entity wiring, per the M3 fix-agent brief's own container-case carve-out).
-const COMPARATOR_BASE: u32 = 11263;
-/// Inclusive upper bound -- this module's own doc comment above already cites the full real
-/// range (`protocol 776, states 11263..=11278`); 16 reachable states (`facing`(4) x `mode`(2) x
-/// `powered`(2)).
-const COMPARATOR_MAX: u32 = 11278;
-/// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
-/// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
-const AIR_ID: BlockStateId = BlockStateId(0);
+/// `air`'s own raw id (M3 field-report fix, Task 3) -- M3.5-B02: read off `rc-registries`' own
+/// generated `default_state::AIR` constant (value unchanged, `0`) now that this crate already
+/// depends on `rc-registries` normally. The analog `output` value (comparator's own held
+/// signal strength, 0 through 15) has no `BlockStateId` representation at all -- the generated
+/// per-block-state-property registry's own `minecraft:comparator` entry lists only `facing`/
+/// `mode`/`powered`; real vanilla stores it in a separate `ComparatorBlockEntity`, out of this
+/// changeset's own scope (Stage-7/block-entity wiring, per the M3 fix-agent brief's own
+/// container-case carve-out).
+const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
-/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
-/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
-/// identical role.
-pub(crate) fn state_range() -> (u32, u32) {
-    (COMPARATOR_BASE, COMPARATOR_MAX)
+/// `true` iff `raw` falls inside `minecraft:comparator`'s own real generated id range
+/// (M3.5-B02, WS-D15) -- mirrors `wire.rs`'s documented `is_wire_range` convention: keeps the
+/// decode-from-raw-id read paths below safe against this project's own established
+/// acceptance-test convention of registering `ComparatorBehavior` at small arbitrary
+/// placeholder ids, without needing a real id.
+fn is_comparator_range(raw: u32) -> bool {
+    let range = rc_registries::block_state_properties::range_of(block_id::COMPARATOR);
+    (range.first.0..=range.last.0).contains(&raw)
+}
+
+fn mode_str(mode: ComparatorMode) -> &'static str {
+    match mode {
+        ComparatorMode::Compare => "compare",
+        ComparatorMode::Subtract => "subtract",
+    }
+}
+
+fn mode_from_str(s: &str) -> ComparatorMode {
+    match s {
+        "compare" => ComparatorMode::Compare,
+        "subtract" => ComparatorMode::Subtract,
+        other => panic!("mode_from_str: unrecognized comparator mode value {other:?}"),
+    }
+}
+
+fn comparator_powered_str(powered: bool) -> &'static str {
+    if powered { "true" } else { "false" }
+}
+
+fn comparator_property<'a>(props: &'a [(&str, &str)], name: &str, raw: u32) -> &'a str {
+    props
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| panic!("comparator: raw id {raw} has no {name} property"))
 }
 
 fn comparator_state_id(facing: Direction, mode: ComparatorMode, powered: bool) -> BlockStateId {
-    let mode_idx = match mode {
-        ComparatorMode::Compare => 0,
-        ComparatorMode::Subtract => 1,
-    };
-    BlockStateId(
-        COMPARATOR_BASE
-            + signal::diode_facing_index(facing) * 4
-            + mode_idx * 2
-            + u32::from(!powered),
+    let id = state_id(
+        block_id::COMPARATOR,
+        &[
+            ("facing", signal::diode_facing_str(facing)),
+            ("mode", mode_str(mode)),
+            ("powered", comparator_powered_str(powered)),
+        ],
     )
+    .expect("comparator_state_id: every (facing,mode,powered) combination is legal");
+    BlockStateId(id.0)
 }
 
 /// Comparator (Context §G). One instance per region (Context §I).
@@ -221,8 +244,11 @@ impl ComparatorBehavior {
             return;
         }
         entry.seeded = true;
-        if let Some(current) = world.get_block(pos) {
-            entry.powered = (current.0.wrapping_sub(COMPARATOR_BASE)) % 2 == 0;
+        if let Some(current) = world.get_block(pos)
+            && is_comparator_range(current.0)
+        {
+            let props = properties(GenStateId(current.0));
+            entry.powered = comparator_property(props, "powered", current.0) == "true";
         }
     }
 
@@ -473,16 +499,12 @@ impl BlockBehavior for ComparatorBehavior {
         let Some(current) = ctx.get_block(pos) else {
             return;
         };
-        let rel = current.0.wrapping_sub(COMPARATOR_BASE);
-        if rel >= 16 {
+        if !is_comparator_range(current.0) {
             return; // not a real comparator id -- defensive only, dispatch never reaches here otherwise
         }
-        let facing = signal::diode_facing_from_index(rel / 4);
-        let mode = if (rel % 4) / 2 == 0 {
-            ComparatorMode::Compare
-        } else {
-            ComparatorMode::Subtract
-        };
+        let props = properties(GenStateId(current.0));
+        let facing = signal::diode_facing_from_str(comparator_property(props, "facing", current.0));
+        let mode = mode_from_str(comparator_property(props, "mode", current.0));
         self.place(pos, facing, mode);
     }
 }

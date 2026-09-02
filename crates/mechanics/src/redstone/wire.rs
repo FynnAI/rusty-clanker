@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
+use rc_registries::block_state_properties::{properties, range_of, with_property};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, UpdateContext};
 use crate::direction::Direction;
@@ -13,50 +16,49 @@ use crate::world_access::BlockWorldAccess;
 
 use super::signal::{self, RedstoneSignalSource, SignalSourceRegistry};
 
-/// Own-state id arithmetic for `minecraft:redstone_wire` (M3 field-report fix: own-state
-/// writeback; WS-D15's generated per-property registry is future work, so these constants are
-/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
-/// `minecraft:redstone_wire` entry, protocol 776). Five properties, blocks.json's own listed
-/// per-property value order (`east`/`north`/`south`/`west`: `[up, side, none]`; `power`:
-/// `0..=15`), enumerated alphabetically-by-property-name with the *last* property varying
-/// fastest (`west`), matching the real generated state list exactly (verified directly against
-/// every id this fixture corpus places, `redstone_wire.rs`'s own test module):
-/// `id = WIRE_BASE + east_idx*432 + north_idx*144 + power*9 + south_idx*3 + west_idx`.
-const WIRE_BASE: u32 = 4011;
-const WIRE_MAX: u32 = 5306; // inclusive -- east=none,north=none,power=15,south=none,west=none
-const WIRE_STRIDE_WEST: u32 = 1;
-const WIRE_STRIDE_SOUTH: u32 = 3;
-const WIRE_STRIDE_POWER: u32 = 9;
-const WIRE_STRIDE_NORTH: u32 = 144;
-const WIRE_STRIDE_EAST: u32 = 432;
+/// blocks.json's own per-direction `[up, side, none]` value strings, the generated registry's
+/// own property-value spelling for `minecraft:redstone_wire`'s `east`/`north`/`south`/`west`
+/// properties (M3.5-B02, WS-D15) — ordinary, un-magic string mapping, not itself an id table
+/// (`blueprints/M3.5/M3.5-B02-retire-hand-authored-id-tables.md` §3.2).
+fn wire_side_str(shape: WireSideShape) -> &'static str {
+    match shape {
+        WireSideShape::Up => "up",
+        WireSideShape::Side => "side",
+        WireSideShape::None => "none",
+    }
+}
 
-/// `true` iff `raw` is a real `minecraft:redstone_wire` id (`WIRE_BASE..=WIRE_MAX`) —
-/// `new_power_state_id`/`new_connections_state_id` may only ever be called with a `raw` this
-/// returns `true` for, since `wire_decode`'s own unchecked subtraction underflows otherwise.
-/// This project's own established acceptance-test convention registers `WireBehavior` at small
-/// arbitrary placeholder ids unrelated to blocks.json's real range (e.g. `redstone_repeater.rs`'s
-/// own `WIRE_ID = BlockStateId(4)`, standing in for "some wire neighbor" without needing a real
-/// id) — dispatch through a real `SignalSourceRegistry`/`BlockBehaviorRegistry` range is always
-/// in-range by construction, but this guard keeps every such test double safe too, leaving its
-/// placeholder id untouched rather than attempting arithmetic that assumes a real one.
+fn wire_side_from_str(s: &str) -> WireSideShape {
+    match s {
+        "up" => WireSideShape::Up,
+        "side" => WireSideShape::Side,
+        "none" => WireSideShape::None,
+        other => panic!("wire_side_from_str: unrecognized wire side value {other:?}"),
+    }
+}
+
+/// `true` iff `raw` falls inside `minecraft:redstone_wire`'s own real generated id range
+/// (M3.5-B02, WS-D15: reads `rc-registries`' M3.5-B01-generated per-block range table instead
+/// of a hand-derived `WIRE_BASE..=WIRE_MAX` literal pair) — `new_power_state_id`/`new_
+/// connections_state_id` may only ever be called with a `raw` this returns `true` for, since
+/// `wire_decode`'s own `properties()` lookup panics on a raw id that is not a real generated
+/// state id otherwise. This project's own established acceptance-test convention registers
+/// `WireBehavior` at small arbitrary placeholder ids unrelated to blocks.json's real range
+/// (e.g. `redstone_repeater.rs`'s own `WIRE_ID` constant, a small `BlockStateId` standing in
+/// for "some wire neighbor" without needing a real id) — dispatch through a real
+/// `SignalSourceRegistry`/`BlockBehaviorRegistry` range is always in-range by construction, but
+/// this guard keeps every such test double safe too (a cheap range-containment check never panics, unlike a full
+/// `block_of` property decode of an out-of-bounds id), leaving its placeholder id untouched
+/// rather than attempting arithmetic that assumes a real one.
 fn is_wire_range(raw: u32) -> bool {
-    (WIRE_BASE..=WIRE_MAX).contains(&raw)
+    let range = range_of(block_id::REDSTONE_WIRE);
+    (range.first.0..=range.last.0).contains(&raw)
 }
 
-/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
-/// field-report fix, "production never wires redstone"): exposes this module's own already
-/// oracle-verified `WIRE_BASE`/`WIRE_MAX` constants above, rather than duplicating them a second
-/// time the way `crates/testing/gametest/src/replay.rs`'s own `WIRE_RANGE` constant currently
-/// does.
-pub(crate) fn state_range() -> (u32, u32) {
-    (WIRE_BASE, WIRE_MAX)
-}
-
-/// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
-/// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
-/// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency
-/// (WS-D3 rule 1).
-const AIR_ID: BlockStateId = BlockStateId(0);
+/// `air`'s own raw id (M3 field-report fix, Task 1) — M3.5-B02: read off `rc-registries`' own
+/// generated `default_state::AIR` constant (value unchanged, `0`) now that this crate already
+/// depends on `rc-registries` normally, instead of a bare hardcoded literal.
+const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
 /// `RedStoneWireBlock::canSurvive` (Context/research doc §3.1/Notes): a wire tile requires a
 /// conductor directly beneath it. Mirrors `TorchBehavior::should_pop`'s identical role/shape.
@@ -142,44 +144,47 @@ fn side_index(shape: WireSideShape) -> u32 {
     }
 }
 
-fn wire_state_id(east: u32, north: u32, power: u8, south: u32, west: u32) -> BlockStateId {
-    BlockStateId(
-        WIRE_BASE
-            + east * WIRE_STRIDE_EAST
-            + north * WIRE_STRIDE_NORTH
-            + u32::from(power) * WIRE_STRIDE_POWER
-            + south * WIRE_STRIDE_SOUTH
-            + west * WIRE_STRIDE_WEST,
-    )
-}
-
-/// Inverse of `wire_state_id` — `raw` must already be known to lie in wire's own real range
-/// (dispatch only ever reaches this behavior through that registered range), so every
-/// intermediate index below is guaranteed in-bounds without needing to check.
+/// M3.5-B02 (WS-D15): built on the generated registry's own name-based `properties` API
+/// instead of hand-derived subtract+div/mod arithmetic. `raw` must
+/// already be known to lie in wire's own real range (dispatch only ever reaches this behavior
+/// through that registered range, `is_wire_range`'s own doc comment) — `properties` panics
+/// otherwise.
 fn wire_decode(raw: u32) -> (u32, u32, u8, u32, u32) {
-    let rel = raw - WIRE_BASE;
-    let east = rel / WIRE_STRIDE_EAST;
-    let rel = rel % WIRE_STRIDE_EAST;
-    let north = rel / WIRE_STRIDE_NORTH;
-    let rel = rel % WIRE_STRIDE_NORTH;
-    let power = (rel / WIRE_STRIDE_POWER) as u8;
-    let rel = rel % WIRE_STRIDE_POWER;
-    let south = rel / WIRE_STRIDE_SOUTH;
-    let west = rel % WIRE_STRIDE_SOUTH;
+    let props = properties(GenStateId(raw));
+    let value_of = |name: &str| -> &str {
+        props
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| *v)
+            .unwrap_or_else(|| panic!("wire_decode: raw id {raw} has no {name} property"))
+    };
+    let side_idx = |name: &str| side_index(wire_side_from_str(value_of(name)));
+    let east = side_idx("east");
+    let north = side_idx("north");
+    let power: u8 = value_of("power").parse().unwrap_or_else(|_| {
+        panic!("wire_decode: raw id {raw}'s own power property is not 0 through 15")
+    });
+    let south = side_idx("south");
+    let west = side_idx("west");
     (east, north, power, south, west)
 }
 
-/// `on_neighbor_changed`'s own writeback: replaces only the `power` digit, decoding and
-/// re-encoding every connection digit unchanged (preserves a pre-existing `up` bit exactly,
-/// `side_index`'s own doc comment).
+/// `on_neighbor_changed`'s own writeback: replaces only the `power` digit, leaving every other
+/// property exactly as `current_raw` already has it (preserves a pre-existing `up` bit exactly,
+/// `side_index`'s own doc comment) — M3.5-B02 (WS-D15): `with_property`'s own contract is
+/// precisely this "leave every other property unchanged" writeback, so this is a direct match.
 fn new_power_state_id(current_raw: u32, power: u8) -> BlockStateId {
-    let (east, north, _old_power, south, west) = wire_decode(current_raw);
-    wire_state_id(east, north, power, south, west)
+    let id = with_property(GenStateId(current_raw), "power", &power.to_string()).expect(
+        "new_power_state_id: power is always a legal minecraft:redstone_wire property value \
+         (0 through 15)",
+    );
+    BlockStateId(id.0)
 }
 
 /// `on_shape_update`'s own writeback: replaces every connection digit with the freshly
 /// recomputed 3-way shape (`side_index`'s own `up`/`side`/`none` encoding), preserving whatever
-/// `power` digit the position's own current raw id already holds.
+/// `power` digit the position's own current raw id already holds — M3.5-B02 (WS-D15): four
+/// chained `with_property` calls, one per changed digit, `power` untouched by construction.
 fn new_connections_state_id(
     current_raw: u32,
     east: WireSideShape,
@@ -187,14 +192,18 @@ fn new_connections_state_id(
     south: WireSideShape,
     west: WireSideShape,
 ) -> BlockStateId {
-    let (_east, _north, power, _south, _west) = wire_decode(current_raw);
-    wire_state_id(
-        side_index(east),
-        side_index(north),
-        power,
-        side_index(south),
-        side_index(west),
-    )
+    let mut id = GenStateId(current_raw);
+    for (name, shape) in [
+        ("east", east),
+        ("north", north),
+        ("south", south),
+        ("west", west),
+    ] {
+        id = with_property(id, name, wire_side_str(shape)).unwrap_or_else(|| {
+            panic!("new_connections_state_id: {name}={shape:?} is a legal wire property value")
+        });
+    }
+    BlockStateId(id.0)
 }
 
 /// "Does this side connect at all," per direction — `weak_signal_toward`'s own output-gating
@@ -477,9 +486,9 @@ impl WireBehavior {
         WireSideShape::None
     }
 
-    /// The 3-way shape for all four horizontal sides, in `east/north/south/west` order (matching
-    /// `wire_state_id`'s own parameter order) -- the read side `on_shape_update` needs for its
-    /// own state-id writeback (M3 field-report fix, Task 4). Finishes with vanilla's own
+    /// The 3-way shape for all four horizontal sides, in `east/north/south/west` order -- the
+    /// read side `on_shape_update` needs for its own state-id writeback (M3 field-report fix,
+    /// Task 4). Finishes with vanilla's own
     /// `RedStoneWireBlock.getConnectionState` post-processing pass (M3 field-report fix, Task 1
     /// -- closes the "isolated wire auto-extends to a straight line" gap
     /// `docs/findings-for-planning.md` names for this exact fixture): per axis, a side that is

@@ -332,11 +332,6 @@ impl rc_chunk_storage::BlockEntityCodec for HopperBlockEntity {
 pub(crate) const HOPPER_BASE: u32 = 11313;
 pub(crate) const HOPPER_MAX: u32 = 11322;
 
-/// `dispatch_ranges::derive_hopper_state_ids`'s own read side (mirrors `wire::state_range`/
-/// `piston::state_range`'s identical role).
-pub(crate) fn state_range() -> (u32, u32) {
-    (HOPPER_BASE, HOPPER_MAX)
-}
 
 /// `true` iff `raw` (must be a real hopper id, `HOPPER_BASE..=HOPPER_MAX`) encodes
 /// `enabled=true` -- the inner `facing` property is stride-1 (`0..=4`), so `enabled` (the

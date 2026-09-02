@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use rc_chunk_storage::BlockStateId;
+use rc_registries::generated_v776::block_states::default_state;
 
 use crate::behavior::{BlockBehavior, BlockBehaviorRegistry};
 use crate::direction::Direction;
@@ -163,9 +164,10 @@ pub fn register_tier1_redstone(
 }
 
 /// `minecraft:redstone_block`'s own single reachable state id (`redstone_block.rs`'s own module
-/// doc comment: blocks.json, protocol 776, `type: "minecraft:powered"`, no properties — the one
-/// `default: true` state, never rewritten).
-pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(11311);
+/// doc comment: `type: "minecraft:powered"`, no properties — the one `default: true` state,
+/// never rewritten). M3.5-B02 (WS-D15): read off `rc-registries`' own generated `default_state`
+/// table (value unchanged, `11311`) instead of a hand-copied literal.
+pub const REDSTONE_BLOCK_STATE_ID: BlockStateId = BlockStateId(default_state::REDSTONE_BLOCK.0);
 
 /// Registers `minecraft:redstone_block` as an always-on `RedstoneSignalSource` (M3 field-report
 /// fix: "nearly every remaining failing contraption is triggered by a redstone_block that

@@ -14,18 +14,17 @@
 //!   against what it held when the plan was resolved. Neither `PushPlan` nor `PullPlan` (both
 //!   externally observed via exact-equality assertions in `piston_structure_resolver.rs`) can
 //!   carry this without breaking those assertions, so it lives here instead.
-//! - A private `classify`-only literal-id table (`DESTROY_IDS`/`BLOCK_ENTITY_IMMOVABLE_IDS`/the
-//!   two `*_EXTENDED_PLACEHOLDER` constants/`PISTON_HEAD_RANGE`) — `classify` has no injected
-//!   registry parameter (Deliverables' own signature), and this crate has no `rc-registries`
-//!   dependency (WS-D3 rule 1), so the tier-1 push/destroy/block table (Context §C) is
-//!   hardcoded directly, exactly mirroring `rc_physics::tier1_shape_table()`'s own identical
-//!   convention. The two extended-piston placeholders still have no real generated-registry id
-//!   to read (Context §I) — flagged for reconciliation once one exists; `piston_head`'s own
-//!   former placeholder range was closed (M3 field-report fix, Task 3: `piston_head_id`'s own
-//!   doc comment has the real arithmetic). The twelve real `piston_head` ids are kept in sync
-//!   by hand with `crates/physics/src/shapes.rs`'s own twelve `tier1_shape_table()` entries
-//!   (Context §D) and with `piston_shape_table.rs`'s own local copy — a cross-file consistency
-//!   note in all three places.
+//! - A private `classify`-only `DESTROY_IDS`/`BLOCK_ENTITY_IMMOVABLE_IDS`/the two
+//!   `*_EXTENDED_PLACEHOLDER` constants table — `classify` has no injected registry parameter
+//!   (Deliverables' own signature), so these stay local literals (M3.5-B02, WS-D15: their own
+//!   values are now read off `rc-registries`' generated `default_state` table, not hand-copied,
+//!   and every real id range `classify` needs -- piston/sticky_piston/piston_head/respawn_
+//!   anchor -- reads directly off that same generated registry via `range_of`/`properties`,
+//!   this crate having depended on `rc-registries` normally since a prior M3 field-report
+//!   changeset). The two extended-piston placeholders still have no real generated-registry id
+//!   to read (Context §I: no real block-state ever needs to represent "an extended piston with
+//!   no other property recorded") — flagged for reconciliation once removing them no longer
+//!   requires editing `piston_structure_resolver.rs`'s own protected test case.
 //!
 //! M3 field-report fix (own-state writeback): `commit_extend`/`commit_retract` now write the
 //! piston base's own real `EXTENDED` `BlockStateId` (`piston_state_id`, arithmetic read
@@ -84,6 +83,9 @@ use std::sync::{Arc, Mutex};
 
 use rc_chunk_storage::{BlockStateId, RegistryId};
 use rc_core::BlockPos;
+use rc_registries::block_state_properties::{block_of, properties, range_of, state_id};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEvent;
@@ -106,15 +108,10 @@ pub const COMMIT_DELAY_TICKS: u64 = 2;
 /// `PistonStructureResolver.MAX_PUSH_DEPTH` (Context §C).
 pub const MAX_PUSH_DEPTH: usize = 12;
 
-/// `air`'s own raw id (Context §E) — stable by protocol convention (`rc_physics::shapes`'s
-/// identical documented assumption), hardcoded directly since this crate has no
-/// `rc-registries` dependency (WS-D3 rule 1).
-const AIR_ID: BlockStateId = BlockStateId(0);
-
-/// Bedrock — the one hardcoded `Immovable` literal beyond piston/piston_head/block-entity ids
-/// (Context §C's own table); `rc_registries::generated_v776::block_states::default_state::
-/// BEDROCK`'s real value (85), reused directly (no `rc-registries` dependency, Constraints (b)).
-const BEDROCK_ID: u32 = 85;
+/// `air`'s own raw id (Context §E) — M3.5-B02: read off `rc-registries`' own generated
+/// `default_state::AIR` constant (value unchanged, `0`) now that this crate already depends on
+/// `rc-registries` normally.
+const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
 /// Real vanilla `PistonBaseBlock.isPushable`'s own explicit hardcoded-block-identity exception
 /// list, checked *before* (and independently of) the `getDestroySpeed == -1` rule Context §C's
@@ -125,140 +122,145 @@ const BEDROCK_ID: u32 = 85;
 /// only names bedrock, since obsidian was not yet part of any M3-B02/M3-B03-placed block set at
 /// that blueprint's own authoring time) once the M3 field-report `redstone_block` registration
 /// fix let `redstone/piston/piston_unpushable_obsidian` actually trigger its own piston for the
-/// first time — ids read directly off `datagen-output/26.2/generated/reports/blocks.json`,
-/// protocol 776 (`minecraft:obsidian` 3369, `minecraft:crying_obsidian` 21820,
-/// `minecraft:reinforced_deepslate` 32085, single states each; `minecraft:respawn_anchor`
-/// 21821..=21825, its own five `charges` states, none of which changes pushability).
-const OBSIDIAN_ID: u32 = 3369;
-const CRYING_OBSIDIAN_ID: u32 = 21820;
-const REINFORCED_DEEPSLATE_ID: u32 = 32085;
-const RESPAWN_ANCHOR_RANGE: std::ops::RangeInclusive<u32> = 21821..=21825;
+/// first time — M3.5-B02: every value below now reads off the generated registry's own
+/// `default_state` table (each a single-state block; `minecraft:respawn_anchor`'s own five
+/// `charges` states, none of which changes pushability, are matched via `range_of` in
+/// `classify` below) instead of a hand-copied literal.
+const BEDROCK_ID: u32 = default_state::BEDROCK.0;
+const OBSIDIAN_ID: u32 = default_state::OBSIDIAN.0;
+const CRYING_OBSIDIAN_ID: u32 = default_state::CRYING_OBSIDIAN.0;
+const REINFORCED_DEEPSLATE_ID: u32 = default_state::REINFORCED_DEEPSLATE.0;
 
 /// The tier-1 `Destroy`-class ids (Context §C): redstone wire/torch/wall-torch/repeater/
 /// comparator — the same literals `rc_physics::tier1_shape_table()` already hardcodes for
-/// these same five blocks.
-const DESTROY_IDS: [u32; 5] = [5171, 6885, 6887, 7037, 11264];
+/// these same five blocks. M3.5-B02: an exact-equality-preserving swap to the generated
+/// registry's own `default_state` values, never widened to a `block_of`-based full-per-block
+/// range match (Constraints (e): a piston pushing a non-default-substate redstone component is
+/// a real, more-vanilla-correct gap, but a behavior change out of this changeset's "no behavior
+/// change" mandate — flagged in `docs/findings-for-planning.md` instead of decided here).
+const DESTROY_IDS: [u32; 5] = [
+    default_state::REDSTONE_WIRE.0,
+    default_state::REDSTONE_TORCH.0,
+    default_state::REDSTONE_WALL_TORCH.0,
+    default_state::REPEATER.0,
+    default_state::COMPARATOR.0,
+];
 
 /// The tier-1 block-entity `Immovable` ids (Context §C): chest/furnace/blast_furnace/smoker/
 /// hopper — identical literals to `rc_physics::tier1_shape_table()`'s own entries for these
-/// blocks.
-const BLOCK_ENTITY_IMMOVABLE_IDS: [u32; 5] = [3988, 5328, 20763, 20755, 11313];
+/// blocks. M3.5-B02: exact-equality-preserving swap, same rationale as `DESTROY_IDS` above.
+const BLOCK_ENTITY_IMMOVABLE_IDS: [u32; 5] = [
+    default_state::CHEST.0,
+    default_state::FURNACE.0,
+    default_state::BLAST_FURNACE.0,
+    default_state::SMOKER.0,
+    default_state::HOPPER.0,
+];
 
 /// Placeholder literals for an *extended* piston/sticky-piston base (Context §C's own
-/// "Immovable, deliberate bounded M3 deviation" row) — this project has no generated per-
-/// property-combination registry (Context §I), so there is no real distinct id to read here;
-/// `PistonBehavior`'s own `BlockBehaviorRegistry` range covers both retracted and extended
-/// states without ever needing this distinction (`PistonStateIds`' own doc comment), so these
-/// two constants exist solely for `classify`'s own literal-id table and this blueprint's own
-/// `classify_matches_tier1_table` acceptance test — flagged for reconciliation once a real
-/// per-state-id registry exists.
+/// "Immovable, deliberate bounded M3 deviation" row) — M3.5-B02 leaves these two constants in
+/// place exactly as before (Constraints (f)): `classify`'s own real-extended-id checks below
+/// now recognize a real extended piston base directly (a real per-property registry exists as
+/// of this blueprint), so these two placeholders are never produced by this module's own
+/// writes any more, but `piston_structure_resolver.rs`'s own protected `PISTON_EXTENDED`
+/// acceptance test still exercises them directly — removing them requires editing that
+/// protected test file, out of this changeset's reach; flagged in
+/// `docs/findings-for-planning.md`.
 const PISTON_EXTENDED_PLACEHOLDER: u32 = 900_101;
 const STICKY_PISTON_EXTENDED_PLACEHOLDER: u32 = 900_102;
 
-/// `minecraft:piston_head`'s own real id range (M3 field-report fix, Task 3: own-state
-/// writeback -- closes this module's own former placeholder-literal gap; ids read directly off
-/// `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:piston_head` entry,
-/// protocol 776). Three properties: `type` (`[normal,sticky]`) fastest-varying, stride 1; then
-/// `short` (`[true,false]`), stride 2; then `facing` (`[north,east,south,west,up,down]`,
-/// `piston_facing_index`'s own identical order), stride 4 -- `id = PISTON_HEAD_BASE +
-/// piston_facing_index(facing)*4 + short_idx*2 + type_idx` (`short_idx`: `true` -> `0`,
-/// `false` -> `1`; `type_idx`: `normal` -> `0`, `sticky` -> `1`). `classify`'s own Immovable
-/// check matches the *whole* reachable range (`PISTON_HEAD_RANGE`, including `short=true`,
-/// never itself written by this module but still a real reachable id), matching every other
-/// tier-1 component's own "match the full reachable id space" convention; `piston_head_id`
-/// itself only ever produces a `short=false` id (this module's own writes never model an
-/// intermediate `MOVING_PISTON` placeholder, Context §D/§E).
-const PISTON_HEAD_BASE: u32 = 2269;
-const PISTON_HEAD_RANGE: std::ops::RangeInclusive<u32> = 2269..=2292;
-
-/// Own-state id arithmetic for `minecraft:piston`/`minecraft:sticky_piston` (M3 field-report
-/// fix: own-state writeback, closing this module's own top-of-file "further deviation" note --
-/// WS-D15's generated per-property registry is still future work, so these two constants are
-/// read directly off `datagen-output/26.2/generated/reports/blocks.json`'s own
-/// `minecraft:piston`/`minecraft:sticky_piston` entries, protocol 776). `extended`
-/// (`[true,false]`, blocks.json order) is the slower-varying property, stride 6; then `facing`
-/// (`[north,east,south,west,up,down]`, blocks.json's own listed order -- the same
-/// `piston_facing_index` convention `piston_head_id` above now shares), stride 1.
-const PISTON_BASE: u32 = 2257; // extended=true, facing=north
-const STICKY_PISTON_BASE: u32 = 2235; // extended=true, facing=north
-/// Inclusive upper bounds -- 12 reachable states each (`extended`(2) x `facing`(6)); also
-/// directly consistent with `PISTON_HEAD_BASE`'s own doc comment above (`PISTON_MAX + 1 ==
-/// PISTON_HEAD_BASE == 2269`, the next block's own range starting immediately where this one
-/// ends, per this crate's own contiguous-block-state-range convention).
-const PISTON_MAX: u32 = PISTON_BASE + 11;
-const STICKY_PISTON_MAX: u32 = STICKY_PISTON_BASE + 11;
-
-fn piston_facing_index(d: Direction) -> u32 {
+fn piston_facing_str(d: Direction) -> &'static str {
     match d {
-        Direction::North => 0,
-        Direction::East => 1,
-        Direction::South => 2,
-        Direction::West => 3,
-        Direction::Up => 4,
-        Direction::Down => 5,
+        Direction::North => "north",
+        Direction::East => "east",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::Up => "up",
+        Direction::Down => "down",
     }
 }
 
+fn piston_facing_from_str(s: &str) -> Direction {
+    match s {
+        "north" => Direction::North,
+        "east" => Direction::East,
+        "south" => Direction::South,
+        "west" => Direction::West,
+        "up" => Direction::Up,
+        "down" => Direction::Down,
+        other => panic!("piston_facing_from_str: unrecognized piston facing value {other:?}"),
+    }
+}
+
+fn piston_extended_str(extended: bool) -> &'static str {
+    if extended { "true" } else { "false" }
+}
+
+/// M3.5-B02 (WS-D15): built on the generated registry's own name-based `state_id` API instead
+/// of hand-derived stride arithmetic.
 fn piston_state_id(sticky: bool, extended: bool, facing: Direction) -> BlockStateId {
-    let base = if sticky {
-        STICKY_PISTON_BASE
+    let block = if sticky {
+        block_id::STICKY_PISTON
     } else {
-        PISTON_BASE
+        block_id::PISTON
     };
-    let extended_idx = u32::from(!extended);
-    BlockStateId(base + extended_idx * 6 + piston_facing_index(facing))
-}
-
-/// The exact inverse of `piston_facing_index` (Context §D/§E's own `[north, east, south, west,
-/// up, down]` order) — `idx` must be `0..6`, always true for both `decode_piston_state` call
-/// sites below (`rel % 6` off a real piston/sticky_piston raw id).
-fn piston_facing_from_index(idx: u32) -> Direction {
-    match idx {
-        0 => Direction::North,
-        1 => Direction::East,
-        2 => Direction::South,
-        3 => Direction::West,
-        4 => Direction::Up,
-        _ => Direction::Down,
-    }
+    let id = state_id(
+        block,
+        &[
+            ("extended", piston_extended_str(extended)),
+            ("facing", piston_facing_str(facing)),
+        ],
+    )
+    .expect("piston_state_id: every (sticky,extended,facing) combination is legal");
+    BlockStateId(id.0)
 }
 
 /// The exact inverse of `piston_state_id` — `on_placed`'s own decode-from-raw-id step (M3
 /// field-report fix, "a piston placed by an actual connected player is never wired into
 /// `PistonBehavior`'s own internal per-position state" — `docs/findings-for-planning.md`'s own
 /// matching entry), mirroring `RepeaterBehavior::on_placed`/`ComparatorBehavior::on_placed`'s
-/// already-established decode-from-raw-id pattern. Returns `(sticky, extended, facing)`, or
-/// `None` if `raw` falls outside both `[PISTON_BASE, PISTON_MAX]` and `[STICKY_PISTON_BASE,
-/// STICKY_PISTON_MAX]` (defensive only — `register_piston` only ever registers exactly these two
+/// already-established decode-from-raw-id pattern. M3.5-B02: `sticky` is now read via `block_of`
+/// (disambiguating `minecraft:piston` from `minecraft:sticky_piston` directly), `extended`/
+/// `facing` via `properties`. Returns `None` if `raw` is neither a real piston nor
+/// sticky_piston id (defensive only — `register_piston` only ever registers exactly these two
 /// ranges, so dispatch never reaches `on_placed` with any other id).
 fn decode_piston_state(raw: u32) -> Option<(bool, bool, Direction)> {
-    let (sticky, base) = if (STICKY_PISTON_BASE..=STICKY_PISTON_MAX).contains(&raw) {
-        (true, STICKY_PISTON_BASE)
-    } else if (PISTON_BASE..=PISTON_MAX).contains(&raw) {
-        (false, PISTON_BASE)
+    let block = block_of(GenStateId(raw));
+    let sticky = if block == block_id::STICKY_PISTON {
+        true
+    } else if block == block_id::PISTON {
+        false
     } else {
         return None;
     };
-    let rel = raw - base;
-    // `piston_state_id`'s own `extended_idx = u32::from(!extended)` encoding, restated in
-    // reverse: `rel < 6` means `extended_idx == 0`, i.e. `extended == true`.
-    let extended = rel < 6;
-    let facing = piston_facing_from_index(rel % 6);
+    let props = properties(GenStateId(raw));
+    let value_of = |name: &str| -> &str {
+        props
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| *v)
+            .unwrap_or_else(|| panic!("decode_piston_state: raw id {raw} has no {name} property"))
+    };
+    let extended = value_of("extended") == "true";
+    let facing = piston_facing_from_str(value_of("facing"));
     Some((sticky, extended, facing))
 }
 
 /// The settled `piston_head` block for `facing`/`sticky` (Context §D/§E) — the real id a commit
-/// writes at the head's landing position (`PISTON_HEAD_BASE`'s own doc comment has the full
-/// arithmetic citation). Always `short=false` (`short_idx = 1`) — this module's own writes never
-/// model an intermediate `MOVING_PISTON` placeholder.
+/// writes at the head's landing position. Always `short=false` — this module's own writes never
+/// model an intermediate `MOVING_PISTON` placeholder. M3.5-B02: built on the generated
+/// registry's own name-based `state_id` API instead of hand-derived stride arithmetic.
 fn piston_head_id(facing: Direction, sticky: bool) -> BlockStateId {
-    const SHORT_FALSE_IDX: u32 = 1;
-    BlockStateId(
-        PISTON_HEAD_BASE
-            + piston_facing_index(facing) * 4
-            + SHORT_FALSE_IDX * 2
-            + u32::from(sticky),
+    let id = state_id(
+        block_id::PISTON_HEAD,
+        &[
+            ("facing", piston_facing_str(facing)),
+            ("short", "false"),
+            ("type", if sticky { "sticky" } else { "normal" }),
+        ],
     )
+    .expect("piston_head_id: every (facing,sticky) combination is legal");
+    BlockStateId(id.0)
 }
 
 /// `true` iff `pos` holds no block at all (unloaded) or the literal `air` id (Context §C: "Air
@@ -318,19 +320,39 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
     // alongside this (never produced by this module's own writes anymore, but
     // `piston_structure_resolver.rs`'s own `PISTON_EXTENDED` acceptance test still exercises
     // them directly) rather than being removed outright.
-    let is_real_extended_piston = (PISTON_BASE..PISTON_BASE + 6).contains(&raw);
-    let is_real_extended_sticky_piston =
-        (STICKY_PISTON_BASE..STICKY_PISTON_BASE + 6).contains(&raw);
+    //
+    // M3.5-B02 (WS-D15): each check's own cheap `range_of`-based bound test runs FIRST, short-
+    // circuiting the `properties()` decode -- `raw` here can be one of the two large synthetic
+    // placeholder sentinels above (`900_101`/`900_102`, `piston_structure_resolver.rs`'s own
+    // acceptance test), far outside the generated registry's own total state-id space, and
+    // `properties`/`block_of` panic on an out-of-bounds id (this module's own established
+    // `is_wire_range`-style safe-bound-check-first convention, mirrored from `wire.rs`).
+    let is_real_extended_piston = {
+        let range = range_of(block_id::PISTON);
+        (range.first.0..=range.last.0).contains(&raw)
+            && properties(GenStateId(raw))
+                .iter()
+                .any(|(name, value)| *name == "extended" && *value == "true")
+    };
+    let is_real_extended_sticky_piston = {
+        let range = range_of(block_id::STICKY_PISTON);
+        (range.first.0..=range.last.0).contains(&raw)
+            && properties(GenStateId(raw))
+                .iter()
+                .any(|(name, value)| *name == "extended" && *value == "true")
+    };
+    let piston_head_range = range_of(block_id::PISTON_HEAD);
+    let respawn_anchor_range = range_of(block_id::RESPAWN_ANCHOR);
     if raw == BEDROCK_ID
         || raw == OBSIDIAN_ID
         || raw == CRYING_OBSIDIAN_ID
         || raw == REINFORCED_DEEPSLATE_ID
-        || RESPAWN_ANCHOR_RANGE.contains(&raw)
+        || (respawn_anchor_range.first.0..=respawn_anchor_range.last.0).contains(&raw)
         || raw == PISTON_EXTENDED_PLACEHOLDER
         || raw == STICKY_PISTON_EXTENDED_PLACEHOLDER
         || is_real_extended_piston
         || is_real_extended_sticky_piston
-        || PISTON_HEAD_RANGE.contains(&raw)
+        || (piston_head_range.first.0..=piston_head_range.last.0).contains(&raw)
         || BLOCK_ENTITY_IMMOVABLE_IDS.contains(&raw)
     {
         return PushClass::Immovable;
@@ -1122,18 +1144,6 @@ impl BlockBehavior for PistonBehavior {
 pub struct PistonStateIds {
     pub piston: (BlockStateId, BlockStateId),
     pub sticky_piston: (BlockStateId, BlockStateId),
-}
-
-/// `[min, max]` inclusive for `minecraft:piston` (`sticky = false`) or `minecraft:sticky_piston`
-/// (`sticky = true`) -- `dispatch_ranges::derive_piston_state_ids`'s own read side (M3
-/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
-/// identical role (`crates/mechanics/src/redstone/wire.rs`).
-pub(crate) fn state_range(sticky: bool) -> (u32, u32) {
-    if sticky {
-        (STICKY_PISTON_BASE, STICKY_PISTON_MAX)
-    } else {
-        (PISTON_BASE, PISTON_MAX)
-    }
 }
 
 /// Constructs one fresh `PistonBehavior` and registers it into `behaviors` at both of `ids`'

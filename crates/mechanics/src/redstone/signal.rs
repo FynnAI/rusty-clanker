@@ -352,37 +352,38 @@ pub fn notify_shape_update_at(ctx: &mut UpdateContext, target: BlockPos, from: D
     }
 }
 
-/// A diode's own `facing` property, as blocks.json's own `minecraft:repeater`/
-/// `minecraft:comparator` entries list it (`[north, south, west, east]`) -- shared between
-/// `repeater.rs`'s and `comparator.rs`'s own own-state id arithmetic (M3 field-report fix; WS-D15's
-/// generated per-property registry is future work), since both components' `facing` property
-/// uses this identical order/stride.
-pub(crate) fn diode_facing_index(facing: Direction) -> u32 {
+/// A diode's own `facing` property value, as `minecraft:repeater`/`minecraft:comparator`'s own
+/// generated per-block-state-property registry entries spell it -- shared between
+/// `repeater.rs`'s and `comparator.rs`'s own own-state id arithmetic (M3.5-B02, WS-D15: the
+/// generated per-property registry's `state_id`/`with_property`/`properties` API replaced the
+/// former hand-derived `diode_facing_index` stride arithmetic this pair of functions used to
+/// be), since both components' `facing` property shares this identical string spelling. Ordinary
+/// property-value string mapping, not itself an id table (`blueprints/M3.5/
+/// M3.5-B02-retire-hand-authored-id-tables.md` §3.2).
+pub(crate) fn diode_facing_str(facing: Direction) -> &'static str {
     match facing {
-        Direction::North => 0,
-        Direction::South => 1,
-        Direction::West => 2,
-        Direction::East => 3,
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::East => "east",
         Direction::Up | Direction::Down => {
-            panic!("diode_facing_index: a diode's own facing is always horizontal, got {facing:?}")
+            panic!("diode_facing_str: a diode's own facing is always horizontal, got {facing:?}")
         }
     }
 }
 
-/// Inverse of `diode_facing_index` (M3 field-report fix, Task 2) — recovers a diode's own
-/// `facing` from its own stored `BlockStateId`'s facing digit, the read-side companion
-/// `RepeaterBehavior::on_placed`/`ComparatorBehavior::on_placed` need to reseed their own
-/// facing side-table directly off a freshly-(re)placed position's real id, without requiring an
-/// explicit `place()` call from the caller. Panics on an out-of-range index (`0..=3` only,
-/// mirroring `diode_facing_index`'s own panic contract) — every real caller derives `index` via
-/// `% 4` arithmetic on a position already known to be a diode, so this can never actually fire.
-pub(crate) fn diode_facing_from_index(index: u32) -> Direction {
-    match index {
-        0 => Direction::North,
-        1 => Direction::South,
-        2 => Direction::West,
-        3 => Direction::East,
-        other => panic!("diode_facing_from_index: index must be 0..=3, got {other}"),
+/// Inverse of `diode_facing_str` (M3 field-report fix, Task 2) — recovers a diode's own
+/// `facing` from its own stored `BlockStateId`'s decoded `facing` property, the read-side
+/// companion `RepeaterBehavior::on_placed`/`ComparatorBehavior::on_placed` need to reseed their
+/// own facing side-table directly off a freshly-(re)placed position's real id, without requiring
+/// an explicit `place()` call from the caller.
+pub(crate) fn diode_facing_from_str(value: &str) -> Direction {
+    match value {
+        "north" => Direction::North,
+        "south" => Direction::South,
+        "west" => Direction::West,
+        "east" => Direction::East,
+        other => panic!("diode_facing_from_str: unrecognized diode facing value {other:?}"),
     }
 }
 

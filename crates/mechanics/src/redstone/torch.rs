@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
+use rc_registries::block_state_properties::{properties, range_of, state_id, with_property};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, UpdateContext};
 use crate::direction::Direction;
@@ -12,6 +15,20 @@ use crate::scheduled_tick::TickPriority;
 use crate::world_access::BlockWorldAccess;
 
 use super::signal::{self, RedstoneSignalSource, SignalSourceRegistry};
+
+fn torch_facing_from_str(s: &str) -> Direction {
+    match s {
+        "north" => Direction::North,
+        "south" => Direction::South,
+        "west" => Direction::West,
+        "east" => Direction::East,
+        other => panic!("torch_facing_from_str: unrecognized wall-torch facing value {other:?}"),
+    }
+}
+
+fn lit_str(lit: bool) -> &'static str {
+    if lit { "true" } else { "false" }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TorchAttachment {
@@ -35,69 +52,22 @@ struct TorchState {
     burnt_out: bool,
 }
 
-/// Own-state id arithmetic (M3 field-report fix: own-state writeback; WS-D15's generated
-/// per-property registry is future work, so these constants are read directly off
-/// `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:redstone_torch`/
-/// `minecraft:redstone_wall_torch` entries, protocol 776). Floor torch has a single `lit`
-/// property (`[true, false]`, blocks.json order): `id = TORCH_FLOOR_BASE + lit_idx`
-/// (`lit_idx`: `true` -> `0`, `false` -> `1`; state 6885 = `lit=true`, 6886 = `lit=false`).
-/// Wall torch adds `facing` (`[north, south, west, east]`, blocks.json's own listed order) as
-/// the slower-varying property, stride 2: `id = TORCH_WALL_BASE + facing_idx*2 + lit_idx`
-/// (6887 = north/lit=true .. 6894 = east/lit=false).
-const TORCH_FLOOR_BASE: u32 = 6885;
-const TORCH_WALL_BASE: u32 = 6887;
-/// Inclusive upper bound -- floor torch has exactly 2 reachable states (`lit` boolean only),
-/// this doc comment's own arithmetic above ("state 6885 = lit=true, 6886 = lit=false").
-const TORCH_FLOOR_MAX: u32 = 6886;
-/// Inclusive upper bound -- wall torch has exactly 8 reachable states (`facing`(4) x `lit`(2)),
-/// this doc comment's own arithmetic above ("6887 = north/lit=true .. 6894 = east/lit=false").
-const TORCH_WALL_MAX: u32 = 6894;
-
-/// `[min, max]` inclusive for the floor variant -- `dispatch_ranges::derive_tier1_state_ids`'s
-/// own read side (M3 field-report fix, "production never wires redstone"), mirroring `wire::
-/// state_range`'s identical role.
-pub(crate) fn floor_state_range() -> (u32, u32) {
-    (TORCH_FLOOR_BASE, TORCH_FLOOR_MAX)
-}
-
-/// `[min, max]` inclusive for the wall variant -- same role as `floor_state_range` above.
-pub(crate) fn wall_state_range() -> (u32, u32) {
-    (TORCH_WALL_BASE, TORCH_WALL_MAX)
-}
-
-/// `true` iff `raw` is a real `minecraft:redstone_wall_torch` id (`TORCH_WALL_BASE..=
-/// TORCH_WALL_MAX`) -- `TorchBehavior::attachment_at`'s own guard, mirroring `wire.rs`'s
+/// M3.5-B02 (WS-D15): `true` iff `raw` falls inside `minecraft:redstone_wall_torch`'s own real
+/// generated id range -- `TorchBehavior::attachment_at`'s own guard, mirroring `wire.rs`'s
 /// documented `is_wire_range` convention: keeps a `Wall`-constructed behavior safe against a
 /// unit test's own small placeholder id (`wall_torch_reads_from_its_attach_direction`'s own
 /// `TORCH_ID = BlockStateId(1)`, standing in for "some wall torch" without needing a real id) as
 /// well as a position with nothing stored yet, falling back to the constructor's own `attachment`
 /// in both cases rather than attempting arithmetic that assumes a real one.
 fn is_wall_range(raw: u32) -> bool {
-    (TORCH_WALL_BASE..=TORCH_WALL_MAX).contains(&raw)
+    let range = range_of(block_id::REDSTONE_WALL_TORCH);
+    (range.first.0..=range.last.0).contains(&raw)
 }
 
-/// Inverse of this module's own `facing_idx*2` encoding above -- a wall torch's own `facing`
-/// property, in blocks.json's own listed order (this module's own top-of-file doc comment:
-/// `[north, south, west, east]`). Kept local to this module (this changeset's ownership is
-/// scoped to `torch.rs`/`registration.rs`) even though the digit order happens to coincide with
-/// `signal::diode_facing_index`'s -- a wall torch's `facing` and a diode's `facing` are unrelated
-/// properties on unrelated blocks that merely share blocks.json's alphabetical enum-value
-/// convention, not a real shared concept worth coupling the two modules over.
-fn wall_facing_from_index(index: u32) -> Direction {
-    match index {
-        0 => Direction::North,
-        1 => Direction::South,
-        2 => Direction::West,
-        3 => Direction::East,
-        other => panic!("wall_facing_from_index: index must be 0..=3, got {other}"),
-    }
-}
-
-/// `air`'s own raw id (M3 field-report fix, Task 1) — stable by protocol convention
-/// (`rc_physics::shapes`'s identical documented assumption, `piston.rs`'s own identical
-/// `AIR_ID` convention), hardcoded directly since this crate has no `rc-registries` dependency
-/// (WS-D3 rule 1).
-const AIR_ID: BlockStateId = BlockStateId(0);
+/// `air`'s own raw id (M3 field-report fix, Task 1) — M3.5-B02: read off `rc-registries`' own
+/// generated `default_state::AIR` constant (value unchanged, `0`) now that this crate already
+/// depends on `rc-registries` normally.
+const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
 /// Redstone torch (Context §E). One instance per region (Context §I).
 pub struct TorchBehavior {
@@ -163,8 +133,14 @@ impl TorchBehavior {
         };
         match world.get_block(pos) {
             Some(current) if is_wall_range(current.0) => {
-                let facing_idx = (current.0 - TORCH_WALL_BASE) / 2;
-                TorchAttachment::Wall(wall_facing_from_index(facing_idx))
+                let facing_str = properties(GenStateId(current.0))
+                    .iter()
+                    .find(|(name, _)| *name == "facing")
+                    .map(|(_, v)| *v)
+                    .unwrap_or_else(|| {
+                        panic!("attachment_at: raw id {} has no facing property", current.0)
+                    });
+                TorchAttachment::Wall(torch_facing_from_str(facing_str))
             }
             _ => self.attachment,
         }
@@ -195,22 +171,23 @@ impl TorchBehavior {
     }
 
     /// This own-state writeback's new `BlockStateId` for `lit` (M3 field-report fix). Floor: a
-    /// pure `lit` encoding, no facing dimension. Wall: this behavior's own shared `attachment`
-    /// field does not track each individual wall torch's real per-position facing
-    /// (`registration.rs`'s own "one representative orientation for the whole registered range"
-    /// scope limitation, Context §I -- no generated per-block-state-property registry exists
-    /// yet) -- so the facing bits are instead recovered from `current_raw`, the position's own
-    /// live raw id immediately before this write (guaranteed already a `TORCH_WALL_BASE`-range
-    /// id, since dispatch only ever reaches this behavior through that same registered range),
-    /// and carried through unchanged; only the `lit` bits are ever replaced here, exactly
-    /// mirroring vanilla's own `state.setValue(LIT, val)` (leaves `FACING` untouched).
+    /// pure `lit` encoding, no facing dimension. Wall: `with_property` leaves every other
+    /// property of `current_raw` -- in particular `facing` -- exactly as it already has it
+    /// (M3.5-B02, WS-D15: this is a direct match for `with_property`'s own contract), so only
+    /// the `lit` bits are ever replaced here, exactly mirroring vanilla's own
+    /// `state.setValue(LIT, val)` (leaves `FACING` untouched).
     fn new_state_id(&self, current_raw: u32, lit: bool) -> BlockStateId {
-        let lit_idx = u32::from(!lit);
         match self.attachment {
-            TorchAttachment::Floor => BlockStateId(TORCH_FLOOR_BASE + lit_idx),
+            TorchAttachment::Floor => {
+                let id = state_id(block_id::REDSTONE_TORCH, &[("lit", lit_str(lit))])
+                    .expect("new_state_id: lit is always a legal minecraft:redstone_torch value");
+                BlockStateId(id.0)
+            }
             TorchAttachment::Wall(_) => {
-                let facing_idx = (current_raw - TORCH_WALL_BASE) / 2;
-                BlockStateId(TORCH_WALL_BASE + facing_idx * 2 + lit_idx)
+                let id = with_property(GenStateId(current_raw), "lit", lit_str(lit)).expect(
+                    "new_state_id: lit is always a legal minecraft:redstone_wall_torch value",
+                );
+                BlockStateId(id.0)
             }
         }
     }

@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
+use rc_registries::block_state_properties::{properties, state_id};
+use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, UpdateContext};
 use crate::direction::Direction;
@@ -31,28 +34,38 @@ struct RepeaterState {
     seeded: bool,
 }
 
-/// Own-state id arithmetic for `minecraft:repeater` (M3 field-report fix: own-state writeback;
-/// WS-D15's generated per-property registry is future work, so this constant is read directly
-/// off `datagen-output/26.2/generated/reports/blocks.json`'s own `minecraft:repeater` entry,
-/// protocol 776, states 7034..=7097). `delay` (`[1,2,3,4]`, blocks.json order) is the
-/// slowest-varying property, stride 16; then `facing` (`signal::diode_facing_index`), stride 4;
-/// then `locked` (`[true,false]`), stride 2; then `powered` (`[true,false]`), stride 1:
-/// `id = 7034 + (delay-1)*16 + facing_idx*4 + locked_idx*2 + powered_idx` (`locked_idx`/
-/// `powered_idx`: `true` -> `0`, `false` -> `1`, blocks.json's own listed value order).
-const REPEATER_BASE: u32 = 7034;
-/// Inclusive upper bound -- this module's own doc comment above already cites the full real
-/// range (`protocol 776, states 7034..=7097`); 64 reachable states (`delay`(4) x `facing`(4) x
-/// `locked`(2) x `powered`(2)).
-const REPEATER_MAX: u32 = 7097;
-/// `air`'s own raw id (M3 field-report fix, Task 3) -- stable by protocol convention
-/// (`wire.rs`'s/`piston.rs`'s own identical documented `AIR_ID` convention).
-const AIR_ID: BlockStateId = BlockStateId(0);
+/// `air`'s own raw id (M3 field-report fix, Task 3) -- M3.5-B02: read off `rc-registries`' own
+/// generated `default_state::AIR` constant (value unchanged, `0`) now that this crate already
+/// depends on `rc-registries` normally.
+const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
-/// `[min, max]` inclusive -- `dispatch_ranges::derive_tier1_state_ids`'s own read side (M3
-/// field-report fix, "production never wires redstone"), mirroring `wire::state_range`'s
-/// identical role.
-pub(crate) fn state_range() -> (u32, u32) {
-    (REPEATER_BASE, REPEATER_MAX)
+/// `true` iff `raw` falls inside `minecraft:repeater`'s own real generated id range
+/// (M3.5-B02, WS-D15) -- mirrors `wire.rs`'s documented `is_wire_range` convention: keeps the
+/// decode-from-raw-id read paths below (`seed_powered_from_world`/`write_state_id`) safe
+/// against this project's own established acceptance-test convention of registering
+/// `RepeaterBehavior` at small arbitrary placeholder ids (e.g. `redstone_repeater.rs`'s own
+/// `REPEATER_ID` constant, a small `BlockStateId`), standing in for "some repeater" without
+/// needing a real id -- a cheap range-containment check never panics, unlike a full
+/// `properties()` decode of an id with no `locked`/`powered` property at all.
+fn is_repeater_range(raw: u32) -> bool {
+    let range = rc_registries::block_state_properties::range_of(block_id::REPEATER);
+    (range.first.0..=range.last.0).contains(&raw)
+}
+
+fn locked_str(locked: bool) -> &'static str {
+    if locked { "true" } else { "false" }
+}
+
+fn powered_str(powered: bool) -> &'static str {
+    if powered { "true" } else { "false" }
+}
+
+fn repeater_property<'a>(props: &'a [(&str, &str)], name: &str, raw: u32) -> &'a str {
+    props
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| panic!("repeater: raw id {raw} has no {name} property"))
 }
 
 fn repeater_state_id(
@@ -61,13 +74,17 @@ fn repeater_state_id(
     locked: bool,
     powered: bool,
 ) -> BlockStateId {
-    BlockStateId(
-        REPEATER_BASE
-            + (delay_setting as u32 - 1) * 16
-            + signal::diode_facing_index(facing) * 4
-            + u32::from(!locked) * 2
-            + u32::from(!powered),
+    let id = state_id(
+        block_id::REPEATER,
+        &[
+            ("delay", &delay_setting.to_string()),
+            ("facing", signal::diode_facing_str(facing)),
+            ("locked", locked_str(locked)),
+            ("powered", powered_str(powered)),
+        ],
     )
+    .expect("repeater_state_id: every (delay,facing,locked,powered) combination is legal");
+    BlockStateId(id.0)
 }
 
 /// Repeater (Context §F). One instance per region (Context §I).
@@ -172,9 +189,11 @@ impl RepeaterBehavior {
             return;
         }
         entry.seeded = true;
-        if let Some(current) = world.get_block(pos) {
-            let bits = current.0.wrapping_sub(REPEATER_BASE) % 4;
-            entry.powered = bits % 2 == 0;
+        if let Some(current) = world.get_block(pos)
+            && is_repeater_range(current.0)
+        {
+            let props = properties(GenStateId(current.0));
+            entry.powered = repeater_property(props, "powered", current.0) == "true";
         }
     }
 
@@ -246,9 +265,15 @@ impl RepeaterBehavior {
         let Some(current) = ctx.get_block(pos) else {
             return;
         };
-        let bits = (current.0.wrapping_sub(REPEATER_BASE)) % 4;
-        let current_locked = bits / 2 == 0;
-        let current_powered = bits % 2 == 0;
+        let (current_locked, current_powered) = if is_repeater_range(current.0) {
+            let props = properties(GenStateId(current.0));
+            (
+                repeater_property(props, "locked", current.0) == "true",
+                repeater_property(props, "powered", current.0) == "true",
+            )
+        } else {
+            (false, false)
+        };
         let facing = self.facing(pos);
         let delay = self.delay_setting(pos);
         let id = repeater_state_id(
@@ -396,12 +421,19 @@ impl BlockBehavior for RepeaterBehavior {
         let Some(current) = ctx.get_block(pos) else {
             return;
         };
-        let rel = current.0.wrapping_sub(REPEATER_BASE);
-        if rel >= 64 {
+        if !is_repeater_range(current.0) {
             return; // not a real repeater id -- defensive only, dispatch never reaches here otherwise
         }
-        let delay_setting = (rel / 16) as u8 + 1;
-        let facing = signal::diode_facing_from_index((rel % 16) / 4);
+        let props = properties(GenStateId(current.0));
+        let delay_setting: u8 = repeater_property(props, "delay", current.0)
+            .parse()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "repeater: raw id {} has a malformed delay property",
+                    current.0
+                )
+            });
+        let facing = signal::diode_facing_from_str(repeater_property(props, "facing", current.0));
         self.place(pos, facing, delay_setting);
     }
 }
