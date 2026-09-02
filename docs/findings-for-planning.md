@@ -1081,6 +1081,78 @@ Entries name the milestone that surfaced them and the code they concern.
   placement path already performs), for every tier-1 component, not only
   comparator's analog output.
 
+- **M3.5-B03: the protocol-differential harness's own normalizer collapses
+  `SetTime`'s entire `clockUpdates` map to a fixed canonical value, not just
+  its values.** `crates/testing/gametest/src/protocol_capture.rs::
+  normalize_set_time` masks the fixed-offset `gameTime` field precisely (TEST-
+  D57-confirmed, `M3.5-B03-CLAIMS.md`), but the real 26.2 shape's own
+  `clockUpdates: Map<Holder<WorldClock>, ClockNetworkState>` that follows is
+  masked wholesale — `ClockNetworkState`'s own wire width is not modeled
+  (no per-field byte layout for it exists anywhere in this project's research
+  corpus), so the decoder cannot safely locate where one entry's value ends
+  and the next key begins, and therefore cannot preserve the map's own *keys*
+  under comparison the way §3.8's literal text asks ("the map's keys...stay
+  unmasked"). The whole map is dropped from the compared bytes instead — the
+  safe direction to fail in (never a byte-alignment guess), but narrower than
+  the blueprint's own stated intent: two `SetTime` packets whose *key set*
+  (which clocks exist) genuinely differs between oracle and ours would
+  currently diff clean instead of failing. Needs a decision: either commission
+  a TEST-D57 pass specifically to pin `ClockNetworkState`'s own wire shape (so
+  the normalizer can be tightened to mask only the values), or explicitly
+  accept this narrower masking as the harness's own permanent behavior for
+  this one packet.
+
+- **M3.5-B03: `PlayerInfoUpdate`'s normalizer bails to a whole-body mask for
+  any player entry carrying a genuine signed chat session or a display-name
+  override** — `try_normalize_player_info_update` (same file) confidently
+  masks `UPDATE_LATENCY` structurally for the common case (`INITIALIZE_CHAT`
+  present with no session, `UPDATE_DISPLAY_NAME` absent), but a player entry
+  whose `INITIALIZE_CHAT`/`UPDATE_DISPLAY_NAME` payload is actually present
+  (nested shapes this decoder does not model — the signed-chat-session
+  record, the optional NBT/JSON text component) collapses that whole packet
+  instance to an empty canonical body rather than being decoded further. Not
+  expected to matter for M3.5-B03's own offline-mode, no-plugin harness
+  session (no bot ever carries a signed chat session or a server-set display
+  name), but would silently hide a real divergence in that field if one
+  existed once a future milestone's own scripted session grows to cover
+  signed chat or display-name overrides. Needs a decision: commission a
+  TEST-D57 pass to pin both nested shapes precisely, or accept the bailout as
+  permanent, narrowly-scoped harness behavior.
+
+- **M3.5-B03: `redstone_wire_capture::classify_cell` ignores the
+  blueprint's own "no same-contraption upstream real source" qualifier** —
+  every cell whose `vanilla_state` carries `extended=true`/`powered=true`/
+  `lit=true`/`triggered=true`, or a nonzero default comparator analog, is
+  classified `SetblockPrelude` unconditionally, never checking whether
+  another cell in the *same* contraption could plausibly drive it there
+  through real, unfrozen redstone propagation instead. A safe over-
+  approximation (a cell that might in fact be real-placement-reachable simply
+  takes the always-available setblock-prelude path too, never a correctness
+  hazard) but a narrower exercise of the real placement wire path than the
+  blueprint's own text describes. Needs a decision: commission the
+  contextual, per-contraption analysis the blueprint's own text originally
+  asked for, or accept the context-free heuristic as permanent.
+
+- **M3.5-B03: real-placement orientation fidelity for the redstone corpus is
+  bounded to the cases this harness confidently models.**
+  `redstone_wire_capture::approach_and_pitch_for` derives a real placement's
+  own bot yaw/pitch from a corpus cell's declared `facing=<direction>`
+  property for the four horizontal directions (any kind) plus up/down (the
+  two pitch-sensitive kinds, `BlockKind::pitch_sensitive` — piston/sticky
+  piston only); every other case (no `facing` property at all, an `up`/`down`
+  target on a kind whose own orientation rule this harness does not
+  confidently model — e.g. a hopper's own facing selection) places with a
+  fixed default approach instead of attempting to match the fixture's own
+  declared orientation. A resulting real placement landing with a different
+  facing than the fixture's own declared `vanilla_state` is still a genuine
+  real placement (never silently "corrected" to force agreement) — but it
+  does mean this pass's own redstone-corpus-over-the-wire captures are not
+  guaranteed to reproduce each fixture's exact declared geometry for kinds
+  outside this bounded model. Needs a decision: commission the research pass
+  needed to pin every tier-1 kind's own real orientation-selection rule
+  precisely (hopper's own facing rule in particular), or accept the current
+  bounded model as permanent for this harness's purposes.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s
