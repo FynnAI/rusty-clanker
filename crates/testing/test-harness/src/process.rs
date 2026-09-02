@@ -48,6 +48,12 @@ pub struct ManagedServerConfig {
     /// inherited — every prior call site (M1-B06, M2-B08), which never sets this,
     /// keeps stdout inherited, unchanged.
     pub capture_stdout: bool,
+    /// New (M3.5-B03): passed as `--debug-hooks` when `true` — widens `main.rs`'s own
+    /// stdin-line reader task to additionally recognize `debug-setblock`/
+    /// `debug-gamemode` (`crates/server/src/main.rs`'s own doc comment has the full
+    /// contract). Default `false`: every pre-existing call site keeps the flag off,
+    /// unchanged. Test/diagnostic only — a production deployment never sets this.
+    pub debug_hooks: bool,
 }
 
 impl ManagedServerConfig {
@@ -66,6 +72,7 @@ impl ManagedServerConfig {
             tick_log: None,
             region_lifecycle: None,
             capture_stdout: false,
+            debug_hooks: false,
         }
     }
 }
@@ -151,6 +158,23 @@ impl ManagedServer {
             None => Vec::new(),
         }
     }
+
+    /// New (M3.5-B03): writes `line` + `\n` to the child's piped stdin (borrowing,
+    /// not consuming, unlike `graceful_shutdown`'s own one-shot `stdin.take()` — this
+    /// is called repeatedly across one session, e.g. once per `debug-setblock`/
+    /// `debug-gamemode` line a test issues). `false` if stdin was never captured or
+    /// is already gone (mirrors `graceful_shutdown`'s own degrade-to-`false`
+    /// contract) — never a panic on a closed pipe.
+    pub fn send_stdin_line(&mut self, line: &str) -> bool {
+        use std::io::Write;
+        let Some(stdin) = self.stdin.as_mut() else {
+            return false;
+        };
+        if writeln!(stdin, "{line}").is_err() {
+            return false;
+        }
+        stdin.flush().is_ok()
+    }
 }
 
 impl Drop for ManagedServer {
@@ -212,6 +236,9 @@ pub fn spawn_server(config: ManagedServerConfig) -> Result<ManagedServer, SpawnE
     }
     if let Some(region_lifecycle) = &config.region_lifecycle {
         command.arg("--region-lifecycle").arg(region_lifecycle);
+    }
+    if config.debug_hooks {
+        command.arg("--debug-hooks");
     }
     command.args(&config.extra_args);
     // M2 integration addition: a real, capturable pipe for `ManagedServer::
