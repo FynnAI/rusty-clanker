@@ -533,6 +533,52 @@ Entries name the milestone that surfaced them and the code they concern.
   confirm `extended: false` is always correct for a freshly-placed real
   piston before wiring it in.
 
+  **(Update, M3 field-report fix wave, "real-player piston placement" task:
+  resolved.)** Confirmed first: production placement (`tier1_oriented_
+  entries()`'s own piston/sticky_piston rows, `crates/server/src/play/
+  mining.rs`) always writes `extended=false` — a freshly-placed real piston
+  is never mid-extend, exactly as this entry asked to have confirmed.
+  `PistonBehavior` now implements `on_placed` (`crates/mechanics/src/
+  redstone/piston.rs`), the `on_placed` override this entry named as the
+  obvious candidate: decodes `facing`/`sticky`/`extended` off the placed id
+  (`decode_piston_state`, the exact inverse of `piston_state_id`) and
+  reseeds via `place` (never duplicated by hand), then runs vanilla's own
+  `PistonBaseBlock.setPlacedBy -> checkIfExtend` once — evaluating the
+  current neighbor signal immediately and queuing a real extend/retract if
+  it disagrees with the freshly-placed state, mirroring what `on_neighbor_
+  changed` does on a genuine transition. No separate production wiring
+  change was needed beyond this: `apply_placement_with_redstone` already
+  calls `behaviors.resolve(state).on_placed(&mut ctx, target)`
+  unconditionally for every placed block (the same call site the "diode
+  re-placement crash risk" fix above added), and `world.rs`'s
+  `bootstrap_redstone_dispatch` already registers `PistonBehavior` into
+  production's `BlockBehaviorRegistry` via `register_piston` — both
+  pre-existing from that same fix wave, simply never reached for piston
+  before because `on_placed` itself was a no-op. The immediate-check step
+  is gated by a new `previously_matched` idempotency check (compares the
+  freshly decoded `facing`/`sticky`/`extended` against whatever this
+  position's own state already held, if any) so `replay.rs`'s own `tier1_
+  registry` pre-scan — which always seeds a piston position with these
+  exact same decoded properties strictly before `place_and_settle`'s own
+  `on_placed` call ever reaches it — never re-triggers the check a second
+  time; the two already-committed "already-extended fixture, triggering
+  signal placed later in the same batch" corpus fixtures this entry's own
+  sibling fix addressed keep settling identically (`parity-check redstone`
+  confirmed 52/52 unchanged). Real-client-verified end-to-end
+  (`crates/server/tests/play_redstone_field_report.rs`'s two new tests): a
+  real player places a retracted piston, then a redstone torch adjacent to
+  it — the piston extends and the head settles, both reaching a passive
+  bystander with no further player action; breaking the torch retracts it
+  the same way; a sticky variant with a stone placed in front of the
+  settled head pulls that stone back on retract. A mechanics-level suite
+  (`crates/mechanics/tests/piston_on_placed.rs`) covers `on_placed`
+  directly: a fresh unpowered placement fires nothing, a fresh placement
+  beside an already-active signal extends immediately, a pre-seeded
+  re-placement with identical properties is a genuine no-op, and a
+  re-placement with *different* properties (simulating a stale leftover
+  entry from an earlier, unrelated placement at the same position) still
+  runs the immediate check.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
