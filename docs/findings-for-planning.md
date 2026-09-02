@@ -638,6 +638,28 @@ Entries name the milestone that surfaced them and the code they concern.
   scenario deadline starts, so a cold CI/agent checkout cannot fail on build
   time alone.
 
+- **M3.5-B03 / PLAN-D9(a): the first real scheduled `protocol-diff` run cannot
+  finish inside its own budgets on a GitHub runner — a decision on budget,
+  scope or both is needed before criterion 2 can ever be green.** Run
+  33680590475, `windows-2025`: the oracle capture ran from 21:05Z to 22:00Z and
+  hit its 3300 s deadline, then the "ours" capture ran from 22:00Z to 22:50Z
+  and hit its 3000 s deadline — sequentially, the job spent 2 h 11 min and
+  produced no diff. The "ours" side had completed locally during B03 (on this
+  8-core machine), so the 2-core runner is at least ~2× slower than the budget
+  assumed, and the oracle side never completed anywhere. Nothing in the
+  runner's output says how far either side got (the per-step progress logging
+  already requested in the B03 entry above is the precondition for any
+  informed budget change). Options the planning role has to pick from: (a)
+  raise both deadlines toward the 6 h job limit and run the two sides in
+  parallel jobs (they are independent captures — the diff can be a third,
+  cheap job consuming both artifacts); (b) run the scripted session plus a
+  rotating subset of the 51 contraptions per scheduled run, so every
+  contraption is diffed over a week; (c) profile the per-contraption cost (bot
+  reconnect, tick-freeze barrier waits, setup-command log confirmation) and cut
+  it before deciding (a)/(b). Recommendation: (c) first with the progress
+  logging, then (a) — the two captures are embarrassingly parallel and the diff
+  itself is milliseconds.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
