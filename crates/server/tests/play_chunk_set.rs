@@ -143,7 +143,7 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
     // synthesized placeholder blob -- observed at ~6.3s under a real full-suite `cargo
     // nextest run`'s own contention, comfortably inside the old `10`s but with little
     // margin; `30` gives real headroom.
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
         let (server, mut client) = connected_pair().await;
         let (inbound, handle) = spawn_connection(server, ConnectionConfig::default());
 

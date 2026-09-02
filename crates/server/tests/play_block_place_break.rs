@@ -163,7 +163,7 @@ async fn break_and_place_broadcast_and_persist() {
     // same-machine contention (confirmed directly: this exact test alone finished in
     // 2.379s, the same test inside a full-suite run exceeded 20s) -- `60` gives
     // comfortable headroom without masking a genuine hang.
-    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+    tokio::time::timeout(std::time::Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;

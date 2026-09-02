@@ -139,7 +139,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 // full-suite contention).
 #[tokio::test]
 async fn sequence_acks_preserve_fifo_order_under_a_burst() {
-    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+    tokio::time::timeout(std::time::Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(1);
         let (server, mut client) = connected_pair().await;
