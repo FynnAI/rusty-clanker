@@ -656,6 +656,63 @@ pub fn check_raw_stdio_piped(file: &str, added_lines: &[String]) -> Vec<PatternV
     violations
 }
 
+/// Recursively collects every `.rs` file under `dir` (relative to the current working
+/// directory, matching this module's own repo-root assumption — every other path in
+/// this file, e.g. `xtask/src/...`, is relative the same way), as `/`-separated paths —
+/// the same path shape `check_raw_stdio_piped`'s own `file.starts_with("xtask/src/")`
+/// guard and every commit-diff path in this module already use. Missing/unreadable
+/// directories are silently skipped rather than failing the whole walk.
+fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, out);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            out.push(path.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
+/// Check 7's whole-tree companion (M3.5-B06 field-report fix): `check_raw_stdio_piped`
+/// only ever inspected one commit's own `added_lines`, so a piped-`Stdio` constructor
+/// occurrence already sitting in the tree before the lint that forbids it was even
+/// introduced -- added by some commit outside `<base>..HEAD` -- was structurally
+/// invisible to it on the per-commit path, and (since a bare `lint-tests` invocation
+/// with `HEAD == main` resolves to an empty commit range and therefore never walks any
+/// file at all) equally invisible on the no-`--base` path — exactly the gap that let
+/// `m3_5_be_report.rs`'s own raw pipe survive B06's own centralization. This reads the
+/// *current on-disk content* of every `xtask/src/**/*.rs` file (`process.rs` excluded,
+/// exactly like the per-commit check — `check_raw_stdio_piped`'s own guard already
+/// handles that) and runs the identical stripped-literal line check over it, so the
+/// lint catches a pre-existing occurrence the very next time anyone runs it at all, not
+/// only a commit that happens to touch that exact line again. Reuses
+/// `check_raw_stdio_piped` itself (it operates on any `&[String]` of lines, not
+/// specifically diff-added ones) rather than duplicating the pattern-match.
+/// `pub` (rather than the module-private shape most of this file's `run`-only helpers
+/// take) so `xtask/tests/forbidden_patterns_rules.rs` can drive it directly against a
+/// chdir'd fixture tree — the same `TempCwd` idiom `xtask/tests/verify_claims_cli.rs`
+/// already established for a CWD-relative xtask function.
+pub fn check_raw_stdio_piped_whole_tree() -> Vec<PatternViolation> {
+    let mut files = Vec::new();
+    collect_rs_files(std::path::Path::new("xtask/src"), &mut files);
+    files.sort();
+
+    let mut violations = Vec::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let lines: Vec<String> = content.lines().map(str::to_string).collect();
+        violations.extend(check_raw_stdio_piped(&file, &lines));
+    }
+    violations
+}
+
 /// Per-commit gate mirroring `path_guard::evaluate_commit`'s decision shape (one
 /// commit is one changeset, TEST-D45): `Skip` for an empty or docs-only-exempt
 /// commit, `Lint(t)` to run every check under that commit's own declared type,
@@ -791,8 +848,11 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
 /// docs-only all-Markdown commits are exempt from the trailer, exactly as in the
 /// path-guard). For every file one commit changes, shells out to `git diff <sha>^
 /// <sha>`/`git show <rev>:<path>` to gather the inputs each `check_*` function above
-/// needs and unions their results. Writes `target/verify/lint-tests.json`, returns
-/// the matching `ExitCode`.
+/// needs and unions their results. Independently of that per-commit walk and of
+/// `base`, also runs `check_raw_stdio_piped_whole_tree` exactly once per invocation
+/// (its own doc comment has the field-report rationale — the per-commit-only form of
+/// that one check was structurally blind to a pre-existing violation). Writes
+/// `target/verify/lint-tests.json`, returns the matching `ExitCode`.
 pub fn run(base: Option<&str>) -> std::process::ExitCode {
     let sh = match xshell::Shell::new() {
         Ok(sh) => sh,
@@ -803,6 +863,29 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
     };
 
     let mut result = crate::tier_result::TierResult::new("lint-tests");
+
+    // Runs once per invocation, unconditionally — independent of `base` and of
+    // whichever commits (if any) end up in range below — so a piped-`Stdio`
+    // constructor occurrence already sitting in the tree is never structurally
+    // invisible the way the per-commit-only check on its own was (doc comment above).
+    let whole_tree_violations = check_raw_stdio_piped_whole_tree();
+    if whole_tree_violations.is_empty() {
+        result.push(
+            "whole-tree::raw-stdio-piped",
+            crate::tier_result::Status::Pass,
+            Some("0 violations".to_string()),
+        );
+    } else {
+        for (i, v) in whole_tree_violations.iter().enumerate() {
+            let (name, detail) = describe_violation(v);
+            eprintln!("lint-tests: whole-tree: {detail}");
+            result.push(
+                format!("whole-tree::{i}::{name}"),
+                crate::tier_result::Status::Fail,
+                Some(detail),
+            );
+        }
+    }
 
     let Some(resolved_base) = crate::path_guard::resolve_base(&sh, base) else {
         println!(
