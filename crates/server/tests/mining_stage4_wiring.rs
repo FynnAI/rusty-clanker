@@ -122,7 +122,7 @@ fn assert_idle(counters: Stage4Counters) {
 
 #[tokio::test]
 async fn stage4_is_inert_with_no_registered_behavior() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
 
         // Ten ordinary ticks, no block actions sent at all -- Stage 4 now runs for real

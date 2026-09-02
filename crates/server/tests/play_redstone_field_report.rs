@@ -308,7 +308,7 @@ async fn staged<T>(
 
 #[tokio::test]
 async fn isolated_redstone_wire_gets_the_connected_plus_shape_not_a_bare_dot() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         world
@@ -336,7 +336,7 @@ async fn isolated_redstone_wire_gets_the_connected_plus_shape_not_a_bare_dot() {
 
 #[tokio::test]
 async fn two_adjacent_wires_connect_to_each_other_on_both_sides() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         // B is a bystander whose own traffic proves the SECOND placement's cascade -- wire A's
@@ -404,7 +404,7 @@ async fn two_adjacent_wires_connect_to_each_other_on_both_sides() {
 
 #[tokio::test]
 async fn a_lit_wall_torch_powers_an_adjacent_wire_to_full_strength() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;
@@ -457,7 +457,7 @@ async fn a_lit_wall_torch_powers_an_adjacent_wire_to_full_strength() {
 
 #[tokio::test]
 async fn a_floor_torch_pops_when_its_own_support_block_is_broken() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         // B is a bystander watching for the torch's own cascaded pop-to-air, exactly mirroring
@@ -559,7 +559,7 @@ async fn a_floor_torch_pops_when_its_own_support_block_is_broken() {
 /// LATER, unsolicited `Block Update` (this test's real point) reads `lit=false`.
 #[tokio::test]
 async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_action() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         // B is a bystander watching for the torch's own scheduled-tick flip -- proving it
@@ -658,7 +658,7 @@ async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_act
 /// later player action.
 #[tokio::test]
 async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_action() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;

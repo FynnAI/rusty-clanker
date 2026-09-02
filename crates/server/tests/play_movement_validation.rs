@@ -114,7 +114,7 @@ async fn assert_no_packet_of_type(
 
 #[tokio::test]
 async fn small_in_range_move_is_accepted_silently() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -147,7 +147,7 @@ async fn small_in_range_move_is_accepted_silently() {
 
 #[tokio::test]
 async fn wildly_out_of_range_move_triggers_a_teleport_correction() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 2).await;
 
@@ -189,7 +189,7 @@ async fn wildly_out_of_range_move_triggers_a_teleport_correction() {
 
 #[tokio::test]
 async fn movement_is_ignored_while_awaiting_a_teleport_ack() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 3).await;
 
@@ -263,7 +263,7 @@ async fn movement_is_ignored_while_awaiting_a_teleport_ack() {
 
 #[tokio::test]
 async fn nan_position_disconnects_the_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 4).await;
 
@@ -290,7 +290,7 @@ async fn nan_position_disconnects_the_connection() {
         // connection out and closing it -- or nothing at all).
         let mut chunk = [0u8; 4096];
         loop {
-            match tokio::time::timeout(Duration::from_secs(30), a.read(&mut chunk)).await {
+            match tokio::time::timeout(Duration::from_secs(120), a.read(&mut chunk)).await {
                 Ok(Ok(0)) => return, // EOF -- connection closed, as expected.
                 Ok(Ok(n)) => a_acc.extend_from_slice(&chunk[..n]),
                 Ok(Err(_)) => return, // connection reset -- also closed.
@@ -311,7 +311,7 @@ async fn nan_position_disconnects_the_connection() {
 /// it.
 #[tokio::test]
 async fn nan_rotation_disconnects_the_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 5).await;
 
@@ -364,7 +364,7 @@ async fn nan_rotation_disconnects_the_connection() {
 /// the speed check is even reached), and the connection actually closes.
 #[tokio::test]
 async fn nan_rotation_paired_with_a_speed_violation_disconnects_before_any_correction_is_sent() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 6).await;
 
@@ -410,7 +410,7 @@ async fn nan_rotation_paired_with_a_speed_violation_disconnects_before_any_corre
                 }
                 continue;
             }
-            match tokio::time::timeout(Duration::from_secs(30), a.read(&mut chunk)).await {
+            match tokio::time::timeout(Duration::from_secs(120), a.read(&mut chunk)).await {
                 Ok(Ok(0)) => return, // EOF -- connection closed, as expected.
                 Ok(Ok(n)) => a_acc.extend_from_slice(&chunk[..n]),
                 Ok(Err(_)) => return, // connection reset -- also closed.

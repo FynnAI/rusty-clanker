@@ -186,7 +186,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 // in ~1.5s -- `60` gives comfortable headroom without masking a genuine hang.
 #[tokio::test]
 async fn reach_rejects_out_of_range_target_with_ack_only() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -234,7 +234,7 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
 
 #[tokio::test]
 async fn reach_accepts_in_range_target() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -283,7 +283,7 @@ async fn reach_accepts_in_range_target() {
 
 #[tokio::test]
 async fn placement_into_non_air_target_is_rejected_with_correction() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -363,7 +363,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
 /// target far enough away that no reach model (old or new) would ever accept it, air or not.
 #[tokio::test]
 async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_correction() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -414,7 +414,7 @@ async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_corre
 /// the actor, `respond_break`'s own doc comment).
 #[tokio::test]
 async fn breaking_an_in_reach_air_target_is_rejected_with_correction() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;

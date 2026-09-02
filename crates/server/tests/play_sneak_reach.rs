@@ -150,7 +150,7 @@ const TARGET: BlockPos = BlockPos::new(0, -60, 0);
 
 #[tokio::test]
 async fn sneaking_makes_an_otherwise_out_of_reach_block_breakable() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;

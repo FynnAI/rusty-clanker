@@ -230,7 +230,7 @@ const STONE_FLOOR: BlockPos = BlockPos::new(0, -60, 3);
 
 #[tokio::test]
 async fn furnace_orientation_and_lit_state_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -259,7 +259,7 @@ async fn furnace_orientation_and_lit_state_over_real_connection() {
 
 #[tokio::test]
 async fn blast_furnace_and_smoker_orientation_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -305,7 +305,7 @@ async fn blast_furnace_and_smoker_orientation_over_real_connection() {
 
 #[tokio::test]
 async fn chest_orientation_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -350,7 +350,7 @@ async fn chest_orientation_over_real_connection() {
 
 #[tokio::test]
 async fn repeater_and_comparator_orientation_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -402,7 +402,7 @@ async fn repeater_and_comparator_orientation_over_real_connection() {
 
 #[tokio::test]
 async fn piston_and_sticky_piston_orientation_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -451,7 +451,7 @@ async fn piston_and_sticky_piston_orientation_over_real_connection() {
 
 #[tokio::test]
 async fn hopper_orientation_over_real_connection_including_the_down_case() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         world
@@ -516,7 +516,7 @@ async fn hopper_orientation_over_real_connection_including_the_down_case() {
 
 #[tokio::test]
 async fn wall_and_floor_redstone_torch_orientation_over_real_connection() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;

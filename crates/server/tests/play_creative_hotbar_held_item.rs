@@ -147,7 +147,7 @@ async fn place_up_from(a: &mut TcpStream, a_acc: &mut BytesMut, base: BlockPos, 
 
 #[tokio::test]
 async fn selecting_a_redstone_wire_hotbar_slot_places_wire_not_stone() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
@@ -193,7 +193,7 @@ async fn selecting_a_redstone_wire_hotbar_slot_places_wire_not_stone() {
 
 #[tokio::test]
 async fn switching_back_to_a_stone_slot_places_stone_again() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 

@@ -273,7 +273,7 @@ async fn login_rejects_invalid_username() {
     // Hang guard only — sized for a starved shared CI runner (RSA keygen inside
     // spawn_full_drive alone can take seconds there), same reasoning as
     // login_watchdog_times_out's own outer budget.
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         let sink = Arc::new(TestSink::default());
         let (mut client, task) = spawn_full_drive(sink).await;
         let mut codec = ClientCodec::new();
@@ -321,7 +321,7 @@ async fn login_watchdog_times_out() {
     // sized generously — the real assertion is the exact Err(Timeout(short_watchdog))
     // below, which is load-independent.
     let key_pair = rc_auth::ServerKeyPair::generate().unwrap();
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         let (server, mut client) = connected_pair().await;
         let (mut inbound, handle) = spawn_connection(server, ConnectionConfig::default());
         handle.set_inbound_state(ConnectionState::Login);

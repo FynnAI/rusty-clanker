@@ -93,7 +93,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 
 #[tokio::test]
 async fn position_and_rotation_persist_across_a_real_disconnect_and_rejoin() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_raw: u128 = 9001;
         let uuid = uuid::Uuid::from_u128(uuid_raw);

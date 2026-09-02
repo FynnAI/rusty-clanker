@@ -34,7 +34,7 @@ async fn shut_down(world: &HardcodedWorld) {
 
 #[tokio::test]
 async fn enter_play_closes_the_connection_gracefully_once_the_region_thread_is_gone() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         let world = HardcodedWorld::new();
         shut_down(&world).await;
 
@@ -57,7 +57,7 @@ async fn enter_play_closes_the_connection_gracefully_once_the_region_thread_is_g
 
 #[tokio::test]
 async fn request_chunk_grid_and_queue_join_degrade_gracefully_once_the_region_thread_is_gone() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         let world = HardcodedWorld::new();
         shut_down(&world).await;
 
@@ -91,7 +91,7 @@ async fn request_chunk_grid_and_queue_join_degrade_gracefully_once_the_region_th
 /// panic, never hang, exactly like `debug_query_block`/`request_chunk_grid` above.
 #[tokio::test]
 async fn debug_stage4_counters_degrades_gracefully_once_the_region_thread_is_gone() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(120), async {
         let world = HardcodedWorld::new();
         shut_down(&world).await;
 

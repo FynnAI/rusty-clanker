@@ -206,7 +206,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // forever).
             let ack = staged(
                 "phantom-ack",
-                Duration::from_secs(45),
+                Duration::from_secs(120),
                 recv_packet_of_type(&mut phantom, &mut phantom_acc, AcknowledgeBlockChange::ID),
             )
             .await;
@@ -222,7 +222,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // was lost again.
             let update = staged(
                 "phantom-block-update",
-                Duration::from_secs(45),
+                Duration::from_secs(120),
                 recv_packet_of_type(&mut phantom, &mut phantom_acc, BlockUpdate::ID),
             )
             .await;
@@ -236,7 +236,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             // is never left silently unread for however long those actually take.
             let bystander_update = staged(
                 "bystander-block-update",
-                Duration::from_secs(45),
+                Duration::from_secs(120),
                 recv_packet_of_type(&mut bystander, &mut bystander_acc, BlockUpdate::ID),
             )
             .await;

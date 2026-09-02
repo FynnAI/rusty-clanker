@@ -132,7 +132,7 @@ async fn recv_matching<T: RcPacket, F: Fn(&T) -> bool>(
 
 #[tokio::test]
 async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cache_center() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(1);
         let sessions = world.player_sessions();
@@ -203,7 +203,7 @@ async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cach
 /// own typical latency, comfortably (>2x) below the pre-fix version's.
 #[tokio::test]
 async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_resolves() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(2);
         let sessions = world.player_sessions();

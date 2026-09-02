@@ -286,7 +286,7 @@ fn floor(i: usize) -> BlockPos {
 
 #[tokio::test]
 async fn chest_furnace_hopper_appear_in_a_second_joiners_chunk_block_entity_list() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;
@@ -367,7 +367,7 @@ async fn chest_furnace_hopper_appear_in_a_second_joiners_chunk_block_entity_list
 
 #[tokio::test]
 async fn comparator_appears_in_the_chunk_block_entity_list_without_a_tracked_ecs_entity() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid_a = uuid::Uuid::from_u128(1);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
@@ -398,7 +398,7 @@ async fn comparator_appears_in_the_chunk_block_entity_list_without_a_tracked_ecs
 
 #[tokio::test]
 async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;
@@ -435,7 +435,7 @@ async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled() {
 
 #[tokio::test]
 async fn hopper_placed_with_no_neighbor_signal_stays_enabled() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;

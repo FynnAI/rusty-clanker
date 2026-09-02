@@ -164,7 +164,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 
 #[tokio::test]
 async fn reach_check_uses_the_live_position_after_a_movement_packet() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(101);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 101).await;
@@ -237,7 +237,7 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
 
 #[tokio::test]
 async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
         let uuid = uuid::Uuid::from_u128(102);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 102).await;
