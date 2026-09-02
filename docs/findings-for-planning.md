@@ -624,6 +624,20 @@ Entries name the milestone that surfaced them and the code they concern.
   real behavior change to already-shipped, tested lint logic) to close this
   gap for its own two checks, not just the two this blueprint added.
 
+- **`xtask m35-be-report` (M3.5-B05) starts its runner deadline before the
+  `block_entity_persistence_runner` binary is built.** First run on a clean main
+  checkout (paritybot never built there) failed both cases with
+  "block_entity_persistence_runner did not exit within <deadline>" — the azalea
+  cold build alone exceeded the budget; pre-building the runner
+  (`cd crates/testing/paritybot && cargo build --bin block_entity_persistence_runner`)
+  made the identical run pass 2/2. `m3_report.rs` already solved this shape with
+  an explicit `BUILD_GRACE` ahead of its login/run budget; the same applies to
+  every `cargo run --bin <runner>` subprocess (`fetch_corpus`, `placement_diff`,
+  `protocol_diff`). Needs one `governance` changeset: build the runner in a
+  separate, generously-budgeted step (or `cargo build` it first) before the
+  scenario deadline starts, so a cold CI/agent checkout cannot fail on build
+  time alone.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
