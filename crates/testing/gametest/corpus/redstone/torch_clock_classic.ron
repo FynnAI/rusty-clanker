@@ -10,7 +10,7 @@ ContraptionSpec(
     id: "redstone/clock/torch_clock_classic",
     category: Clock,
     description: "Three redstone torches, each on its own support block, wired in a closed ring via a fourth plain pass-through support (2x2 footprint) — each torch inverts the next support's neighbor-signal state, and the odd inversion count around the closed loop never settles.",
-    quirk: "Three-torch ring inverter clock, each 2-tick recheck compounding into the classic self-sustaining period (08-redstone-ticking.md §3.7).",
+    quirk: "Three-torch ring, all three torches placed simultaneously while tick-frozen (no placement-order asymmetry to 'kick' it) — settles into a stable, non-oscillating all-lit fixed point rather than vanilla's classic self-sustaining clock; RedstoneTorchBlock never self-schedules on its own regardless of how it was placed (08-redstone-ticking.md §3.7).",
     max_ticks: 40,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),

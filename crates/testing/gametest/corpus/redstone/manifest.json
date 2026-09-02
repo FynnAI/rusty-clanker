@@ -28,7 +28,7 @@
     },
     {
       "path": "comparator_compare_vs_subtract.ron",
-      "sha256": "89145cd6c1ae0ce93c65d644e91047564cc741b33cf4ad7e7d3b0c5a6aa6f96a",
+      "sha256": "ac9f385a777a55d6ba221d0acdec184535f770da494b0852d1bcf3a6c89c37ea",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -46,7 +46,7 @@
     },
     {
       "path": "comparator_priority_diode_behind.ron",
-      "sha256": "d3db227dce4ae214c22ee07ec284cfbf71488957784cd1cdfe047c16c9a919c0",
+      "sha256": "ed96dd90b44462d390bd6b7166262cbe6c712fbc6e827821f7b6cb4cb2ed5cb5",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -226,7 +226,7 @@
     },
     {
       "path": "torch_clock_classic.ron",
-      "sha256": "f1c3ef301f9b7feed28fae56deaaa099c71e6a0093322690ba3fb380d956ca79",
+      "sha256": "cbcf8f3137b4b28179a6ccc4740915047aa4b4310347b0b846a685b432237d90",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },

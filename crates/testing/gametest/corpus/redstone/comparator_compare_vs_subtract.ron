@@ -9,11 +9,14 @@ ContraptionSpec(
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
-        // Field-report fix: redstone_wire self-validates its own floor support
-        // immediately on /setblock placement (unlike comparator/torch, which don't) —
-        // these two floor tiles must precede their wire tiles in list order, or the
-        // wire never actually comes into existence (placement silently reverts to
-        // air).
+        // Floor tiles precede their wire tiles here purely for build-order realism,
+        // not because placement order is load-bearing: neither `WireBehavior` nor
+        // `ComparatorBehavior::on_placed` validates floor support at `/setblock` time
+        // (`WireBehavior::on_placed` only re-fires the diagonal-relay cascade off the
+        // connection digits its own declared id already encodes; comparator's own
+        // `on_placed` decodes facing/mode only) — the real support check for both runs
+        // later, via `on_neighbor_changed`/`on_shape_update`, once every position in
+        // this fixture's own `blocks:` list already exists regardless of order.
         (pos: (-1, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (-1, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4873),
