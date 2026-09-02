@@ -697,53 +697,56 @@ Entries name the milestone that surfaced them and the code they concern.
   implements the real candidate-loop-with-support-fallback algorithm and
   updates that pre-existing test to match.
 
-- **Redstone torch, repeater, and comparator placement never validates
-  `canSurvive` (support quality) at all — every placement is accepted
-  unconditionally regardless of what (if anything) is beneath/behind it.**
-  Per the same forwarded research: floor torch requires `Block.
-  canSupportCenter(below, UP)` (a `SupportType.CENTER` check — a small
-  2x2-in-16ths center column, not a full face); wall torch requires the
-  attached block to be `isFaceSturdy(FACING, FULL)`; repeater/comparator
-  require the block below to be `isFaceSturdy(UP, RIGID)` (a 12x12-in-16ths
-  inset column, coarser than `CENTER` but finer than `FULL`). None of these
-  three sturdiness predicates (`CENTER`/`RIGID`/`FULL`) exist in this
-  project's own current shape vocabulary — `rc_physics::tier1_shape_table`
-  only ever answers "is this a `default_full_cube()` conductor," used
-  today as a blunt stand-in everywhere a real sturdiness check belongs
-  (`WireBehavior`'s/`TorchBehavior`'s own `should_pop` support-LOSS checks
-  already use this same coarse `is_conductor` proxy, not a real sturdiness
-  predicate, and get away with it only because every tier-1 world surface
-  in this milestone's own superflat scope happens to be a literal full
-  cube). `redstone_wire` is the only tier-1 kind with a real placement-time
-  support gate today (`apply_placement`'s own `NoSolidSupportBelow` check,
-  itself only the `is_conductor` proxy, not vanilla's real wire `canSurvive`
-  either). Not implemented this wave for torch/repeater/comparator: no
-  owner-reported symptom depends on placement-time rejection (only on
-  post-placement id/connection/power correctness, all closed this wave),
-  and every real placement this milestone's own test suite exercises lands
-  on ordinary full-cube superflat terrain, where an `is_conductor`-based
-  gate and a real `CENTER`/`RIGID`/`FULL` sturdiness gate would agree
-  anyway. Needs a decision on (a) whether `rc_physics` should gain real
-  `SupportType`-style sturdiness predicates (a larger shape-vocabulary
-  addition, likely paired with the WS-D15 generated-registry work above),
-  and (b) which blueprint/changeset adds the three missing placement-time
-  `canSurvive` gates once that vocabulary exists.
+- **RESOLVED this wave (placement-diff closure): redstone torch, repeater,
+  and comparator placement now validate a placement-time support gate —
+  the "never validates `canSurvive` at all" finding this entry used to
+  record no longer holds.** Floor/wall torch: `resolve_orientation`'s own
+  real candidate loop (`Direction.orderedByNearest`, front-inserting the
+  clicked face's opposite, `UP` always excluded) now tries each direction
+  in turn and refuses placement (`RejectReason::InvalidTorchFace`) only
+  once every candidate has failed its own support check — this doubles as
+  the torch's own `canSurvive` gate by construction (no separate check
+  needed). Repeater/comparator: `apply_placement` gained the same
+  `NoSolidSupportBelow` check `redstone_wire` already had (wire's own copy
+  now also accepts a hopper directly below, vanilla's own dedicated
+  exception for wire alone). **Still a simplification, not the real
+  vanilla predicate**: every one of these checks still uses the same
+  blunt "is the neighbor a `default_full_cube()` conductor" proxy this
+  entry originally flagged as wrong — real `SupportType::CENTER` (floor
+  torch), `FULL` (wall torch), and `RIGID` (repeater/comparator) remain
+  unimplemented in `rc_physics`'s own shape vocabulary, and get away with
+  the coarser proxy only because this milestone's own tier-1 world has no
+  block that is sturdy-on-a-face/center without also being a literal full
+  cube. The original decision this entry asked for is therefore still
+  open, narrowed: (a) whether `rc_physics` should gain real `SupportType`-
+  style sturdiness predicates (a larger shape-vocabulary addition, likely
+  paired with the WS-D15 generated-registry work above), and (b) whether
+  the four placement sites above (floor torch, wall torch, repeater,
+  comparator) should be migrated onto that real vocabulary once it exists
+  — today's full-cube-conductor proxy stays correct for every reachable
+  tier-1 world surface but would silently under- or over-accept the moment
+  a non-full-cube-but-sturdy block (e.g. a future slab/stair) enters this
+  project's placeable set.
 
-- **`minecraft:chest` always places `TYPE = single`; the real double-chest
-  merge rule (adopting/becoming `LEFT`/`RIGHT` when placed beside a
-  same-facing single chest, including the sneak+cross-axis special case) is
-  not implemented.** Per the same forwarded research, this is explicitly
-  flagged as a "minimal M3 floor... implement the merge rule if cheap, it's
-  just two neighbor reads" allowance — not implemented this wave because a
-  correct merge also needs to retroactively rewrite the ALREADY-placed
-  neighbor chest's own `TYPE` (a second, different position's block state
-  changing as a side effect of this placement — the same class of
-  "cascade write" `broadcast_cascaded_changes` above now knows how to
-  broadcast, so the client-visibility half is no longer a blocker), and
-  ties directly into `ChestBlockEntity` pairing/inventory, which this wave's
-  own brief explicitly named as separate-wave, do-not-attempt scope. Needs
-  a decision on which future wave (likely the same one that spawns real
-  block entities, per the Stage-7 entry above) implements the merge rule.
+- **RESOLVED this wave (placement-diff closure): `minecraft:chest`'s own
+  double-merge rule (`ChestBlock.getStateForPlacement`) is now implemented**
+  — both the non-sneak clockwise/counter-clockwise same-facing-neighbor
+  case and the sneak+cross-axis adopt-facing case, including the
+  retroactive rewrite of the ALREADY-placed neighbor chest's own `TYPE`
+  (`crates/server/src/play/mining.rs`'s own `resolve_chest_placement`/
+  `ChestMerge`; `apply_placement_with_redstone`'s own
+  `PlaceableBlockKind::Chest` arm writes the neighbor's new state via a
+  plain `ctx.set_block`, which records it into `UpdateContext`'s own
+  `changed` collector automatically — reaching every other connected
+  client through `world.rs`'s own `broadcast_changed_positions` with no
+  call-site change needed — the "second write's own client-visibility"
+  concern this entry used to raise is exactly what that collector already
+  covers).
+  Chest pairing/inventory (`ChestBlockEntity`) itself remains genuinely
+  out of scope, unchanged from before — this closure is placement-state
+  (`TYPE`/`FACING`) only, matching this wave's own confined scope. One new
+  residual, Section B below (shape-table coverage for the new `LEFT`/
+  `RIGHT` chest ids).
 
 - **`minecraft:hopper`'s own `ENABLED` bit is always `true` at placement
   (vanilla's own literal `getStateForPlacement` behavior) but the
@@ -835,6 +838,29 @@ Entries name the milestone that surfaced them and the code they concern.
   `OutputSignal` independently queryable (e.g. a container-menu/analyzer
   UI, M4 scope) will need a real `ComparatorBlockEntity` introduced from
   scratch, with no existing partial scaffolding to build on.
+
+- **New this wave: `rc_physics::tier1_shape_table()` has no row for a
+  merged chest's own `LEFT`/`RIGHT` `TYPE` ids (only each facing's `SINGLE`
+  id, `3988`/`3994`/`4000`/`4006`, is registered) — a `LEFT`/`RIGHT` id
+  (`chest_state_id`'s own `+2`/`+4` offset of each of those four) falls
+  through to `ShapeTable::lookup`'s own `default_full_cube()` fallback.**
+  Surfaced by this wave's own chest-merge closure (immediately above), but
+  the fix belongs in `crates/physics/src/shapes.rs`, outside this wave's
+  own confined scope (`crates/server` only, per its own task brief).
+  Consequence: `mining::is_placement_obstructed` sizes a freshly-merged
+  chest's own collision box as a full cube (too generous, never too
+  permissive — this can only make a legitimate merge spuriously
+  `Obstructed`, never let one collide-through where it shouldn't) instead
+  of the real chest box every `SINGLE` id already gets; separately,
+  `rc_mechanics::redstone::signal::is_conductor` (which reuses this same
+  table) would wrongly treat a merged chest half as a solid redstone
+  conductor — dormant today (this milestone's own world has no redstone
+  circuit that ever runs a wire past a chest), but real the moment one
+  does. Needs a `crates/physics`-side changeset adding the eight missing
+  `LEFT`/`RIGHT` rows (reusing the identical `chest_shape()` box the four
+  `SINGLE` rows already share, mirroring this table's own established
+  "same box, only the id varies per orientation" precedent for every other
+  oriented block it covers).
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 

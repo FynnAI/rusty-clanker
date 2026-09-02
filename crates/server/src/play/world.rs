@@ -2113,6 +2113,12 @@ impl HardcodedWorld {
                                 motion.yaw,
                                 motion.pitch,
                                 &player_boxes,
+                                // M3 field-report fix (chest-merge): the acting player's own
+                                // current sneak state, feeding `resolve_orientation`'s own
+                                // chest-merge branch -- `crouching` is already computed just
+                                // above (this tick loop's own pre-existing reach-check input,
+                                // `PlayerInputState.sneaking`), reused here unchanged.
+                                crouching,
                                 Some(&redstone_registry),
                             );
                             let outcome_pos = match outcome {
@@ -3373,6 +3379,9 @@ mod direct_block_world_bounds {
             // No player entities in this fixture (Defect 1's own gate is exercised by its
             // dedicated regression suite instead) -- an empty slice can never obstruct.
             &[],
+            // Not sneaking -- irrelevant to this fixture's own bounds-guard regression (Stone
+            // ignores `sneaking` entirely, `resolve_orientation`'s own `Stone` arm).
+            false,
         );
         assert!(
             matches!(outcome, PlaceOutcome::Applied { .. }),

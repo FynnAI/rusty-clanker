@@ -673,6 +673,50 @@ pub enum Orientation {
     None,
     Horizontal(Direction),
     Full(Direction),
+    /// Chest-only (M3 field-report fix, chest-merge): FACING plus the resolved `TYPE`
+    /// property (`Single`/`Left`/`Right`) -- every other block kind's own orientation is
+    /// fully described by `Horizontal`/`Full` alone, but a chest's own raw state id also
+    /// depends on whether this placement merged into an existing neighbor
+    /// (`resolve_chest_placement`'s own doc comment below has the full merge algorithm).
+    Chest(Direction, ChestType),
+}
+
+/// A chest's own `TYPE` block-state property (M3 field-report fix, chest-merge) -- `Single`
+/// is every chest's own placement-time default absent a merge; `Left`/`Right` only ever arise
+/// from `resolve_orientation`'s own chest-merge branch below. blocks.json's own listed value
+/// order for this property is `[single, left, right]` (`chest_state_id`'s own doc comment has
+/// the full stride derivation).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ChestType {
+    Single,
+    Left,
+    Right,
+}
+
+/// One neighbor-position probe result for the chest-merge algorithm (M3 field-report fix,
+/// chest-merge) -- `apply_placement`'s own `chest_neighbor_at` closure decodes whatever raw
+/// state already sits at a candidate neighbor position into this shape (`None` for "not a
+/// chest at all," air included); `resolve_orientation`'s own chest branch never needs the
+/// neighbor's raw id directly, only these two decoded fields.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ChestNeighbor {
+    pub facing: Direction,
+    pub is_single: bool,
+}
+
+/// Set on a `PlacementSelection` whenever the new chest's own resolved `TYPE`
+/// (`Orientation::Chest`'s own second field) is `Left`/`Right` (M3 field-report fix,
+/// chest-merge: "the EXISTING chest's TYPE must also flip to the complementary value"): the
+/// direction/facing of the EXISTING chest that just gained a partner, plus the complementary
+/// `TYPE` `apply_placement` must write there (vanilla's own `updateShape` side effect on that
+/// neighbor, restated here as an explicit second write rather than a shape-update cascade --
+/// chests dispatch no real `BlockBehavior` in this tier-1 scope, so there is no
+/// `on_shape_update` hook to piggyback on the way wire/repeater/comparator do).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ChestMerge {
+    pub neighbor_direction: Direction,
+    pub neighbor_facing: Direction,
+    pub neighbor_new_type: ChestType,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -680,6 +724,10 @@ pub struct PlacementSelection {
     pub kind: PlaceableBlockKind,
     pub orientation: Orientation,
     pub is_wall_variant: bool,
+    /// `Some` only for a `Chest` placement that merged into an existing neighbor -- `None`
+    /// for every other kind, and for a chest placement that resolved to `Single` (no eligible
+    /// neighbor found).
+    pub chest_merge: Option<ChestMerge>,
 }
 
 fn face_to_direction(face: Face) -> Direction {
@@ -693,37 +741,134 @@ fn face_to_direction(face: Face) -> Direction {
     }
 }
 
-/// Context's own per-block-type table, dispatched by `kind`. `clicked_face`/`yaw`/`pitch`
-/// are the inputs each row's own rule (Context) actually reads; unused inputs for a given
-/// `kind` are simply ignored (e.g. torches ignore yaw/pitch entirely).
+/// Vanilla's own `Direction.orderedByNearest` tie-break order (M3 field-report fix,
+/// torch-candidate loop) -- distinct from `Direction::vanilla_ordinal`
+/// (`Down=0,Up=1,North=2,South=3,West=4,East=5`, `rc_mechanics::direction`'s own
+/// wire-specific ordinal): `North=0, East=1, South=2, West=3, Up=4, Down=5`.
+fn ordered_by_nearest_tie_index(dir: Direction) -> u8 {
+    match dir {
+        Direction::North => 0,
+        Direction::East => 1,
+        Direction::South => 2,
+        Direction::West => 3,
+        Direction::Up => 4,
+        Direction::Down => 5,
+    }
+}
+
+fn dot_with_direction(look: Vec3, dir: Direction) -> f64 {
+    let (dx, dy, dz) = dir.offset();
+    look.x * dx as f64 + look.y * dy as f64 + look.z * dz as f64
+}
+
+/// `Direction.orderedByNearest` (M3 field-report fix, torch-candidate loop): the six
+/// directions sorted by descending dot product with `look` (`look_vector`'s own output --
+/// already unit length by construction), ties broken by `ordered_by_nearest_tie_index`'s own
+/// N,E,S,W,U,D order. `pub` for `mining_placement_orientation.rs`'s own direct unit-test
+/// coverage (Acceptance tests: "write a unit test for a few look vectors").
+pub fn ordered_by_nearest(look: Vec3) -> [Direction; 6] {
+    let mut dirs = FULL6;
+    dirs.sort_by(|&a, &b| {
+        let da = dot_with_direction(look, a);
+        let db = dot_with_direction(look, b);
+        db.partial_cmp(&da)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| ordered_by_nearest_tie_index(a).cmp(&ordered_by_nearest_tie_index(b)))
+    });
+    dirs
+}
+
+/// Removes `value` from `order` (if present) and reinserts it at index `0`, shifting every
+/// element that was ahead of it one slot right -- elements after `value`'s own original
+/// position are left untouched (M3 field-report fix, torch-candidate loop: "the clicked
+/// face's OPPOSITE moved to the front", `BlockPlaceContext.getNearestLookingDirections`'s own
+/// restated shape).
+fn move_to_front(order: &mut [Direction; 6], value: Direction) {
+    if let Some(idx) = order.iter().position(|&d| d == value) {
+        order.copy_within(0..idx, 1);
+        order[0] = value;
+    }
+}
+
+/// Context's own per-block-type table, dispatched by `kind`. `clicked_face`/`yaw`/`pitch` are
+/// the inputs each row's own rule (Context) actually reads; unused inputs for a given `kind`
+/// are simply ignored. `sneaking`/`is_full_cube_at`/`chest_neighbor_at` are injected world
+/// queries (M3 field-report fix, torch-candidate + chest-merge: this function stays "pure, no
+/// sockets" -- `mining_placement_orientation.rs`'s own file-level doc comment -- by taking the
+/// world as caller-supplied closures rather than an ECS/`BlockWorldAccess` dependency,
+/// mirroring `BlockShapeSource`'s own injection-seam precedent elsewhere in this codebase);
+/// every kind except `RedstoneTorch`/`Chest` ignores all three.
 pub fn resolve_orientation(
     kind: PlaceableBlockKind,
     clicked_face: Face,
     yaw_degrees: f32,
     pitch_degrees: f32,
+    sneaking: bool,
+    is_full_cube_at: &mut dyn FnMut(Direction) -> bool,
+    chest_neighbor_at: &mut dyn FnMut(Direction) -> Option<ChestNeighbor>,
 ) -> Result<PlacementSelection, RejectReason> {
     match kind {
         PlaceableBlockKind::Stone | PlaceableBlockKind::RedstoneWire => Ok(PlacementSelection {
             kind,
             orientation: Orientation::None,
             is_wall_variant: false,
+            chest_merge: None,
         }),
-        PlaceableBlockKind::RedstoneTorch => match clicked_face {
-            Face::Up => Ok(PlacementSelection {
-                kind,
-                orientation: Orientation::None,
-                is_wall_variant: false,
-            }),
-            Face::Down => Err(RejectReason::InvalidTorchFace),
-            horizontal => Ok(PlacementSelection {
-                kind,
-                orientation: Orientation::Horizontal(face_to_direction(horizontal)),
-                is_wall_variant: true,
-            }),
-        },
+        PlaceableBlockKind::RedstoneTorch => {
+            // M3 field-report fix (the real torch-candidate loop, superseding the former
+            // clicked-face-only approximation): `StandingAndWallBlockItem`'s own real
+            // candidate order (Context, AUTHORITATIVE RESEARCH VERDICT) -- the six directions
+            // ordered by closeness to the player's own look vector, with the clicked face's
+            // own OPPOSITE moved to the front (this tier-1 scope never places into a
+            // replaceable block, so that front-insertion always applies), UP always skipped.
+            // For `Down`: a floor torch, valid iff the block below the target cell is a full
+            // cube (`is_full_cube_at(Direction::Down)` -- Context's own simplified "full-cube
+            // conductor" stand-in for vanilla's `canSupportCenter`/`SupportType::CENTER`, this
+            // module's own established convention: `apply_placement`'s wire check already
+            // uses the identical simplification). For a horizontal candidate `d`: a wall
+            // torch with `FACING = d.opposite()` (pointing away from the wall, into the
+            // room), valid iff the wall block -- at `target.relative(d)`, i.e.
+            // `is_full_cube_at(d)` -- is a full cube (the identical simplification, applied to
+            // `isFaceSturdy` instead of `canSupportCenter`: this tier-1 world has no
+            // partial-shape block that is sturdy on a side without also being a full-cube
+            // conductor). The FIRST valid candidate wins; if none is valid, placement fails
+            // (Context: "vanilla acks with no change").
+            let look = look_vector(yaw_degrees, pitch_degrees);
+            let mut order = ordered_by_nearest(look);
+            move_to_front(&mut order, face_to_direction(clicked_face).opposite());
+
+            for dir in order {
+                match dir {
+                    Direction::Up => continue,
+                    Direction::Down => {
+                        if is_full_cube_at(Direction::Down) {
+                            return Ok(PlacementSelection {
+                                kind,
+                                orientation: Orientation::None,
+                                is_wall_variant: false,
+                                chest_merge: None,
+                            });
+                        }
+                    }
+                    horizontal => {
+                        if is_full_cube_at(horizontal) {
+                            return Ok(PlacementSelection {
+                                kind,
+                                orientation: Orientation::Horizontal(horizontal.opposite()),
+                                is_wall_variant: true,
+                                chest_merge: None,
+                            });
+                        }
+                    }
+                }
+            }
+            Err(RejectReason::InvalidTorchFace)
+        }
+        PlaceableBlockKind::Chest => {
+            resolve_chest_placement(clicked_face, yaw_degrees, sneaking, chest_neighbor_at)
+        }
         PlaceableBlockKind::Repeater
         | PlaceableBlockKind::Comparator
-        | PlaceableBlockKind::Chest
         | PlaceableBlockKind::Furnace
         | PlaceableBlockKind::BlastFurnace
         | PlaceableBlockKind::Smoker => {
@@ -732,6 +877,7 @@ pub fn resolve_orientation(
                 kind,
                 orientation: Orientation::Horizontal(dir),
                 is_wall_variant: false,
+                chest_merge: None,
             })
         }
         PlaceableBlockKind::Piston | PlaceableBlockKind::StickyPiston => {
@@ -740,6 +886,7 @@ pub fn resolve_orientation(
                 kind,
                 orientation: Orientation::Full(dir),
                 is_wall_variant: false,
+                chest_merge: None,
             })
         }
         PlaceableBlockKind::Hopper => {
@@ -758,8 +905,148 @@ pub fn resolve_orientation(
                 kind,
                 orientation,
                 is_wall_variant: false,
+                chest_merge: None,
             })
         }
+    }
+}
+
+/// `ChestBlock.getStateForPlacement` (M3 field-report fix, chest-merge, full algorithm): the
+/// player's own horizontal-opposite is always the base `FACING`; when the clicked face is
+/// horizontal AND the player is sneaking, a merge is attempted first against the neighbor
+/// directly across the clicked face (`target.relative(clicked_face.opposite())` -- for a
+/// direct "click an existing chest's own side face" placement this is exactly that clicked
+/// chest); only a SINGLE neighbor whose own FACING axis differs from the clicked face's axis
+/// is eligible (a same-axis neighbor -- clicking the chest's own front/back -- never merges
+/// here). Absent a sneak-merge, the non-sneak fallback checks the base FACING's own clockwise
+/// then counter-clockwise neighbor for a SINGLE chest sharing that exact FACING. No eligible
+/// neighbor at all resolves to `Single`.
+fn resolve_chest_placement(
+    clicked_face: Face,
+    yaw_degrees: f32,
+    sneaking: bool,
+    chest_neighbor_at: &mut dyn FnMut(Direction) -> Option<ChestNeighbor>,
+) -> Result<PlacementSelection, RejectReason> {
+    let kind = PlaceableBlockKind::Chest;
+    let base_facing = nearest_horizontal_direction4(yaw_degrees).opposite();
+
+    if sneaking
+        && matches!(
+            clicked_face,
+            Face::North | Face::South | Face::West | Face::East
+        )
+    {
+        let clicked_dir = face_to_direction(clicked_face);
+        let neighbor_dir = clicked_dir.opposite();
+        if let Some(neighbor) = chest_neighbor_at(neighbor_dir)
+            && neighbor.is_single
+            && horizontal_axis_is_z(neighbor.facing) != horizontal_axis_is_z(clicked_dir)
+        {
+            let new_type = if counter_clockwise(neighbor.facing) == neighbor_dir {
+                ChestType::Left
+            } else {
+                ChestType::Right
+            };
+            return Ok(PlacementSelection {
+                kind,
+                orientation: Orientation::Chest(neighbor.facing, new_type),
+                is_wall_variant: false,
+                chest_merge: Some(ChestMerge {
+                    neighbor_direction: neighbor_dir,
+                    neighbor_facing: neighbor.facing,
+                    neighbor_new_type: complementary_chest_type(new_type),
+                }),
+            });
+        }
+    }
+
+    let cw_dir = clockwise(base_facing);
+    if let Some(neighbor) = chest_neighbor_at(cw_dir)
+        && neighbor.is_single
+        && neighbor.facing == base_facing
+    {
+        return Ok(PlacementSelection {
+            kind,
+            orientation: Orientation::Chest(base_facing, ChestType::Left),
+            is_wall_variant: false,
+            chest_merge: Some(ChestMerge {
+                neighbor_direction: cw_dir,
+                neighbor_facing: base_facing,
+                neighbor_new_type: ChestType::Right,
+            }),
+        });
+    }
+
+    let ccw_dir = counter_clockwise(base_facing);
+    if let Some(neighbor) = chest_neighbor_at(ccw_dir)
+        && neighbor.is_single
+        && neighbor.facing == base_facing
+    {
+        return Ok(PlacementSelection {
+            kind,
+            orientation: Orientation::Chest(base_facing, ChestType::Right),
+            is_wall_variant: false,
+            chest_merge: Some(ChestMerge {
+                neighbor_direction: ccw_dir,
+                neighbor_facing: base_facing,
+                neighbor_new_type: ChestType::Left,
+            }),
+        });
+    }
+
+    Ok(PlacementSelection {
+        kind,
+        orientation: Orientation::Chest(base_facing, ChestType::Single),
+        is_wall_variant: false,
+        chest_merge: None,
+    })
+}
+
+fn complementary_chest_type(t: ChestType) -> ChestType {
+    match t {
+        ChestType::Left => ChestType::Right,
+        ChestType::Right => ChestType::Left,
+        ChestType::Single => ChestType::Single,
+    }
+}
+
+/// `true` for the Z-axis horizontal directions (North/South), `false` for the X-axis ones
+/// (East/West) -- panics for a vertical input (every real caller here only ever passes a
+/// horizontal `Direction`, mirroring `horizontal4_index`'s own panic-on-vertical convention).
+fn horizontal_axis_is_z(dir: Direction) -> bool {
+    match dir {
+        Direction::North | Direction::South => true,
+        Direction::East | Direction::West => false,
+        Direction::Up | Direction::Down => panic!(
+            "horizontal_axis_is_z: {dir:?} is not horizontal -- every real caller here only \
+             ever passes a chest FACING or clicked-face direction"
+        ),
+    }
+}
+
+fn clockwise(dir: Direction) -> Direction {
+    match dir {
+        Direction::North => Direction::East,
+        Direction::East => Direction::South,
+        Direction::South => Direction::West,
+        Direction::West => Direction::North,
+        Direction::Up | Direction::Down => panic!(
+            "clockwise: {dir:?} is not horizontal -- every real caller here only ever passes a \
+             chest FACING"
+        ),
+    }
+}
+
+fn counter_clockwise(dir: Direction) -> Direction {
+    match dir {
+        Direction::North => Direction::West,
+        Direction::West => Direction::South,
+        Direction::South => Direction::East,
+        Direction::East => Direction::North,
+        Direction::Up | Direction::Down => panic!(
+            "counter_clockwise: {dir:?} is not horizontal -- every real caller here only ever \
+             passes a chest FACING"
+        ),
     }
 }
 
@@ -879,6 +1166,57 @@ fn full6_piston_index(dir: Direction) -> u32 {
     }
 }
 
+/// `minecraft:chest`'s own listed `type` value order (blocks.json: `[single, left, right]`,
+/// protocol 776), M3 field-report fix (chest-merge) -- stride 2 (`type`'s own stride sits one
+/// level inside `facing`'s own stride-6; `waterlogged`, this table's own innermost property,
+/// is always `false` in this tier-1 no-fluids scope and so contributes no term, exactly as
+/// `tier1_oriented_entries()`'s own pre-existing chest doc comment already established for
+/// `facing`'s stride).
+fn chest_type_index(chest_type: ChestType) -> u32 {
+    match chest_type {
+        ChestType::Single => 0,
+        ChestType::Left => 1,
+        ChestType::Right => 2,
+    }
+}
+
+/// `<CHEST default id> + facing_idx*6 + type_idx*2` (M3 field-report fix, chest-merge) --
+/// `waterlogged` stays at its own default (`false`) always in this tier-1 scope, contributing
+/// no term. `decode_chest_state` below is this function's own exact inverse, used by
+/// `apply_placement`'s own `chest_neighbor_at` closure to read an existing chest's own
+/// `(facing, type)` back out of a raw id, and by the chest-merge writeback to compute the
+/// EXISTING neighbor's own new id after a merge.
+pub fn chest_state_id(facing: Direction, chest_type: ChestType) -> u32 {
+    CHEST.0 + horizontal4_index(facing) * 6 + chest_type_index(chest_type) * 2
+}
+
+/// `chest_state_id`'s own exact inverse (M3 field-report fix, chest-merge) -- `None` for any
+/// raw id outside chest's own reachable `facing in [north,south,west,east] x type in
+/// [single,left,right] x waterlogged in [true,false]` range (`CHEST.0 ..= CHEST.0 + 23`); a
+/// `waterlogged=true` id (an odd offset within its own 6-wide facing group) still decodes
+/// correctly since `type`'s own stride-2 groups each contain exactly one `waterlogged=true`/
+/// `false` pair -- this tier-1 world never itself creates one (no fluids), but a defensive
+/// correct decode costs nothing.
+fn decode_chest_state(raw: u32) -> Option<(Direction, ChestType)> {
+    let offset = raw.checked_sub(CHEST.0)?;
+    if offset > 23 {
+        return None;
+    }
+    let facing = match offset / 6 {
+        0 => Direction::North,
+        1 => Direction::South,
+        2 => Direction::West,
+        3 => Direction::East,
+        _ => return None,
+    };
+    let chest_type = match (offset % 6) / 2 {
+        0 => ChestType::Single,
+        1 => ChestType::Left,
+        _ => ChestType::Right,
+    };
+    Some((facing, chest_type))
+}
+
 /// The complete tier-1 `(kind, orientation)` -> raw-id entry set, shared by
 /// `tier1_oriented_state_table()` (wrapped as an `OrientedStateTable`) and
 /// `raw_state_dig_properties()` below (iterated in reverse, raw id -> `DigProperties`) — one
@@ -958,12 +1296,21 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
             // North/South/West/East -> 11264/11268/11272/11276.
             COMPARATOR.0 + idx * 4,
         ));
-        entries.push((
-            (PlaceableBlockKind::Chest, Orientation::Horizontal(dir)),
-            // CHEST default = 3988 (type=single, facing=north, waterlogged=false); stride 6.
-            // North/South/West/East -> 3988/3994/4000/4006.
-            CHEST.0 + idx * 6,
-        ));
+        // M3 field-report fix (chest-merge): all three `TYPE` values per facing, not only
+        // `Single` -- a merged placement's own `Orientation::Chest(dir, Left | Right)` needs a
+        // real table row too (`chest_state_id`'s own doc comment has the full stride
+        // derivation). CHEST default = 3988 (type=single, facing=north, waterlogged=false);
+        // facing stride 6, type stride 2. North/South/West/East, Single -> 3988/3994/4000/4006
+        // (unchanged from before this fix); Left -> +2 of each; Right -> +4 of each.
+        for chest_type in [ChestType::Single, ChestType::Left, ChestType::Right] {
+            entries.push((
+                (
+                    PlaceableBlockKind::Chest,
+                    Orientation::Chest(dir, chest_type),
+                ),
+                chest_state_id(dir, chest_type),
+            ));
+        }
         entries.push((
             (PlaceableBlockKind::Furnace, Orientation::Horizontal(dir)),
             // FURNACE default = 5328 (facing=north, lit=false); stride 2.
@@ -1239,6 +1586,13 @@ pub enum RejectReason {
     OutOfReach,
     TargetNotAir,
     TargetAlreadyAir,
+    /// M3 field-report fix (torch-candidate loop): no longer "the clicked face itself is
+    /// never valid for a torch" (the old, wrong, face-only rule) -- now "every candidate
+    /// direction `resolve_orientation`'s own torch candidate loop tried (UP always excluded)
+    /// failed its own support check," i.e. vanilla's real placement-time survival refusal for
+    /// a torch specifically. The variant name is kept (no other code references
+    /// `RejectReason` by name across a crate boundary) but the condition it now reports is
+    /// this broader, real one.
     InvalidTorchFace,
     NoSolidSupportBelow,
     /// Not part of the blueprint's own literal `RejectReason` listing — added because a
@@ -1459,18 +1813,33 @@ pub fn finalize_break(
 
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
 /// unchanged), checks the cursor sanity bound (`cursor_within_sanity_bound`, M3 field-report
-/// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`), resolves the
-/// raw state via `tier1_oriented_state_table()`, checks `is_placement_obstructed` (M3
-/// field-report fix, Defect 1 -- run after the raw state is resolved, before `ctx.set_block`,
-/// matching vanilla's own `isUnobstructed` ordering), calls `ctx.set_block` +
-/// `settle_neighbor_updates`. Wire-connection blocks (`RedstoneWire`) additionally check
-/// `NoSolidSupportBelow` (Context's own simplified "block below is the `FULL_CUBE` default
-/// shape-table row" rule) before calling `set_block`. `cursor` is the client-sent `Use Item
-/// On` cursor hit location (`cursor_x`/`_y`/`_z`, `connection.rs`'s own decode), validated
-/// against `location` (the raw clicked cell), never against `target`. `player_boxes` is
+/// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`, fed a pair of
+/// closures over `ctx_world` -- `is_full_cube_at`/`chest_neighbor_at`, M3 field-report fix,
+/// torch-candidate + chest-merge), resolves the raw state via `tier1_oriented_state_table()`,
+/// checks `is_placement_obstructed` (M3 field-report fix, Defect 1 -- run after the raw state
+/// is resolved, before `ctx.set_block`, matching vanilla's own `isUnobstructed` ordering),
+/// calls `ctx.set_block` + `settle_neighbor_updates`. Wire/repeater/comparator additionally
+/// check `NoSolidSupportBelow` (Context's own simplified "block below is the `FULL_CUBE`
+/// default shape-table row" rule -- M3 field-report fix, placement-time survival refusal:
+/// repeater/comparator never had this check before; wire's own pre-existing check now also
+/// accepts a hopper directly below, vanilla's own dedicated exception for wire alone) before
+/// calling `set_block`; a floor/wall torch's own equivalent refusal is already built into
+/// `resolve_orientation`'s own candidate loop (no valid candidate `Err`s the whole call). A
+/// chest placement that merges into an existing neighbor (`selection.chest_merge`) also
+/// writes that neighbor's own complementary `TYPE` (M3 field-report fix, chest-merge) via a
+/// plain `ctx.set_block` -- `UpdateContext::set_block`'s own `changed` collector (M3 field-
+/// report fix, the changed-positions broadcast) records that second write automatically, so
+/// `world.rs`'s own `broadcast_changed_positions` reaches it with no call-site change needed.
+/// `cursor` is the client-sent `Use Item On`
+/// cursor hit location (`cursor_x`/`_y`/`_z`, `connection.rs`'s own decode), validated against
+/// `location` (the raw clicked cell), never against `target`. `player_boxes` is
 /// `is_placement_obstructed`'s own complete entity-AABB collection, caller-supplied (this
 /// module has no ECS access of its own) -- see that function's own doc comment for the full
-/// "why every currently-connected player, the placer included" reasoning.
+/// "why every currently-connected player, the placer included" reasoning. `sneaking` (M3
+/// field-report fix, chest-merge) is the acting player's own current `PlayerInputState.
+/// sneaking` -- `world.rs`'s tick loop already computes this exact value (`crouching`) for
+/// the reach check just above its own `apply_placement_with_redstone` call site, reused there
+/// unchanged.
 ///
 /// A thin, signature-preserving wrapper around `apply_placement_with_redstone` (`redstone:
 /// None` -- a freshly placed hopper always resolves `enabled=true`, this function's own
@@ -1497,6 +1866,7 @@ pub fn apply_placement(
     yaw_degrees: f32,
     pitch_degrees: f32,
     player_boxes: &[rc_physics::Aabb],
+    sneaking: bool,
 ) -> PlaceOutcome {
     apply_placement_with_redstone(
         ctx_world,
@@ -1516,6 +1886,7 @@ pub fn apply_placement(
         yaw_degrees,
         pitch_degrees,
         player_boxes,
+        sneaking,
         None,
     )
 }
@@ -1544,6 +1915,7 @@ pub fn apply_placement_with_redstone(
     yaw_degrees: f32,
     pitch_degrees: f32,
     player_boxes: &[rc_physics::Aabb],
+    sneaking: bool,
     redstone: Option<&SignalSourceRegistry>,
 ) -> PlaceOutcome {
     let target = resolve_place_position(location, face, inside_block);
@@ -1579,7 +1951,36 @@ pub fn apply_placement_with_redstone(
         };
     }
 
-    let selection = match resolve_orientation(kind, face, yaw_degrees, pitch_degrees) {
+    let mut is_full_cube_at = |dir: Direction| -> bool {
+        let pos = dir.apply(target);
+        ctx_world
+            .get_block(pos)
+            .map(|state| {
+                rc_physics::tier1_shape_table().lookup(state.to_raw()).shape
+                    == rc_physics::VoxelShape::full_cube()
+            })
+            .unwrap_or(false)
+    };
+    let mut chest_neighbor_at = |dir: Direction| -> Option<ChestNeighbor> {
+        let pos = dir.apply(target);
+        ctx_world
+            .get_block(pos)
+            .and_then(|state| decode_chest_state(state.to_raw()))
+            .map(|(facing, chest_type)| ChestNeighbor {
+                facing,
+                is_single: chest_type == ChestType::Single,
+            })
+    };
+
+    let selection = match resolve_orientation(
+        kind,
+        face,
+        yaw_degrees,
+        pitch_degrees,
+        sneaking,
+        &mut is_full_cube_at,
+        &mut chest_neighbor_at,
+    ) {
         Ok(selection) => selection,
         Err(reason) => {
             return PlaceOutcome::Rejected {
@@ -1590,16 +1991,28 @@ pub fn apply_placement_with_redstone(
         }
     };
 
-    if matches!(kind, PlaceableBlockKind::RedstoneWire) {
+    if matches!(
+        kind,
+        PlaceableBlockKind::RedstoneWire
+            | PlaceableBlockKind::Repeater
+            | PlaceableBlockKind::Comparator
+    ) {
         let below = BlockPos::new(target.x, target.y - 1, target.z);
-        let supported = ctx_world
-            .get_block(below)
-            .map(|state| {
-                rc_physics::tier1_shape_table().lookup(state.to_raw()).shape
+        let below_raw = ctx_world.get_block(below).map(|state| state.to_raw());
+        let solid_below = below_raw
+            .map(|raw| {
+                rc_physics::tier1_shape_table().lookup(raw).shape
                     == rc_physics::VoxelShape::full_cube()
             })
             .unwrap_or(false);
-        if !supported {
+        // M3 field-report fix (verified vanilla rule, redstone_wire's own "or a hopper below"
+        // exception): a hopper is never a full-cube conductor (`tier1_shape_table`'s own
+        // hopper row is the funnel/rim shape) yet vanilla still lets wire rest directly on
+        // one (`RedstoneWireBlock`'s own dedicated hopper carve-out) -- repeater/comparator
+        // have no such exception, only wire's own rule names it.
+        let hopper_below = matches!(kind, PlaceableBlockKind::RedstoneWire)
+            && below_raw.is_some_and(|raw| (HOPPER.0..=HOPPER.0 + 4).contains(&raw));
+        if !solid_below && !hopper_below {
             return PlaceOutcome::Rejected {
                 pos: target,
                 reason: RejectReason::NoSolidSupportBelow,
@@ -1722,6 +2135,21 @@ pub fn apply_placement_with_redstone(
                 behaviors
                     .resolve(state)
                     .on_neighbor_changed(&mut ctx, target, Direction::North);
+            }
+            PlaceableBlockKind::Chest => {
+                // M3 field-report fix (chest-merge): the EXISTING neighbor chest's own TYPE
+                // flips to the complementary value (vanilla's own `updateShape` side effect on
+                // that neighbor -- `ChestMerge`'s own doc comment has the full reasoning). A
+                // plain `ctx.set_block` -- not `on_placed`/`on_neighbor_changed` -- since this
+                // is an existing block's property changing, not a fresh placement, and chests
+                // dispatch no real `BlockBehavior` (`NoOpBehavior`) to seed or re-evaluate
+                // here anyway.
+                if let Some(merge) = selection.chest_merge {
+                    let neighbor_pos = merge.neighbor_direction.apply(target);
+                    let neighbor_id =
+                        chest_state_id(merge.neighbor_facing, merge.neighbor_new_type);
+                    ctx.set_block(neighbor_pos, to_storage_id(neighbor_id));
+                }
             }
             _ => {}
         }
