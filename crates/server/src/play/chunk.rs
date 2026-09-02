@@ -341,8 +341,29 @@ pub fn encode_block_entities(blocks: &rc_chunk_storage::BlockStateColumn) -> Vec
 
     let mut out = Vec::new();
     for section_index in 0..SECTION_COUNT {
+        let section = blocks.section(section_index);
+        // M3 field-report fix (CI hang, 2026-09-02): a full 4096-cell walk over all 26
+        // sections is 106k `block_entity_wire_kind_for_raw_state` calls per chunk -- 12.9M
+        // per join (121 chunks) in an unoptimized test build, which turned every
+        // two-player integration test into a 30s..300s stall on the CI runners. The
+        // section's own palette already says whether any block-entity kind can occur in
+        // it at all: `SingleValue`/`Indirect` palettes are checked in O(palette) and the
+        // cell walk only runs for sections that can actually contain one (`Direct`
+        // palettes -- huge, never seen in this project's own worlds -- keep the full walk).
+        let may_hold_block_entity = match section.palette() {
+            rc_chunk_storage::Palette::SingleValue(id) => {
+                mining::block_entity_wire_kind_for_raw_state(id.to_raw()).is_some()
+            }
+            rc_chunk_storage::Palette::Indirect { entries, .. } => entries
+                .iter()
+                .any(|id| mining::block_entity_wire_kind_for_raw_state(id.to_raw()).is_some()),
+            rc_chunk_storage::Palette::Direct { .. } => true,
+        };
+        if !may_hold_block_entity {
+            continue;
+        }
         let section_base_y = CHUNK_STORAGE_WORLD_MIN_Y + (section_index as i32) * 16;
-        for (i, id) in blocks.section(section_index).iter().enumerate() {
+        for (i, id) in section.iter().enumerate() {
             let Some(kind) = mining::block_entity_wire_kind_for_raw_state(id.to_raw()) else {
                 continue;
             };
