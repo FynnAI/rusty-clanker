@@ -105,7 +105,13 @@ fn nbt_validation_rejects_non_nbt_payload_at_the_backend_level() {
     // Write a non-NBT byte payload directly through the low-level RegionFile/
     // CompressionScheme primitives at the exact slot `read_chunk` looks up for
     // (Overworld, Terrain, 0, 0) — region (0,0), local (0,0).
-    let region_path = dir.path().join("region").join("r.0.0.mca");
+    let region_path = dir
+        .path()
+        .join("dimensions")
+        .join("minecraft")
+        .join("overworld")
+        .join("region")
+        .join("r.0.0.mca");
     let compressed = CompressionScheme::Zlib.compress(b"not nbt at all, just bytes");
     {
         let mut rf = RegionFile::open(region_path, 0, 0).unwrap();

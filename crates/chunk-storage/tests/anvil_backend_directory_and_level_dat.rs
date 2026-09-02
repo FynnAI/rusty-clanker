@@ -28,16 +28,37 @@ fn open_creates_overworld_directories_eagerly() {
         AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
     let _keep_alive = backend;
 
-    assert!(dir.path().join("region").is_dir());
-    assert!(dir.path().join("entities").is_dir());
-    assert!(dir.path().join("poi").is_dir());
+    let overworld = dir
+        .path()
+        .join("dimensions")
+        .join("minecraft")
+        .join("overworld");
+    assert!(overworld.join("region").is_dir());
+    assert!(overworld.join("entities").is_dir());
+    assert!(overworld.join("poi").is_dir());
+    assert!(
+        !dir.path()
+            .join("dimensions")
+            .join("minecraft")
+            .join("the_nether")
+            .exists()
+    );
+    assert!(
+        !dir.path()
+            .join("dimensions")
+            .join("minecraft")
+            .join("the_end")
+            .exists()
+    );
+    // The pre-M3.5 legacy layout is never created as a side effect.
+    assert!(!dir.path().join("region").exists());
     assert!(!dir.path().join("DIM-1").exists());
     assert!(!dir.path().join("DIM1").exists());
 }
 
 #[test]
-fn writing_a_nether_chunk_lazily_creates_dim_minus_1() {
-    let dir = TempWorldDir::new("writing_a_nether_chunk_lazily_creates_dim_minus_1");
+fn writing_a_nether_chunk_lazily_creates_its_own_directory() {
+    let dir = TempWorldDir::new("writing_a_nether_chunk_lazily_creates_its_own_directory");
     let backend =
         AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib).unwrap();
 
@@ -52,8 +73,34 @@ fn writing_a_nether_chunk_lazily_creates_dim_minus_1() {
         )
         .unwrap();
 
-    assert!(dir.path().join("DIM-1").join("region").is_dir());
-    assert!(!dir.path().join("DIM1").exists());
+    assert!(
+        dir.path()
+            .join("dimensions")
+            .join("minecraft")
+            .join("the_nether")
+            .join("region")
+            .is_dir()
+    );
+    assert!(
+        !dir.path()
+            .join("dimensions")
+            .join("minecraft")
+            .join("the_end")
+            .exists()
+    );
+}
+
+#[test]
+fn open_refuses_legacy_layout() {
+    let dir = TempWorldDir::new("open_refuses_legacy_layout");
+    std::fs::create_dir_all(dir.path().join("region")).unwrap();
+
+    match AnvilDiskBackend::open(dir.path().to_path_buf(), CompressionScheme::Zlib) {
+        Ok(_) => panic!("a legacy-layout world root must be refused, not silently opened"),
+        Err(err) => assert!(matches!(err, StorageError::LegacyLayoutDetected { .. })),
+    }
+
+    assert!(!dir.path().join("dimensions").exists());
 }
 
 #[test]

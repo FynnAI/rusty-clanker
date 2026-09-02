@@ -75,7 +75,15 @@ fn batch_write_with_entries_for_a_never_before_seen_region_creates_it() {
         )
         .unwrap();
 
-    assert!(dir.path().join("region").join("r.6.6.mca").exists());
+    assert!(
+        dir.path()
+            .join("dimensions")
+            .join("minecraft")
+            .join("overworld")
+            .join("region")
+            .join("r.6.6.mca")
+            .exists()
+    );
     assert_eq!(
         backend
             .read_chunk(

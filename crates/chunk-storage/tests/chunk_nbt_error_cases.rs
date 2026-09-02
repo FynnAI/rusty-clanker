@@ -3,11 +3,8 @@
 
 mod common;
 
-use bevy_ecs::prelude::Entity;
 use common::{codec, thresholds};
-use rc_chunk_storage::{
-    BiomeColumn, BiomeId, BlockEntityIndex, BlockStateColumn, BlockStateId, ChunkNbtError,
-};
+use rc_chunk_storage::{BiomeColumn, BiomeId, BlockStateColumn, BlockStateId, ChunkNbtError};
 use rc_core::DimensionId;
 use rc_nbt::owned::{NbtCompound, NbtList, NbtTag};
 
@@ -20,7 +17,7 @@ fn base_compound() -> NbtCompound {
             &fixture.biomes,
             &fixture.light,
             &fixture.heightmaps,
-            &fixture.block_entities,
+            &fixture.block_entity_records,
             fixture.status,
             fixture.persistence,
             false,
@@ -94,38 +91,11 @@ fn missing_block_section_is_rejected() {
     assert!(matches!(err, ChunkNbtError::MissingSection(3)));
 }
 
-#[test]
-fn non_empty_block_entities_on_save_is_rejected() {
-    let fixture = common::all_air_fixture();
-    let (_, _) = thresholds();
-    let mut block_entities = BlockEntityIndex::new();
-    block_entities.push(Entity::from_raw_u32(0).unwrap());
-
-    let err = codec()
-        .to_nbt(
-            fixture.chunk_key.0,
-            &fixture.blocks,
-            &fixture.biomes,
-            &fixture.light,
-            &fixture.heightmaps,
-            &block_entities,
-            fixture.status,
-            fixture.persistence,
-            false,
-            &[],
-        )
-        .unwrap_err();
-    assert!(matches!(err, ChunkNbtError::UnsupportedBlockEntities(1)));
-}
-
-#[test]
-fn non_empty_block_entities_on_load_is_rejected() {
-    let mut compound = base_compound();
-    let dummy = NbtCompound::from_values(vec![("id".into(), NbtTag::String("test:dummy".into()))]);
-    *compound.get_mut("block_entities").unwrap() = NbtTag::List(NbtList::Compound(vec![dummy]));
-    let err = expect_err(decode(compound));
-    assert!(matches!(err, ChunkNbtError::UnsupportedBlockEntities(1)));
-}
+// `non_empty_block_entities_on_save_is_rejected`/`non_empty_block_entities_on_load_is_
+// rejected` (M2-B04's own original pair) are removed by M3.5-B05: `ChunkNbtError::
+// UnsupportedBlockEntities` no longer exists -- a non-empty `block_entities` list is real,
+// supported production behavior now (WORLD-D6), not an error. Real coverage for the new
+// encode/decode behavior lives in `block_entity_record_roundtrip.rs`.
 
 #[test]
 fn out_of_range_local_palette_index_is_rejected() {
@@ -168,7 +138,7 @@ fn unresolvable_block_state_name_on_save_is_rejected() {
             &biomes,
             &fixture.light,
             &fixture.heightmaps,
-            &fixture.block_entities,
+            &fixture.block_entity_records,
             fixture.status,
             fixture.persistence,
             false,
