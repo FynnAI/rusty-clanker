@@ -44,10 +44,45 @@ fn late_save_timer_is_caught_by_the_cadence_leg() {
 
 #[test]
 fn early_save_is_also_a_violation() {
-    let events = vec![event(0, "r0.0"), event(1197, "r0.0")];
+    let events = vec![event(0, "r0.0"), event(1200, "r0.0"), event(2397, "r0.0")];
     let report = analyze_cadence(&events, 1200);
     assert_eq!(report.violations.len(), 1);
+    assert_eq!(report.violations[0].at_index, 2);
     assert_eq!(report.violations[0].actual_interval_ticks, 1197);
+}
+
+/// The gap between a chunk's immediate first save and its first interval-elapsed save is
+/// decided by when the harness's dirty driver first touched the chunk (bot login, recenter,
+/// aim settle), never by the save timer -- `analyze_cadence` treats it as warm-up. Observed
+/// for real on the `ubuntu-24.04` runner: first save at the join burst, first churn toggle
+/// three ticks after the interval had elapsed, every later gap exactly on cadence.
+#[test]
+fn first_gap_after_a_chunks_immediate_first_save_is_warm_up_not_cadence() {
+    let events = vec![
+        event(340, "1:0,0"),
+        event(363, "1:0,0"),
+        event(383, "1:0,0"),
+        event(403, "1:0,0"),
+    ];
+    let report = analyze_cadence(&events, 20);
+    assert!(
+        report.within_tolerance(),
+        "unexpected violations: {:?}",
+        report.violations
+    );
+}
+
+#[test]
+fn a_late_second_gap_is_still_caught_after_the_warm_up_gap() {
+    let events = vec![
+        event(340, "1:0,0"),
+        event(363, "1:0,0"),
+        event(386, "1:0,0"),
+    ];
+    let report = analyze_cadence(&events, 20);
+    assert_eq!(report.violations.len(), 1);
+    assert_eq!(report.violations[0].at_index, 2);
+    assert_eq!(report.violations[0].actual_interval_ticks, 23);
 }
 
 #[test]
