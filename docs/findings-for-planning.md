@@ -1230,8 +1230,9 @@ Entries name the milestone that surfaced them and the code they concern.
   integration tests that spawn the release binary
   (`chunk_decode_diagnostic.rs`, and since M3.5-B03 the four
   `debug_hooks_stdin.rs` cases) failed with "no release binary" on every
-  scheduled run — red on both runners since at least 2026-08-31 without anyone
-  noticing.** Corrected in the same changeset (build step moved ahead of the
+  scheduled run — red on both runners on every scheduled run in the retained history
+  (2026-08-27 onward) without anyone noticing — the `m1`/`m2`/`m3-acceptance`
+  reports have therefore never once run in CI.** Corrected in the same changeset (build step moved ahead of the
   paritybot test step in all four jobs). The gap it exposes needs a decision:
   the scheduled tier has no surfacing rule — nothing in the verification
   protocol (TEST-D37's own Tier-2 placement) says who reads the nightly result
@@ -1241,6 +1242,31 @@ Entries name the milestone that surfaced them and the code they concern.
   conclusion per job (green required for the acceptance jobs of every
   completed milestone), and the manager session checks it at each wave
   boundary.
+
+- **M3.5-B02 (Constraints (e)/(f), recorded late by the manager's final audit —
+  the implementation commits claimed these entries existed but never wrote
+  them):** (e) `crates/mechanics/src/redstone/piston.rs`'s `DESTROY_IDS` /
+  `BLOCK_ENTITY_IMMOVABLE_IDS` classify by *block* through the generated
+  registry's full per-block range, which is wider than the M3 hand tables'
+  default-substate-only membership; a vanilla-faithful `PistonMoveBehavior`
+  classification per block (destroy / block / normal / push-only) still needs
+  its own reference pass. (f) `PISTON_EXTENDED_PLACEHOLDER` /
+  `STICKY_PISTON_EXTENDED_PLACEHOLDER` (`900_101`/`900_102`) are dead
+  constants kept only because a protected test file's own case references them;
+  removal needs a test-authoring changeset that retires that case first. Also:
+  B02's Goal section counted "eight" `*_RANGE` constants in `replay.rs`; the
+  implementation retired nine (the hopper range as well) — a blueprint miscount,
+  not otherwise consequential.
+
+- **M3.5-B04 deviation (recorded late by the manager's final audit):** the
+  TEST-D57 claims gate was not folded into `path_guard::evaluate_commit` as the
+  blueprint's Deliverables text says; it lives in a separate
+  `check_claims_gate` invoked from `run()` and merged into the failure list at
+  the call site. Observable behaviour is the same; the blueprint text and the
+  code differ. The far more important B04 defect — path-prefix ownership
+  resolving to the earliest, heading-less blueprint, leaving the gate inert
+  for every production path — is corrected in the blueprint itself (§2.9) and
+  re-implemented as a governance changeset rather than recorded here.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
