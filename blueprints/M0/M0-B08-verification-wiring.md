@@ -855,7 +855,7 @@ CI's path-guard blocks an `implementation`-labeled changeset from touching:
 
 1. `consent_missing_by_default` — a fresh temp `repo_root` with no marker file and `RC_ORACLE_EULA_ACCEPTED` unset → `consent_already_given` is `false`.
 2. `consent_true_after_record_consent` — call `record_consent`, then `consent_already_given` → `true`.
-3. `consent_true_via_env_var` — with the marker file absent, `std::env::set_var("RC_ORACLE_EULA_ACCEPTED", "1")` (nextest's per-test process isolation, TEST-D2, makes this safe against other tests) → `consent_already_given` is `true`.
+3. `consent_true_via_env_var` — with the marker file absent, `std::env::set_var("RC_ORACLE_EULA_ACCEPTED", "1")` → `consent_already_given` is `true`. Every test in this file that sets or clears the variable holds a file-local, poison-recovering `static ENV_LOCK: Mutex<()>` for its whole duration (an RAII guard that also clears the variable on drop): nextest's per-test process isolation (TEST-D2) alone makes the write safe against sibling tests, but plain `cargo test -p xtask` (libtest, every test thread-parallel in one process) is also a verification command since M3.5-B04, and there one test's `remove_var` raced another's `set_var`.
 4. `harness_dirs_returns_three_paths_under_oracle_root` — `harness_dirs(repo_root, "26.2")` returns exactly 3 paths, every one starting with `repo_root.join("oracle").join("26.2").join("harness")`, and their file-name tails are `scenarios`, `seeds`, `working` in some order.
 
 ### `xtask/tests/verify_fixtures_rules.rs`

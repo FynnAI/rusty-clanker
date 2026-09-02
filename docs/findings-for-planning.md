@@ -1095,4 +1095,24 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
-(empty — no pending blueprint-correction reconciliations)
+- **M3.5 hardening: `blueprints/M0/M0-B08-verification-wiring.md`'s
+  `xtask/tests/setup_oracle_consent.rs` item 3 corrected — it justified
+  `consent_true_via_env_var`'s bare `std::env::set_var`/`remove_var` with
+  "nextest's per-test process isolation (TEST-D2) makes this safe against
+  other tests", which holds only under `cargo nextest run`.** Under plain
+  `cargo test -p xtask` (libtest: every test of one binary thread-parallel
+  in the SAME process), which M3.5-B04's governance work runs alongside
+  `cargo nextest run -p xtask`, the three consent tests raced on the
+  process-wide `RC_ORACLE_EULA_ACCEPTED` variable — one test's `remove_var`
+  landing between another's `set_var` and its assertion, observed as an
+  intermittent `consent_true_via_env_var` failure that vanishes in isolation
+  or under nextest. Shipped fix (governance changeset, `xtask/**`): the
+  test file serializes every environment-touching test behind a file-local,
+  poison-recovering `static ENV_LOCK: Mutex<()>` via an RAII guard that sets
+  the variable on construction and clears it on drop (panic included),
+  mirroring `verify_claims_cli.rs`'s own `CWD_LOCK`; the pure `harness_dirs`
+  test now uses a synthetic root so it touches neither disk nor environment.
+  `setup_oracle::consent_already_given`'s own signature is unchanged. Planning
+  may want `09-testing-quality.md` (TEST-D2's per-test process isolation) to
+  state that libtest is also a supported runner for Tier 1, so no future test
+  relies on process isolation for process-global state (environment, cwd).
