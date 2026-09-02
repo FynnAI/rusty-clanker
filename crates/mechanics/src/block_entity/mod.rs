@@ -48,6 +48,16 @@ pub trait BlockEntityWorldAccess {
     /// Injected redstone-power query (Context: "Redstone lock" — not implemented by this
     /// blueprint's own production adapter; test doubles supply a fixed answer).
     fn is_locked_by_redstone(&self, pos: BlockPos) -> bool;
+    /// M3.5-B06 (Context §3.2): the raw block-state `ENABLED` bit at `pos` -- a hopper's own
+    /// `HopperBlockEntity::tick` gates its transfer attempt on this, in addition to (and
+    /// distinct from) `is_locked_by_redstone` above. Default `true` (matches vanilla's own
+    /// "always enabled" default) so every pre-existing implementor (`stage7/ecs.rs`,
+    /// `crates/testing/gametest/src/replay.rs`, every `crates/mechanics/tests/*.rs` test
+    /// double) compiles and behaves unchanged; only the real production adapter
+    /// (`stage7::ecs::EcsBlockEntityWorld`) overrides it with a real block-state read.
+    fn hopper_enabled(&self, _pos: BlockPos) -> bool {
+        true
+    }
     /// Applies a furnace lit-state block swap if `resolver` is present and resolves one
     /// (Context: "Lit-state block swap"). A no-op if `resolver` is `None`.
     fn swap_furnace_lit_state(

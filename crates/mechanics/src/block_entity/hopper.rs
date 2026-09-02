@@ -3,16 +3,19 @@
 //! collection are explicitly out of scope (Constraints (g)).
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use bevy_ecs::prelude::Component;
-use rc_chunk_storage::ItemStackRecord;
+use rc_chunk_storage::{BlockStateId, ItemStackRecord};
 use rc_core::BlockPos;
 use rc_nbt::schema::{NbtCompoundExt, NbtPath, SchemaError};
 use rc_nbt::{borrow, owned};
 
+use crate::behavior::{BlockBehavior, BlockBehaviorRegistry, UpdateContext};
 use crate::block_entity::BlockEntityWorldAccess;
 use crate::container::ItemMaxStackSize;
 use crate::direction::Direction;
+use crate::redstone::{SignalSourceRegistry, best_neighbor_signal};
 
 pub const HOPPER_SLOT_COUNT: usize = 5;
 pub const ALL_HOPPER_SLOTS: [usize; HOPPER_SLOT_COUNT] = [0, 1, 2, 3, 4];
@@ -31,6 +34,11 @@ pub struct HopperBlockEntity {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum HopperTickOutcome {
     OnCooldown,
+    /// M3.5-B06 (Context §3.2): the hopper's own raw block-state `ENABLED` bit reads `false`
+    /// -- checked after the cooldown gate and before the (separate, pre-existing) redstone-lock
+    /// gate, mirroring `HopperBlockEntity.tryMoveItems`'s own confirmed combined condition
+    /// (`M3.5-B06-CLAIMS.md`).
+    Disabled,
     Locked,
     Pushed,
     Pulled,
@@ -90,6 +98,13 @@ impl HopperBlockEntity {
         }
         if self.transfer_cooldown > 0 {
             return HopperTickOutcome::OnCooldown;
+        }
+        // M3.5-B06 (Context §3.2, TEST-D57 CONFIRMED): the raw block-state `ENABLED` gate --
+        // a distinct check from `is_locked_by_redstone` immediately below (that gate's own doc
+        // comment has the full "different vanilla concept" reasoning, restated in this
+        // blueprint's own §3.2).
+        if !world.hopper_enabled(pos) {
+            return HopperTickOutcome::Disabled;
         }
         if world.is_locked_by_redstone(pos) {
             return HopperTickOutcome::Locked;
@@ -309,4 +324,73 @@ impl rc_chunk_storage::BlockEntityCodec for HopperBlockEntity {
         let (_pos, value) = Self::from_nbt(&compound)?;
         Ok(value)
     }
+}
+
+/// `[min, max]` inclusive for `minecraft:hopper` (Context §3.2: `HOPPER.0` = `11313`,
+/// `enabled=true` occupies `HOPPER.0..=HOPPER.0+4`, `enabled=false` occupies
+/// `HOPPER.0+5..=HOPPER.0+9`, same five-way `facing` order both halves).
+pub(crate) const HOPPER_BASE: u32 = 11313;
+pub(crate) const HOPPER_MAX: u32 = 11322;
+
+/// `dispatch_ranges::derive_hopper_state_ids`'s own read side (mirrors `wire::state_range`/
+/// `piston::state_range`'s identical role).
+pub(crate) fn state_range() -> (u32, u32) {
+    (HOPPER_BASE, HOPPER_MAX)
+}
+
+/// `true` iff `raw` (must be a real hopper id, `HOPPER_BASE..=HOPPER_MAX`) encodes
+/// `enabled=true` -- the inner `facing` property is stride-1 (`0..=4`), so `enabled` (the
+/// outer, stride-5 property) is `true` for offsets `0..=4` and `false` for `5..=9`.
+pub(crate) fn hopper_enabled_from_raw(raw: u32) -> bool {
+    (raw - HOPPER_BASE) < 5
+}
+
+/// M3.5-B06 (Context §3.2): re-evaluates a hopper's own `ENABLED` block-state bit on every
+/// neighbor change, exactly mirroring vanilla's `HopperBlock.checkPoweredState`
+/// (`ENABLED = !hasNeighborSignal(pos)`, TEST-D57 CONFIRMED) -- placement-time evaluation
+/// already lives in `crates/server/src/play/mining.rs`'s `apply_placement_with_redstone`; this
+/// closes the neighbor-changed half. Emits no redstone signal of its own (never registered
+/// into `SignalSourceRegistry`, mirroring `PistonBehavior`'s own identical rule).
+pub struct HopperBehavior {
+    registry: Arc<SignalSourceRegistry>,
+}
+
+impl HopperBehavior {
+    pub fn new(registry: Arc<SignalSourceRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+impl BlockBehavior for HopperBehavior {
+    fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        // M3.5-B06 implementation changeset fills in the real body (test-authoring stub,
+        // TEST-D45 -- `hopper_enabled_reeval.rs`'s own tests pin down the exact behavior this
+        // replaces).
+        let _ = (ctx, pos);
+        todo!("M3.5-B06 implementation changeset: HopperBehavior::on_neighbor_changed")
+    }
+}
+
+/// `register_hopper`'s own dispatch-range input, mirroring `PistonStateIds`'s identical shape
+/// (a hopper has no sticky/non-sticky split, so this carries exactly one range).
+pub struct HopperStateIds {
+    pub hopper: (BlockStateId, BlockStateId),
+}
+
+/// Constructs one fresh `HopperBehavior` and registers it into `behaviors` at `ids.hopper`'s
+/// range. Call once per region (`crates/server/src/play/world.rs`'s own `bootstrap_redstone_
+/// dispatch`). Never registers anything into `SignalSourceRegistry` (`HopperBehavior`'s own
+/// doc comment).
+pub fn register_hopper(
+    behaviors: &mut BlockBehaviorRegistry,
+    registry: Arc<SignalSourceRegistry>,
+    ids: &HopperStateIds,
+) -> Arc<HopperBehavior> {
+    let hopper = Arc::new(HopperBehavior::new(registry));
+    behaviors.register_range(
+        ids.hopper.0,
+        ids.hopper.1,
+        Arc::clone(&hopper) as Arc<dyn BlockBehavior>,
+    );
+    hopper
 }

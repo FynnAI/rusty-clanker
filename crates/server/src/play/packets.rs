@@ -625,6 +625,52 @@ pub struct BlockUpdate {
     pub block_state_id: i32,
 }
 
+/// M3.5-B06 (Context §3.1): the batched sibling of `BlockUpdate` -- exactly one changed
+/// block in a section broadcasts as `BlockUpdate`, two or more broadcast as one of these
+/// instead (`world.rs`'s own `broadcast_changed_positions`/`send_filtered_by_chunk`). Wire
+/// shape is a TEST-D57 CONFIRMED claim (`M3.5-B06-CLAIMS.md`): `section_pos` is a **plain**
+/// (not VarInt) big-endian `i64` (`pack_section_position`'s own doc comment has the exact bit
+/// layout); `states` is a VarInt-counted `Vec` of `VarLong`, each entry packed by
+/// `pack_block_in_section`. Packet id `0x54` -- also CONFIRMED (`M3.5-B06-CLAIMS.md`, cross-
+/// checked against a real `reports/packets.json` this session).
+#[derive(RcPacket, Debug, Clone, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x54)]
+pub struct SectionBlocksUpdate {
+    pub section_pos: i64,
+    #[rc(prefixed_array = "VarInt")]
+    pub states: Vec<rc_protocol::VarLong>,
+}
+
+/// `SectionBlocksUpdate::section_pos`'s own packing (Context §3.1, TEST-D57 CONFIRMED):
+/// 22-bit `chunk_x`, 20-bit `section_y`, 22-bit `chunk_z` -- distinct bit widths from
+/// `pack_position`'s own 26/26/12 block-position split (this packet addresses a *section*,
+/// not a block). `section_y` is the section index (`world_y >> 4`), signed.
+pub fn pack_section_position(chunk_x: i32, section_y: i32, chunk_z: i32) -> i64 {
+    let x = (chunk_x as i64) & 0x3F_FFFF;
+    let y = (section_y as i64) & 0xF_FFFF;
+    let z = (chunk_z as i64) & 0x3F_FFFF;
+    (x << 42) | y | (z << 20)
+}
+
+/// One `SectionBlocksUpdate::states` entry's own packing (Context §3.1, TEST-D57 CONFIRMED):
+/// the new state id in the high bits, the block's own local `(x, z, y)` position within the
+/// section (each `0..16`) in the low 12 bits. Returned pre-wrapped as `VarLong` since that is
+/// exactly how `states` is declared (`#[rc(prefixed_array = "VarInt")]` only prefixes the
+/// count -- each element's own wire width comes from its own `WireWrite` impl, `VarLong`'s
+/// here).
+pub fn pack_block_in_section(
+    state_id: u32,
+    local_x: u8,
+    local_z: u8,
+    local_y: u8,
+) -> rc_protocol::VarLong {
+    let packed = ((state_id as u64) << 12)
+        | ((local_x as u64) << 8)
+        | ((local_z as u64) << 4)
+        | (local_y as u64);
+    rc_protocol::VarLong::new(packed as i64)
+}
+
 /// M2-B07: the vanilla per-action `sequence` acknowledgment (MECH-D63, restated) -- the
 /// client allocates and stamps `sequence`, the server only validates and echoes it back,
 /// unmodified, exactly once per received `PlayerAction`/`UseItemOn`, unconditionally
@@ -708,6 +754,38 @@ mod tests {
         let packed = pack_position(rc_core::BlockPos::new(0, -59, 0));
         // y is the low 12 bits, two's-complement: -59 as u12 == 4096 - 59 == 4037.
         assert_eq!(packed & 0xFFF, 4037);
+    }
+
+    #[test]
+    fn pack_section_position_round_trips_through_a_hand_decoded_inverse() {
+        let packed = pack_section_position(-3, -4, 5);
+        let x = (packed >> 42) & 0x3F_FFFF;
+        let y = packed & 0xF_FFFF;
+        let z = (packed >> 20) & 0x3F_FFFF;
+        assert_eq!(
+            sign_extend(x, 22) as i32,
+            -3,
+            "chunk_x round trip via 22-bit sign extension"
+        );
+        assert_eq!(
+            sign_extend(y, 20) as i32,
+            -4,
+            "section_y round trip via 20-bit sign extension"
+        );
+        assert_eq!(
+            sign_extend(z, 22) as i32,
+            5,
+            "chunk_z round trip via 22-bit sign extension"
+        );
+    }
+
+    #[test]
+    fn pack_block_in_section_round_trips_through_a_hand_decoded_inverse() {
+        let packed = pack_block_in_section(11318, 2, 5, 9).get() as u64;
+        assert_eq!(packed >> 12, 11318, "state id occupies the high bits");
+        assert_eq!((packed >> 8) & 0xF, 2, "local_x at bits 8..12");
+        assert_eq!((packed >> 4) & 0xF, 5, "local_z at bits 4..8");
+        assert_eq!(packed & 0xF, 9, "local_y at bits 0..4");
     }
 
     #[test]
