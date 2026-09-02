@@ -123,9 +123,17 @@ impl BlocksIndex {
 mod tests {
     use super::*;
 
+    /// One fresh directory per call: the process id alone is shared by every test in
+    /// this binary under plain `cargo test` (libtest runs them as threads of one process,
+    /// unlike nextest's process-per-test), so a pid-only name had the four tests here
+    /// racing on one file. The counter mirrors `xtask/tests/datagen_tags.rs`'s own
+    /// `temp_dir` helper.
     fn fixture_path() -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "placement-diff-blocks-report-self-test-{}",
+            "placement-diff-blocks-report-self-test-{}-{n}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
