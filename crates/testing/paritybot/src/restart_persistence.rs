@@ -68,6 +68,22 @@
 //! stays exactly as valuable as ever: a scripted action's own effect can still legitimately
 //! fail to land (an out-of-reach rejection under the new predicate, or a real persistence
 //! bug), and this harness must still be able to tell those apart from a silent no-op.
+//!
+//! M2 field-report fix (AC3, "the configured save interval fires within ±1 tick of its
+//! cadence"): `churn`/`churn_inner`/`ChurnSummary`/`churn_toggle_count`/`churn_toggle_is_place`
+//! below are a third scenario, added for `xtask::m2_report`'s own cadence leg
+//! (`finish_after_cadence`). That leg needs one chunk dirty at *every* Stage-9 save pass for
+//! the whole observation window (`crates/chunk-storage/src/lifecycle.rs`'s own save rule: a
+//! chunk saves only when dirty AND `interval` ticks have elapsed since its last save), which
+//! its previous driver — re-running `apply_actions`'s full 5-action script every few seconds —
+//! never actually provided: that left the churned chunk dirty only during each brief
+//! reconnect, producing large save-to-save gaps the rest of the time, every one flagged as a
+//! cadence violation by `save_cadence::analyze_cadence`, deterministically, independent of the
+//! product's own (correctly implemented) save rule — a harness defect, verified with
+//! instrumentation, not a product defect. `churn` connects once and toggles a single fixed
+//! block position at a fixed sub-interval cadence for the whole run instead, reusing
+//! `apply_actions_inner`'s own connect/recenter/aim/place/break building blocks rather than
+//! re-deriving any of them.
 
 use std::time::Duration;
 
@@ -497,6 +513,129 @@ async fn observe_state_inner(
     client.disconnect();
 
     Ok(ExpectedState { blocks, health })
+}
+
+/// M2 field-report fix (AC3, "the configured save interval fires within ±1 tick of its
+/// cadence"): `xtask::m2_report`'s own cadence leg (`finish_after_cadence`) needs one chunk
+/// dirty at *every* Stage-9 pass for the whole observation window (`crates/chunk-storage/src/
+/// lifecycle.rs`'s own doc comment — a chunk is only saved when dirty AND `interval` ticks
+/// have elapsed since its last save), which its previous driver ("re-run the full 5-action
+/// `apply_actions` script every `dirty_period`") never actually provided: that left the
+/// churned chunk dirty only during each brief reconnect, producing large save-to-save gaps —
+/// flagged as violations — the rest of the time. `churn`'s own fixed toggle position, below.
+const CHURN_BELOW: (i32, i32, i32) = (2, -60, 0);
+/// The position `churn` actually writes to — the block immediately above `CHURN_BELOW`,
+/// reused verbatim from `apply_actions_inner`'s own 2nd scripted placement (`Face::Up`'s own
+/// `+1` to `y`, `resolve_place_position`), a position this module's own script has already
+/// exercised successfully at this exact spawn distance. Not a problem that this overlaps one
+/// of `xtask::m2_report::EXPECTED_BLOCKS`' own positions — `churn` always runs against its
+/// own, separate, freshly-created world directory (`finish_after_cadence`'s own
+/// `cadence_world`), never the restart-round-trip leg's `restart_world`.
+const CHURN_WRITE: (i32, i32, i32) = (2, -59, 0);
+
+/// `churn`'s own summary, printed by `restart_persistence_runner`'s `churn` mode (module doc
+/// comment there has the exact line-based output contract).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChurnSummary {
+    pub toggle_count: u64,
+    pub duration: Duration,
+}
+
+/// The `churn` mode's own pure scheduling arithmetic: how many block-state toggles a
+/// `duration`-long run performs at a fixed `period` cadence, in the theoretical case where
+/// each toggle itself takes zero time. Integer division, matching `churn_inner`'s own
+/// `Instant::now() < deadline` loop gate: the loop performs one toggle, then sleeps `period`,
+/// repeating until `duration` elapses, so this is an upper bound on a real run's own toggle
+/// count — per-iteration overhead (the toggle action itself, `tokio::time::sleep`'s own
+/// scheduling slop) only ever makes one real iteration take `>= period`, so the real count can
+/// be equal to or smaller than this value, never larger. Pure, no live server involved —
+/// pinned by this crate's own `tests/restart_persistence_self_tests.rs`.
+pub fn churn_toggle_count(duration: Duration, period: Duration) -> u64 {
+    if period.is_zero() {
+        return 0;
+    }
+    (duration.as_millis() / period.as_millis()) as u64
+}
+
+/// The churn loop's own two-state alternation: `true` (place) for even 0-based toggle
+/// indices, `false` (break) for odd — starting from a placed state at index `0`, mirroring
+/// `apply_actions_inner`'s own first scripted action being a placement (never a break) on a
+/// position that starts empty.
+pub fn churn_toggle_is_place(index: u64) -> bool {
+    index.is_multiple_of(2)
+}
+
+/// Connects once (`connect_and_wait_for_spawn`), recenters within the spawn block
+/// (`recenter_in_spawn_block`, reused verbatim), aims once at `CHURN_WRITE` (`look_at_click`,
+/// reused verbatim — no per-toggle re-aim: this module's own governance-note addendum, top of
+/// file, already established the server's real reach predicate has no directional component),
+/// then toggles `CHURN_WRITE` between `STONE` (place, `block_interact` on `CHURN_BELOW` with
+/// `Face::Up`, exactly `apply_actions_inner`'s own placement pattern) and `AIR` (break, `mine`
+/// directly on `CHURN_WRITE`) at a fixed `period` cadence for `duration`, keeping the chunk
+/// containing `CHURN_WRITE` continuously dirty across the whole run. `xtask::m2_report`'s own
+/// `finish_after_cadence` is the only caller. No `verify_effect` call per toggle (unlike
+/// `apply_actions_inner`'s own scripted actions): a single missed toggle here does not
+/// invalidate the leg's own measurement (Stage-9's own dirty-flag rule keeps the chunk dirty
+/// across a missed toggle exactly as it would across a slow one, and `save_cadence`'s own
+/// analyzer only ever compares consecutive *actual* save events — it never expects one save
+/// per toggle), and a live server round trip on every single toggle would eat into `period`'s
+/// own tightness for no benefit this leg needs. Disconnects cleanly once `duration` elapses.
+pub async fn churn(
+    host: &str,
+    port: u16,
+    username: &str,
+    login_timeout: Duration,
+    duration: Duration,
+    period: Duration,
+) -> Result<ChurnSummary, ActionError> {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(churn_inner(
+            host,
+            port,
+            username,
+            login_timeout,
+            duration,
+            period,
+        ))
+        .await
+}
+
+async fn churn_inner(
+    host: &str,
+    port: u16,
+    username: &str,
+    login_timeout: Duration,
+    duration: Duration,
+    period: Duration,
+) -> Result<ChurnSummary, ActionError> {
+    let client = connect_and_wait_for_spawn(host, port, username, login_timeout).await?;
+
+    recenter_in_spawn_block(&client)?;
+    client.wait_ticks(AIM_SETTLE_TICKS).await;
+
+    let below_pos = azalea::BlockPos::new(CHURN_BELOW.0, CHURN_BELOW.1, CHURN_BELOW.2);
+    let write_pos = azalea::BlockPos::new(CHURN_WRITE.0, CHURN_WRITE.1, CHURN_WRITE.2);
+    look_at_click(&client, write_pos).await;
+
+    let deadline = std::time::Instant::now() + duration;
+    let mut index: u64 = 0;
+    while std::time::Instant::now() < deadline {
+        if churn_toggle_is_place(index) {
+            client.block_interact(below_pos);
+        } else {
+            client.mine(write_pos).await;
+        }
+        index += 1;
+        tokio::time::sleep(period).await;
+    }
+
+    client.disconnect();
+
+    Ok(ChurnSummary {
+        toggle_count: index,
+        duration,
+    })
 }
 
 /// Pure comparison: every field of `actual` compared against `expected`; returns one

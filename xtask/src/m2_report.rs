@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rc_chunk_storage::{
     AnvilDiskBackend, BiomeId, BiomeNames, BlockStateId, BlockStateNames, ChunkNbtCodec,
@@ -48,6 +48,19 @@ const EXPECTED_BLOCKS: [(i32, i32, i32, u32); 5] = [
     (1, -60, 0, AIR.0),
 ];
 const EXPECTED_HEALTH: f32 = 20.0;
+
+/// M2 field-report AC3 fix: `finish_after_cadence`'s own churn-subprocess login timeout —
+/// reuses the same `30s` budget every other `restart_persistence_runner` invocation in this
+/// module already uses for a single login.
+const CHURN_LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// M2 field-report AC3 fix: the fixed cadence `restart_persistence_runner`'s own `churn` mode
+/// toggles its one block position at — well under the smallest real-time equivalent of any
+/// `save_interval_ticks` this module ever passes (`Mode::cadence_params`'s smoke leg alone is
+/// `20` ticks, i.e. `1000ms` at the real server's `20 ticks/s`; full mode's `1200` ticks is
+/// `60000ms`), so the chunk containing that position is re-dirtied many times within any one
+/// `interval`-length window, keeping Stage-9's own "dirty at every pass" precondition
+/// (`crates/chunk-storage/src/lifecycle.rs`) satisfied for the whole run.
+const CHURN_PERIOD: Duration = Duration::from_millis(250);
 
 #[derive(serde::Serialize)]
 pub struct M2ReportResult {
@@ -329,27 +342,47 @@ fn finish_after_cadence(
     };
     target = managed3.addr.to_string();
 
-    // Keep at least one region dirty throughout the observation window (Context's own
-    // "one extra apply_actions-style single block toggle per cadence cycle"): re-run
-    // the full 5-action script periodically, spaced so at least a handful of dirtying
-    // events land inside `cadence_run_duration` without flooding the relay with
-    // reconnects. A best-effort approximation, not a precisely-engineered cadence
-    // driver — this leg is Tier-2/manual only (Context's own CI tier table), never
-    // part of this blueprint's own Tier-1 Done gate.
-    let dirty_period = (cadence_run_duration / 6).max(Duration::from_secs(5));
-    let deadline = Instant::now() + cadence_run_duration;
-    while Instant::now() < deadline {
-        let _ = run_restart_persistence_subprocess(
-            "apply",
-            "127.0.0.1",
-            managed3.addr.port(),
-            Duration::from_secs(30),
-        );
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        std::thread::sleep(dirty_period.min(remaining));
-    }
+    // M2 field-report AC3 fix: keep exactly one chunk continuously dirty across the whole
+    // observation window — the previous "re-run the 5-action `apply_actions` script every
+    // `dirty_period`" driver never actually did this. Stage-9's own save rule (`crates/
+    // chunk-storage/src/lifecycle.rs`) only saves a chunk when it is dirty AND `interval`
+    // ticks have elapsed since its last save, so the cadence is measurable only on a chunk
+    // that is dirty at *every* Stage-9 pass; a single brief `apply` reconnect every
+    // `dirty_period` left the churned chunk dirty only during that reconnect's own few
+    // actions, producing large save-to-save gaps for the rest of the window — every one
+    // flagged as a violation by `save_cadence::analyze_cadence`, deterministically,
+    // independent of the product's own (correctly implemented) save rule. Verified with
+    // instrumentation before this fix: a harness defect, not a product defect.
+    // `restart_persistence_runner`'s own `churn` mode fixes this directly — one bot connects
+    // once and toggles a single fixed block position between placed/broken at `CHURN_PERIOD`
+    // (well under any `save_interval_ticks` this module ever passes, that constant's own doc
+    // comment has the derivation) for the entire `cadence_run_duration`, so the chunk
+    // containing that position is re-dirtied many times within any one `interval`-length
+    // window.
+    let churn_outcome = run_churn_subprocess(
+        "127.0.0.1",
+        managed3.addr.port(),
+        CHURN_LOGIN_TIMEOUT,
+        cadence_run_duration,
+        CHURN_PERIOD,
+    );
 
-    drop(managed3);
+    drop(managed3); // guaranteed teardown either way (Drop's own hard-kill fallback); the
+    // save-event log is read below, exactly as before this fix, only after the server that
+    // wrote it has been torn down.
+
+    if let SubprocessOutcome::Error(message) | SubprocessOutcome::ProcessFailure(message) =
+        &churn_outcome
+    {
+        result.push(
+            "AC3_save_cadence_within_one_tick",
+            Status::Fail,
+            Some(format!(
+                "restart_persistence_runner churn failed: {message}"
+            )),
+        );
+        return finish(result, mode, target, save_interval_ticks);
+    }
 
     match rc_test_harness::save_cadence::parse_save_event_log(&log_path) {
         Ok(events) => {
@@ -638,6 +671,68 @@ fn run_restart_persistence_subprocess(
         Err(crate::process::SpawnDrainedError::TimedOut) => SubprocessOutcome::ProcessFailure(
             format!("restart_persistence_runner did not exit within {deadline:?} of its own start"),
         ),
+    }
+}
+
+/// M2 field-report AC3 fix: builds and runs `rc-paritybot`'s `restart_persistence_runner`'s
+/// `churn` mode as a subprocess — same spawn shape as `run_restart_persistence_subprocess`
+/// above (`crate::process::spawn_drained`, `RUSTC_BOOTSTRAP=1`, `env_remove("RUSTUP_TOOLCHAIN")`,
+/// `current_dir` = `crates/testing/paritybot`), restated as its own function rather than folded
+/// into that one because `churn`'s own two extra positional args (`duration_secs`, `period_ms`)
+/// and deadline (`duration + login_timeout + build grace`, not just `login_timeout + build
+/// grace`) don't fit that function's fixed 5-arg/`login_timeout`-only-deadline shape without
+/// branching on mode inside it. Reuses `parse_runner_output` unchanged — `churn`'s own
+/// `TOGGLE_COUNT=`/`DURATION_MS=` stdout lines are simply not one of the prefixes that function
+/// captures, exactly like `apply`'s own `RESULT=OK` (no `BLOCK=`/`HEALTH=` lines either).
+fn run_churn_subprocess(
+    host: &str,
+    port: u16,
+    login_timeout: Duration,
+    duration: Duration,
+    period: Duration,
+) -> SubprocessOutcome {
+    let paritybot_dir = repo_root().join("crates/testing/paritybot");
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&paritybot_dir)
+        .env("RUSTC_BOOTSTRAP", "1")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .args([
+            "run",
+            "--quiet",
+            "--bin",
+            "restart_persistence_runner",
+            "--",
+            "churn",
+            host,
+            &port.to_string(),
+            BOT_USERNAME,
+            &login_timeout.as_secs().to_string(),
+            &duration.as_secs().to_string(),
+            &period.as_millis().to_string(),
+        ]);
+
+    // Concurrent pipe drains via `crate::process::spawn_drained` (M3.5-B06) — that
+    // module's own doc comment has the full pipe-buffer-deadlock diagnosis.
+    let build_grace = Duration::from_secs(300);
+    let deadline = duration + login_timeout + build_grace;
+    match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => parse_runner_output(&output.stdout, &output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
+            SubprocessOutcome::ProcessFailure(format!(
+                "failed to spawn restart_persistence_runner (churn): {err}"
+            ))
+        }
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            SubprocessOutcome::ProcessFailure(format!(
+                "failed to poll restart_persistence_runner (churn): {err}"
+            ))
+        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => {
+            SubprocessOutcome::ProcessFailure(format!(
+                "restart_persistence_runner (churn) did not exit within {deadline:?} of its own start"
+            ))
+        }
     }
 }
 
