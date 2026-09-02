@@ -1,7 +1,7 @@
 use xtask::forbidden_patterns::{
     LintGate, PatternViolation, check_empty_test_body, check_hardcoded_block_state_literal,
-    check_tautological_assertion, check_undocumented_tier_cfg, check_unlinked_ignore,
-    check_weakened_tests, commit_lint_gate,
+    check_raw_stdio_piped, check_tautological_assertion, check_undocumented_tier_cfg,
+    check_unlinked_ignore, check_weakened_tests, commit_lint_gate,
 };
 use xtask::path_guard::ChangesetType;
 
@@ -288,6 +288,44 @@ fn waiver_comment_on_preceding_line_suppresses() {
             "// block-state-id-lint-waiver: pending M3.5-B02 retirement".to_string(),
             "const WIRE_MAX: u32 = 5306; // redstone_wire".to_string(),
         ],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+// --- M3.5-B06's own cases: check 7, `check_raw_stdio_piped`. ---
+
+#[test]
+fn bare_stdio_piped_under_xtask_src_is_flagged() {
+    let v = check_raw_stdio_piped(
+        "xtask/src/anything_else.rs",
+        &[".stdout(Stdio::piped())".to_string()],
+    );
+    assert_eq!(v.len(), 1);
+}
+
+#[test]
+fn bare_stdio_piped_inside_process_rs_itself_is_not_flagged() {
+    let v = check_raw_stdio_piped(
+        "xtask/src/process.rs",
+        &[".stdout(Stdio::piped())".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn stdio_piped_outside_xtask_src_is_not_flagged() {
+    let v = check_raw_stdio_piped(
+        "crates/testing/paritybot/src/main.rs",
+        &[".stdout(Stdio::piped())".to_string()],
+    );
+    assert_eq!(v.len(), 0);
+}
+
+#[test]
+fn stdio_piped_mentioned_only_in_a_string_literal_is_not_flagged() {
+    let v = check_raw_stdio_piped(
+        "xtask/src/anything_else.rs",
+        &["// never write \"Stdio::piped()\" outside process.rs".to_string()],
     );
     assert_eq!(v.len(), 0);
 }

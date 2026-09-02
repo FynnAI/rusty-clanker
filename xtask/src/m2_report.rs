@@ -19,9 +19,8 @@
 //! implementer does not fix unilaterally, restated in this blueprint's own final
 //! report).
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -618,53 +617,28 @@ fn run_restart_persistence_subprocess(
             &port.to_string(),
             BOT_USERNAME,
             &login_timeout.as_secs().to_string(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        ]);
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return SubprocessOutcome::ProcessFailure(format!(
-                "failed to spawn restart_persistence_runner: {err}"
-            ));
-        }
-    };
-
+    // Concurrent pipe drains via `crate::process::spawn_drained` (M3.5-B06) — that
+    // module's own doc comment has the full pipe-buffer-deadlock diagnosis.
     let build_grace = Duration::from_secs(300);
-    let deadline = Instant::now() + login_timeout + build_grace;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return SubprocessOutcome::ProcessFailure(format!(
-                        "restart_persistence_runner did not exit within {deadline:?} of its own start"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(err) => {
-                return SubprocessOutcome::ProcessFailure(format!(
-                    "failed to poll restart_persistence_runner: {err}"
-                ));
-            }
+    let deadline = login_timeout + build_grace;
+    match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => parse_runner_output(&output.stdout, &output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
+            SubprocessOutcome::ProcessFailure(format!(
+                "failed to spawn restart_persistence_runner: {err}"
+            ))
         }
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            SubprocessOutcome::ProcessFailure(format!(
+                "failed to poll restart_persistence_runner: {err}"
+            ))
+        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => SubprocessOutcome::ProcessFailure(
+            format!("restart_persistence_runner did not exit within {deadline:?} of its own start"),
+        ),
     }
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
-
-    parse_runner_output(&stdout, &stderr)
 }
 
 fn parse_runner_output(stdout: &str, stderr: &str) -> SubprocessOutcome {

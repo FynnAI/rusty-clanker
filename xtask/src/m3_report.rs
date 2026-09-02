@@ -35,11 +35,10 @@
 //! identical underlying reason (a type/constant that legitimately exists in a
 //! forbidden-to-depend-on crate).
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rc_test_harness::process::{ManagedServerConfig, spawn_server};
 use rc_test_harness::tick_cadence::{self, TpsReport};
@@ -325,88 +324,27 @@ fn run_load_scenario_subprocess(
             &port.to_string(),
             &login_timeout.as_secs().to_string(),
             &run_duration.as_secs().to_string(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        ]);
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return RunnerOutcome::ProcessFailure(format!(
-                "failed to spawn load_scenario_runner: {err}"
-            ));
+    // M3 field-report fix (pipe-buffer deadlock), now centralized in `crate::process::
+    // spawn_drained` (M3.5-B06): a real `load_scenario_runner` run's own output volume (20
+    // concurrently-pathfinding azalea clients, confirmed live at 700KB+ of stderr in one
+    // ordinary 60-second run) reliably fills the OS pipe buffer once nobody drains it until
+    // after exit is observed -- `spawn_drained`'s own doc comment has the full original
+    // diagnosis.
+    let deadline = BUILD_GRACE + login_timeout + run_duration + Duration::from_secs(60);
+    match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => parse_load_scenario_runner_output(&output.stdout, &output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
+            RunnerOutcome::ProcessFailure(format!("failed to spawn load_scenario_runner: {err}"))
         }
-    };
-
-    // M3 field-report fix (pipe-buffer deadlock): `Stdio::piped()` gives each of the
-    // child's stdout/stderr a fixed-size OS pipe buffer (a few tens of KB) -- with
-    // nobody draining either one until AFTER the poll loop below observes the child
-    // has exited, a real `load_scenario_runner` run reliably fills it: 20
-    // concurrently-pathfinding azalea clients each emit their own per-tick `tracing`
-    // output (confirmed live: one ordinary 60-second/20-bot run produced over 700 KB
-    // of stderr alone, more than 10x a typical pipe buffer). Once the buffer fills,
-    // the CHILD's own next `write()` to that stream blocks indefinitely -- it can
-    // then never reach its own exit, so `try_wait` below never returns `Ok(Some(_))`,
-    // and this whole subprocess call appears hung until this function's own deadline
-    // kills it. Reproduced live as exactly this function's own failure symptom
-    // ("load_scenario_runner did not exit within ... of its own start", every run,
-    // regardless of `load_scenario.rs`'s own scenario-side fixes -- this bug sits one
-    // layer up, in how this function itself drives the subprocess). Draining both
-    // streams to completion on their own threads, started immediately and running
-    // concurrently with the poll loop below, keeps the pipe from ever filling no
-    // matter how much the child writes.
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_string(&mut buf);
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            RunnerOutcome::ProcessFailure(format!("failed to poll load_scenario_runner: {err}"))
         }
-        buf
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_string(&mut buf);
-        }
-        buf
-    });
-
-    let deadline =
-        Instant::now() + BUILD_GRACE + login_timeout + run_duration + Duration::from_secs(60);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // The killed child's own pipe ends close on drop, so both reader
-                    // threads above observe EOF and return -- joined here so neither
-                    // outlives this function, even on this timeout path.
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
-                    return RunnerOutcome::ProcessFailure(format!(
-                        "load_scenario_runner did not exit within {deadline:?} of its own start"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(err) => {
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return RunnerOutcome::ProcessFailure(format!(
-                    "failed to poll load_scenario_runner: {err}"
-                ));
-            }
-        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => RunnerOutcome::ProcessFailure(format!(
+            "load_scenario_runner did not exit within {deadline:?} of its own start"
+        )),
     }
-
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
-
-    parse_load_scenario_runner_output(&stdout, &stderr)
 }
 
 struct BotAccumulator {

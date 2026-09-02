@@ -9,10 +9,9 @@
 //! Never runs in Tier 1 (Context, "CI tier placement") — needs a real oracle
 //! process, network or a locally-cached jar, and Java.
 
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use rc_gametest::spec::load_spec;
 
@@ -74,58 +73,28 @@ fn run_fetch_corpus_runner_subprocess(
     if let Some(only) = only {
         command.arg(only);
     }
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return RunnerOutcome::ProcessFailure(format!(
-                "failed to spawn fetch_corpus_runner: {err}"
-            ));
-        }
-    };
 
     // A generous, fixed allowance for the nested `cargo run`'s own (possibly cold,
     // first-ever) build of the azalea-dependent binary, plus the full corpus
     // capture budget (Context, "Rates and limits": ≤10 minutes end to end).
+    // Concurrent pipe drains via `crate::process::spawn_drained` (M3.5-B06) — that
+    // module's own doc comment has the full pipe-buffer-deadlock diagnosis.
     let build_grace = Duration::from_secs(300);
     let capture_budget = Duration::from_secs(600);
-    let deadline = Instant::now() + build_grace + capture_budget;
+    let deadline = build_grace + capture_budget;
 
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return RunnerOutcome::ProcessFailure(format!(
-                        "fetch_corpus_runner did not exit within {deadline:?} of its own start"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(err) => {
-                return RunnerOutcome::ProcessFailure(format!(
-                    "failed to poll fetch_corpus_runner: {err}"
-                ));
-            }
+    match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => parse_runner_output(&output.stdout, &output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
+            RunnerOutcome::ProcessFailure(format!("failed to spawn fetch_corpus_runner: {err}"))
         }
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            RunnerOutcome::ProcessFailure(format!("failed to poll fetch_corpus_runner: {err}"))
+        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => RunnerOutcome::ProcessFailure(format!(
+            "fetch_corpus_runner did not exit within {deadline:?} of its own start"
+        )),
     }
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
-
-    parse_runner_output(&stdout, &stderr)
 }
 
 fn parse_runner_output(stdout: &str, stderr: &str) -> RunnerOutcome {

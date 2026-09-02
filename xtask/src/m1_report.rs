@@ -15,10 +15,9 @@
 //! `RUSTC_BOOTSTRAP=1` set for good measure. This verb therefore stays fully
 //! synchronous — no `tokio::runtime::Runtime`/`block_on` anywhere in `xtask`.
 
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use rc_test_harness::probe::{ProbeConfig, probe_status};
 use rc_test_harness::process::{ManagedServerConfig, spawn_server};
@@ -237,57 +236,32 @@ fn run_idle_stability_subprocess(
             "rc_m1_report_bot",
             &login_timeout.as_secs().to_string(),
             &idle_duration.as_secs().to_string(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return IdleStabilityOutcome::ProcessFailure(format!(
-                "failed to spawn idle_stability_runner: {err}"
-            ));
-        }
-    };
+        ]);
 
     // A generous, fixed allowance for the nested `cargo run`'s own (possibly cold,
     // first-ever) build of the azalea-dependent binary — never part of the timed
     // scenario itself, purely a bound against a hung/never-returning subprocess.
+    // Concurrent pipe drains via `crate::process::spawn_drained` (M3.5-B06) —
+    // that module's own doc comment has the full pipe-buffer-deadlock diagnosis.
     let build_grace = Duration::from_secs(300);
-    let deadline = Instant::now() + login_timeout + idle_duration + build_grace;
+    let deadline = login_timeout + idle_duration + build_grace;
 
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return IdleStabilityOutcome::ProcessFailure(format!(
-                        "idle_stability_runner did not exit within {deadline:?} of its own start"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(err) => {
-                return IdleStabilityOutcome::ProcessFailure(format!(
-                    "failed to poll idle_stability_runner: {err}"
-                ));
-            }
+    match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => parse_idle_stability_output(&output.stdout, &output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
+            IdleStabilityOutcome::ProcessFailure(format!(
+                "failed to spawn idle_stability_runner: {err}"
+            ))
         }
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            IdleStabilityOutcome::ProcessFailure(format!(
+                "failed to poll idle_stability_runner: {err}"
+            ))
+        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => IdleStabilityOutcome::ProcessFailure(
+            format!("idle_stability_runner did not exit within {deadline:?} of its own start"),
+        ),
     }
-
-    let mut stdout = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut stdout);
-    }
-    let mut stderr = String::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr);
-    }
-
-    parse_idle_stability_output(&stdout, &stderr)
 }
 
 fn parse_idle_stability_output(stdout: &str, stderr: &str) -> IdleStabilityOutcome {

@@ -56,6 +56,11 @@ pub enum PatternViolation {
         file: String,
         line: String,
     },
+    // M3.5-B06 (Context §3.3): the `xtask::process::spawn_drained` centralization lint.
+    RawStdioPiped {
+        file: String,
+        line: String,
+    },
 }
 
 // Each is pure — takes already-extracted text, no I/O — and independently unit
@@ -626,6 +631,31 @@ pub fn check_hardcoded_block_state_literal(
     violations
 }
 
+/// Check 7 (M3.5-B06, Context §3.3): a new bare piped-`Stdio` constructor call under
+/// `xtask/src/**` outside `xtask/src/process.rs` itself — every `xtask` subprocess that
+/// pipes a child's stdout/stderr must go through the centralized `xtask::process::
+/// spawn_drained` instead (its own doc comment has the full pipe-buffer-deadlock
+/// rationale this check makes structural). String-literal content is stripped first
+/// (reusing `strip_string_literals`) so a line merely mentioning that constructor call's
+/// own literal text in a doc comment or string (e.g. this very check's own acceptance
+/// test's fixture strings) never trips it.
+pub fn check_raw_stdio_piped(file: &str, added_lines: &[String]) -> Vec<PatternViolation> {
+    if !file.starts_with("xtask/src/") || file == "xtask/src/process.rs" {
+        return Vec::new();
+    }
+    let mut violations = Vec::new();
+    for line in added_lines {
+        let stripped = strip_string_literals(line);
+        if stripped.contains("Stdio::piped()") {
+            violations.push(PatternViolation::RawStdioPiped {
+                file: file.to_string(),
+                line: line.trim().to_string(),
+            });
+        }
+    }
+    violations
+}
+
 /// Per-commit gate mirroring `path_guard::evaluate_commit`'s decision shape (one
 /// commit is one changeset, TEST-D45): `Skip` for an empty or docs-only-exempt
 /// commit, `Lint(t)` to run every check under that commit's own declared type,
@@ -743,6 +773,13 @@ fn describe_violation(v: &PatternViolation) -> (&'static str, String) {
         PatternViolation::HardcodedBlockStateLiteral { file, line } => (
             "hardcoded-block-state-literal",
             format!("{file}: hardcoded block-state-id literal — {line}"),
+        ),
+        PatternViolation::RawStdioPiped { file, line } => (
+            "raw-stdio-piped",
+            format!(
+                "{file}: bare Stdio::piped() outside xtask/src/process.rs — use \
+                 xtask::process::spawn_drained instead — {line}"
+            ),
         ),
     }
 }
@@ -862,6 +899,7 @@ pub fn run(base: Option<&str>) -> std::process::ExitCode {
             commit_violations.extend(check_tautological_assertion(file, &added_lines));
             commit_violations.extend(check_undocumented_tier_cfg(file, &added_lines));
             commit_violations.extend(check_hardcoded_block_state_literal(file, &added_lines));
+            commit_violations.extend(check_raw_stdio_piped(file, &added_lines));
 
             let head_content = content_at(&sh, sha, file);
             commit_violations.extend(check_empty_test_body(file, &head_content));

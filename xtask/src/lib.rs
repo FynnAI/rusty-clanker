@@ -21,6 +21,7 @@ pub mod m3_5_be_report;
 pub mod m3_report;
 pub mod metadata;
 pub mod path_guard;
+pub mod process;
 pub mod quarantine;
 pub mod setup_oracle;
 pub mod spec_citation;

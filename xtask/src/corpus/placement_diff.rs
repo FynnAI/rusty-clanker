@@ -15,11 +15,10 @@
 //! oracle process, network or a locally-cached jar, and Java, plus now also our own
 //! freshly built release binary).
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rc_gametest::placement_spec::{InteractionScenario, enumerate_scenarios};
 use rc_gametest::placement_trace::{PlacementCaptureFile, diff_captures, read_capture};
@@ -205,11 +204,11 @@ enum RunnerOutcome {
     Failure(String),
 }
 
-/// Runs `placement_diff_runner` as a subprocess with `args`, draining stdout/stderr on
-/// their own threads concurrently with the poll loop (M3 field-report pipe-buffer-
-/// deadlock lesson, `m3_report.rs::run_load_scenario_subprocess`'s own doc comment has
-/// the full diagnosis this restates verbatim) — never read only after the child is
-/// observed to have exited, which is exactly the deadlock that lesson documents.
+/// Runs `placement_diff_runner` as a subprocess with `args`, draining stdout/stderr
+/// concurrently with the poll loop via the shared `crate::process::spawn_drained`
+/// (M3.5-B06 — that module's own doc comment has the full pipe-buffer-deadlock diagnosis
+/// this file's own hand-rolled drain threads used to duplicate) — never read only after the
+/// child is observed to have exited, which is exactly the deadlock that diagnosis documents.
 fn run_placement_diff_runner_subprocess(
     repo_root: &Path,
     args: &[String],
@@ -227,63 +226,22 @@ fn run_placement_diff_runner_subprocess(
         .arg("--bin")
         .arg("placement_diff_runner")
         .arg("--")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .args(args);
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
+    let (stdout, stderr) = match crate::process::spawn_drained(&mut command, deadline) {
+        Ok(output) => (output.stdout, output.stderr),
+        Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
             return RunnerOutcome::Failure(format!("failed to spawn placement_diff_runner: {err}"));
         }
+        Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
+            return RunnerOutcome::Failure(format!("failed to poll placement_diff_runner: {err}"));
+        }
+        Err(crate::process::SpawnDrainedError::TimedOut) => {
+            return RunnerOutcome::Failure(format!(
+                "placement_diff_runner did not exit within {deadline:?} of its own start"
+            ));
+        }
     };
-
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_string(&mut buf);
-        }
-        buf
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_string(&mut buf);
-        }
-        buf
-    });
-
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if started.elapsed() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
-                    return RunnerOutcome::Failure(format!(
-                        "placement_diff_runner did not exit within {deadline:?} of its own start"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            Err(err) => {
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return RunnerOutcome::Failure(format!(
-                    "failed to poll placement_diff_runner: {err}"
-                ));
-            }
-        }
-    }
-
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
 
     if stdout.lines().any(|line| line == "RESULT=OK") {
         return RunnerOutcome::Ok;
