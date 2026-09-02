@@ -11,5 +11,6 @@ pub mod load_scenario;
 pub mod packet_capture;
 pub mod packet_recorder;
 pub mod placement_capture;
+pub mod protocol_session;
 pub mod restart_persistence;
 pub mod vanilla_registry_defaults;
