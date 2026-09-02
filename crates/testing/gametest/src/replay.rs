@@ -35,6 +35,8 @@ use rc_mechanics::{
 };
 use rc_mechanics::{stage4, stage7};
 use rc_messaging::{Address, RegionId, RegionMessage};
+use rc_registries::block_state_properties::range_of;
+use rc_registries::generated_v776::block_state_properties::{BlockId, block_id};
 
 use crate::spec::{ContraptionSpec, bounding_box};
 use crate::trace::{BlockObservation, RedstoneTrace, TRACE_FORMAT_VERSION, TickSnapshot};
@@ -428,48 +430,28 @@ fn snapshot_volume(
     out
 }
 
-/// The `[min, max_inclusive]` of every real reachable state id blocks.json declares for each
-/// tier-1 block (`datagen-output/26.2/generated/reports/blocks.json`, protocol 776) — M3
-/// field-report fix (Task 3): widened from this file's own former "tight range of only what
-/// this corpus's own committed fixtures place" convention, which broke the instant a
-/// component's own writeback (torch/repeater/comparator/piston: M3 field-report fix; wire: this
-/// same wave) moved a position's stored id anywhere outside that narrow placement-only window —
-/// dispatch would then silently fall through to `NoOpBehavior`/no signal source for the rest of
-/// the replay, even though the identical write is correct against the real, generated-registry-
-/// based composition root this replay path stands in for (`docs/findings-for-planning.md`'s own
-/// "own-state writeback residual gaps" entry — confirmed there by direct arithmetic:
-/// `TORCH_FLOOR_RANGE`'s old `(6885, 6885)` excluded `lit=false`'s own 6886; `REPEATER_RANGE`'s
-/// old floor of 7037 excluded the `locked=true` ids 7034/7035 `pulse_repeater_facing_side_lock_
-/// ccw`/`_cw` dispatch outside it; `COMPARATOR_RANGE`'s old floor of 11264 excluded 11263,
-/// breaking every `facing=north, mode=compare` comparator the instant it turned on). Every
-/// component still gets exactly one registered range each (this project's own still-open "no
-/// generated per-block-state-property registry" gap, `Tier1RedstoneStateIds`'s own doc comment,
-/// applied honestly here too — a real per-property registry, not a wider hand-picked bound, is
-/// the eventual fix, WS-D15) — only the bounds changed, from "narrowest window covering this
-/// corpus's own placements" to "every id blocks.json actually declares for this block."
-const WIRE_RANGE: (u32, u32) = (4011, 5306); // power 0..=15 x 4 sides (up/side/none each)
-const TORCH_FLOOR_RANGE: (u32, u32) = (6885, 6886); // lit true/false
-const TORCH_WALL_RANGE: (u32, u32) = (6887, 6894); // facing x lit
-const REPEATER_RANGE: (u32, u32) = (7034, 7097); // facing x delay x locked x powered
-const COMPARATOR_RANGE: (u32, u32) = (11263, 11278); // facing x mode x powered
-const PISTON_RANGE: (u32, u32) = (2257, 2268); // extended x facing
-const STICKY_PISTON_RANGE: (u32, u32) = (2235, 2246); // extended x facing
-/// `minecraft:chest`'s full reachable range (`type` x `facing` x `waterlogged`) — M3 fix-agent
-/// brief: not a redstone tier-1 component at all (no `BlockBehavior`/`RedstoneSignalSource`
-/// registration below), used only to recognize a chest placement for Stage-7 block-entity
-/// seeding (`seed_container_if_present`).
-const CHEST_RANGE: (u32, u32) = (3987, 4010);
-/// `minecraft:hopper`'s full reachable range (`enabled` x `facing`) — same "seeding trigger
-/// only, never a redstone registration" status as `CHEST_RANGE` above.
-const HOPPER_RANGE: (u32, u32) = (11313, 11322);
-
-fn in_range(id: u32, range: (u32, u32)) -> bool {
-    id >= range.0 && id <= range.1
+/// The `[min, max_inclusive]` of every real reachable state id for each tier-1 block --
+/// M3.5-B02 (WS-D15): every one of the eight former hand-authored `*_RANGE` constants this
+/// section used to declare is retired against `rc-registries`' M3.5-B01-generated
+/// per-block-state-property registry (`range_of`) instead; `in_range`/`exclusive` below now
+/// take a `BlockId` directly and read the real range off that registry on every call, so there
+/// is no longer a second, independently hand-derived range anywhere in this file to drift out
+/// of sync with the generated source (the M3 field-report widening this doc comment used to
+/// describe -- "narrowest window covering this corpus's own placements" versus "every id
+/// blocks.json actually declares" -- is moot now that the range itself always comes from the
+/// generated table). `minecraft:chest`/`minecraft:hopper` are not redstone tier-1 components
+/// (no `BlockBehavior`/`RedstoneSignalSource` registration below) -- their own ranges are used
+/// only to recognize a placement for Stage-7 block-entity seeding (`seed_container_if_present`).
+fn in_range(id: u32, block: BlockId) -> bool {
+    let range = range_of(block);
+    id >= range.first.0 && id <= range.last.0
 }
 
-/// The `[start, end_exclusive)` `register_range` needs, from an inclusive `(min, max)`.
-fn exclusive(range: (u32, u32)) -> (BlockStateId, BlockStateId) {
-    (BlockStateId(range.0), BlockStateId(range.1 + 1))
+/// The `[start, end_exclusive)` `register_range` needs, from `block`'s own real generated
+/// range (M3.5-B02, WS-D15).
+fn exclusive(block: BlockId) -> (BlockStateId, BlockStateId) {
+    let range = range_of(block);
+    (BlockStateId(range.first.0), BlockStateId(range.last.0 + 1))
 }
 
 /// Extracts one `key=value` property out of a `PlacedBlock::vanilla_state`'s own bracket
@@ -519,13 +501,13 @@ fn seed_container_if_present(
     state: BlockStateId,
     vanilla_state: &str,
 ) {
-    if in_range(state.0, CHEST_RANGE) {
+    if in_range(state.0, block_id::CHEST) {
         let mut chest = ChestBlockEntity::empty();
         for item in seed_items(vanilla_state) {
             place_seed_item(&mut chest.slots, item, vanilla_state);
         }
         block_entities.insert_chest(pos, chest);
-    } else if in_range(state.0, HOPPER_RANGE) {
+    } else if in_range(state.0, block_id::HOPPER) {
         let facing = facing_property(vanilla_state);
         let mut hopper = HopperBlockEntity::empty(facing);
         for item in seed_items(vanilla_state) {
@@ -718,12 +700,12 @@ pub fn tier1_registry(
     register_redstone_block(&mut signals);
 
     let wire = Arc::new(WireBehavior::new());
-    let (lo, hi) = exclusive(WIRE_RANGE);
+    let (lo, hi) = exclusive(block_id::REDSTONE_WIRE);
     behaviors.register_range(lo, hi, Arc::clone(&wire) as Arc<dyn BlockBehavior>);
     signals.register_range(lo, hi, Arc::clone(&wire) as Arc<dyn RedstoneSignalSource>);
 
     let torch_floor = Arc::new(TorchBehavior::new(TorchAttachment::Floor));
-    let (lo, hi) = exclusive(TORCH_FLOOR_RANGE);
+    let (lo, hi) = exclusive(block_id::REDSTONE_TORCH);
     behaviors.register_range(lo, hi, Arc::clone(&torch_floor) as Arc<dyn BlockBehavior>);
     signals.register_range(
         lo,
@@ -736,7 +718,7 @@ pub fn tier1_registry(
     // different direction in a fixture dispatches with the wrong `input_direction` here, same
     // as it would through the real composition root today.
     let torch_wall = Arc::new(TorchBehavior::new(TorchAttachment::Wall(Direction::North)));
-    let (lo, hi) = exclusive(TORCH_WALL_RANGE);
+    let (lo, hi) = exclusive(block_id::REDSTONE_WALL_TORCH);
     behaviors.register_range(lo, hi, Arc::clone(&torch_wall) as Arc<dyn BlockBehavior>);
     signals.register_range(
         lo,
@@ -746,7 +728,7 @@ pub fn tier1_registry(
 
     let repeater = RepeaterBehavior::new();
     for block in &spec.blocks {
-        if in_range(block.state_id, REPEATER_RANGE) {
+        if in_range(block.state_id, block_id::REPEATER) {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
             let facing = facing_property(&block.vanilla_state);
             let delay: u8 = vanilla_property(&block.vanilla_state, "delay")
@@ -762,7 +744,7 @@ pub fn tier1_registry(
         }
     }
     let repeater = Arc::new(repeater);
-    let (lo, hi) = exclusive(REPEATER_RANGE);
+    let (lo, hi) = exclusive(block_id::REPEATER);
     behaviors.register_range(lo, hi, Arc::clone(&repeater) as Arc<dyn BlockBehavior>);
     signals.register_range(
         lo,
@@ -777,7 +759,7 @@ pub fn tier1_registry(
     let comparator =
         ComparatorBehavior::new(Arc::clone(&container_signals) as Arc<dyn ContainerSignalSource>);
     for block in &spec.blocks {
-        if in_range(block.state_id, COMPARATOR_RANGE) {
+        if in_range(block.state_id, block_id::COMPARATOR) {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
             let facing = facing_property(&block.vanilla_state);
             let mode = match vanilla_property(&block.vanilla_state, "mode") {
@@ -792,7 +774,7 @@ pub fn tier1_registry(
         }
     }
     let comparator = Arc::new(comparator);
-    let (lo, hi) = exclusive(COMPARATOR_RANGE);
+    let (lo, hi) = exclusive(block_id::COMPARATOR);
     behaviors.register_range(lo, hi, Arc::clone(&comparator) as Arc<dyn BlockBehavior>);
     signals.register_range(
         lo,
@@ -812,7 +794,9 @@ pub fn tier1_registry(
     // Piston strictly after the four components (`register_piston`'s own doc comment).
     let piston = Arc::new(PistonBehavior::new(signals));
     for block in &spec.blocks {
-        if in_range(block.state_id, PISTON_RANGE) || in_range(block.state_id, STICKY_PISTON_RANGE) {
+        if in_range(block.state_id, block_id::PISTON)
+            || in_range(block.state_id, block_id::STICKY_PISTON)
+        {
             let pos = BlockPos::new(block.pos.0, block.pos.1, block.pos.2);
             let facing = facing_property(&block.vanilla_state);
             let sticky = block.vanilla_state.starts_with("minecraft:sticky_piston");
@@ -835,9 +819,9 @@ pub fn tier1_registry(
             piston.place(pos, facing, sticky, extended);
         }
     }
-    let (lo, hi) = exclusive(PISTON_RANGE);
+    let (lo, hi) = exclusive(block_id::PISTON);
     behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
-    let (lo, hi) = exclusive(STICKY_PISTON_RANGE);
+    let (lo, hi) = exclusive(block_id::STICKY_PISTON);
     behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
 
     (behaviors, container_signals)
@@ -938,51 +922,45 @@ fn dispatch_one(ctx: &mut UpdateContext, behaviors: &BlockBehaviorRegistry, item
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_registries::block_state_properties::range_of;
-    use rc_registries::generated_v776::block_state_properties::block_id;
 
-    /// M3.5-B02 (WS-D15) governance changeset: pins this module's own seven diode/wire/piston
-    /// `*_RANGE` constants against `rc-registries`' M3.5-B01-generated per-block-state-property
-    /// registry ahead of their own retirement (§5 of `blueprints/M3.5/
-    /// M3.5-B02-retire-hand-authored-id-tables.md`) -- already true today (both the CLAIMS
-    /// file's own research-role pass and this test itself confirm every one of these seven
-    /// constants already matches the generated table exactly), and stays true once the
-    /// retirement below replaces each constant's own literal declaration with a direct
-    /// `range_of` read.
+    /// M3.5-B02 (WS-D15) governance changeset: pins the real generated range for every one of
+    /// this module's own seven former hand-authored diode/wire/piston `*_RANGE` constants
+    /// (retired against `rc-registries`' M3.5-B01-generated per-block-state-property registry
+    /// earlier in this same governance changeset, `in_range`/`exclusive`'s own doc comment) --
+    /// the exact literal values those constants used to declare, restated here since the
+    /// constants themselves no longer exist to compare against.
     #[test]
     fn wire_torch_repeater_comparator_piston_ranges_match_generated_ranges() {
         let wire = range_of(block_id::REDSTONE_WIRE);
-        assert_eq!(WIRE_RANGE, (wire.first.0, wire.last.0));
+        assert_eq!((wire.first.0, wire.last.0), (4011, 5306));
         let torch_floor = range_of(block_id::REDSTONE_TORCH);
-        assert_eq!(TORCH_FLOOR_RANGE, (torch_floor.first.0, torch_floor.last.0));
+        assert_eq!((torch_floor.first.0, torch_floor.last.0), (6885, 6886));
         let torch_wall = range_of(block_id::REDSTONE_WALL_TORCH);
-        assert_eq!(TORCH_WALL_RANGE, (torch_wall.first.0, torch_wall.last.0));
+        assert_eq!((torch_wall.first.0, torch_wall.last.0), (6887, 6894));
         let repeater = range_of(block_id::REPEATER);
-        assert_eq!(REPEATER_RANGE, (repeater.first.0, repeater.last.0));
+        assert_eq!((repeater.first.0, repeater.last.0), (7034, 7097));
         let comparator = range_of(block_id::COMPARATOR);
-        assert_eq!(COMPARATOR_RANGE, (comparator.first.0, comparator.last.0));
+        assert_eq!((comparator.first.0, comparator.last.0), (11263, 11278));
         let piston = range_of(block_id::PISTON);
-        assert_eq!(PISTON_RANGE, (piston.first.0, piston.last.0));
+        assert_eq!((piston.first.0, piston.last.0), (2257, 2268));
         let sticky_piston = range_of(block_id::STICKY_PISTON);
-        assert_eq!(
-            STICKY_PISTON_RANGE,
-            (sticky_piston.first.0, sticky_piston.last.0)
-        );
+        assert_eq!((sticky_piston.first.0, sticky_piston.last.0), (2235, 2246));
     }
 
-    /// Pins that the generated range agrees with `replay.rs`, not with `mining.rs`'s former
-    /// default-anchored arithmetic (§3.7 of the blueprint named above) -- `CHEST_RANGE` was
+    /// Pins that the generated range agrees with `replay.rs`'s own former `CHEST_RANGE`
+    /// literal, not with `mining.rs`'s former default-anchored arithmetic (§3.7 of
+    /// `blueprints/M3.5/M3.5-B02-retire-hand-authored-id-tables.md`) -- `CHEST_RANGE` was
     /// always correct here; `mining.rs`'s own `decode_chest_state` was the defect, already
-    /// retired in the Implementation changeset this governance changeset follows.
+    /// retired in the preceding Implementation changeset.
     #[test]
     fn chest_range_matches_generated_range() {
         let chest = range_of(block_id::CHEST);
-        assert_eq!(CHEST_RANGE, (chest.first.0, chest.last.0));
+        assert_eq!((chest.first.0, chest.last.0), (3987, 4010));
     }
 
     #[test]
     fn hopper_range_matches_generated_range() {
         let hopper = range_of(block_id::HOPPER);
-        assert_eq!(HOPPER_RANGE, (hopper.first.0, hopper.last.0));
+        assert_eq!((hopper.first.0, hopper.last.0), (11313, 11322));
     }
 }
