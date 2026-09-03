@@ -150,7 +150,8 @@ pub fn find_path(
         }
 
         let g_current = *g_score.get(&pos).unwrap_or(&0.0);
-        for (neighbor, edge_cost) in evaluator.get_neighbors(world, pos, entity_height, malus_overrides)
+        for (neighbor, edge_cost) in
+            evaluator.get_neighbors(world, pos, entity_height, malus_overrides)
         {
             let tentative_g = g_current + edge_cost as f64;
             let better = match g_score.get(&neighbor) {

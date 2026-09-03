@@ -10,7 +10,9 @@ use crate::ai::brain::{
     Activity, ActivityPackage, ActivityRequirement, Behavior, Brain, BrainProgram,
     MemoryModuleType, MemoryStatus, Sensor,
 };
-use crate::ai::goal::{AiContext, Goal, GoalSelector, FLAG_JUMP, FLAG_LOOK, FLAG_MOVE, FLAG_TARGET};
+use crate::ai::goal::{
+    AiContext, FLAG_JUMP, FLAG_LOOK, FLAG_MOVE, FLAG_TARGET, Goal, GoalSelector,
+};
 use crate::entity::EntityKind;
 
 /// Context §I's own per-kind table.
@@ -80,7 +82,11 @@ pub fn entity_dimensions(kind: EntityKind) -> (f32, f32) {
 /// blueprint's own dependencies) — used by `WaterAvoidingRandomStrollGoal`'s own
 /// `1/denom`-per-tick chance.
 fn pseudo_random_gate(tick_count: u64, entity_id: RcEntityId, denom: u64) -> bool {
-    (tick_count.wrapping_mul(2654435761).wrapping_add(entity_id.0)) % denom == 0
+    (tick_count
+        .wrapping_mul(2654435761)
+        .wrapping_add(entity_id.0))
+        % denom
+        == 0
 }
 
 /// A goal whose `can_use` is a fixed constant — covers every "declared for
@@ -127,7 +133,8 @@ impl Goal for WaterAvoidingRandomStrollGoal {
         FLAG_MOVE
     }
     fn can_use(&self, ctx: &AiContext) -> bool {
-        ctx.navigation.current_path.is_none() && pseudo_random_gate(ctx.tick_count, ctx.self_id, 120)
+        ctx.navigation.current_path.is_none()
+            && pseudo_random_gate(ctx.tick_count, ctx.self_id, 120)
     }
 }
 
@@ -232,7 +239,7 @@ impl Behavior for SwimBehavior {
     }
     fn start(&mut self, _ctx: &mut AiContext) {}
     fn tick(&mut self, ctx: &mut AiContext) {
-        use crate::ai::pathfinding::node::{tier1_path_type_table, PathType};
+        use crate::ai::pathfinding::node::{PathType, tier1_path_type_table};
         let pos = rc_core::BlockPos::new(
             ctx.self_pos[0].floor() as i32,
             ctx.self_pos[1].floor() as i32,

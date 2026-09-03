@@ -114,9 +114,10 @@ impl PathTypeTable {
     /// below is a full solid cube and the block itself + one above are non-solid,
     /// else `Open` (self and floor both non-solid) or `Blocked` (self itself solid).
     pub fn classify(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> PathType {
-        let id = world.get_block(pos).map(|s| s.to_raw()).unwrap_or_else(|| {
-            reg_to_storage(default_state::AIR)
-        });
+        let id = world
+            .get_block(pos)
+            .map(|s| s.to_raw())
+            .unwrap_or_else(|| reg_to_storage(default_state::AIR));
         if let Some(&pt) = self.direct.get(&id) {
             return pt;
         }
@@ -220,9 +221,9 @@ const CARDINALS: [(i32, i32); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
 /// `CARDINALS` (Context §F: "a diagonal is only emitted if both its adjacent cardinal
 /// neighbors are themselves valid").
 const DIAGONALS: [((i32, i32), usize, usize); 4] = [
-    ((1, -1), 1, 0), // NE = E + N
-    ((1, 1), 1, 2),  // SE = E + S
-    ((-1, 1), 3, 2), // SW = W + S
+    ((1, -1), 1, 0),  // NE = E + N
+    ((1, 1), 1, 2),   // SE = E + S
+    ((-1, 1), 3, 2),  // SW = W + S
     ((-1, -1), 3, 0), // NW = W + N
 ];
 

@@ -59,8 +59,7 @@ impl PathNavigation {
 
         let mut ran_search = None;
 
-        if self.current_path.is_none() && goal_pos.is_some() && self.recompute_cooldown_ticks == 0
-        {
+        if self.current_path.is_none() && goal_pos.is_some() && self.recompute_cooldown_ticks == 0 {
             let goal = goal_pos.expect("checked Some above");
             let start = BlockPos::new(
                 entity_pos[0].floor() as i32,

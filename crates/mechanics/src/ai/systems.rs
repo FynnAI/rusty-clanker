@@ -33,7 +33,7 @@ use rc_registries::generated_v776::registries::attribute;
 use crate::ai::attributes::AttributeMap;
 use crate::ai::brain::{Brain, BrainProgram};
 use crate::ai::goal::GoalSelector;
-use crate::ai::goal::{should_full_tick, AiContext};
+use crate::ai::goal::{AiContext, should_full_tick};
 use crate::ai::navigation::PathNavigation;
 use crate::ai::navigation::PendingMovementIntent;
 use crate::ai::navigation::{MoveControl, MoveControlOperation};
@@ -133,8 +133,15 @@ pub fn goal_selector_tick_system(
     )>,
 ) {
     let world = NullBlockWorld;
-    for (entity, goal_selector, target_selector, attributes, sensing, mut navigation, mut movement_intent) in
-        query.iter_mut()
+    for (
+        entity,
+        goal_selector,
+        target_selector,
+        attributes,
+        sensing,
+        mut navigation,
+        mut movement_intent,
+    ) in query.iter_mut()
     {
         if goal_selector.is_none() && target_selector.is_none() {
             continue;
@@ -211,7 +218,9 @@ pub fn brain_tick_system(
 /// such seam exists in this blueprint's own dependency set) — used only for a
 /// `Behavior`'s own randomized `min..=max` duration roll.
 fn deterministic_rng(tick_count: u64, entity_id: RcEntityId) -> impl FnMut() -> u32 {
-    let mut state = tick_count.wrapping_mul(2654435761).wrapping_add(entity_id.0);
+    let mut state = tick_count
+        .wrapping_mul(2654435761)
+        .wrapping_add(entity_id.0);
     move || {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
         (state >> 32) as u32
@@ -221,7 +230,11 @@ fn deterministic_rng(tick_count: u64, entity_id: RcEntityId) -> impl FnMut() -> 
 /// `navigation_and_movement_intent_system` — `PathNavigation` tick, `MoveControl`/
 /// `LookControl`/`JumpControl`, writes `PendingMovementIntent` (Context §G/§K).
 pub fn navigation_and_movement_intent_system(
-    mut query: Query<(&mut AttributeMap, &mut PathNavigation, &mut PendingMovementIntent)>,
+    mut query: Query<(
+        &mut AttributeMap,
+        &mut PathNavigation,
+        &mut PendingMovementIntent,
+    )>,
 ) {
     let world = NullBlockWorld;
     let evaluator = WalkNodeEvaluator;
@@ -319,8 +332,9 @@ pub fn register_ai_systems(builder: &mut rc_scheduler::RcExecutorBuilder) {
     builder.register_system(
         rc_scheduler::DomainGroup::EntityAiSelection,
         Box::new(|| {
-            Box::new(IntoSystem::into_system(navigation_and_movement_intent_system))
-                as Box<dyn System<In = (), Out = ()>>
+            Box::new(IntoSystem::into_system(
+                navigation_and_movement_intent_system,
+            )) as Box<dyn System<In = (), Out = ()>>
         }),
         vec![],
     );

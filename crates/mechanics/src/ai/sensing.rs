@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use rc_core::BlockPos;
 use rc_core::RcEntityId;
 
-use crate::ai::pathfinding::node::{tier1_path_type_table, PathType};
+use crate::ai::pathfinding::node::{PathType, tier1_path_type_table};
 use crate::world_access::BlockWorldAccess;
 
 #[cfg_attr(feature = "server-systems", derive(bevy_ecs::prelude::Component))]
