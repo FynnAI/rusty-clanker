@@ -2033,6 +2033,66 @@ Entries name the milestone that surfaced them and the code they concern.
   corpus spec `comparator_container_fullness_chest` floats without a floor
   (the oracle pops the comparator one tick after setup); fixed in the same
   governance changeset together with a sweep of the other 50 specs.
+- **M4-B03 (AI, pathfinding & navigation) — code-vs-blueprint mismatches and
+  bounded infrastructure gaps, all shipped as documented, non-silent
+  deviations.**
+  - `rc-mechanics`'s `Cargo.toml` already carries `bevy_ecs = { workspace =
+    true }` as a hard, unconditional dependency (not `optional`, not gated
+    behind `server-systems`) as merged by M4-B01 — contradicting M4-B03's own
+    Context §B claim that M4-B01 "never attached any of its own component
+    structs to a live `bevy_ecs::World`" and left `rc-mechanics` with "no
+    `bevy_ecs` dependency at all, direct or optional." Per this project's own
+    "code wins" rule for blueprint/repo-state conflicts, M4-B03's Cargo.toml
+    edit (adding `bevy_ecs` as optional, re-gating `server-systems`) was
+    skipped entirely — the dependency, and every `server-systems` feature
+    already needed, was already present and correct.
+  - `AiContext`'s own struct definition in Context §D omits a `hurt_by:
+    Option<RcEntityId>` field, but Context §J's own Zombie/Cow goal tables
+    (`ZombieAttackGoal`, `HurtByTargetGoal`, `PanicGoal`) and `M4-B00-index.md`
+    itself ("M4-B03's own `AiContext.hurt_by` field already assumed existed")
+    both require it — a same-document internal inconsistency, resolved by
+    adding the field for real (matching the index's own framing that it
+    already exists), since the blueprint's own downstream text depends on it.
+  - Context §K's own Stage-6a `Query` shape names `&BaseEntity`/
+    `&LivingEntity` as two of the four systems' own query terms, but neither
+    type derives `bevy_ecs::Component` in the merged M4-B01 code (only
+    `EntityNbtFields`/`EntityMetadataFields` — M4-B01's own Context explicitly
+    states it never attached its own component structs to a live `World`).
+    Shipped fix: the four Stage-6a systems (`crates/mechanics/src/ai/
+    systems.rs`) query only the six AI-owned component types this blueprint
+    itself defines, and construct `AiContext.self_pos`/`self_rotation`/
+    `self_id` from a placeholder (`Entity::index_u32`-derived id, world-origin
+    position) until a future blueprint adds the `Component` derive to
+    `BaseEntity`/`LivingEntity` plus a queryable live-position component.
+  - No shared "target-selector's own current target" storage type exists
+    anywhere in this blueprint's Deliverables (no `AiContext` field, no
+    component), and no `Goal`/`Sensor` call site receives a live
+    player-candidate list either (`AiContext`/`Sensor::tick` take no such
+    parameter) — genuine, bounded infrastructure gaps, not oversights.
+    Shipped as declared-but-inert, mirroring the blueprint's own precedent for
+    `BreedGoal`/`TemptGoal`/`FollowParentGoal`: `ZombieAttackGoal`,
+    `NearestAttackableTargetGoal<Player>`, and Villager's `PlayerSensor` all
+    have real structural placement (priority/flags/package membership exactly
+    per Context §J's own tables) but a `can_use()`-always-`false` (goals) or
+    empty-`tick()` (sensor) body. `HurtByTargetGoal`/`PanicGoal`/
+    `HurtBySensor` are real (driven by the `hurt_by` seam above); Villager's
+    `FleeFromHostile` gates correctly on `HurtByEntity` memory presence but
+    cannot drive real flee movement since that memory carries only an
+    `RcEntityId`, never an associated position, anywhere in `AiContext`/
+    `Brain`.
+  - `NodeEvaluator::get_neighbors`'s own pinned signature (Context §F /
+    Deliverables) carries no `step_height` parameter, so `WalkNodeEvaluator`
+    hardcodes vanilla's own shared `STEP_HEIGHT = 0.6` default (every tier-2
+    kind's own identical value at M4 scope, so not a parity loss for this
+    milestone) rather than threading a per-instance attribute override
+    through.
+  - Consistent with this blueprint's own Goal & Done definition ("does not...
+    wire any of this into `HardcodedWorld`'s live tick loop"), the four
+    Stage-6a systems read world blocks through a `NullBlockWorld` stand-in
+    (every position unloaded) rather than a real, chunk-backed
+    `EcsBlockWorld`-style adapter (`crate::stage4::ecs::EcsBlockWorld`'s own
+    established pattern) — a future composition-root blueprint's own wiring
+    job, restated as still open here rather than silently assumed done.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
