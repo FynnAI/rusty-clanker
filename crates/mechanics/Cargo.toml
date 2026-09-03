@@ -27,6 +27,14 @@ rc-nbt = { path = "../nbt" }
 rc-physics = { path = "../physics" }
 bevy_ecs = { workspace = true }
 tracing = { workspace = true } # defect-2 fix -- rate-limited chain_limit_hit diagnostic, neighbor_update.rs
+# M4-B01: `rc-entity-macros`' first real derive use (`EntityNbtFields`/`EntityMetadataFields`,
+# MECH-D30) -- unconditional (not `server-systems`-gated), since component definitions are
+# needed by both the server-tick and the client-prediction subset.
+rc-entity-macros = { path = "../entity-macros" }
+serde = { workspace = true }
+postcard = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
 
 [dependencies.rc-scheduler]
 path = "../scheduler"

@@ -67,6 +67,16 @@ use rc_mechanics::{BlockWorldAccess, RegionOwnership};
 
 pub const HARDCODED_REGION_ID: RegionId = RegionId(1);
 
+/// M4-B01, test/diagnostic only -- `HardcodedWorld::debug_spawn_entity`'s own channel
+/// message shape, factored into a named alias per `clippy::type_complexity`.
+type DebugEntitySpawnMsg = (
+    rc_mechanics::entity::EntityKind,
+    rc_mechanics::entity::BaseEntity,
+    Option<rc_mechanics::entity::LivingEntity>,
+    rc_mechanics::entity::EntityPayload,
+    oneshot::Sender<rc_core::RcEntityId>,
+);
+
 /// The full set of Configuration-phase synchronized registries the real composition root
 /// (`main.rs`) advertises during registry-data sync, replacing the earlier 2-registry
 /// (`dimension_type`, `worldgen/biome`) placeholder that let a real vanilla client through
@@ -646,6 +656,12 @@ pub struct PlayerMarker {
     /// the "newly entered" set on each chunk crossing without resending anything already on
     /// the client's own chunk cache.
     pub sent_chunks: HashSet<(i32, i32)>,
+    /// New (M4-B01, Context: "Tracking/interest integration"): every M4-B01 entity id
+    /// currently spawned on this connection's own client — mutated only by
+    /// `entity_tracking::apply_tracking_delta_for_player`'s own tick-loop step,
+    /// mirroring `PlayerMarker.connection`'s own M2-B07-established mutation
+    /// discipline.
+    pub tracked_entities: HashSet<rc_core::RcEntityId>,
 }
 
 pub struct PendingJoin {
@@ -1212,6 +1228,16 @@ pub struct HardcodedWorld {
     /// `--debug-hooks`-gated `debug-setblock` stdin line (`main.rs`'s own doc
     /// comment) -- `debug_set_block_state`'s own doc comment has the full contract.
     debug_setblock_tx: tokio::sync::mpsc::UnboundedSender<(BlockPos, u32, oneshot::Sender<()>)>,
+    /// New (M4-B01), test/diagnostic only -- `debug_spawn_entity`'s own doc comment.
+    debug_entity_spawn_tx: tokio::sync::mpsc::UnboundedSender<DebugEntitySpawnMsg>,
+    /// New (M4-B01), test/diagnostic only -- `debug_move_entity`'s own doc comment.
+    debug_entity_move_tx:
+        tokio::sync::mpsc::UnboundedSender<(rc_core::RcEntityId, [f64; 3], oneshot::Sender<()>)>,
+    /// New (M4-B01), test/diagnostic only -- `debug_despawn_entity`'s own doc comment.
+    debug_entity_despawn_tx:
+        tokio::sync::mpsc::UnboundedSender<(rc_core::RcEntityId, oneshot::Sender<()>)>,
+    /// New (M4-B01), test/diagnostic only -- `debug_teleport_player`'s own doc comment.
+    debug_teleport_tx: tokio::sync::mpsc::UnboundedSender<(i32, [f64; 3], oneshot::Sender<()>)>,
 }
 
 /// M3 field-report fix (symptom 2): `HardcodedWorld`'s per-connection channel methods
@@ -1298,6 +1324,26 @@ impl HardcodedWorld {
             tokio::sync::mpsc::unbounded_channel::<oneshot::Sender<Stage4Counters>>();
         let (debug_setblock_tx, mut debug_setblock_rx) =
             tokio::sync::mpsc::unbounded_channel::<(BlockPos, u32, oneshot::Sender<()>)>();
+        // M4-B01, test/diagnostic only -- `debug_spawn_entity`/`debug_move_entity`/
+        // `debug_despawn_entity`'s own doc comments.
+        let (debug_entity_spawn_tx, mut debug_entity_spawn_rx) =
+            tokio::sync::mpsc::unbounded_channel::<DebugEntitySpawnMsg>();
+        let (debug_entity_move_tx, mut debug_entity_move_rx) = tokio::sync::mpsc::unbounded_channel::<
+            (rc_core::RcEntityId, [f64; 3], oneshot::Sender<()>),
+        >();
+        let (debug_entity_despawn_tx, mut debug_entity_despawn_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(rc_core::RcEntityId, oneshot::Sender<()>)>();
+        // M4-B01, test/diagnostic only -- `debug_teleport_player`'s own doc comment: a
+        // server-authoritative position overwrite bypassing `evaluate_movement`'s own
+        // speed check entirely (mirrors `debug_set_block_state`'s own "bypasses every
+        // placement rule" precedent) -- needed so `play_entity_spawn_track_untrack.rs`
+        // can place its own uninvolved observer far from the acting connection without
+        // either connection ever claiming an anti-cheat-rejectable single-tick jump (a
+        // real client always joins at the identical `SPAWN_POSITION`, Context's own
+        // "second `PlayerMarker`'s own fixed `SPAWN_POSITION`" phrasing notwithstanding
+        // -- this seam is the concrete mechanism that phrasing assumed already existed).
+        let (debug_teleport_tx, mut debug_teleport_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, [f64; 3], oneshot::Sender<()>)>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // M2 integration addition (M2-B06's own "Composition-root integration" recipe
@@ -1486,6 +1532,24 @@ impl HardcodedWorld {
             // independently-configured one.
             let player_save_interval_ticks = config.save_interval_ticks() as u64;
             let mut player_save_tick_counter: u64 = 0;
+            // M4-B01, test/diagnostic only (Context: "Tracking/interest integration" --
+            // `debug_spawn_entity`/`debug_move_entity`/`debug_despawn_entity`'s own doc
+            // comments have the full contract): a plain, non-`bevy_ecs` local list of
+            // every M4-B01 tier-2 entity this test/debug seam has spawned, plus a
+            // dedicated, per-region `RcEntityId` allocator for it -- deliberately kept
+            // out of `region.world`, since migrating entity storage onto `bevy_ecs`
+            // components stays explicitly deferred to a future blueprint (Context).
+            let mut debug_entities: Vec<(
+                rc_core::RcEntityId,
+                rc_mechanics::entity::EntityKind,
+                rc_mechanics::entity::BaseEntity,
+                Option<rc_mechanics::entity::LivingEntity>,
+                rc_mechanics::entity::EntityPayload,
+            )> = Vec::new();
+            let debug_entity_ids = rc_core::RcEntityIdAllocator::new();
+            // M4-B01, test/diagnostic only -- mirrors `carried_debug_held_item`'s own
+            // identical not-yet-spawned-actor carry-forward pattern.
+            let mut carried_debug_teleport: Vec<(i32, [f64; 3], oneshot::Sender<()>)> = Vec::new();
 
             loop {
                 if thread_shutdown_flag.load(Ordering::Relaxed) {
@@ -1555,6 +1619,7 @@ impl HardcodedWorld {
                             on_ground: true,
                             last_streamed_center: join_chunk,
                             sent_chunks: already_sent,
+                            tracked_entities: HashSet::new(),
                         },
                         PlayerMotion {
                             position: Vec3::new(
@@ -2709,6 +2774,31 @@ impl HardcodedWorld {
                     }
                 }
 
+                // M4-B01, test/diagnostic only (`debug_teleport_player`'s own doc
+                // comment): overwrites both `PlayerMarker.position` and its own
+                // `PlayerMotion.position` mirror directly -- server-authoritative, never
+                // routed through `evaluate_movement`'s own client-claimed-movement speed
+                // check.
+                let mut pending_teleport: Vec<(i32, [f64; 3], oneshot::Sender<()>)> =
+                    std::mem::take(&mut carried_debug_teleport);
+                while let Ok(msg) = debug_teleport_rx.try_recv() {
+                    pending_teleport.push(msg);
+                }
+                for (network_entity_id, pos, ack) in pending_teleport {
+                    match find_player_entity(&region.world, network_entity_id) {
+                        Some(entity) => {
+                            if let Some(mut marker) = region.world.get_mut::<PlayerMarker>(entity) {
+                                marker.position = pos;
+                            }
+                            if let Some(mut motion) = region.world.get_mut::<PlayerMotion>(entity) {
+                                motion.position = Vec3::new(pos[0], pos[1], pos[2]);
+                            }
+                            let _ = ack.send(());
+                        }
+                        None => carried_debug_teleport.push((network_entity_id, pos, ack)),
+                    }
+                }
+
                 // M3.5-B03, test/diagnostic only, reachable externally only via the
                 // `--debug-hooks`-gated `debug-setblock` stdin line
                 // (`debug_set_block_state`'s own doc comment): a raw, unconditional
@@ -2759,6 +2849,48 @@ impl HardcodedWorld {
                         fluid_ticks_pending: scheduled.fluid_len(),
                         block_events_pending_next_tick: events.pending(),
                     });
+                }
+
+                // M4-B01, test/diagnostic only (mirroring `debug_query_block`'s own
+                // established precedent, `debug_query_block`'s own doc comment): drains
+                // `debug_spawn_entity`/`debug_move_entity`/`debug_despawn_entity`'s own
+                // three channels into `debug_entities`, a plain, non-`bevy_ecs` local
+                // list -- this blueprint's own "substrate now, behavior later" scope
+                // (Goal & Done definition) never migrates entity storage into `region.
+                // world` itself (that migration stays explicitly deferred, Context), so
+                // this debug seam is not, and must not be mistaken for, a real spawning
+                // system.
+                while let Ok((kind, base, living, payload, reply)) =
+                    debug_entity_spawn_rx.try_recv()
+                {
+                    let id = debug_entity_ids.alloc();
+                    debug_entities.push((id, kind, base, living, payload));
+                    let _ = reply.send(id);
+                }
+                while let Ok((id, pos, ack)) = debug_entity_move_rx.try_recv() {
+                    if let Some(entry) = debug_entities.iter_mut().find(|(eid, ..)| *eid == id) {
+                        entry.2.pos = pos;
+                    }
+                    let _ = ack.send(());
+                }
+                while let Ok((id, ack)) = debug_entity_despawn_rx.try_recv() {
+                    debug_entities.retain(|(eid, ..)| *eid != id);
+                    let _ = ack.send(());
+                }
+
+                // M4-B01 (Context, "The production integration"): entity tracking's own
+                // manual step, run once per `PlayerMarker` per tick -- after the
+                // block-action drain-and-apply step above and every other per-tick
+                // queue drain, and before `executor.tick_region` below -- mirroring
+                // M2-B07/M3-B02's own established manual-step placement.
+                let mut tracking_query = region.world.query::<&mut PlayerMarker>();
+                for mut marker in tracking_query.iter_mut(&mut region.world) {
+                    let viewer_pos = marker.position;
+                    super::entity_tracking::apply_tracking_delta_for_player(
+                        &mut marker,
+                        viewer_pos,
+                        debug_entities.iter().cloned(),
+                    );
                 }
 
                 executor.tick_region(&mut region, &pool, &transport);
@@ -2835,6 +2967,10 @@ impl HardcodedWorld {
             debug_survival_tx,
             stage4_counters_tx,
             debug_setblock_tx,
+            debug_entity_spawn_tx,
+            debug_entity_move_tx,
+            debug_entity_despawn_tx,
+            debug_teleport_tx,
         }
     }
 
@@ -3097,6 +3233,69 @@ impl HardcodedWorld {
     pub async fn debug_set_block_state(&self, pos: BlockPos, state_id: u32) {
         let (ack_tx, ack_rx) = oneshot::channel();
         if self.debug_setblock_tx.send((pos, state_id, ack_tx)).is_ok() {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// New (M4-B01), test/diagnostic only — mirrors `debug_query_block`'s own
+    /// established "test/diagnostic introspection only" precedent, extended to entity
+    /// spawning: enqueues a new M4-B01 tier-2 entity, applied at the start of the
+    /// region's next tick, and awaits the tick loop's own confirmation (a freshly
+    /// allocated `RcEntityId`) before returning. **Not** a real spawning system — no
+    /// production code path calls this (Constraints: "mob spawning/despawning logic...
+    /// a future M4 blueprint"). `None` iff the tick-loop thread is already gone
+    /// (`queue_join`'s own `RegionUnavailable`-adjacent "already gone" handling,
+    /// shared by every test/diagnostic method here).
+    pub async fn debug_spawn_entity(
+        &self,
+        kind: rc_mechanics::entity::EntityKind,
+        base: rc_mechanics::entity::BaseEntity,
+        living: Option<rc_mechanics::entity::LivingEntity>,
+        payload: rc_mechanics::entity::EntityPayload,
+    ) -> Option<rc_core::RcEntityId> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_entity_spawn_tx
+            .send((kind, base, living, payload, reply_tx))
+            .ok()?;
+        reply_rx.await.ok()
+    }
+
+    /// As `debug_spawn_entity` — moves an already-spawned debug entity to `pos`,
+    /// applied at the start of the region's next tick (so the following tick's own
+    /// tracking pass observes the new position), and awaits confirmation. A no-op
+    /// (silently) if `id` names no currently-spawned debug entity.
+    pub async fn debug_move_entity(&self, id: rc_core::RcEntityId, pos: [f64; 3]) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.debug_entity_move_tx.send((id, pos, ack_tx)).is_ok() {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// As `debug_move_entity` — removes an already-spawned debug entity entirely.
+    pub async fn debug_despawn_entity(&self, id: rc_core::RcEntityId) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.debug_entity_despawn_tx.send((id, ack_tx)).is_ok() {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// New (M4-B01), test/diagnostic only — a server-authoritative position overwrite
+    /// for an already-connected player, bypassing `evaluate_movement`'s own client-
+    /// claimed-movement speed check entirely (mirrors `debug_set_block_state`'s own
+    /// "bypasses every placement rule" precedent). Every real client that joins via
+    /// `enter_play` starts at the identical `SPAWN_POSITION` (Context, "Tracking/
+    /// interest integration"); this method exists specifically so an acceptance test
+    /// can place a second, uninvolved observer connection far from an actor connection
+    /// without either one ever claiming an anti-cheat-rejectable single-tick jump.
+    /// Awaits the tick loop's own confirmation before returning; a silent no-op if
+    /// `network_entity_id` names no currently-spawned player.
+    pub async fn debug_teleport_player(&self, network_entity_id: i32, pos: [f64; 3]) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self
+            .debug_teleport_tx
+            .send((network_entity_id, pos, ack_tx))
+            .is_ok()
+        {
             let _ = ack_rx.await;
         }
     }

@@ -6,3 +6,16 @@ publish = false
 
 [lib]
 proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+
+# M4-B01: the derive-expansion acceptance tests type-check the macro's own generated
+# code (which references `rc_nbt::...` directly, an ordinary external dependency of
+# whichever crate the derive is actually used in) against test-local stand-in traits —
+# `rc-nbt` is already WS-D3 `SHARED` (rule 1), so this dev-only edge crosses no
+# `SIM`/`NETRENDER` boundary (`xtask lint-deps` rule 2).
+[dev-dependencies]
+rc-nbt = { path = "../nbt" }

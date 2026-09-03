@@ -15,5 +15,5 @@ pub struct RegionState {
     pub world: World,
     pub tick_counter: u64,
     pub message_state: RegionMessageState,
-    pub(crate) system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 7],
+    pub(crate) system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 8],
 }

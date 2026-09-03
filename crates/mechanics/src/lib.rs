@@ -9,6 +9,7 @@ pub mod block_event;
 pub mod border;
 pub mod container;
 pub mod direction;
+pub mod entity;
 pub mod item_stack;
 pub mod neighbor_update;
 pub mod random;

@@ -25,28 +25,31 @@ pub(crate) struct CompiledGroup {
     pub(crate) waves: Vec<Vec<usize>>,       // from compute_waves; ignored by Stage 4's dispatch
 }
 
-/// M3-B06 field-report fix: `DomainGroup::ALL`'s own declaration order stays exactly what
-/// M0-B05 fixed it as (`BlockRedstone, AiPhysics, Lighting, ChunkSerialize, NetCodec`) with
-/// the two new M3-B06 groups appended at the end (`RandomTick, BlockEntity`) — required,
-/// since `DomainGroup::index()`'s return values (and `spawn_region`'s own per-group slot
-/// fill, which is order-independent) are pinned by M3-B06's own already-committed acceptance
-/// tests. But `tick_region`'s *dispatch* order must track ascending `Stage` value, not
-/// `ALL`'s raw array order — M3-B06's own Deliverables claimed "no new dispatch logic is
-/// needed... `tick_region` is already specified generically over each domain group," which
-/// is not correct: appending `RandomTick`/`BlockEntity` to the end of `ALL` and iterating
-/// `ALL` directly (the pre-M3-B06 code) would run Stage 5's and Stage 7's own content
-/// *after* Stage 11's `NetCodec` pass, on every tick — random-tick and block-entity state
-/// changes would consistently miss that same tick's own network snapshot, an undocumented,
-/// unbounded, silent one-tick-late deviation forbidden by this project's own "vanilla parity
-/// is bit-identical by default" binding principle. `DISPATCH_ORDER` is `ALL`'s own seven
-/// members reordered to ascending `Stage` value once, by hand, at compile time (`RandomTick`
-/// = Stage 5 slots in between `BlockRedstone` = Stage 4 and `AiPhysics` = Stage 6;
-/// `BlockEntity` = Stage 7 slots in between `AiPhysics` = Stage 6 and `Lighting` = Stage 8) —
+/// M3-B06 field-report fix, extended by M4-B01: `DomainGroup::ALL`'s own declaration
+/// order stays exactly what M0-B05 fixed it as (`BlockRedstone, ..., ChunkSerialize,
+/// NetCodec`) with M3-B06's two groups appended (`RandomTick, BlockEntity`) and
+/// M4-B01's `AiPhysics` replacement (`EntityAiSelection, EntityPhysicsIntegration`)
+/// substituted in place — required, since `DomainGroup::index()`'s return values (and
+/// `spawn_region`'s own per-group slot fill, which is order-independent) are pinned by
+/// already-committed acceptance tests. But `tick_region`'s *dispatch* order must track
+/// ascending `Stage` value, not `ALL`'s raw array order (M3-B06's own field-report fix,
+/// restated): appending `RandomTick`/`BlockEntity` to the end of `ALL` and iterating
+/// `ALL` directly would run Stage 5's and Stage 8's own content *after* Stage 12's
+/// `NetCodec` pass, on every tick — random-tick and block-entity state changes would
+/// consistently miss that same tick's own network snapshot, an undocumented, unbounded,
+/// silent one-tick-late deviation forbidden by this project's own "vanilla parity is
+/// bit-identical by default" binding principle. `DISPATCH_ORDER` is `ALL`'s own eight
+/// members reordered to ascending `Stage` value once, by hand, at compile time
+/// (`RandomTick` = Stage 5 slots between `BlockRedstone` = Stage 4 and
+/// `EntityAiSelection` = Stage 6; `EntityPhysicsIntegration` = Stage 7 slots between
+/// `EntityAiSelection` = Stage 6 and `BlockEntity` = Stage 8; `BlockEntity` = Stage 8
+/// slots between `EntityPhysicsIntegration` = Stage 7 and `Lighting` = Stage 9) —
 /// `tick_region` iterates this, never `DomainGroup::ALL` directly.
-const DISPATCH_ORDER: [DomainGroup; 7] = [
+const DISPATCH_ORDER: [DomainGroup; 8] = [
     DomainGroup::BlockRedstone,
     DomainGroup::RandomTick,
-    DomainGroup::AiPhysics,
+    DomainGroup::EntityAiSelection,
+    DomainGroup::EntityPhysicsIntegration,
     DomainGroup::BlockEntity,
     DomainGroup::Lighting,
     DomainGroup::ChunkSerialize,
@@ -59,7 +62,7 @@ const DISPATCH_ORDER: [DomainGroup; 7] = [
 /// different threads, a later blueprint's use case, not exercised here.
 pub struct RcExecutor {
     bootstrap: fn(&mut bevy_ecs::world::World),
-    groups: [CompiledGroup; 7],
+    groups: [CompiledGroup; 8],
 }
 
 /// Minimal per-tick result. Extended by later blueprints as needed (e.g. per-stage
@@ -72,7 +75,7 @@ pub struct TickReport {
 impl RcExecutor {
     /// Crate-private constructor -- `RcExecutorBuilder::build` (`registry.rs`) is
     /// the only caller; the conflict graph is computed there, once.
-    pub(crate) fn new(bootstrap: fn(&mut World), groups: [CompiledGroup; 7]) -> Self {
+    pub(crate) fn new(bootstrap: fn(&mut World), groups: [CompiledGroup; 8]) -> Self {
         Self { bootstrap, groups }
     }
 
@@ -83,7 +86,8 @@ impl RcExecutor {
         let mut world = World::new();
         (self.bootstrap)(&mut world);
 
-        let mut system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 7] = [
+        let mut system_instances: [Vec<Box<dyn System<In = (), Out = ()>>>; 8] = [
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -206,14 +210,21 @@ impl RcExecutor {
                         system.run((), world).expect("Stage 4 system failed to run");
                     }
                 }
-                DomainGroup::NetCodec => {
-                    // Stage 11: read-only -- run, but never apply (Constraint f's
-                    // documented limitation: a `Commands`-misusing Stage-11 system's
-                    // state is silently retained, never flushed).
+                DomainGroup::NetCodec | DomainGroup::EntityAiSelection => {
+                    // Stage 12 (`NetCodec`) and Stage 6 (`EntityAiSelection`, M4-B01):
+                    // both read-only -- run, but never apply. Reusing this exact code
+                    // path for `EntityAiSelection` is deliberate and load-bearing
+                    // (Context: "Stage-6a/6b system registration model"): it makes
+                    // MECH-D32's "never mutates World state from within Stage 6a" rule
+                    // structural, not conventional -- a `Commands`-misusing Stage-6a
+                    // system's deferred state is silently retained, never flushed,
+                    // the identical documented limitation Constraint (f) already
+                    // accepts for Stage 12.
                     run_group_waves(compiled, instances, world, pool);
                 }
                 _ => {
-                    // Stages 6, 8, 9: conflict-graph-batched, deferred until Stage 10.
+                    // Stages 7, 8, 9, 10: conflict-graph-batched, deferred until
+                    // Stage 11.
                     run_group_waves(compiled, instances, world, pool);
                     let stage = group.stage() as u8;
                     for order_tag in 0..instances.len() {

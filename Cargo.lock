@@ -2987,6 +2987,12 @@ dependencies = [
 [[package]]
 name = "rc-entity-macros"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rc-nbt",
+ "syn 3.0.4",
+]
 
 [[package]]
 name = "rc-gametest"
@@ -3009,15 +3015,20 @@ name = "rc-mechanics"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+ "postcard",
  "proptest",
  "rc-chunk-storage",
  "rc-core",
+ "rc-entity-macros",
  "rc-messaging",
  "rc-nbt",
  "rc-physics",
  "rc-registries",
  "rc-scheduler",
+ "serde",
+ "thiserror 2.0.20",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

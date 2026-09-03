@@ -22,8 +22,9 @@ pub fn bootstrap_default_profile(world: &mut bevy_ecs::world::World) {
     });
 }
 
-/// The one system this blueprint registers (into `DomainGroup::AiPhysics`, M0-B05's
-/// Stage 6 mapping): reads `Res<SyntheticLoadProfile>` (its only declared access — no
+/// The one system this blueprint registers (into `DomainGroup::EntityPhysicsIntegration`
+/// — M0-B05's own `AiPhysics`/Stage 6 mapping, renamed onto ARCH-D15's Stage 6b by
+/// M4-B01): reads `Res<SyntheticLoadProfile>` (its only declared access — no
 /// `Query`, no `Commands`) and busy-spins for approximately `busy_work_micros`.
 pub fn synthetic_busy_work_system(profile: Res<SyntheticLoadProfile>) {
     busy_spin(profile.busy_work_micros);
