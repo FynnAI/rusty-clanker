@@ -159,5 +159,6 @@ packet path, not only through the engine.
   reach, break/place regression from M2 — **no findings**; redstone/placement
   round — the §4 class-2/class-3 defects (all fixed the same night, verified
   by `placement-diff` 85/85, parity 52/52, real-connection tests, CI green).
-- 2026-09-02 (scheduled): re-test with the final binary. Verdict to be
-  appended here.
+- Re-test with the final binary: **pending manual sign-off** — the owner has
+  postponed it (2026-09-03); the verdict is appended here when it exists, and
+  M4 does not start before it does.
