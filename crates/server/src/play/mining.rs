@@ -1598,6 +1598,10 @@ pub enum BreakOutcome {
     Applied {
         pos: BlockPos,
         drop_eligible: bool,
+        /// M4-B02 addition (Context §I): the pre-break block state — `finalize_break`'s own
+        /// body already computed this internally (as `current`) but previously discarded it;
+        /// this is a pure "return an already-computed value" change, no new computation.
+        broken_state: StorageBlockStateId,
     },
     Rejected {
         pos: BlockPos,
@@ -1791,7 +1795,11 @@ pub fn finalize_break(
         current_tick,
     );
 
-    BreakOutcome::Applied { pos, drop_eligible }
+    BreakOutcome::Applied {
+        pos,
+        drop_eligible,
+        broken_state: current,
+    }
 }
 
 /// Placement: resolves the target position (`block_action::resolve_place_position`,

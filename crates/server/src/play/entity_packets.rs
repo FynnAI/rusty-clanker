@@ -155,9 +155,11 @@ pub fn encode_angle(degrees: f32) -> u8 {
 
 /// Java's `Math.round` (round-half-up toward positive infinity), not Rust's
 /// round-half-away-from-zero — the one asymmetry the delta-family packets' own encoding
-/// depends on (Context).
-#[allow(dead_code)]
-fn java_round(value: f64) -> i64 {
+/// depends on (Context). `pub(crate)` (M4-B02): `entity_tracking.rs`'s own `entity_resync_step`
+/// (Context §O) is this function's first real caller, needing the identical unrounded `i64`
+/// delta (before the `as i16` narrowing) to decide whether a per-axis delta still fits that
+/// range before choosing `UpdateEntityPosition` over `TeleportEntity`.
+pub(crate) fn java_round(value: f64) -> i64 {
     (value + 0.5).floor() as i64
 }
 
@@ -166,12 +168,9 @@ fn java_round(value: f64) -> i64 {
 /// — using Java's round-half-up-toward-positive-infinity `round`, not Rust's
 /// round-half-away-from-zero. The delta-family packets' own position encoding.
 /// Caller's responsibility to fall back to `TeleportEntity` when any axis's unclamped
-/// delta would not fit `i16` (Constraints). Reserved, not yet called by this
-/// blueprint's own tracking integration (`still_tracked`'s own re-send seam stays
-/// unexercised, Context, "The production integration") — a future movement-broadcast
-/// blueprint's own entry point, specified completely here so that blueprint needs no
-/// further design work on this one formula.
-#[allow(dead_code)]
+/// delta would not fit `i16` (Constraints) — `entity_tracking.rs`'s own `entity_resync_step`
+/// (M4-B02, Context §O) is this function's first real caller, checking the unrounded `i64`
+/// delta via `java_round` directly before ever calling this narrowing encoder.
 pub fn encode_position_delta(old: f64, new: f64) -> i16 {
     let delta = java_round(new * 4096.0) - java_round(old * 4096.0);
     delta as i16
@@ -350,6 +349,27 @@ pub struct SetEntityVelocity {
 pub struct RemoveEntities {
     #[rc(prefixed_array = "VarInt")]
     pub entity_ids: Vec<VarInt>,
+}
+
+/// `entity_id`/`collector_id`: `Spawn Entity`'s own network entity id space (M4-B01). The
+/// purely-visual item-pickup swoop (Context §M). **Corrected `bound` from this blueprint's
+/// own Deliverables literal `bound = "server"`, which contradicts that same blueprint's own
+/// Claims-to-verify list and every other movement/spawn/despawn packet already in this file**
+/// (`docs/findings-for-planning.md`): `M4-B02-CLAIMS.md`'s own TEST-D57-verified row states
+/// "The Take Item Entity clientbound play packet is assigned id 0x7C (124)" — clientbound,
+/// broadcast server→client, matching this file's own established convention for every other
+/// packet in this section (`TeleportEntity`/`SetEntityVelocity`/`RemoveEntities`, all
+/// `bound = "client"`). **Moderate confidence on the packet id** — flagged for reconciliation
+/// exactly like every other hand-typed id in this file.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x7C)]
+pub struct TakeItemEntity {
+    #[rc(varint)]
+    pub collected_entity_id: i32,
+    #[rc(varint)]
+    pub collector_entity_id: i32,
+    #[rc(varint)]
+    pub pickup_item_count: i32,
 }
 
 /// This variant's own `rc_mechanics::entity::metadata::type_id::*` constant — the

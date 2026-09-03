@@ -3024,6 +3024,7 @@ dependencies = [
  "rc-nbt",
  "rc-physics",
  "rc-registries",
+ "rc-rng",
  "rc-scheduler",
  "serde",
  "thiserror 2.0.20",
@@ -3150,6 +3151,13 @@ dependencies = [
  "rc-core",
  "rc-mod-host",
  "rc-registries",
+]
+
+[[package]]
+name = "rc-rng"
+version = "0.1.0"
+dependencies = [
+ "md-5 0.11.0",
 ]
 
 [[package]]

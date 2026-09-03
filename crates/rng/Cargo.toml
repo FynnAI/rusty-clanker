@@ -1,0 +1,8 @@
+[package]
+name = "rc-rng"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+md-5 = { workspace = true }

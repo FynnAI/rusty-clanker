@@ -97,7 +97,9 @@ pub enum AiSystemKind {
 /// or-`Default` rule. This struct is an ECS component every `Mob`-rung tier-2 kind's
 /// `EntityRecord` now carries (`mob: Some(..)`), not an `EntityNbtFields`/
 /// `EntityMetadataFields` implementer itself.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, bevy_ecs::prelude::Component,
+)]
 pub struct MobMarker {
     pub ai_system: AiSystemKind,
     pub persistence_required: bool,
@@ -127,6 +129,7 @@ pub struct ItemStackRecord {
     serde::Deserialize,
     rc_entity_macros::EntityNbtFields,
     rc_entity_macros::EntityMetadataFields,
+    bevy_ecs::prelude::Component,
 )]
 pub struct ItemBundle {
     #[nbt(name = "Item")]
@@ -143,7 +146,9 @@ pub struct ItemBundle {
 /// real `Zombie`-rung indices (16-18: `DATA_BABY_ID`, `DATA_SPECIAL_TYPE_ID`,
 /// `DATA_DROWNED_CONVERSION_ID`, Context: "Per-kind synced-data index table") stay
 /// reserved, never sent — this struct declares none of them.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, bevy_ecs::prelude::Component,
+)]
 pub struct ZombieBundle;
 
 #[derive(
@@ -154,6 +159,7 @@ pub struct ZombieBundle;
     serde::Deserialize,
     rc_entity_macros::EntityNbtFields,
     rc_entity_macros::EntityMetadataFields,
+    bevy_ecs::prelude::Component,
 )]
 pub struct VillagerBundle {
     /// Index 19, not 16 — vanilla-exact per `Villager`'s own full class chain
@@ -171,14 +177,34 @@ pub struct VillagerBundle {
 /// `Cow`-rung indices (18-19: `DATA_VARIANT_ID`, `DATA_SOUND_VARIANT_ID`, Context:
 /// "Per-kind synced-data index table") stay reserved, never sent — this struct declares
 /// none of them.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, bevy_ecs::prelude::Component,
+)]
 pub struct CowBundle;
 
 /// The closed set of kind-specific payloads `EntityRecord`/`snapshot.rs` dispatch on.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, bevy_ecs::prelude::Component,
+)]
 pub enum EntityPayload {
     Item(ItemBundle),
     Zombie(ZombieBundle),
     Villager(VillagerBundle),
     Cow(CowBundle),
+}
+
+impl EntityPayload {
+    /// M4-B02 addition (`docs/findings-for-planning.md`): the `EntityKind` this payload's own
+    /// variant carries — needed by any caller (`rusty-clanker-server`'s own tracking-delta
+    /// integration) that only has a live `&EntityPayload` in hand (e.g. from a real `bevy_ecs`
+    /// `Query`) and needs the matching `EntityKind` back, without threading a second,
+    /// separately-stored value alongside every spawned entity.
+    pub const fn kind(&self) -> EntityKind {
+        match self {
+            EntityPayload::Item(_) => EntityKind::Item,
+            EntityPayload::Zombie(_) => EntityKind::Zombie,
+            EntityPayload::Villager(_) => EntityKind::Villager,
+            EntityPayload::Cow(_) => EntityKind::Cow,
+        }
+    }
 }

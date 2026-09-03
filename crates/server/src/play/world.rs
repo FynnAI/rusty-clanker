@@ -3,7 +3,7 @@
 //! No `rc_scheduler::RegionManager` -- a single region that never splits or merges has no
 //! use for its merge/split lifecycle; `RcExecutor::spawn_region` is called directly.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,12 +23,19 @@ use rc_mechanics::block_entity::{
     BlockEntityHeader, chest::ChestBlockEntity, furnace::FurnaceBlockEntity,
     hopper::HopperBlockEntity,
 };
+use rc_mechanics::entity::physics::ecs::{DimensionResource, ShapeTableResource};
+use rc_mechanics::entity::physics::{PendingEnvironmentalDamageQueue, register_stage6b};
+use rc_mechanics::entity::{NetworkEntityIdAllocator, PickedUpItems, loot::RandomSequenceStore};
+use rc_mechanics::fluid::{FluidBlockRanges, FluidDimensionProfile, FluidTables, ReactionBlocks};
+use rc_mechanics::random::RcRandom;
 use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
 use rc_physics::{Aabb, PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HEIGHT_SNEAKING, Vec3};
 use rc_protocol::encode_payload;
+use rc_registries::block_state_properties::range_of;
+use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::{
     self,
-    default_state::{AIR, BEDROCK, DIRT, GRASS_BLOCK},
+    default_state::{AIR, BEDROCK, COBBLESTONE, DIRT, GRASS_BLOCK, OBSIDIAN, STONE},
 };
 use rc_scheduler::chunk_ticket::{PlayerTicketId, TicketManager};
 use rc_scheduler::pool::{RcWorkerPool, SystemTickWaiter, TickClock};
@@ -41,6 +48,8 @@ use super::block_action::{
     target_position, to_storage_biome_id, to_storage_id,
 };
 use super::connection::SPAWN_POSITION;
+use super::entity_drops;
+use super::entity_tracking::{entity_pickup_step, entity_resync_step};
 use super::mining::{
     self, BLOCK_INTERACTION_RANGE_CREATIVE, BLOCK_INTERACTION_RANGE_SURVIVAL, BreakOutcome,
     DestroyOutcome, DestroyState, GameModeState, HeldItem, HeldItemStub, PlaceOutcome,
@@ -662,6 +671,10 @@ pub struct PlayerMarker {
     /// mirroring `PlayerMarker.connection`'s own M2-B07-established mutation
     /// discipline.
     pub tracked_entities: HashSet<rc_core::RcEntityId>,
+    /// M4-B02 (Context §O): position/velocity as last actually *sent* to this connection by
+    /// `entity_tracking::entity_resync_step` — mutated only by that step (never by
+    /// `apply_tracking_delta_for_player`'s own initial `Spawn Entity` send).
+    pub last_sent_entity_state: HashMap<rc_core::RcEntityId, ([f64; 3], [f64; 3])>,
 }
 
 pub struct PendingJoin {
@@ -754,6 +767,60 @@ struct PendingStreamChunk {
 /// know about the other's own internals (`rc-chunk-storage`'s `ChunkLifecycleManager`
 /// never depends on any `rusty-clanker-server` type, Context's own dependency-graph note,
 /// generalized to this composition-root/M2-B07 boundary too).
+/// M4-B02 (Context §K): this project has no real world-seed concept yet outside this one
+/// consumer — a fixed test/debug seed, reused (Implementation freedom, `docs/findings-for-
+/// planning.md`) for the region-entropy stream `entity_drops::spawn_break_drop`'s own
+/// spawn-jitter draws too (a non-deterministic-across-restarts, gameplay-feel-only stream
+/// deliberately independent of the `random_sequence` loot-roll stream, Context §I — its exact
+/// seed value carries no parity requirement).
+pub const DEBUG_WORLD_SEED: i64 = 0;
+
+/// M4-B02: `rc_mechanics::entity::loot::RandomSequenceStore`/`rc_mechanics::random::RcRandom`/
+/// `rc_mechanics::entity::NetworkEntityIdAllocator` are plain Rust types with no uniform
+/// `bevy_ecs::Resource` derive of their own (`RandomSequenceStore` does derive it, feature-
+/// gated; the other two do not, since neither is `rc-mechanics`' own ECS-wiring concern) — this
+/// composition root wraps the two that need one, mirroring `SignalRegistryResource`'s own
+/// established "a plain wrapper `Resource`, not a plain `Arc` alias" precedent.
+#[derive(Resource, Default)]
+struct EntityNetworkIds(NetworkEntityIdAllocator);
+
+#[derive(Resource)]
+struct RegionDropEntropy(RcRandom);
+
+/// A real, production `FluidTables` for the Overworld (M4-B02: `rc-mechanics`' own M4-B06
+/// never actually wired one into `region.world` anywhere in this crate — `register_fluids`
+/// is never called in production either, `docs/findings-for-planning.md` — this blueprint is
+/// the first real consumer needing a live instance, since `system_entity_physics_integration`'s
+/// own `Res<FluidTables>` system param requires it exist). Water/lava ranges read from the
+/// real generated registry (`range_of`, mirroring `rc_physics::tier1_shape_table`'s own
+/// precedent) rather than hand-typed literals; `fast_lava: false` (Overworld default).
+fn build_overworld_fluid_tables() -> FluidTables {
+    let water_range = range_of(block_id::WATER);
+    let lava_range = range_of(block_id::LAVA);
+    let ranges = FluidBlockRanges::new(
+        (
+            to_storage_id(water_range.first.0),
+            to_storage_id(water_range.last.0 + 1),
+        ),
+        (
+            to_storage_id(lava_range.first.0),
+            to_storage_id(lava_range.last.0 + 1),
+        ),
+    )
+    .expect("WATER/LAVA's own generated LEVEL-property ranges are each exactly 16 wide");
+    FluidTables::new(
+        ranges,
+        ReactionBlocks {
+            obsidian: to_storage_id(OBSIDIAN.0),
+            cobblestone: to_storage_id(COBBLESTONE.0),
+            stone: to_storage_id(STONE.0),
+            basalt_conversion: None,
+        },
+        FluidDimensionProfile { fast_lava: false },
+        to_storage_id(AIR.0),
+    )
+}
+
 fn bootstrap_region(world: &mut World) {
     world.insert_resource(ChunkIndex::default());
     // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate into `HardcodedWorld` for the
@@ -762,6 +829,16 @@ fn bootstrap_region(world: &mut World) {
     // instead inserted once, per region, immediately after `RcExecutor::spawn_region`
     // returns (`with_config`'s own construction sequence, below).
     rc_mechanics::stage4::ecs::bootstrap_default_stage4_resources(world);
+    // M4-B02: Stage 6b's own composition-root resource inserts (Context, "world.rs
+    // (modify)" — `ShapeTableResource`/`DimensionResource`/`PendingEnvironmentalDamageQueue`/
+    // `RandomSequenceStore`, plus this crate's own two wrapper resources above).
+    world.insert_resource(ShapeTableResource(rc_physics::tier1_shape_table()));
+    world.insert_resource(DimensionResource(DimensionId::OVERWORLD));
+    world.insert_resource(PendingEnvironmentalDamageQueue::default());
+    world.insert_resource(RandomSequenceStore::default());
+    world.insert_resource(EntityNetworkIds::default());
+    world.insert_resource(RegionDropEntropy(RcRandom::new(DEBUG_WORLD_SEED)));
+    world.insert_resource(build_overworld_fluid_tables());
     // M3-B06's own `Default`-able Stage-7 resources (`SmeltingRecipeTable`/`FuelTable`/
     // `MaxStackSizeResource`) -- `ContainerSignalsResource` has no uniform default and is
     // inserted directly below, alongside the tier-1 redstone wiring it feeds.
@@ -906,6 +983,45 @@ fn spawn_block_entity_for_placement(
     {
         index.push(entity);
     }
+}
+
+/// M3-B0X production block-entity spawn wiring (Context, "Spawn on placement / remove on
+/// break"): the call-site-shared "was this a BE-creating kind, and did the break actually
+/// happen" gate every `mining::finalize_break` call site applies before despawning -- `pre_
+/// break_raw` is the raw state each call site already read *before* calling `finalize_break`
+/// (every site already computes this for `respond_break`'s own diff), so this needs no
+/// separate world read of its own. `Comparator` never spawns a tracked entity in the first
+/// place (`spawn_block_entity_for_placement`'s own doc comment) -- `spawns_tracked_entity()`
+/// filters it out here too, so a broken comparator is correctly a no-op.
+/// M4-B02 (Context §I): the call-site-shared drop-spawn hook every real `mining::
+/// finalize_break` call site applies alongside `despawn_block_entity_if_needed` above,
+/// completing M3-B03's own explicitly-deferred drops stance — a no-op unless `outcome` is
+/// `Applied { drop_eligible: true, .. }`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_drop_if_needed(
+    world: &mut World,
+    outcome: BreakOutcome,
+    region_random: &mut RandomSequenceStore,
+    region_entropy: &mut RegionDropEntropy,
+    network_ids: &EntityNetworkIds,
+) {
+    let BreakOutcome::Applied {
+        pos,
+        drop_eligible: true,
+        broken_state,
+    } = outcome
+    else {
+        return;
+    };
+    entity_drops::spawn_break_drop(
+        world,
+        pos,
+        broken_state,
+        region_random,
+        DEBUG_WORLD_SEED,
+        &mut region_entropy.0,
+        &network_ids.0,
+    );
 }
 
 /// M3-B0X production block-entity spawn wiring (Context, "Spawn on placement / remove on
@@ -1236,6 +1352,23 @@ pub struct HardcodedWorld {
     /// New (M4-B01), test/diagnostic only -- `debug_despawn_entity`'s own doc comment.
     debug_entity_despawn_tx:
         tokio::sync::mpsc::UnboundedSender<(rc_core::RcEntityId, oneshot::Sender<()>)>,
+    /// New (M4-B02), test/diagnostic only -- `debug_spawn_item_entity`'s own doc comment.
+    debug_item_spawn_tx: tokio::sync::mpsc::UnboundedSender<(
+        BlockPos,
+        rc_registries::generated_v776::registries::RegistryEntryId,
+        u8,
+        oneshot::Sender<rc_core::RcEntityId>,
+    )>,
+    /// New (M4-B02), test/diagnostic only -- `debug_query_item_entity`'s own doc comment.
+    debug_item_query_tx: tokio::sync::mpsc::UnboundedSender<(
+        rc_core::RcEntityId,
+        oneshot::Sender<Option<DebugItemEntityInfo>>,
+    )>,
+    /// New (M4-B02), test/diagnostic only -- `debug_query_picked_up_items`'s own doc comment.
+    debug_picked_up_items_tx: tokio::sync::mpsc::UnboundedSender<(
+        i32,
+        oneshot::Sender<Vec<rc_mechanics::entity::ItemStackRecord>>,
+    )>,
     /// New (M4-B01), test/diagnostic only -- `debug_teleport_player`'s own doc comment.
     debug_teleport_tx: tokio::sync::mpsc::UnboundedSender<(i32, [f64; 3], oneshot::Sender<()>)>,
 }
@@ -1333,6 +1466,28 @@ impl HardcodedWorld {
         >();
         let (debug_entity_despawn_tx, mut debug_entity_despawn_rx) =
             tokio::sync::mpsc::unbounded_channel::<(rc_core::RcEntityId, oneshot::Sender<()>)>();
+        // M4-B02, test/diagnostic only -- `debug_spawn_item_entity`/`debug_query_item_entity`/
+        // `debug_query_picked_up_items`'s own doc comments. Unlike `debug_entity_spawn_tx`
+        // above (M4-B01's own plain, non-`bevy_ecs` `debug_entities` stand-in), this spawns a
+        // real ECS entity directly (bypassing the break->loot pipeline, Deliverables' own doc
+        // comment) so it is ticked by Stage 6b exactly like a real drop.
+        let (debug_item_spawn_tx, mut debug_item_spawn_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(
+                BlockPos,
+                rc_registries::generated_v776::registries::RegistryEntryId,
+                u8,
+                oneshot::Sender<rc_core::RcEntityId>,
+            )>();
+        let (debug_item_query_tx, mut debug_item_query_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(
+                rc_core::RcEntityId,
+                oneshot::Sender<Option<DebugItemEntityInfo>>,
+            )>();
+        let (debug_picked_up_items_tx, mut debug_picked_up_items_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(
+                i32,
+                oneshot::Sender<Vec<rc_mechanics::entity::ItemStackRecord>>,
+            )>();
         // M4-B01, test/diagnostic only -- `debug_teleport_player`'s own doc comment: a
         // server-authoritative position overwrite bypassing `evaluate_movement`'s own
         // speed check entirely (mirrors `debug_set_block_state`'s own "bypasses every
@@ -1427,6 +1582,10 @@ impl HardcodedWorld {
             // Stage 4 itself carried before `mining_stage4_wiring.rs`; recorded as a finding for
             // planning, not fixed here -- out of this changeset's own scope).
             rc_mechanics::stage7::ecs::register_stage7(&mut builder);
+            // M4-B02 (Context §A): the first real content in `DomainGroup::
+            // EntityPhysicsIntegration` -- must be called before any sibling M4 blueprint's
+            // own registration into this same group so this system keeps `order_tag = 0`.
+            register_stage6b(&mut builder);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );
@@ -1620,7 +1779,9 @@ impl HardcodedWorld {
                             last_streamed_center: join_chunk,
                             sent_chunks: already_sent,
                             tracked_entities: HashSet::new(),
+                            last_sent_entity_state: HashMap::new(),
                         },
+                        PickedUpItems::default(),
                         PlayerMotion {
                             position: Vec3::new(
                                 join.position[0],
@@ -1957,6 +2118,24 @@ impl HardcodedWorld {
                 let mut mining_outbound: Vec<(Address, RegionMessage)> = Vec::new();
                 let current_tick = region.tick_counter;
 
+                // M4-B02: this tick's own drop-spawning resources, pulled out of `region.
+                // world` for the identical reason `engine`/`scheduled`/etc. above are --
+                // `entity_drops::spawn_break_drop` needs `&mut region.world` directly (to
+                // spawn a real entity), which the ordinary borrow checker cannot prove is
+                // disjoint from these same resources also living inside that `World`.
+                let mut region_random = region
+                    .world
+                    .remove_resource::<RandomSequenceStore>()
+                    .expect("bootstrap_region always inserts this");
+                let mut region_entropy = region
+                    .world
+                    .remove_resource::<RegionDropEntropy>()
+                    .expect("bootstrap_region always inserts this");
+                let network_ids = region
+                    .world
+                    .remove_resource::<EntityNetworkIds>()
+                    .expect("bootstrap_region always inserts this");
+
                 for action in pending {
                     // The final *write* position (`resolve_place_position`'s own offset for
                     // `Place`, unchanged from block_action.rs) -- used for the chunk-
@@ -2103,6 +2282,13 @@ impl HardcodedWorld {
                                     outcome,
                                     pre_break,
                                 );
+                                spawn_drop_if_needed(
+                                    &mut region.world,
+                                    outcome,
+                                    &mut region_random,
+                                    &mut region_entropy,
+                                    &network_ids,
+                                );
                             } else {
                                 let props = mining::dig_properties_for_raw_state(read_raw_state(
                                     &region.world,
@@ -2164,6 +2350,13 @@ impl HardcodedWorld {
                                         &mut region.world,
                                         outcome,
                                         pre_break,
+                                    );
+                                    spawn_drop_if_needed(
+                                        &mut region.world,
+                                        outcome,
+                                        &mut region_random,
+                                        &mut region_entropy,
+                                        &network_ids,
                                     );
                                 }
                             }
@@ -2230,6 +2423,13 @@ impl HardcodedWorld {
                                         &mut region.world,
                                         outcome,
                                         pre_break,
+                                    );
+                                    spawn_drop_if_needed(
+                                        &mut region.world,
+                                        outcome,
+                                        &mut region_random,
+                                        &mut region_entropy,
+                                        &network_ids,
                                     );
                                 }
                             }
@@ -2482,6 +2682,13 @@ impl HardcodedWorld {
                             }
                             broadcast_changed_positions(&region.world, &direct_changed, Some(pos));
                             despawn_block_entity_if_needed(&mut region.world, outcome, pre_break);
+                            spawn_drop_if_needed(
+                                &mut region.world,
+                                outcome,
+                                &mut region_random,
+                                &mut region_entropy,
+                                &network_ids,
+                            );
                         }
                         TickOutcome::Idle
                         | TickOutcome::CancelledBlockChanged
@@ -2504,6 +2711,9 @@ impl HardcodedWorld {
                 region.world.insert_resource(events);
                 region.world.insert_resource(behaviors);
                 region.world.insert_resource(light_dirty);
+                region.world.insert_resource(region_random);
+                region.world.insert_resource(region_entropy);
+                region.world.insert_resource(network_ids);
                 // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate"): keeps `stage4::
                 // ecs::ChunkIndex` (a *different* resource type from `block_action::
                 // ChunkIndex`, despite the identical name -- distinct crates) current too,
@@ -2888,6 +3098,124 @@ impl HardcodedWorld {
                     let _ = ack.send(());
                 }
 
+                // M4-B02, test/diagnostic only -- `debug_spawn_item_entity`'s own doc
+                // comment: spawns a real ECS entity directly (bypassing the break->loot
+                // pipeline).
+                while let Ok((pos, item_id, count, reply)) = debug_item_spawn_rx.try_recv() {
+                    let base = rc_mechanics::entity::BaseEntity {
+                        pos: [pos.x as f64 + 0.5, pos.y as f64, pos.z as f64 + 0.5],
+                        velocity: [0.0, 0.0, 0.0],
+                        rotation: [0.0, 0.0],
+                        fall_distance: 0.0,
+                        fire_ticks: 0,
+                        status_flags: 0,
+                        air_ticks: 300,
+                        on_ground: false,
+                        invulnerable: false,
+                        portal_cooldown: 0,
+                        uuid: rc_mechanics::entity::EntityUuid::new_random(),
+                        custom_name: None,
+                        custom_name_visible: false,
+                        silent: false,
+                        no_gravity: false,
+                        glowing: false,
+                        pose: rc_mechanics::entity::Pose::Standing,
+                        ticks_frozen: 0,
+                        has_visual_fire: false,
+                    };
+                    let payload = rc_mechanics::entity::EntityPayload::Item(
+                        rc_mechanics::entity::ItemBundle {
+                            item: rc_mechanics::entity::ItemStackRecord {
+                                item_id,
+                                count,
+                                components: None,
+                            },
+                            pickup_delay_ticks: rc_mechanics::entity::pickup::PICKUP_DELAY_DEFAULT,
+                            age_ticks: 0,
+                        },
+                    );
+                    let entity = region.world.spawn((base, payload)).id();
+                    let _ = reply.send(rc_core::RcEntityId(entity.to_bits()));
+                }
+
+                // M4-B02, test/diagnostic only -- `debug_query_item_entity`'s own doc
+                // comment: reads a live item entity's `age_ticks`/`pickup_delay_ticks`/
+                // position/velocity directly off `region.world`.
+                while let Ok((id, reply)) = debug_item_query_rx.try_recv() {
+                    let entity = Entity::from_bits(id.0);
+                    let info = region
+                        .world
+                        .get::<rc_mechanics::entity::BaseEntity>(entity)
+                        .zip(
+                            region
+                                .world
+                                .get::<rc_mechanics::entity::EntityPayload>(entity),
+                        )
+                        .and_then(|(base, payload)| {
+                            if let rc_mechanics::entity::EntityPayload::Item(item) = payload {
+                                Some(DebugItemEntityInfo {
+                                    age_ticks: item.age_ticks,
+                                    pickup_delay_ticks: item.pickup_delay_ticks,
+                                    pos: base.pos,
+                                    velocity: base.velocity,
+                                    count: item.item.count,
+                                })
+                            } else {
+                                None
+                            }
+                        });
+                    let _ = reply.send(info);
+                }
+
+                // M4-B02, test/diagnostic only -- `debug_query_picked_up_items`'s own doc
+                // comment.
+                while let Ok((network_entity_id, reply)) = debug_picked_up_items_rx.try_recv() {
+                    let mut lookup = region
+                        .world
+                        .query::<(&PlayerMarker, &rc_mechanics::entity::PickedUpItems)>();
+                    let items = lookup
+                        .iter(&region.world)
+                        .find(|(marker, _)| marker.network_entity_id == network_entity_id)
+                        .map(|(_, picked_up)| picked_up.0.clone())
+                        .unwrap_or_default();
+                    let _ = reply.send(items);
+                }
+
+                // M4-B02: every real ECS-spawned tier-2 entity (`entity_drops::
+                // spawn_break_drop`'s own item entities this milestone's own scope, the
+                // first such real spawns this project has ever made — `docs/findings-for-
+                // planning.md`: M4-B01's own `debug_entities` above is a plain, non-`bevy_ecs`
+                // stand-in the tracking pipeline already consumed, never itself migrated to
+                // real ECS spawning) merged into the identical `live_entities` shape `apply_
+                // tracking_delta_for_player` already expects, so newly-dropped items become
+                // visible to players through the same, unmodified tracking pipeline.
+                let live_ecs_entities: Vec<(
+                    rc_core::RcEntityId,
+                    rc_mechanics::entity::EntityKind,
+                    rc_mechanics::entity::BaseEntity,
+                    Option<rc_mechanics::entity::LivingEntity>,
+                    rc_mechanics::entity::EntityPayload,
+                )> = {
+                    let mut live_query = region.world.query::<(
+                        Entity,
+                        &rc_mechanics::entity::BaseEntity,
+                        Option<&rc_mechanics::entity::LivingEntity>,
+                        &rc_mechanics::entity::EntityPayload,
+                    )>();
+                    live_query
+                        .iter(&region.world)
+                        .map(|(entity, base, living, payload)| {
+                            (
+                                rc_core::RcEntityId(entity.to_bits()),
+                                payload.kind(),
+                                base.clone(),
+                                living.cloned(),
+                                payload.clone(),
+                            )
+                        })
+                        .collect()
+                };
+
                 // M4-B01 (Context, "The production integration"): entity tracking's own
                 // manual step, run once per `PlayerMarker` per tick -- after the
                 // block-action drain-and-apply step above and every other per-tick
@@ -2899,11 +3227,22 @@ impl HardcodedWorld {
                     super::entity_tracking::apply_tracking_delta_for_player(
                         &mut marker,
                         viewer_pos,
-                        debug_entities.iter().cloned(),
+                        debug_entities
+                            .iter()
+                            .cloned()
+                            .chain(live_ecs_entities.iter().cloned()),
                     );
                 }
 
                 executor.tick_region(&mut region, &pool, &transport);
+
+                // M4-B02 (Context §M/§O): the player-touching half of pickup, then the
+                // velocity/position resync cadence -- both positioned after `executor.
+                // tick_region` returns so they observe this tick's own fresh Stage 6b physics
+                // output, mirroring this same tick loop's own `TickChangedPositions` drain
+                // just below.
+                entity_pickup_step(&mut region.world);
+                entity_resync_step(&mut region.world, region.tick_counter);
 
                 // M3 field-report fix ("block-state changes made outside a direct player
                 // action never reach any client" -- `docs/findings-for-planning.md`'s own
@@ -2980,6 +3319,9 @@ impl HardcodedWorld {
             debug_entity_spawn_tx,
             debug_entity_move_tx,
             debug_entity_despawn_tx,
+            debug_item_spawn_tx,
+            debug_item_query_tx,
+            debug_picked_up_items_tx,
             debug_teleport_tx,
         }
     }
@@ -3309,6 +3651,70 @@ impl HardcodedWorld {
             let _ = ack_rx.await;
         }
     }
+
+    /// M4-B02, test/diagnostic only. Spawns one real item entity directly (bypassing the
+    /// break->loot pipeline) for tests that need a known item entity without breaking a block
+    /// first — applied at the start of the region's next tick, awaited before returning.
+    /// Panics (via the oneshot's own dropped-sender path folding into a `None`-like silent
+    /// failure, mirroring `debug_spawn_entity`'s own established contract) only if the tick
+    /// loop itself is gone.
+    pub async fn debug_spawn_item_entity(
+        &self,
+        pos: BlockPos,
+        item_id: rc_registries::generated_v776::registries::RegistryEntryId,
+        count: u8,
+    ) -> rc_core::RcEntityId {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_item_spawn_tx
+            .send((pos, item_id, count, reply_tx))
+            .expect("tick loop still running");
+        reply_rx.await.expect("tick loop still running")
+    }
+
+    /// M4-B02, test/diagnostic only. Reads a live item entity's `age_ticks`/
+    /// `pickup_delay_ticks`/position/velocity directly off `region.world` — mirrors
+    /// `debug_query_block`'s own "maybe nothing" contract exactly.
+    pub async fn debug_query_item_entity(
+        &self,
+        id: rc_core::RcEntityId,
+    ) -> Option<DebugItemEntityInfo> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_item_query_tx.send((id, reply_tx)).ok()?;
+        reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B02, test/diagnostic only. Reads the given player's own current `PickedUpItems`
+    /// contents (Context §M's explicitly interim per-player item log) — mirrors `debug_query_
+    /// block`'s own "maybe nothing" contract; an empty `Vec` (rather than `None`) for a
+    /// currently-unspawned or unknown `network_entity_id`.
+    pub async fn debug_query_picked_up_items(
+        &self,
+        network_entity_id: i32,
+    ) -> Vec<rc_mechanics::entity::ItemStackRecord> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .debug_picked_up_items_tx
+            .send((network_entity_id, reply_tx))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        reply_rx.await.unwrap_or_default()
+    }
+}
+
+/// M4-B02, test/diagnostic only — `HardcodedWorld::debug_query_item_entity`'s own doc comment.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DebugItemEntityInfo {
+    pub age_ticks: i16,
+    pub pickup_delay_ticks: i16,
+    pub pos: [f64; 3],
+    pub velocity: [f64; 3],
+    /// Additive beyond this blueprint's own literal Deliverables listing
+    /// (`docs/findings-for-planning.md`): `drop_merge_pickup_sequence.rs`'s own acceptance
+    /// test needs to observe a post-merge survivor's own summed count, which the base four
+    /// fields cannot express.
+    pub count: u8,
 }
 
 /// Test/diagnostic introspection only (`debug_stage4_counters`'s own doc comment) -- the

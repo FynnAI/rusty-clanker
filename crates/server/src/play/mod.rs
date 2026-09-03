@@ -12,6 +12,7 @@ mod attribute_packets;
 mod block_action;
 mod chunk;
 mod connection;
+mod entity_drops;
 mod entity_packets;
 mod entity_persistence;
 mod entity_tracking;
@@ -43,11 +44,14 @@ pub use block_action::{
 pub use connection::{PlayerProfile, enter_play};
 pub use entity_packets::{
     LpVec3, RemoveEntities, SetEntityData, SetEntityVelocity, SetHeadRotation, SpawnEntity,
-    TeleportEntity, UpdateEntityPosition, UpdateEntityPositionAndRotation, UpdateEntityRotation,
-    encode_angle,
+    TakeItemEntity, TeleportEntity, UpdateEntityPosition, UpdateEntityPositionAndRotation,
+    UpdateEntityRotation, encode_angle,
 };
 pub use entity_persistence::{read_entities_chunk, write_entities_chunk};
-pub use entity_tracking::apply_tracking_delta_for_player;
+pub use entity_tracking::{
+    ENTITY_UPDATE_INTERVAL_TICKS, apply_tracking_delta_for_player, entity_pickup_step,
+    entity_resync_step,
+};
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
 pub use mining::{
     BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER, BLOCK_INTERACTION_RANGE_CREATIVE,
@@ -71,6 +75,6 @@ pub use movement::{
 };
 pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
 pub use world::{
-    EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker, SYNCHRONIZED_REGISTRIES,
-    Stage4Counters,
+    DebugItemEntityInfo, EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker,
+    SYNCHRONIZED_REGISTRIES, Stage4Counters,
 };

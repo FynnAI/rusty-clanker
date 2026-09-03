@@ -106,3 +106,21 @@ pub fn chunk_random_seed(world_seed: i64, chunk_x: i32, chunk_z: i32, tick_count
     h ^= (tick_counter as i64).wrapping_mul(GOLDEN_RATIO_64);
     stafford_mix13(h)
 }
+
+/// `next_long`/`next_int`/`next_int_bounded`/`next_float`/`next_double`/`next_bool` are
+/// `rc_rng::RcRandomSource` TRAIT methods (`rc-rng`'s own design), not inherent methods on
+/// `XoroshiroRandom` — re-exported here too so every call site needs only `use crate::
+/// random::{RcRandomSource, XoroshiroRandom};`, never a direct `rc_rng` import.
+pub use rc_rng::RcRandomSource;
+/// Xoroshiro128++ (Context §K, `rng-parity-notes.md` §3) — vanilla's modern RNG family,
+/// re-exported from the shared `rc-rng` crate (`12-workspace-structure.md`'s WS-D14) rather
+/// than reimplemented here. Distinct from `RcRandom` (the legacy 48-bit LCG, unmodified,
+/// defined above in this crate): every `random_sequence` (loot) always resolves to this
+/// type, never the legacy one.
+pub use rc_rng::RcXoroshiroRandom as XoroshiroRandom;
+
+/// Context §K — the `random_sequence` seeding formula, `rc-rng`'s own function re-exported
+/// unmodified. `salt`/`include_world_seed`/`include_sequence_id` default to this project's own
+/// fixed per-world defaults (`0`/`true`/`true`) via `create_random_sequence_default`; the
+/// full-signature form exists for completeness and future `/random`-command-equivalent work.
+pub use rc_rng::{create_random_sequence, create_random_sequence_default};

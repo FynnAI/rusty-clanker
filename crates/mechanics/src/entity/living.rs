@@ -17,6 +17,7 @@
     serde::Deserialize,
     rc_entity_macros::EntityNbtFields,
     rc_entity_macros::EntityMetadataFields,
+    bevy_ecs::prelude::Component,
 )]
 pub struct LivingEntity {
     #[net_metadata(index = 8, kind = "Byte")]

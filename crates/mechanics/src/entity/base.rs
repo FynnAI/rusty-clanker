@@ -23,6 +23,7 @@ use crate::entity::metadata::Pose;
     serde::Deserialize,
     rc_entity_macros::EntityNbtFields,
     rc_entity_macros::EntityMetadataFields,
+    bevy_ecs::prelude::Component,
 )]
 pub struct BaseEntity {
     #[nbt(name = "Pos")]

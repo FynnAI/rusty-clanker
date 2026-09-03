@@ -25,6 +25,12 @@ rc-nbt = { path = "../nbt" }
 # directly; `rusty-clanker-server` does not (Deviations) -- this crate is its only other path,
 # so this edge is kept even though M3-B01's own Cargo.toml sample omits it.
 rc-physics = { path = "../physics" }
+# M4-B02: `random_sequence` (loot) support -- `XoroshiroRandom`/`create_random_sequence[_default]`
+# re-exported from the shared `rc-rng` crate (`12-workspace-structure.md`'s WS-D14), unconditional
+# (not `server-systems`-gated) since `entity::loot`'s own module declaration is itself
+# unconditional (`entity/mod.rs`). Replaces what would otherwise have been an independent,
+# `server-systems`-gated `md-5` dependency of this crate's own.
+rc-rng = { path = "../rng" }
 bevy_ecs = { workspace = true }
 tracing = { workspace = true } # defect-2 fix -- rate-limited chain_limit_hit diagnostic, neighbor_update.rs
 # M4-B01: `rc-entity-macros`' first real derive use (`EntityNbtFields`/`EntityMetadataFields`,
