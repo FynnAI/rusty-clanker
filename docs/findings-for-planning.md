@@ -2017,6 +2017,23 @@ Entries name the milestone that surfaced them and the code they concern.
   pattern already used by the multiplayer tests) or raise the keep-alive
   window for test servers.
 
+- **Second real protocol-diff run (33789270683): contraption-level findings.**
+  With floor-relative slots both sides captured all 51 contraptions; the diff
+  then showed, per contraption, oracle-only `block_update`s whose decoded
+  positions are (1) the tick-barrier marker block far outside the contraption
+  (the oracle's `view-distance=10` versus our fixed send radius 5 — product
+  gap: our view distance is not configurable and defaults below vanilla's
+  10; NET hardening), (2) setup/cleanup writes the oracle spreads across
+  ticks (single `block_update`s) where ours land in one tick and coalesce
+  (`section_blocks_update`) — the harness's own cadence, handled by the new
+  per-contraption observation window; and genuine product gaps: we never
+  send `block_event` (`ClientboundBlockEventPacket`, pistons and chest lids —
+  M3 field report, closes in M4), `set_equipment` (M4-B01), and
+  `player_info_remove` when a player leaves (join-sequence hardening). The
+  corpus spec `comparator_container_fullness_chest` floats without a floor
+  (the oracle pops the comparator one tick after setup); fixed in the same
+  governance changeset together with a sweep of the other 50 specs.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
