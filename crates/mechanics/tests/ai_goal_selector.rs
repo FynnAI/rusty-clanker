@@ -7,7 +7,6 @@ use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, RcEntityId};
 use rc_core::{ChunkKey, DimensionId};
 use rc_mechanics::ai::attributes::AttributeMap;
-use rc_mechanics::ai::brain::Brain;
 use rc_mechanics::ai::navigation::{PathNavigation, PendingMovementIntent};
 use rc_mechanics::ai::sensing::Sensing;
 use rc_mechanics::ai::{AiContext, FLAG_LOOK, FLAG_MOVE, Goal, GoalSelector, should_full_tick};
