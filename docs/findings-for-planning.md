@@ -722,6 +722,17 @@ Entries name the milestone that surfaced them and the code they concern.
   encoders land before M4-B02 consumes the metadata path. The M4-B01
   blueprint carries the corrected rule above its Deliverables.
 
+- **Flaky under CI load: `play_block_break_place_full::creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event`
+  (run 33779660538, `ubuntu-24.04` gates).** Failed once with "peer closed
+  before a full frame arrived" after 33 s while the same test passes in 2.7 s
+  locally (3 of 3) and passed on the rerun and on `windows-2025`. Same class
+  as the M3 delayed-destroy keep-alive starvation: a test that holds a second
+  connection idle while waiting on the first can be disconnected by the
+  server's keep-alive timeout when the runner is slow. Test-authoring
+  follow-up: service every socket concurrently in this file's helpers (the
+  pattern already used by the multiplayer tests) or raise the keep-alive
+  window for test servers.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
