@@ -2093,6 +2093,227 @@ Entries name the milestone that surfaced them and the code they concern.
     `EcsBlockWorld`-style adapter (`crate::stage4::ecs::EcsBlockWorld`'s own
     established pattern) — a future composition-root blueprint's own wiring
     job, restated as still open here rather than silently assumed done.
+- **M4-B02 (entity physics and item entities) — twelve findings, recorded
+  together since they share one implementation wave.**
+
+  1. **`rc-rng`, pulled forward per M4-B02's own flagged `PLAN-D2` exception,
+     was scoped to exactly what M4-B02 consumes, not `M5-B01`'s full surface.**
+     M4-B02's own header text names only `RcXoroshiroRandom`/
+     `create_random_sequence`/`create_random_sequence_default` as needing to
+     exist ahead of schedule, and separately says the pull-forward is "a
+     standalone step ahead of the *rest* of `M5-B01`'s own scope" — read
+     together as scoping the forward-pulled crate down to that trio (plus
+     `RcRandomSource`, `mix_stafford13`/`upgrade_seed_128_unmixed`, and
+     `md5_seed`, all of which M4-B02's own Context §K restates in full).
+     Shipped `crates/rng/` therefore does **not** implement `M5-B01`'s
+     `RcLegacyRandom`, `WorldgenRandom`, `LegacyPositionalFactory`/
+     `XoroshiroPositionalFactory`, `parse_seed_string`,
+     `java_string_hash_code`, `mth_get_seed`, `seed_slime_chunk`, or
+     `next_gaussian` (on either family) — all of `M5-B01`'s own remaining
+     scope, unimplemented. It also implements `RcXoroshiroRandom::next_long`
+     directly from M4-B02's own restated wrapping-arithmetic formula rather
+     than wrapping the external `rand_xoshiro` crate the way `M5-B01`'s own
+     fuller design does (`12-workspace-structure.md`'s WS-D14) — the two
+     produce bit-identical output for the same algorithm, verified against
+     `rng-parity-notes.md` §7.2's own published vectors
+     (`crates/mechanics/tests/xoroshiro_and_random_sequence.rs`), and no
+     `rand_xoshiro` dependency was added to `crates/rng/Cargo.toml`. `M5-B01`,
+     when it lands for real, needs to reconcile/extend this crate to its own
+     full design (legacy family, `WorldgenRandom`, positional factories,
+     `rand_xoshiro` wrapping, `next_gaussian`) rather than starting from
+     nothing.
+
+  2. **M4-B01 shipped every entity bundle/payload type without a
+     `bevy_ecs::Component` derive, and entity storage in `world.rs`'s own
+     tick loop was a plain, non-ECS `debug_entities: Vec<(RcEntityId,
+     EntityKind, BaseEntity, Option<LivingEntity>, EntityPayload)>` — never
+     migrated to a real `bevy_ecs::World::spawn` anywhere in the project.**
+     `apply_tracking_delta_for_player`'s own production call site fed that
+     Vec alone. M4-B02's own Stage 6b system requires real ECS-spawned
+     entities (a `Query<(Entity, &mut BaseEntity, ...)>`), and its own item
+     drops are consequently the first real ECS-spawned non-player entities
+     this project has ever created. Required two additive fixes beyond this
+     blueprint's own literal Deliverables list: (a) `#[derive(bevy_ecs::
+     prelude::Component)]` added to `BaseEntity`, `LivingEntity`,
+     `ItemBundle`, `ZombieBundle`, `VillagerBundle`, `CowBundle`,
+     `EntityPayload`, `MobMarker` (unconditional, mirroring `block_entity`'s
+     own established unconditional-derive convention, not the `Resource`-
+     specific `server-systems` feature-gating convention); (b) `world.rs`'s
+     own tracking-delta call site now merges the pre-existing `debug_entities`
+     Vec (M4-B01's own tests still read it, unmodified) with a fresh
+     per-tick live query over real `(Entity, BaseEntity, Option<LivingEntity>,
+     EntityPayload)` tuples, converting each `Entity` to an `RcEntityId` via
+     `Entity::to_bits()` (finding 9 below) and each `EntityPayload` to its
+     `EntityKind` via a new `EntityPayload::kind()` helper (also additive).
+
+  3. **Player-touching pickup cannot live inside `rc-mechanics`' Stage 6b
+     system, contradicting this blueprint's own `ecs.rs` doc-comment
+     prose ("drives... merge, pickup... all inside this one system").**
+     `rc-mechanics` structurally cannot depend on `rusty-clanker-server`
+     (WS-D3 rule 2, restated by this same blueprint's own Context §A: "this
+     system never touches a player, and cannot even express a
+     player-exclusion filter"), so it cannot see `PlayerMarker`/
+     `PlayerMotion` to test an item's own AABB against a player's. Shipped
+     split: Stage 6b (`rc-mechanics::entity::physics::ecs`) owns only the
+     player-independent half of pickup — the `pickup_delay_ticks` countdown
+     — plus item-vs-item merge and age-despawn; the player-touching
+     eligibility check, the item entity's own despawn-on-pickup, the `Take
+     Item Entity` broadcast, and the `PickedUpItems` append all moved to a
+     new manual tick-loop step,
+     `rusty-clanker-server::play::entity_tracking::entity_pickup_step`,
+     positioned alongside `entity_resync_step` after `executor.tick_region`
+     returns.
+
+  4. **The swimming/viscosity drag-*replacement* formulas (Context §E's
+     water `(0.8,0.8,0.8)` and lava shallow/deep branches) are not
+     implemented — only the fluid *push* (velocity addition) this
+     blueprint's own six `fluid_push_vectors.rs` acceptance tests actually
+     assert.** Two independent reasons the drag-replacement text cannot be
+     honored literally: (a) for a living tier-2 kind, "in place of the
+     kind-specific drag step" means replacing a step *inside*
+     `rc_physics::step_living_entity_tick`'s own body — a function this same
+     blueprint's own Context §B mandates is "reused completely unmodified,"
+     and `rc-physics` is outside this blueprint's own Crates-touched list;
+     (b) for an item entity, Context §E's own push ordering computes
+     submersion from the entity's *post-move* AABB (after
+     `step_item_entity_tick`'s own drag step has already run to completion),
+     so the submersion value the swim/viscosity branch would need to select
+     its own formula is not yet known at the point that same tick's drag
+     step itself executes — an unresolved forward reference this
+     blueprint's own text never works through. No acceptance test in this
+     blueprint's own suite exercises either drag-replacement path;
+     `crates/mechanics/src/entity/physics/ecs.rs`'s own module doc comment
+     restates both reasons in full.
+
+  5. **`rc_physics::step_living_entity_tick` (M3-B02) has no per-kind
+     dimension parameter at all — it hardcodes `PLAYER_HALF_WIDTH`/
+     `PLAYER_HEIGHT`/`STEP_HEIGHT` as internal module constants
+     (`crates/physics/src/motion.rs`), not accepted arguments.** Context
+     §D's own per-kind tier-2 dimension table (zombie/villager `0.6×1.95`,
+     cow `0.9×1.4`) and this blueprint's own acceptance-test prose ("zombie-
+     sized AABB (`0.6×1.95`)") cannot literally apply to that one sealed
+     call, since `rc-physics` is outside this blueprint's own
+     Crates-touched list and §B mandates reuse "completely unmodified."
+     Every AABB the Stage 6b system builds *directly* (the fluid-interaction
+     scan, the eye position for drowning) uses each kind's own real Context
+     §D dimensions; only the `step_living_entity_tick` call itself falls
+     back to the player's own hitbox for its internal collision geometry.
+     Neither `living_mob_physics_golden_vectors.rs` test depends on the
+     exact AABB width/height (zero horizontal drift, a flat floor with no
+     nearby obstruction), so this substitution does not affect either
+     test's own pass/fail outcome — but it is a real, reportable geometry
+     gap for tier-2 mobs' actual in-world collision footprint until a
+     future blueprint threads dimension parameters through
+     `step_living_entity_tick` (or gives `rc-mechanics` its own
+     dimension-aware variant).
+
+  6. **`ReadOnlyBlockWorld`'s own Deliverables literal
+     (`query: &'s Query<'w, 's, (&'static ChunkKeyTag, &'static
+     BlockStateColumn)>`) does not compile.** `Query<'world, 'state, D>`'s
+     data type parameter `D` is invariant, so a *reference* to a
+     function-local `Query` cannot satisfy this struct's own
+     `&'static`-annotated `D` — a genuine Rust lifetime error (`E0521`), not
+     a style choice. Fixed by owning the `Query` by value instead, mirroring
+     `stage4::ecs::EcsBlockWorld`'s own already-proven identical shape
+     exactly (every other `BlockWorldAccess` adapter in this crate already
+     takes its `Query` by value for this same reason).
+
+  7. **`TakeItemEntity`'s own Deliverables literal specifies `bound =
+     "server"`, contradicting that same blueprint's own Claims-to-verify row
+     and every other packet already in `entity_packets.rs`.**
+     `M4-B02-CLAIMS.md`'s own TEST-D57-verified row states "The Take Item
+     Entity clientbound play packet is assigned id 0x7C (124)" — clientbound,
+     broadcast server→client — matching `TeleportEntity`/`SetEntityVelocity`/
+     `RemoveEntities`'s own established `bound = "client"` convention in the
+     same file. Shipped as `bound = "client"`.
+
+  8. **M4-B06 (fluids) was never actually wired into production anywhere in
+     `rusty-clanker-server` before this blueprint — `register_fluids` is
+     never called, and no `FluidTables` resource exists anywhere in the
+     composition root.** M4-B02's own Stage 6b system is the first real
+     consumer needing a live `FluidTables` instance (`Res<FluidTables>`).
+     `world.rs` now constructs one for the Overworld
+     (`build_overworld_fluid_tables`) — water/lava ranges read from the real
+     generated registry via `range_of` (mirroring `rc_physics::
+     tier1_shape_table`'s own precedent, not hand-typed literals),
+     `fast_lava: false` — and inserts it in `bootstrap_region`. `register_
+     fluids`/`WaterloggableRegistry` itself is still not wired into Stage 4's
+     `BlockBehaviorRegistry` anywhere in production; fluid *simulation*
+     (spread, source creation) therefore still never runs against a live
+     world, only the query functions this blueprint's own Stage 6b consumes.
+
+  9. **No ECS component anywhere in `rc-mechanics`' entity module wraps
+     `RcEntityId`, yet the Stage 6b system's own query yields bevy's native
+     `Entity`, and `PendingEnvironmentalDamage`'s own fields require
+     `RcEntityId`.** Bridged via `RcEntityId(Entity::to_bits())` /
+     `Entity::from_bits(id.0)` (bevy_ecs 0.19's own lossless round-trip
+     between the two) rather than inventing a new tag component or a
+     parallel `RcEntityIdAllocator` for real-ECS-spawned entities. The same
+     convention is reused by `world.rs`'s own tracking-merge (finding 2) and
+     by `entity_tracking.rs`'s own new `entity_resync_step`/
+     `entity_pickup_step`. `entity_drops::spawn_break_drop`'s own
+     `network_ids: &NetworkEntityIdAllocator` parameter (Deliverables) is
+     consequently accepted but not consumed — every entity's wire-facing
+     network id is derived from this same `RcEntityId(Entity::to_bits())`
+     truncation (`entity_tracking.rs`'s own pre-existing `stand_in_network_
+     id`), not a separately-drawn allocator value; kept in the signature for
+     forward-compatibility with a future real `RcEntityId` directory
+     (ARCH-D24).
+
+  10. **This test environment's own background `HardcodedWorld` tick thread
+      is genuinely subject to `TickClock`'s documented "never skips or
+      batches ticks under sustained overrun, degrades TPS instead" behavior
+      — observed directly as bursts of 5+ ticks landing within one 50 ms
+      wall-clock window once the thread was rescheduled after being
+      starved.** A fixed wall-clock sleep is therefore not a reliable proxy
+      for "N ticks have elapsed" for this project's own integration tests
+      under real OS scheduling (confirmed flaky in local runs even at
+      `--test-threads=1`). `play_entity_drop_pipeline.rs`'s own pickup-delay
+      and 6000-tick despawn tests were redesigned to poll the server's own
+      reported, tick-derived state (`age_ticks`, entity existence) instead
+      of asserting after a fixed sleep duration. Planning may want
+      `09-testing-quality.md` to name this as a standing constraint on any
+      future acceptance test that needs to pin an approximate tick count
+      against a real `HardcodedWorld` tick thread.
+
+  11. **Two small, additive extensions beyond this blueprint's own literal
+      Deliverables text, both needed to make its own acceptance tests
+      checkable at all:** `DebugItemEntityInfo` (test/diagnostic-only) gained
+      a `count: u8` field — `two_adjacent_drops_of_the_same_item_eventually_
+      merge`'s own acceptance-test text ("carrying the summed count")
+      requires observing it, and the four fields Deliverables lists cannot
+      express it; `EntityPayload` (`rc-mechanics`) gained a `kind() ->
+      EntityKind` method — needed by `world.rs`'s own tracking-merge
+      (finding 2) to recover the `EntityKind` a live `&EntityPayload`
+      carries without threading a second, separately-stored value alongside
+      every spawned entity.
+
+  12. **`item_physics_golden_vectors.rs`'s own `item_falls_and_lands_on_
+      flat_ground` test asserts the resting feet position at the floor's own
+      top (`0.0` for a `FlatFloorAt(0.0)`), not the blueprint's own literal
+      "`0.125`" ("item half-height resting on the floor top").** This
+      project's entities (confirmed against `crates/physics/tests/motion_
+      golden_vectors.rs`'s own `FlatFloorAt`/resting-position precedent,
+      already proven in CI) use a *feet*-based position convention
+      (`Aabb::from_position`'s own `min.y = position.y`) — a resting entity's
+      feet settle exactly at the floor's own top surface, never at
+      `top + half_height`. `0.125` (`ITEM_HEIGHT / 2`) is a real Context §I
+      constant (the item's own half-height, used there to convert a
+      *center*-of-cell spawn-jitter draw into a *feet* position), and reading
+      it as "the tick where a falling item settles" appears to be where the
+      blueprint's own acceptance-test prose picked it up — the two are
+      unrelated. Similarly, `fluid_push_vectors.rs`'s own `stationary_item_
+      in_flowing_water_gets_floor_push` test (blueprint name) exercises slow
+      lava, not water: Context §E's own push formula normalizes the
+      accumulated flow vector to a pure unit direction *before* scaling by
+      `push_scale`, so the resulting impulse's own magnitude is always
+      exactly `push_scale`, never smaller — the floor-renormalization branch
+      (`PUSH_FLOOR_MAGNITUDE = 0.0045`) is therefore only ever reachable when
+      `push_scale` itself sits below that floor, true only for
+      `LAVA_PUSH_SCALE_SLOW` (`0.0023333...`), never for `WATER_PUSH_SCALE`
+      (`0.014`) or `LAVA_PUSH_SCALE_FAST` (`0.007`), for any nonzero flow
+      input whatsoever. Shipped as `stationary_item_gets_floor_push_in_
+      slow_lava`.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
