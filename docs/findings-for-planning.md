@@ -638,49 +638,6 @@ Entries name the milestone that surfaced them and the code they concern.
   scenario deadline starts, so a cold CI/agent checkout cannot fail on build
   time alone.
 
-- **First real protocol-diff inventory (2026-09-03, run 33736929221) — the
-  clientbound surface vanilla sends in the scripted session and we do not.**
-  Per step, oracle-only packet types: every break of a block -> `add_entity`,
-  `set_entity_motion`, `move_entity_pos`/`_pos_rot`, `rotate_head`,
-  `set_entity_data` (the item drop; M4-B01/B02 scope); every step ->
-  `set_time` (we never sync world time — small NET item); movement/sneak ->
-  `chunk_batch_start`/`_finished` + `level_chunk_with_light` (vanilla streams
-  chunks at view distance 10 and paces batches at 2–5 chunks by the client's
-  reported rate; we send one 121-chunk batch at spawn); gamemode switch ->
-  `game_event`; join/reconnect -> `change_difficulty`, `commands`,
-  `container_set_content`, `initialize_border`, `player_abilities`,
-  `player_info_update`, `recipe_book_add`/`_settings`, `server_data`,
-  `set_experience`, `set_held_slot`, `ticking_state`/`ticking_step`,
-  `update_advancements`, `update_attributes`, `update_recipes`,
-  `system_chat` (join message), `bundle_delimiter`, `entity_event`,
-  `remove_entities`. Body differences: configuration `custom_payload` brand
-  (`rusty-clanker` vs `vanilla` — by design, the normalizer must mask the brand
-  value), configuration `registry_data` for `minecraft:dialog` (vanilla ships
-  built-in dialog entries we do not send — registry-sync gap), `login_finished`
-  (26.2's second field is a random session UUID: `ClientboundLoginFinishedPacket
-  (GameProfile, UUID sessionId)` — the normalizer must mask it), `block_update`
-  on the survival dig (position Y one lower on the oracle: the vanilla `flat`
-  preset's surface sits one layer below our placeholder world's — world-parity
-  item for the harness worlds). Needs decisions: (a) which of the join-sequence
-  packets are M4/M5 deliverables and which form a dedicated NET hardening pass
-  (proposal: a NET hardening blueprint before M5 covering time sync, chunk
-  pacing by client rate, the join sequence, game events); (b) whether our
-  placeholder world adopts the vanilla flat preset's layer layout exactly
-  (proposal: yes — every harness that compares geometry benefits).
-
-- **M4 entry prerequisite: `rc-chunk-storage`'s `LightSection` lags WORLD-D8.**
-  `crates/chunk-storage/src/light.rs` still carries the two-state
-  `LightSection { sky: Option<Box<[u8; 2048]>>, block: Option<Box<[u8; 2048]>> }`
-  from M2-B01, while WORLD-D8 (amended 2026-09-03) and the corrected M4-B07
-  build on `LightNibbles { Uninitialized, Filled(u8), Data(..) }` so vanilla's
-  structural empty-mask semantics reproduce bit-identically. A small M2-B01
-  field-report changeset (test-authoring for the light tests, implementation
-  for `light.rs` and its chunk-packet mask use) must land before M4-B07's
-  implementation starts; M4-B07's Context §1 names the gap. **Resolved**
-  during M4-B07's own Step 0 (test-authoring/implementation pair landed
-  ahead of the M4-B07 changesets themselves) — left here only until
-  planning deletes it, per this file's own review process.
-
 - **`cargo fmt --all` (and therefore `cargo run -p xtask -- fmt-check`,
   which shells out to it unmodified) fails on this Windows machine with
   `Der Dateiname oder die Erweiterung ist zu lang` / `os error 206`
@@ -703,35 +660,6 @@ Entries name the milestone that surfaced them and the code they concern.
   `fmt-check`'s own implementation should switch to a manifest-driven,
   batched invocation so a Windows development machine's local gate stays
   usable as the workspace keeps growing.
-
-- **Text components on the wire collapse to a bare string — M1-B05's
-  `NbtTextComponent` and M4-B01's metadata encoders emit the compound form
-  for plain text (decided 2026-09-03, follow-up implementation owed).**
-  `ComponentSerialization`'s codec (reference, `tryCollapseToString` in the
-  NBT encode path) writes a plain-text component as an unnamed `TAG_String`
-  and only a styled/sibling-bearing/translatable component as a
-  `TAG_Compound`; `EntityDataSerializers.OPTIONAL_COMPONENT` uses that codec.
-  Our `rc_protocol::wire::NbtTextComponent` always writes `{"text": …}`, and
-  M4-B01 reproduced that shape in `entity_packets::encode_metadata_value` and
-  `rc_mechanics::entity::metadata::encode_network_nbt_text` (ledger item 5 of
-  the M4-B01 entry) — client-tolerated, not vanilla-identical, and visible to
-  the TEST-D54 diff wherever a component crosses the wire. Decision: the wire
-  form follows the codec (bare string when collapsible, compound otherwise)
-  in all three places; a `M1 field-report` test-authoring + implementation
-  pair for `rc-protocol` and an `M4-B01 implementation` follow-up for the two
-  encoders land before M4-B02 consumes the metadata path. The M4-B01
-  blueprint carries the corrected rule above its Deliverables.
-
-- **Flaky under CI load: `play_block_break_place_full::creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event`
-  (run 33779660538, `ubuntu-24.04` gates).** Failed once with "peer closed
-  before a full frame arrived" after 33 s while the same test passes in 2.7 s
-  locally (3 of 3) and passed on the rerun and on `windows-2025`. Same class
-  as the M3 delayed-destroy keep-alive starvation: a test that holds a second
-  connection idle while waiting on the first can be disconnected by the
-  server's keep-alive timeout when the runner is slow. Test-authoring
-  follow-up: service every socket concurrently in this file's helpers (the
-  pattern already used by the multiplayer tests) or raise the keep-alive
-  window for test servers.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
@@ -1987,6 +1915,78 @@ Entries name the milestone that surfaced them and the code they concern.
      src/restart_persistence.rs` (already shifted to `y == -61`). Recorded in
      case the brief's expectation reflects a real, differently-named file this
      research pass missed rather than a simple misattribution.
+
+- **First real protocol-diff inventory (2026-09-03, run 33736929221) — the
+  clientbound surface vanilla sends in the scripted session and we do not.**
+  Per step, oracle-only packet types: every break of a block -> `add_entity`,
+  `set_entity_motion`, `move_entity_pos`/`_pos_rot`, `rotate_head`,
+  `set_entity_data` (the item drop; M4-B01/B02 scope); every step ->
+  `set_time` (we never sync world time — small NET item); movement/sneak ->
+  `chunk_batch_start`/`_finished` + `level_chunk_with_light` (vanilla streams
+  chunks at view distance 10 and paces batches at 2–5 chunks by the client's
+  reported rate; we send one 121-chunk batch at spawn); gamemode switch ->
+  `game_event`; join/reconnect -> `change_difficulty`, `commands`,
+  `container_set_content`, `initialize_border`, `player_abilities`,
+  `player_info_update`, `recipe_book_add`/`_settings`, `server_data`,
+  `set_experience`, `set_held_slot`, `ticking_state`/`ticking_step`,
+  `update_advancements`, `update_attributes`, `update_recipes`,
+  `system_chat` (join message), `bundle_delimiter`, `entity_event`,
+  `remove_entities`. Body differences: configuration `custom_payload` brand
+  (`rusty-clanker` vs `vanilla` — by design, the normalizer must mask the brand
+  value), configuration `registry_data` for `minecraft:dialog` (vanilla ships
+  built-in dialog entries we do not send — registry-sync gap), `login_finished`
+  (26.2's second field is a random session UUID: `ClientboundLoginFinishedPacket
+  (GameProfile, UUID sessionId)` — the normalizer must mask it), `block_update`
+  on the survival dig (position Y one lower on the oracle: the vanilla `flat`
+  preset's surface sits one layer below our placeholder world's — world-parity
+  item for the harness worlds). Needs decisions: (a) which of the join-sequence
+  packets are M4/M5 deliverables and which form a dedicated NET hardening pass
+  (proposal: a NET hardening blueprint before M5 covering time sync, chunk
+  pacing by client rate, the join sequence, game events); (b) whether our
+  placeholder world adopts the vanilla flat preset's layer layout exactly
+  (proposal: yes — every harness that compares geometry benefits).
+
+- **M4 entry prerequisite: `rc-chunk-storage`'s `LightSection` lags WORLD-D8.**
+  `crates/chunk-storage/src/light.rs` still carries the two-state
+  `LightSection { sky: Option<Box<[u8; 2048]>>, block: Option<Box<[u8; 2048]>> }`
+  from M2-B01, while WORLD-D8 (amended 2026-09-03) and the corrected M4-B07
+  build on `LightNibbles { Uninitialized, Filled(u8), Data(..) }` so vanilla's
+  structural empty-mask semantics reproduce bit-identically. A small M2-B01
+  field-report changeset (test-authoring for the light tests, implementation
+  for `light.rs` and its chunk-packet mask use) must land before M4-B07's
+  implementation starts; M4-B07's Context §1 names the gap. **Resolved**
+  during M4-B07's own Step 0 (test-authoring/implementation pair landed
+  ahead of the M4-B07 changesets themselves) — left here only until
+  planning deletes it, per this file's own review process.
+
+- **Text components on the wire collapse to a bare string — M1-B05's
+  `NbtTextComponent` and M4-B01's metadata encoders emit the compound form
+  for plain text (decided 2026-09-03, follow-up implementation owed).**
+  `ComponentSerialization`'s codec (reference, `tryCollapseToString` in the
+  NBT encode path) writes a plain-text component as an unnamed `TAG_String`
+  and only a styled/sibling-bearing/translatable component as a
+  `TAG_Compound`; `EntityDataSerializers.OPTIONAL_COMPONENT` uses that codec.
+  Our `rc_protocol::wire::NbtTextComponent` always writes `{"text": …}`, and
+  M4-B01 reproduced that shape in `entity_packets::encode_metadata_value` and
+  `rc_mechanics::entity::metadata::encode_network_nbt_text` (ledger item 5 of
+  the M4-B01 entry) — client-tolerated, not vanilla-identical, and visible to
+  the TEST-D54 diff wherever a component crosses the wire. Decision: the wire
+  form follows the codec (bare string when collapsible, compound otherwise)
+  in all three places; a `M1 field-report` test-authoring + implementation
+  pair for `rc-protocol` and an `M4-B01 implementation` follow-up for the two
+  encoders land before M4-B02 consumes the metadata path. The M4-B01
+  blueprint carries the corrected rule above its Deliverables.
+
+- **Flaky under CI load: `play_block_break_place_full::creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event`
+  (run 33779660538, `ubuntu-24.04` gates).** Failed once with "peer closed
+  before a full frame arrived" after 33 s while the same test passes in 2.7 s
+  locally (3 of 3) and passed on the rerun and on `windows-2025`. Same class
+  as the M3 delayed-destroy keep-alive starvation: a test that holds a second
+  connection idle while waiting on the first can be disconnected by the
+  server's keep-alive timeout when the runner is slow. Test-authoring
+  follow-up: service every socket concurrently in this file's helpers (the
+  pattern already used by the multiplayer tests) or raise the keep-alive
+  window for test servers.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
