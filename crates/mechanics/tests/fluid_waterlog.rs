@@ -21,15 +21,15 @@ use rc_mechanics::scheduled_tick::ScheduledTickQueue;
 use rc_mechanics::{BlockWorldAccess, UpdateContext};
 use rc_messaging::{Address, RegionId, RegionMessage};
 
-const AIR: BlockStateId = BlockStateId(50);
-const STONE: BlockStateId = BlockStateId(51);
+const AIR: BlockStateId = BlockStateId(0);
+const STONE: BlockStateId = BlockStateId(999_999);
 const DRY: BlockStateId = BlockStateId(70);
 const WET: BlockStateId = BlockStateId(71);
 
 fn tables() -> FluidTables {
     let ranges = FluidBlockRanges::new(
-        (BlockStateId(0), BlockStateId(16)),
-        (BlockStateId(100), BlockStateId(116)),
+        (BlockStateId(900_000), BlockStateId(900_016)),
+        (BlockStateId(900_100), BlockStateId(900_116)),
     )
     .expect("both ranges are 16-wide");
     FluidTables::new(

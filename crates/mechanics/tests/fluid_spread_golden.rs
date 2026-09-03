@@ -24,15 +24,15 @@ use rc_mechanics::{BlockBehaviorRegistry, BlockWorldAccess, ScheduledTickQueue, 
 use rc_messaging::{Address, RegionId};
 use support::{FluidFakeWorld, settle_fluids};
 
-const AIR: BlockStateId = BlockStateId(50);
-const STONE: BlockStateId = BlockStateId(51);
+const AIR: BlockStateId = BlockStateId(0);
+const STONE: BlockStateId = BlockStateId(999_999);
 const OBSIDIAN: BlockStateId = BlockStateId(60);
 const COBBLESTONE: BlockStateId = BlockStateId(61);
 
 fn tables(fast_lava: bool) -> FluidTables {
     let ranges = FluidBlockRanges::new(
-        (BlockStateId(0), BlockStateId(16)),
-        (BlockStateId(100), BlockStateId(116)),
+        (BlockStateId(900_000), BlockStateId(900_016)),
+        (BlockStateId(900_100), BlockStateId(900_116)),
     )
     .expect("both ranges are 16-wide");
     let reactions = ReactionBlocks {
@@ -173,10 +173,10 @@ fn nearer_hole_in_a_later_scan_direction_discards_farther_ties() {
     settle_fluids(&mut world, &mut scheduled, &registry, &ownership, 200);
 
     // West (the strictly shorter path, found later in scan order) carries fluid.
-    assert_ne!(world.get_block(BlockPos::new(-1, y, 0)), Some(STONE));
+    assert_ne!(world.get_block(BlockPos::new(-1, y, 0)), Some(AIR));
     // North (the farther tie, discarded once West's shorter distance was found) never does --
-    // it stays the FakeWorld's own untouched default.
-    assert_eq!(world.get_block(BlockPos::new(0, y, -1)), Some(STONE));
+    // it stays exactly the air this scenario carved out, untouched by any fluid write.
+    assert_eq!(world.get_block(BlockPos::new(0, y, -1)), Some(AIR));
 }
 
 #[test]
@@ -249,54 +249,57 @@ fn non_source_flowing_column_skips_sideways_when_still_full_below() {
 
 #[test]
 fn lava_slope_reach_differs_by_dimension_profile() {
-    // Identical terrain: a hole 3 blocks north of a lava source. With `fast_lava: false`
-    // (slope_find_distance = 2), the search gives up before reaching it and spreads uniformly
-    // instead; with `fast_lava: true` (slope_find_distance = 4), the same hole is found.
+    // Identical terrain: a straight open channel north with a pit at the *fourth* step -- the
+    // top-level North candidate is itself hop 1 (Context §E: `get_slope_distance` is invoked
+    // *from* that candidate, at `pass=1`), so a hole discovered via `pass`'s own recursive
+    // budget of N is reachable up to `N` additional hops beyond the top-level candidate, i.e.
+    // `1 + slope_find_distance(kind)` blocks from the source in total. `fast_lava: false`'s own
+    // budget of 2 therefore reaches at most 3 blocks total -- one short of this pit at 4 -- and
+    // spreads uniformly instead; `fast_lava: true`'s own budget of 4 (reach 5 total) finds it.
+    let build_channel = |world: &mut FluidFakeWorld, y: i32| {
+        for dz in 1..=4 {
+            world.set(BlockPos::new(0, y, -dz), AIR);
+        }
+        // Only the far pit (4 blocks north) has an open floor -- every intermediate cell's own
+        // floor stays the default solid stone.
+        world.set(BlockPos::new(0, y - 1, -4), AIR);
+        world.set(BlockPos::new(0, y - 2, -4), AIR);
+    };
 
-    // fast_lava = false: reach 2, gives up before the hole 3 blocks away.
+    // fast_lava = false: total reach 3, gives up before the pit 4 blocks away.
     {
         let (mut world, mut scheduled, registry, ownership) = harness(false);
         let t = tables(false);
         let y = 5;
         let source_pos = BlockPos::new(0, y, 0);
-        for dz in 1..=3 {
-            world.set(BlockPos::new(0, y, -dz), AIR);
-        }
-        world.set(BlockPos::new(0, y - 1, -3), AIR);
-        world.set(BlockPos::new(0, y - 2, -3), AIR);
+        build_channel(&mut world, y);
         world.set(
             source_pos,
             fluid_id(&t, FluidState::source(FluidKind::Lava)),
         );
         scheduled.schedule_fluid_tick(source_pos, 0, TickPriority::Normal, 0);
         settle_fluids(&mut world, &mut scheduled, &registry, &ownership, 400);
-        // Reach exhausted before the hole -- the immediate north neighbor still received *some*
-        // uniform sideways spread (the fallback), but the far pit at distance 3 was never
-        // specifically targeted; assert the near neighbor got lava while confirming the search
-        // did not treat the far hole as reachable (the pit's own floor cell, 2 below the hole
-        // entrance, stays untouched since nothing ever flowed that far down).
+        // Reach exhausted before the pit -- the immediate north neighbor still received *some*
+        // uniform sideways spread (the fallback), but the pit's own floor, out of reach, stays
+        // untouched since nothing ever flowed that far down.
         assert_ne!(world.get_block(BlockPos::new(0, y, -1)), Some(STONE));
-        assert_eq!(world.get_block(BlockPos::new(0, y - 2, -3)), Some(AIR));
+        assert_eq!(world.get_block(BlockPos::new(0, y - 2, -4)), Some(AIR));
     }
 
-    // fast_lava = true: reach 4, finds the same hole.
+    // fast_lava = true: total reach 5, finds the same pit.
     {
         let (mut world, mut scheduled, registry, ownership) = harness(true);
         let t = tables(true);
         let y = 5;
         let source_pos = BlockPos::new(0, y, 0);
-        for dz in 1..=3 {
-            world.set(BlockPos::new(0, y, -dz), AIR);
-        }
-        world.set(BlockPos::new(0, y - 1, -3), AIR);
-        world.set(BlockPos::new(0, y - 2, -3), AIR);
+        build_channel(&mut world, y);
         world.set(
             source_pos,
             fluid_id(&t, FluidState::source(FluidKind::Lava)),
         );
         scheduled.schedule_fluid_tick(source_pos, 0, TickPriority::Normal, 0);
         settle_fluids(&mut world, &mut scheduled, &registry, &ownership, 400);
-        // The hole is now within reach: lava eventually fills the pit floor at (0, y-2, -3).
-        assert_ne!(world.get_block(BlockPos::new(0, y - 2, -3)), Some(AIR));
+        // The pit is now within reach: lava eventually fills its own floor at (0, y-2, -4).
+        assert_ne!(world.get_block(BlockPos::new(0, y - 2, -4)), Some(AIR));
     }
 }

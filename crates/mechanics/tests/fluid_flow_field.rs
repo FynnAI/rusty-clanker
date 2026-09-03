@@ -16,13 +16,13 @@ use rc_mechanics::fluid::{FluidBlockRanges, FluidDimensionProfile, FluidTables, 
 use rc_messaging::{Address, RegionId};
 use rc_physics::{Aabb, Vec3, VoxelShape};
 
-const AIR: BlockStateId = BlockStateId(50);
-const STONE: BlockStateId = BlockStateId(51);
+const AIR: BlockStateId = BlockStateId(0);
+const STONE: BlockStateId = BlockStateId(999_999);
 
 fn tables() -> FluidTables {
     let ranges = FluidBlockRanges::new(
-        (BlockStateId(0), BlockStateId(16)),
-        (BlockStateId(100), BlockStateId(116)),
+        (BlockStateId(900_000), BlockStateId(900_016)),
+        (BlockStateId(900_100), BlockStateId(900_116)),
     )
     .expect("both ranges are 16-wide");
     FluidTables::new(
@@ -214,12 +214,14 @@ fn falling_state_applies_the_downward_pull_on_first_solid_face_match() {
     );
 
     // The primary horizontal flow-accumulation loop legitimately reads every one of
-    // North/East/South/West's own base position exactly once each (regardless of the falling
-    // redirect below), so a raw "was this position ever probed" check cannot distinguish the
-    // falling-check loop's own short-circuit -- count occurrences instead: East must be probed
-    // a *second* time (the falling-check loop's own `is_solid_face` call), while South/West must
-    // never be probed more than the primary loop's own single legitimate read, proving the
-    // falling-check scan stopped at East and never reached them.
+    // North/East/South/West's own base position a *fixed* number of times each (via
+    // `fluid_state_at` and, for a non-fluid, solid neighbor, `blocks_motion`'s own further
+    // `is_solid` reads), regardless of the falling redirect below -- so a raw "was this position
+    // ever probed" check cannot distinguish the falling-check loop's own short-circuit. South
+    // and West share an identical setup (both left at the default solid stone, both never
+    // reached by the falling-check loop once it stops at East) and therefore an identical
+    // baseline count; East's own count must be strictly higher, since the falling-check loop's
+    // own `is_solid_face` call adds further reads there before the scan breaks.
     let east = Direction::East.apply(pos);
     let south = Direction::South.apply(pos);
     let west = Direction::West.apply(pos);
@@ -231,19 +233,14 @@ fn falling_state_applies_the_downward_pull_on_first_solid_face_match() {
             .filter(|p| **p == target)
             .count()
     };
-    assert!(
-        count(east) >= 2,
-        "East must be probed a second time by the falling-check loop"
-    );
     assert_eq!(
         count(south),
-        1,
-        "South must never be re-probed by the falling-check loop"
-    );
-    assert_eq!(
         count(west),
-        1,
-        "West must never be re-probed by the falling-check loop"
+        "South and West share an identical setup -- an identical baseline read count"
+    );
+    assert!(
+        count(east) > count(south),
+        "East must be probed additionally by the falling-check loop"
     );
 }
 
@@ -285,8 +282,8 @@ fn ice_exception_list_overrides_the_real_sturdiness_test_for_solid_face_purposes
 
     // The identical shape (unregistered -> full cube, sturdy on every face per
     // `is_face_sturdy_shape`) is exempted for `is_solid_face` purposes once it's on the
-    // exception list.
-    assert!(occlusion::is_solid_face(
+    // exception list -- `is_solid_face` returns `false` despite the shape itself being sturdy.
+    assert!(!occlusion::is_solid_face(
         &world,
         &t,
         FluidKind::Water,

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use bevy_ecs::prelude::*;
 use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag, PaletteThresholds};
 use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_mechanics::Direction;
 use rc_mechanics::border::{BorderHalo, RegionOwnership};
 use rc_mechanics::fluid::algorithm::get_new_liquid;
 use rc_mechanics::fluid::state::{FluidKind, FluidState};
@@ -27,8 +28,8 @@ use rc_messaging::{
 use rc_scheduler::pool::RcWorkerPool;
 use rc_scheduler::{BorderUpdateInbox, RcExecutorBuilder};
 
-const AIR: BlockStateId = BlockStateId(50);
-const STONE: BlockStateId = BlockStateId(51);
+const AIR: BlockStateId = BlockStateId(0);
+const STONE: BlockStateId = BlockStateId(999_999);
 /// Region A's own edge cell, immediately adjacent to the border on A's own side -- the position
 /// whose *own* recompute-driven write is what actually crosses (Context §N: a fluid write is
 /// always local; the border is crossed by that write's own neighbor-changed fan-out, exactly
@@ -40,8 +41,8 @@ const CROSSED_POS: BlockPos = BlockPos::new(16, 0, 0);
 
 fn make_tables() -> FluidTables {
     let ranges = FluidBlockRanges::new(
-        (BlockStateId(0), BlockStateId(16)),
-        (BlockStateId(100), BlockStateId(116)),
+        (BlockStateId(900_000), BlockStateId(900_016)),
+        (BlockStateId(900_100), BlockStateId(900_116)),
     )
     .expect("both ranges are 16-wide");
     FluidTables::new(
@@ -325,16 +326,20 @@ fn horizontal_neighbor_read_across_a_border_is_treated_as_absent_until_announced
 
 #[test]
 fn inbound_neighbor_changed_border_event_is_handled_correctly() {
+    // `apply_inbound_border_event`'s own `NeighborChanged` handling (M3-B01, reused unmodified)
+    // notifies `ev.pos`'s own six *neighbors*, never `ev.pos` itself (the identical shape
+    // `fan_out_from_changed_block` uses on the outbound side) -- so the fluid cell this test
+    // means to observe reacting must sit *adjacent to* `event_pos`, not *at* it.
     let t = make_tables();
     let mut world = std::collections::HashMap::<BlockPos, BlockStateId>::new();
-    let fluid_pos = BlockPos::new(5, 0, 5);
-    let adjacent_pos = BlockPos::new(6, 0, 5);
+    let event_pos = BlockPos::new(5, 0, 5);
+    let fluid_pos = Direction::East.apply(event_pos);
+    world.insert(event_pos, STONE);
     world.insert(
         fluid_pos,
         t.ranges
             .to_block_state_id(FluidState::flowing(FluidKind::Water, 4, false)),
     );
-    world.insert(adjacent_pos, AIR);
 
     struct MapWorld {
         blocks: std::collections::HashMap<BlockPos, BlockStateId>,
@@ -378,8 +383,8 @@ fn inbound_neighbor_changed_border_event_is_handled_correctly() {
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(1)));
 
     let ev = BorderUpdateEvent {
-        chunk: fluid_pos.chunk_key(DimensionId::OVERWORLD),
-        pos: fluid_pos,
+        chunk: event_pos.chunk_key(DimensionId::OVERWORLD),
+        pos: event_pos,
         kind: BorderUpdateKind::NeighborChanged,
     };
 
@@ -404,10 +409,9 @@ fn inbound_neighbor_changed_border_event_is_handled_correctly() {
 
     // `BorderUpdateKind::NeighborChanged` records no halo entry (Context §N/M3-B01's own
     // documented handling).
-    assert_eq!(halo.get(fluid_pos), None);
-    // The local fluid cell adjacent to `pos` (i.e. `fluid_pos` itself, one of `pos`'s own six
-    // neighbors) received exactly one `on_neighbor_changed` dispatch -- observable via its own
-    // re-arm side effect: a fluid tick is now scheduled at that position that was not scheduled
-    // before.
+    assert_eq!(halo.get(event_pos), None);
+    // The local fluid cell adjacent to `event_pos` received exactly one `on_neighbor_changed`
+    // dispatch -- observable via its own re-arm side effect: a fluid tick is now scheduled at
+    // that position that was not scheduled before.
     assert!(scheduled.is_fluid_tick_pending(fluid_pos));
 }
