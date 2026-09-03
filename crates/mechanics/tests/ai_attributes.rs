@@ -108,10 +108,7 @@ fn default_attribute_map_matches_the_per_kind_table() {
         20.0
     );
     assert_eq!(
-        villager
-            .get_mut(attribute::MOVEMENT_SPEED)
-            .unwrap()
-            .value(),
+        villager.get_mut(attribute::MOVEMENT_SPEED).unwrap().value(),
         0.5
     );
     assert_eq!(
@@ -182,7 +179,10 @@ fn decode_attribute_entries_is_the_exact_inverse_of_encode() {
     assert_eq!(decoded[0].attribute, attribute::MAX_HEALTH);
     assert_eq!(decoded[0].base_value, 20.0);
     assert_eq!(decoded[0].modifiers.len(), 1);
-    assert_eq!(decoded[0].modifiers[0].id, AttributeModifierId("a".to_string()));
+    assert_eq!(
+        decoded[0].modifiers[0].id,
+        AttributeModifierId("a".to_string())
+    );
     assert_eq!(decoded[0].modifiers[0].amount, 1.0);
     assert_eq!(
         decoded[0].modifiers[0].operation,

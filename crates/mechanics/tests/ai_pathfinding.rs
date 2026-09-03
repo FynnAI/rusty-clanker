@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::ai::pathfinding::node::{PathType, WalkNodeEvaluator};
-use rc_mechanics::ai::{find_path, FUDGING};
+use rc_mechanics::ai::{FUDGING, find_path};
 use rc_mechanics::world_access::BlockWorldAccess;
 use rc_messaging::Address;
 use rc_registries::generated_v776::block_states::BlockStateId as RegBlockStateId;
@@ -203,7 +203,8 @@ fn step_up_one_block_is_free_traversal() {
     let path = outcome.path.expect("a path was found");
     assert!(outcome.target_reached);
     assert!(
-        path.nodes().contains(&BlockPos::new(2, 64, 0)) && path.nodes().contains(&BlockPos::new(3, 65, 0)),
+        path.nodes().contains(&BlockPos::new(2, 64, 0))
+            && path.nodes().contains(&BlockPos::new(3, 65, 0)),
         "steps directly from the flat run onto the raised step in one hop"
     );
     assert!(outcome.nodes_visited < 50);

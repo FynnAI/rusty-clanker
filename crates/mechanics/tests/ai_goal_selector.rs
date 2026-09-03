@@ -3,16 +3,16 @@
 
 use std::sync::{Arc, Mutex};
 
+use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, RcEntityId};
-use rc_mechanics::ai::{AiContext, FLAG_LOOK, FLAG_MOVE, Goal, GoalSelector, should_full_tick};
+use rc_core::{ChunkKey, DimensionId};
 use rc_mechanics::ai::attributes::AttributeMap;
 use rc_mechanics::ai::brain::Brain;
 use rc_mechanics::ai::navigation::{PathNavigation, PendingMovementIntent};
 use rc_mechanics::ai::sensing::Sensing;
+use rc_mechanics::ai::{AiContext, FLAG_LOOK, FLAG_MOVE, Goal, GoalSelector, should_full_tick};
 use rc_mechanics::entity::EntityKind;
 use rc_mechanics::world_access::BlockWorldAccess;
-use rc_core::{ChunkKey, DimensionId};
-use rc_chunk_storage::BlockStateId;
 use rc_messaging::Address;
 
 struct EmptyWorld;
@@ -203,7 +203,11 @@ fn non_interruptable_running_goal_blocks_a_lower_priority_number_challenger() {
     let mut ctx = scratch.ctx(1);
     selector.tick(&mut ctx, true);
 
-    assert_eq!(*high_starts.lock().unwrap(), 1, "still running, never restarted");
+    assert_eq!(
+        *high_starts.lock().unwrap(),
+        1,
+        "still running, never restarted"
+    );
     assert_eq!(*low_starts.lock().unwrap(), 0, "never allowed to start");
 }
 
@@ -231,7 +235,11 @@ fn cleanup_pass_stops_a_goal_whose_can_continue_to_use_goes_false() {
     selector.tick(&mut ctx, true);
 
     assert_eq!(*high_stops.lock().unwrap(), 1);
-    assert_eq!(*low_starts.lock().unwrap(), 1, "freed flag claimed same tick");
+    assert_eq!(
+        *low_starts.lock().unwrap(),
+        1,
+        "freed flag claimed same tick"
+    );
 }
 
 #[test]

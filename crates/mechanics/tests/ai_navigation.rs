@@ -5,8 +5,8 @@
 
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::ai::navigation::{
-    JumpControl, MoveControl, MoveControlOperation, PathNavigation, PendingMovementIntent,
-    MAX_TURN_DEGREES_PER_TICK, MOVE_CONTROL_ARRIVAL_EPSILON_SQ,
+    JumpControl, MAX_TURN_DEGREES_PER_TICK, MOVE_CONTROL_ARRIVAL_EPSILON_SQ, MoveControl,
+    MoveControlOperation, PathNavigation, PendingMovementIntent,
 };
 use rc_mechanics::ai::pathfinding::node::WalkNodeEvaluator;
 use rc_mechanics::ai::rotate_towards;
@@ -148,15 +148,7 @@ fn path_navigation_recompute_is_throttled_to_every_20_ticks() {
         // gate (which `path_navigation_stuck_detection_clears_the_path`, below,
         // exercises together with a real, persisting path instead).
         nav.current_path = None;
-        let ran = nav.tick(
-            [0.0, 64.0, 0.0],
-            goal,
-            0.5,
-            &evaluator,
-            &world,
-            1.95,
-            1000,
-        );
+        let ran = nav.tick([0.0, 64.0, 0.0], goal, 0.5, &evaluator, &world, 1.95, 1000);
         if ran.is_some() {
             ran_ticks.push(tick);
         }

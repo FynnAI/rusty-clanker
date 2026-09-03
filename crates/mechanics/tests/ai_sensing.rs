@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 
 use rc_core::{BlockPos, ChunkKey, DimensionId, RcEntityId};
-use rc_mechanics::ai::{nearest_within_range, raycast_line_of_sight, Sensing};
+use rc_mechanics::ai::{Sensing, nearest_within_range, raycast_line_of_sight};
 use rc_mechanics::world_access::BlockWorldAccess;
 use rc_messaging::Address;
 use rc_registries::generated_v776::block_states::default_state;
@@ -137,9 +137,16 @@ fn sensing_cache_is_reused_within_one_clear_cycle_and_reset_after_clear() {
     assert!(calls_after_first > 0);
 
     sensing.has_line_of_sight([0.0, 64.0, 0.0], target, [5.0, 64.0, 0.0], &world);
-    assert_eq!(*world.calls.borrow(), calls_after_first, "cached, no new raycast");
+    assert_eq!(
+        *world.calls.borrow(),
+        calls_after_first,
+        "cached, no new raycast"
+    );
 
     sensing.clear();
     sensing.has_line_of_sight([0.0, 64.0, 0.0], target, [5.0, 64.0, 0.0], &world);
-    assert!(*world.calls.borrow() > calls_after_first, "re-raycasts after clear()");
+    assert!(
+        *world.calls.borrow() > calls_after_first,
+        "re-raycasts after clear()"
+    );
 }

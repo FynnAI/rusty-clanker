@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId, RcEntityId};
+use rc_mechanics::ai::attributes::AttributeMap;
 use rc_mechanics::ai::brain::{
     Activity, ActivityPackage, ActivityRequirement, Behavior, Brain, BrainProgram,
     MemoryModuleType, MemoryStatus, Sensor,
 };
 use rc_mechanics::ai::goal::AiContext;
-use rc_mechanics::ai::attributes::AttributeMap;
 use rc_mechanics::ai::navigation::{PathNavigation, PendingMovementIntent};
 use rc_mechanics::ai::sensing::Sensing;
 use rc_mechanics::entity::EntityKind;
@@ -220,14 +220,20 @@ fn activity_switch_erases_the_previous_activitys_own_erase_on_stop_memories() {
     // sample only runs once `tick_count >= schedule_update_delay_ticks` (20).
     program.select_activity(&mut brain, 20); // active: {Core, Idle}
     brain.set(MemoryModuleType::WalkTarget, BlockPos::new(1, 64, 1), None);
-    assert_eq!(brain.status(MemoryModuleType::WalkTarget), MemoryStatus::ValuePresent);
+    assert_eq!(
+        brain.status(MemoryModuleType::WalkTarget),
+        MemoryStatus::ValuePresent
+    );
 
     brain.set(MemoryModuleType::HurtBy, RcEntityId(2), None);
     let mut ctx = scratch.ctx(0);
     let mut rng = noop_rng();
     program.tick(&mut ctx, &mut brain, 0, &mut rng); // pushes into Panic
 
-    assert_eq!(brain.status(MemoryModuleType::WalkTarget), MemoryStatus::ValueAbsent);
+    assert_eq!(
+        brain.status(MemoryModuleType::WalkTarget),
+        MemoryStatus::ValueAbsent
+    );
 }
 
 #[test]
@@ -237,14 +243,19 @@ fn sensors_run_before_behaviors_every_tick_unthrottled() {
     let ran = Arc::new(Mutex::new(false));
     let starts = Arc::new(Mutex::new(0u32));
     let mut program = BrainProgram {
-        sensors: vec![Box::new(SettingSensor { ran: Arc::clone(&ran) })],
+        sensors: vec![Box::new(SettingSensor {
+            ran: Arc::clone(&ran),
+        })],
         packages: vec![ActivityPackage {
             activity: Activity::Core,
             requirements: vec![],
             behaviors: vec![(
                 0,
                 Box::new(RecordingBehavior {
-                    required: &[(MemoryModuleType::NearestVisiblePlayer, MemoryStatus::ValuePresent)],
+                    required: &[(
+                        MemoryModuleType::NearestVisiblePlayer,
+                        MemoryStatus::ValuePresent,
+                    )],
                     starts: Arc::clone(&starts),
                 }),
             )],
@@ -342,7 +353,10 @@ fn panic_push_activates_immediately_but_never_self_reverts() {
     let mut ctx = scratch.ctx(1);
     program.tick(&mut ctx, &mut brain, 1, &mut rng);
 
-    assert_eq!(brain.active_activities, panic_set, "push never self-reverts");
+    assert_eq!(
+        brain.active_activities, panic_set,
+        "push never self-reverts"
+    );
 }
 
 #[test]
