@@ -20,11 +20,23 @@ impl RcPacket for UpdateAttributes {
     const ID: i32 = 0x83;
 
     fn encode_body(&self, buf: &mut BytesMut) {
-        todo!()
+        VarInt::new(self.entity_id).encode(buf);
+        buf.extend_from_slice(&self.attribute_entries);
     }
 
+    /// The attribute-entries tail has no fixed length or outer prefix, so trailing-byte
+    /// validation is a no-op for this one packet, mirroring `SetEntityData`'s own
+    /// identical exception: this crate's own packet catalog must call
+    /// `UpdateAttributes::decode_body` directly rather than
+    /// `rc_protocol::decode_one::<UpdateAttributes>`.
     fn decode_body(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
-        todo!()
+        use bytes::Buf;
+        let entity_id = VarInt::decode(buf)?.get();
+        let attribute_entries = buf.copy_to_bytes(buf.remaining()).to_vec();
+        Ok(UpdateAttributes {
+            entity_id,
+            attribute_entries,
+        })
     }
 }
 
@@ -36,5 +48,10 @@ pub fn build_update_attributes(
     entity_id: i32,
     map: &mut rc_mechanics::ai::attributes::AttributeMap,
 ) -> UpdateAttributes {
-    todo!()
+    let mut attribute_entries = Vec::new();
+    rc_mechanics::ai::attributes::encode_attribute_entries(map, &mut attribute_entries);
+    UpdateAttributes {
+        entity_id,
+        attribute_entries,
+    }
 }

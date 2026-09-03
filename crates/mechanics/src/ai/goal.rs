@@ -83,24 +83,124 @@ pub struct GoalSelector {
 
 impl GoalSelector {
     pub fn new() -> Self {
-        todo!()
+        GoalSelector {
+            entries: Vec::new(),
+            locked_flags: [None, None, None, None],
+            disabled_flags: 0,
+        }
     }
 
     pub fn add_goal(&mut self, priority: i32, goal: Box<dyn Goal>) {
-        todo!()
+        self.entries.push(WrappedGoal {
+            priority,
+            goal,
+            running: false,
+        });
     }
 
     pub fn disable_flag(&mut self, flag: u8) {
-        todo!()
+        self.disabled_flags |= flag;
     }
 
     pub fn enable_flag(&mut self, flag: u8) {
-        todo!()
+        self.disabled_flags &= !flag;
     }
 
     /// The four-pass `tick` (Context §D, restated field-precise).
     pub fn tick(&mut self, ctx: &mut AiContext, full_tick: bool) {
-        todo!()
+        // 1. Cleanup pass.
+        for i in 0..self.entries.len() {
+            if !self.entries[i].running {
+                continue;
+            }
+            let flags = self.entries[i].goal.flags();
+            let should_stop =
+                flags & self.disabled_flags != 0 || !self.entries[i].goal.can_continue_to_use(ctx);
+            if should_stop {
+                self.entries[i].goal.stop(ctx);
+                self.entries[i].running = false;
+            }
+        }
+
+        // 2. Drop stale flag locks.
+        for slot in self.locked_flags.iter_mut() {
+            if let Some(owner) = *slot {
+                if !self.entries[owner].running {
+                    *slot = None;
+                }
+            }
+        }
+
+        // 3. Start pass, in `entries`' own declaration order.
+        for i in 0..self.entries.len() {
+            if self.entries[i].running {
+                continue;
+            }
+            let flags = self.entries[i].goal.flags();
+            if flags & self.disabled_flags != 0 {
+                continue;
+            }
+            let priority = self.entries[i].priority;
+
+            let mut evictable: Vec<usize> = Vec::new();
+            let mut ok = true;
+            for bit in 0..4u8 {
+                let mask = 1u8 << bit;
+                if flags & mask == 0 {
+                    continue;
+                }
+                if let Some(owner) = self.locked_flags[bit as usize] {
+                    if owner == i {
+                        continue;
+                    }
+                    let owner_interruptable = self.entries[owner].goal.is_interruptable();
+                    let owner_priority = self.entries[owner].priority;
+                    if owner_interruptable && owner_priority > priority {
+                        if !evictable.contains(&owner) {
+                            evictable.push(owner);
+                        }
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if !self.entries[i].goal.can_use(ctx) {
+                continue;
+            }
+
+            for owner in evictable {
+                self.entries[owner].goal.stop(ctx);
+                self.entries[owner].running = false;
+                for slot in self.locked_flags.iter_mut() {
+                    if *slot == Some(owner) {
+                        *slot = None;
+                    }
+                }
+            }
+
+            self.entries[i].goal.start(ctx);
+            self.entries[i].running = true;
+            for bit in 0..4u8 {
+                let mask = 1u8 << bit;
+                if flags & mask != 0 {
+                    self.locked_flags[bit as usize] = Some(i);
+                }
+            }
+        }
+
+        // 4. Tick running goals.
+        for i in 0..self.entries.len() {
+            if !self.entries[i].running {
+                continue;
+            }
+            if full_tick || self.entries[i].goal.requires_update_every_tick() {
+                self.entries[i].goal.tick(ctx);
+            }
+        }
     }
 }
 
@@ -113,5 +213,5 @@ impl Default for GoalSelector {
 /// `(tick_count + entity_id.0) % 2 == 0` — the save-stable half-tick throttle key
 /// (Context §D).
 pub fn should_full_tick(tick_count: u64, entity_id: RcEntityId) -> bool {
-    todo!()
+    (tick_count.wrapping_add(entity_id.0)) % 2 == 0
 }
