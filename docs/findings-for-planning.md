@@ -1378,6 +1378,76 @@ Entries name the milestone that surfaced them and the code they concern.
   be shorter specifically for this pass so a stuck contraption fails fast
   instead of costing 90s each — before deciding the PLAN-D9(a) budget.
 
+- **M3.5-B03 governance (redstone wire capture builds at floor level near
+  spawn): confirms and closes the stance-walk-timeout finding directly above,
+  measured this time on the real scheduled CI run (33736929221,
+  `ubuntu-24.04`) rather than a single local `--only` run — 0 of 51
+  contraptions completed, the oracle side alone burning ~77.6 minutes (51 ×
+  the 90s `WALK_TIMEOUT`) before `xtask` still reported `capture-oracle` as
+  `pass`.** Root cause confirmed exactly as suspected above:
+  `world_origin_for`'s fixed `y = 4` origin floats ~64 blocks above both real
+  worlds' own natural floor (near `y = -60`) and drifts up to 3200 blocks from
+  spawn. Fix: `redstone_wire_capture.rs` no longer calls `world_origin_for`
+  at all (that function itself is untouched — `fetch-corpus` still depends on
+  its exact 64-block spacing); it discovers the real floor once per side
+  (`placement_capture::discover_floor_y`, already proven live by the M3
+  placement-diff harness) and places every contraption at one of two small,
+  fixed, floor-relative slots (`wire_slot_origin`, alternating by
+  `index % 2`), each pre-cleared to air before use. A second, independent fix
+  in `xtask::corpus::protocol_diff` closes the "still reported pass" half:
+  `capture-<side>` now `Pass`es only when every expected session step and
+  every expected contraption printed its own progress `done` line and the
+  runner's own new `finished ... failed=<n>` was `0` (TEST-D48/TEST-D50) —
+  the exact gap that let a 0-of-51 run through as `pass` on the cited CI run.
+  Three deviations from the brief worth recording:
+  - The brief's own illustrative margin ("up to roughly ±10 blocks around the
+    origin") undersells the real corpus: a live scan of every committed
+    `.ron` under `crates/testing/gametest/corpus/redstone/` measured the
+    widest single contraption's own bounding box at x: -4..+16 (not ±10) —
+    `wire_signal_decay_15_chain`'s 15-wire chain and `piston_max_push_depth_
+    12`'s 12-deep push both reach `x = 16` — while y (-2..+5) and z (-3..+3)
+    do sit inside a ±10 window. `WIRE_SLOT_MARGIN_X_NEG`/`_X_POS` in
+    `redstone_wire_capture.rs` use the real measured range plus a small
+    buffer (6/18) instead of the brief's own round number; `WIRE_SLOT_MARGIN_
+    Z_NEG`/`_Z_POS` (5/5) stay tight specifically to keep both slots clear of
+    `protocol_session.rs`'s own `z == 24` placement row without moving the
+    slots any further from spawn.
+  - `place_real`'s own worst-case support depth for a contraption cell at
+    relative `y == -2` (the most negative value across the whole corpus
+    today, `piston_quasi_connectivity_trigger`) needs two natural terrain
+    layers below the floor's own top surface to still be solid. Both this
+    project's own `SuperflatFiller` (bedrock + 3 dirt layers + grass) and
+    real vanilla's default flat preset (bedrock + 2 dirt layers + grass) have
+    at least that much — but this is a **bounded limitation**, not a
+    guarantee: a future corpus contraption whose lowest declared cell sits at
+    relative `y <= -3` would need a third natural layer below the floor,
+    which real vanilla's own 2-dirt-layer default preset does not have
+    (bedrock is the very next layer down, and bedrock cannot be broken to
+    open further clearance). Worth an acceptance-check or corpus-authoring
+    note if `04-worldgen-parity.md`/`09-testing-quality.md` ever wants this
+    stated as a hard constraint on future redstone-corpus entries.
+  - `xtask` still must never link `azalea`/`rc_paritybot`
+    (`protocol_diff_runner`'s own module doc comment), so its own capture-
+    completeness gate cannot import `protocol_session::SESSION_STEPS.len()`
+    or read `ContraptionSpec`s to know the *true* expected counts when a
+    side's own subprocess crashes before ever printing its `begin` line (the
+    one case where the real counts aren't available from the child's own
+    output). `expected_totals` falls back to a hand-kept constant
+    (`EXPECTED_SESSION_STEPS_FALLBACK = 32`) for session steps and a live
+    `std::fs::read_dir` count of the committed `.ron` corpus directory for
+    contraptions — real, but duplicated knowledge that could silently drift
+    from `SESSION_STEPS` if that list's own length ever changes. Low risk
+    (it only weakens the fallback path, never the common path which always
+    reads the real `begin` line), but worth a decision on whether `xtask`
+    should instead read `SESSION_STEPS.len()` from a small shared constant
+    outside the azalea-linking crate boundary.
+  Also confirmed, no code change needed: the oracle-side `spawn-protection`
+  question the brief asked about. `rc_gametest::capture::launch_oracle_
+  server`'s own `server.properties` (the function `protocol_diff_runner`'s
+  own `run_oracle_side` calls for the oracle process) already writes
+  `spawn-protection=0`, so the real vanilla oracle can never block this
+  pass's own real placements near spawn.
+
 - **TEST-D58's own `protocol-diff` job waits on every matrix leg of both capture
   jobs, not just its own OS's pair.** `.github/workflows/ci.yml`'s new
   `protocol-diff` job declares `needs: [protocol-capture-oracle,
