@@ -3,6 +3,7 @@
 //! ECS-agnostic core algorithms live behind `BlockWorldAccess`; the `bevy_ecs`/`rc-scheduler`
 //! adapter lives in `stage4::ecs`, feature-gated `server-systems` (default).
 
+pub mod ai;
 pub mod behavior;
 pub mod block_entity;
 pub mod block_event;

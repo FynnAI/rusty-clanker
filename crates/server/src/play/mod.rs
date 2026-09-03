@@ -8,6 +8,7 @@
 //! first real `rc-scheduler` region ticking at 20 TPS. See `blueprints/M1/M1-B05-play-
 //! superflat.md` for the full design.
 
+mod attribute_packets;
 mod block_action;
 mod chunk;
 mod connection;
@@ -33,6 +34,7 @@ mod persistence;
 mod registry_resolvers;
 mod world;
 
+pub use attribute_packets::{UpdateAttributes, build_update_attributes};
 pub use block_action::{
     BlockActionKind, ChunkIndex, DebugBlockInfo, ENTITY_INTERACTION_RANGE, Face,
     PendingBlockAction, debug_query_block, resolve_place_position, seed_chunk_column,
