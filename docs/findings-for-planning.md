@@ -1338,6 +1338,31 @@ Entries name the milestone that surfaced them and the code they concern.
   be shorter specifically for this pass so a stuck contraption fails fast
   instead of costing 90s each — before deciding the PLAN-D9(a) budget.
 
+- **TEST-D58's own `protocol-diff` job waits on every matrix leg of both capture
+  jobs, not just its own OS's pair.** `.github/workflows/ci.yml`'s new
+  `protocol-diff` job declares `needs: [protocol-capture-oracle,
+  protocol-capture-ours]`, and both of those are themselves matrixed over
+  `{ubuntu-24.04, windows-2025}`. GitHub Actions' `needs:` addresses the job
+  *id*, not one specific matrix leg of it — there is no built-in way to make
+  `protocol-diff (windows-2025)` depend on only `protocol-capture-oracle
+  (windows-2025)`/`protocol-capture-ours (windows-2025)` and not also block on
+  the `ubuntu-24.04` legs of those same two jobs. The per-OS artifact naming
+  (`protocol-capture-oracle-${{ matrix.os }}`, downloaded by the matching
+  `protocol-diff` leg's own `matrix.os`) still keeps each OS's diff correctly
+  paired with its own captures — this is a wall-clock cost, not a correctness
+  bug — but it does mean `protocol-diff`'s two matrix legs can only start once
+  *all four* capture-job instances (2 sides × 2 OSes) have finished, rather
+  than each starting as soon as its own OS's pair is done. Since all four
+  capture instances already run fully in parallel with each other (each is its
+  own `runs-on: matrix.os` job), the practical delta versus a hypothetical
+  per-OS-only dependency is bounded by "the gap between the two OSes' own
+  slowest capture leg" — real but likely small next to the multi-hour capture
+  budgets themselves. Needs a decision on whether this is worth working around
+  (e.g. a reusable workflow called once per OS, so each call's own two capture
+  jobs and diff job share one un-matrixed dependency graph) before or after the
+  first few real scheduled runs show how large the gap actually is in
+  practice.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5-B03 execution shape — decided as TEST-D58 (2026-09-03):** the
