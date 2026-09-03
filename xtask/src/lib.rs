@@ -225,7 +225,14 @@ pub enum Command {
     /// tier, `.github/workflows/ci.yml`). TEST-D58: `--diff-only` is a second,
     /// disjoint invocation shape that skips capture entirely and only diffs two
     /// already-captured files (see its own doc comment below) — every flag above
-    /// that exists only to drive a capture is mutually exclusive with it.
+    /// that exists only to drive a capture is mutually exclusive with it. TEST-D59:
+    /// every diff (both the capturing and `--diff-only` shapes) resolves its own
+    /// mismatches against the committed known-divergence register at
+    /// `crates/testing/gametest/corpus/protocol-diff/known-divergences.ron` before
+    /// deciding pass/fail — a registered divergence passes with a `known (...)`
+    /// detail, an unregistered one still fails, and a register entry whose own
+    /// `expires` milestone already shipped a completion report fails the run outright
+    /// (its own `register::expired::*` case).
     ProtocolDiff {
         #[arg(long, default_value = "26.2")]
         version: String,

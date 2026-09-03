@@ -59,13 +59,36 @@
 //! is never itself an incomplete one. `target/verify/protocol-diff-timings.json`
 //! carries the same `expected_steps`/`expected_contraptions`/`failed` numbers per
 //! side.
+//!
+//! TEST-D59 (known-divergence register, M3.5-B03 governance changeset): the diff
+//! step (`diff_into_result`, both the `run` and `run_diff_only` paths) now resolves
+//! every `protocol_capture::diff_captures` mismatch against the committed register
+//! at `crates/testing/gametest/corpus/protocol-diff/known-divergences.ron`
+//! (`load_and_verify_register`: verifies the register's own TEST-D47 manifest first,
+//! then `rc_gametest::known_divergences::load_register`, then the TEST-D59 expiry
+//! check against `blueprints/<milestone>/*-COMPLETION-REPORT.md`, each its own
+//! `TierResult` case). A step whose every mismatch/missing-packet-type is covered by
+//! a register entry now `Pass`es with a `known (...)`-annotated detail
+//! (`rc_gametest::known_divergences::resolve_step`); anything left over still fails,
+//! with a compact detail (`compact_mismatch_detail`/`compact_missing_detail`: packet
+//! type names and counts, and — for a body mismatch — one example body per side
+//! truncated to its first 32 bytes in hex plus the full body length,
+//! `body_preview`). The first real full diff produced a 135 MB `protocol-diff.json`
+//! because raw packet bodies used to be dumped straight into case details —
+//! `write_bodies_dump` now writes the complete, untruncated oracle/ours body lists to
+//! a separate `target/verify/protocol-diff-bodies.json` instead (not part of
+//! `.github/workflows/ci.yml`'s own artifact upload list — a local-debugging-only
+//! file), keeping the summary report itself well under 1 MB for the full corpus.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use rc_gametest::protocol_capture::{ProtocolCaptureFile, diff_captures, read_capture};
+use rc_gametest::known_divergences::{self, DivergenceClass, KnownDivergence};
+use rc_gametest::protocol_capture::{
+    PacketTypeDiff, ProtocolCaptureFile, diff_captures, read_capture,
+};
 
 use crate::corpus::placement_diff::Side;
 use crate::tier_result::{Status, TierResult};
@@ -931,7 +954,8 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     }
 
     if let (Some(oracle), Some(ours)) = (&oracle_capture, &ours_capture) {
-        diff_into_result(&mut result, oracle, ours);
+        let register = load_and_verify_register(&repo_root, &mut result);
+        diff_into_result(&mut result, oracle, ours, &register, &repo_root);
     }
 
     kill_leftover_rusty_clanker_server();
@@ -952,9 +976,161 @@ pub fn diff_into_result(
     result: &mut TierResult,
     oracle: &ProtocolCaptureFile,
     ours: &ProtocolCaptureFile,
+    register: &[KnownDivergence],
+    repo_root: &Path,
 ) {
     let report_by_step = diff_captures(oracle, ours);
-    push_diff_cases(result, &report_by_step);
+    push_diff_cases(result, &report_by_step, register);
+    write_bodies_dump(repo_root, &report_by_step);
+}
+
+/// TEST-D59: verifies the register's own TEST-D47 manifest (mirrors
+/// `parity_check.rs`'s identical "manifest before content" discipline for the
+/// redstone corpus — same `fixture_manifest::verify_manifest` machinery, this
+/// verb's own `crates/testing/gametest/corpus/protocol-diff/` directory), loads and
+/// validates the register (`rc_gametest::known_divergences::load_register`), and
+/// checks every `Missing`/`Body` entry's own `expires` milestone against
+/// `blueprints/<milestone>/*-COMPLETION-REPORT.md` on disk — pushing its own case(s)
+/// into `result` for each concern. Returns the loaded register (empty on any
+/// load/validation failure — `resolve_step` then correctly treats every observed
+/// divergence as unregistered rather than silently trusting a broken/tampered file,
+/// while `register-load`'s own `Fail` case names why).
+fn load_and_verify_register(repo_root: &Path, result: &mut TierResult) -> Vec<KnownDivergence> {
+    let dir = register_dir(repo_root);
+    let manifest_path = dir.join("manifest.json");
+    let violations = crate::fixture_manifest::verify_manifest(&manifest_path, &dir);
+    if violations.is_empty() {
+        result.push("register-manifest", Status::Pass, None);
+    } else {
+        for violation in &violations {
+            result.push(
+                format!("register-manifest::{}", violation.path),
+                Status::Fail,
+                Some(format!("[{}] {}", violation.kind, violation.message)),
+            );
+        }
+    }
+
+    let register_path = dir.join("known-divergences.ron");
+    let register = match known_divergences::load_register(&register_path) {
+        Ok(entries) => {
+            result.push(
+                "register-load",
+                Status::Pass,
+                Some(format!("{} entries", entries.len())),
+            );
+            entries
+        }
+        Err(message) => {
+            eprintln!("protocol-diff: {message}");
+            result.push("register-load", Status::Fail, Some(message));
+            Vec::new()
+        }
+    };
+
+    for entry in known_divergences::expired_entries(&register, |milestone| {
+        milestone_has_completion_report(repo_root, milestone)
+    }) {
+        let class_name = match entry.class {
+            DivergenceClass::Missing => "Missing",
+            DivergenceClass::Body => "Body",
+            DivergenceClass::Timer => "Timer",
+        };
+        let case_name = format!("register::expired::{}::{}", entry.steps, entry.packet);
+        let message = format!(
+            "{class_name} entry for (steps={:?}, packet={:?}) closes with {:?} but its own \
+             expires milestone {:?} already has a completion report — this known divergence \
+             is a regression in disguise and must be removed from the register",
+            entry.steps, entry.packet, entry.closes_with, entry.expires
+        );
+        eprintln!("protocol-diff: {message}");
+        result.push(case_name, Status::Fail, Some(message));
+    }
+
+    register
+}
+
+fn register_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join("crates/testing/gametest/corpus/protocol-diff")
+}
+
+/// TEST-D59's own expiry predicate, injected into `known_divergences::
+/// expired_entries`: `true` iff `blueprints/<milestone>/` contains at least one
+/// `*-COMPLETION-REPORT.md` file (the exact naming `blueprints/M3/M3-COMPLETION-
+/// REPORT.md` already established) — a milestone directory that doesn't exist at all
+/// (not yet started) reports `false`, never an error.
+fn milestone_has_completion_report(repo_root: &Path, milestone: &str) -> bool {
+    let dir = repo_root.join("blueprints").join(milestone);
+    std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries.filter_map(|e| e.ok()).any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .ends_with("-COMPLETION-REPORT.md")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// TEST-D59 Deliverable 3: the first real full diff produced a 135 MB
+/// `protocol-diff.json` because every mismatch's own raw packet bodies were dumped
+/// straight into its case detail — this writes the complete, untruncated body lists
+/// (every `mismatches` entry of every step, known-covered or not) to a separate
+/// `target/verify/protocol-diff-bodies.json` instead, best-effort (a write failure
+/// here must never turn an otherwise-successful `protocol-diff` run into a failure —
+/// logged and swallowed, exactly like `write_timings`). Never referenced by
+/// `.github/workflows/ci.yml`'s own artifact upload list — a local-debugging-only
+/// file. Writes nothing (not even an empty file) when there is nothing to dump, so a
+/// clean run never leaves a stale dump from an earlier failing one lying around
+/// looking current.
+fn write_bodies_dump(
+    repo_root: &Path,
+    report_by_step: &std::collections::BTreeMap<
+        String,
+        rc_gametest::protocol_capture::ProtocolDiffReport,
+    >,
+) {
+    #[derive(serde::Serialize)]
+    struct BodiesDumpEntry<'a> {
+        step_id: &'a str,
+        packet_id: i32,
+        packet_name: Option<&'a str>,
+        oracle_only_bodies: &'a [(Vec<u8>, usize)],
+        ours_only_bodies: &'a [(Vec<u8>, usize)],
+    }
+
+    let mut entries = Vec::new();
+    for (step_id, report) in report_by_step {
+        for diff in &report.mismatches {
+            entries.push(BodiesDumpEntry {
+                step_id,
+                packet_id: diff.packet_id,
+                packet_name: diff.packet_name.as_deref(),
+                oracle_only_bodies: &diff.oracle_only_bodies,
+                ours_only_bodies: &diff.ours_only_bodies,
+            });
+        }
+    }
+    if entries.is_empty() {
+        return;
+    }
+
+    let dir = repo_root.join("target/verify");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        eprintln!("protocol-diff: failed to create {}: {err}", dir.display());
+        return;
+    }
+    let json = match serde_json::to_string_pretty(&entries) {
+        Ok(json) => json,
+        Err(err) => {
+            eprintln!("protocol-diff: failed to serialize bodies dump: {err}");
+            return;
+        }
+    };
+    let path = dir.join("protocol-diff-bodies.json");
+    if let Err(err) = std::fs::write(&path, json) {
+        eprintln!("protocol-diff: failed to write {}: {err}", path.display());
+    }
 }
 
 fn finish(repo_root: &Path, result: TierResult, timings: &Timings) -> std::process::ExitCode {
@@ -986,7 +1162,9 @@ fn run_diff_only(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     );
     let ours = diff_only_side(&mut result, "capture-ours", args.ours_capture.as_deref());
     if let (Some(oracle), Some(ours)) = (&oracle, &ours) {
-        diff_into_result(&mut result, oracle, ours);
+        let repo_root = repo_root();
+        let register = load_and_verify_register(&repo_root, &mut result);
+        diff_into_result(&mut result, oracle, ours, &register, &repo_root);
     }
 
     let result = result.finalize();
@@ -1043,43 +1221,148 @@ fn diff_only_side(
 /// `protocol_capture::diff_captures`'s own output, kept separate from `run`'s own
 /// I/O shell so it can be exercised directly against a small, hand-built fixture
 /// (this module's own `tests::tier_result_shape`).
+///
+/// TEST-D59: every step is first resolved against `register`
+/// (`known_divergences::resolve_step`) — a step with nothing left unregistered
+/// `Pass`es (detail `None` when the register never mattered at all, matching today's
+/// clean-step behavior exactly; a `registered=N; known (...): ...` detail whenever
+/// it did); a step with anything left over `Fail`s with a compact detail — packet
+/// type names and counts, never a raw byte dump (Deliverable 3, `compact_mismatch_
+/// detail`/`compact_missing_detail`) — capped well under the 1 MB summary-report
+/// budget for the full corpus.
 fn push_diff_cases(
     result: &mut TierResult,
     report_by_step: &std::collections::BTreeMap<
         String,
         rc_gametest::protocol_capture::ProtocolDiffReport,
     >,
+    register: &[KnownDivergence],
 ) {
     for (step_id, report) in report_by_step {
-        if report.mismatches.is_empty()
-            && report.missing_in_oracle.is_empty()
-            && report.missing_in_ours.is_empty()
-        {
-            result.push(step_id, Status::Pass, None);
+        let verdict = known_divergences::resolve_step(step_id, report, register);
+
+        let known_parts: Vec<String> = verdict.known.iter().map(known_detail).collect();
+
+        if verdict.passes() {
+            let detail = if known_parts.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "registered={}; known: {}",
+                    known_parts.len(),
+                    known_parts.join("; ")
+                ))
+            };
+            result.push(step_id, Status::Pass, detail);
             continue;
         }
 
         let mut detail_parts = Vec::new();
-        if !report.missing_in_oracle.is_empty() {
-            detail_parts.push(format!(
-                "packet id(s) present only in ours, never observed from the oracle: {:?}",
-                report.missing_in_oracle
+        if !known_parts.is_empty() {
+            detail_parts.push(format!("known: {}", known_parts.join("; ")));
+        }
+        if !verdict.unregistered_missing_in_oracle.is_empty() {
+            detail_parts.push(compact_missing_detail(
+                "packet id(s) present only in ours, never observed from the oracle",
+                &verdict.unregistered_missing_in_oracle,
+                &report.packet_names,
             ));
         }
-        if !report.missing_in_ours.is_empty() {
-            detail_parts.push(format!(
-                "packet id(s) present only in the oracle capture, never observed from ours: {:?}",
-                report.missing_in_ours
+        if !verdict.unregistered_missing_in_ours.is_empty() {
+            detail_parts.push(compact_missing_detail(
+                "packet id(s) present only in the oracle capture, never observed from ours",
+                &verdict.unregistered_missing_in_ours,
+                &report.packet_names,
             ));
         }
-        for diff in &report.mismatches {
-            let name = diff.packet_name.as_deref().unwrap_or("<unresolved>");
-            detail_parts.push(format!(
-                "packet id {} ({name}): oracle-only bodies {:?}; ours-only bodies {:?}",
-                diff.packet_id, diff.oracle_only_bodies, diff.ours_only_bodies
-            ));
+        for diff in &verdict.unregistered_mismatches {
+            detail_parts.push(compact_mismatch_detail(diff));
         }
-        result.push(step_id, Status::Fail, Some(detail_parts.join("; ")));
+
+        let unregistered_count = verdict.unregistered_missing_in_oracle.len()
+            + verdict.unregistered_missing_in_ours.len()
+            + verdict.unregistered_mismatches.len();
+        result.push(
+            step_id,
+            Status::Fail,
+            Some(format!(
+                "registered={} unregistered={}; {}",
+                known_parts.len(),
+                unregistered_count,
+                detail_parts.join("; ")
+            )),
+        );
+    }
+}
+
+/// TEST-D59 Deliverable 3: at most the first 32 bytes of `body`, hex-encoded, plus
+/// the body's own full length — never the whole body (that goes only into
+/// `write_bodies_dump`'s own separate, uncapped file).
+fn body_preview(body: &[u8]) -> String {
+    const MAX_PREVIEW_BYTES: usize = 32;
+    let take = body.len().min(MAX_PREVIEW_BYTES);
+    let hex: String = body[..take].iter().map(|b| format!("{b:02x}")).collect();
+    format!("len={} first{take}={hex}", body.len())
+}
+
+/// One `unregistered_mismatches` entry's own compact detail: the packet type's own
+/// name/id and how many distinct normalized bodies differ per side, plus one example
+/// body per side (`body_preview`) — never the full `oracle_only_bodies`/
+/// `ours_only_bodies` lists themselves.
+fn compact_mismatch_detail(diff: &PacketTypeDiff) -> String {
+    let name = diff.packet_name.as_deref().unwrap_or("<unresolved>");
+    let mut detail = format!(
+        "packet id {} ({name}): {} distinct oracle-only bod(ies), {} distinct ours-only bod(ies)",
+        diff.packet_id,
+        diff.oracle_only_bodies.len(),
+        diff.ours_only_bodies.len()
+    );
+    if let Some((body, excess)) = diff.oracle_only_bodies.first() {
+        detail.push_str(&format!(
+            "; example oracle-only body (excess count {excess}): {}",
+            body_preview(body)
+        ));
+    }
+    if let Some((body, excess)) = diff.ours_only_bodies.first() {
+        detail.push_str(&format!(
+            "; example ours-only body (excess count {excess}): {}",
+            body_preview(body)
+        ));
+    }
+    detail
+}
+
+/// One `unregistered_missing_in_oracle`/`unregistered_missing_in_ours` list's own
+/// compact detail — packet type names (resolved from `names`, `<unresolved>` when
+/// the id never carried one) with their raw ids, never anything about the body (a
+/// presence-set entry has no body to compare in the first place).
+fn compact_missing_detail(
+    label: &str,
+    ids: &[i32],
+    names: &std::collections::BTreeMap<i32, String>,
+) -> String {
+    let parts: Vec<String> = ids
+        .iter()
+        .map(|id| match names.get(id) {
+            Some(name) => format!("{name} (id {id})"),
+            None => format!("<unresolved> (id {id})"),
+        })
+        .collect();
+    format!("{label}: {}", parts.join(", "))
+}
+
+/// One `StepVerdict::known` entry's own compact detail — TEST-D59's own exact wording:
+/// `known (<closes_with>, expires <milestone>)` for `Missing`/`Body`, `known
+/// (timer-driven)` for `Timer`.
+fn known_detail(m: &known_divergences::KnownEntryMatch<'_>) -> String {
+    let name = m.packet_name.as_deref().unwrap_or("<unresolved>");
+    match m.matched.class {
+        DivergenceClass::Timer => format!("{name}: known (timer-driven)"),
+        DivergenceClass::Missing | DivergenceClass::Body => format!(
+            "{name}: known ({}, expires {})",
+            m.matched.closes_with.as_deref().unwrap_or("?"),
+            m.matched.expires.as_deref().unwrap_or("?")
+        ),
     }
 }
 
@@ -1120,6 +1403,7 @@ mod tests {
                 }],
                 missing_in_oracle: vec![77],
                 missing_in_ours: vec![],
+                ..Default::default()
             },
         );
         report_by_step.insert(
@@ -1128,11 +1412,12 @@ mod tests {
                 mismatches: vec![],
                 missing_in_oracle: vec![],
                 missing_in_ours: vec![],
+                ..Default::default()
             },
         );
 
         let mut result = TierResult::new("protocol-diff");
-        push_diff_cases(&mut result, &report_by_step);
+        push_diff_cases(&mut result, &report_by_step, &[]);
         let result = result.finalize();
 
         assert_eq!(result.cases.len(), 2);
@@ -1151,5 +1436,138 @@ mod tests {
         assert_eq!(move_case.status, Status::Pass);
         assert!(move_case.detail.is_none());
         assert_eq!(result.status, Status::Fail);
+    }
+
+    fn temp_repo_root(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rc-protocol-diff-register-test-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_register_dir(repo_root: &Path, ron_body: &str) {
+        let dir = register_dir(repo_root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("known-divergences.ron"), ron_body).unwrap();
+        let sha256 = crate::fixture_manifest::compute_sha256_hex(ron_body.as_bytes());
+        let manifest = format!(
+            r#"{{"protocol_version":776,"mc_version":"26.2","entries":[{{"path":"known-divergences.ron","sha256":"{sha256}","generator_tool_version":"test","source_jar_sha1":"n/a"}}]}}"#
+        );
+        std::fs::write(dir.join("manifest.json"), manifest).unwrap();
+    }
+
+    #[test]
+    fn milestone_has_completion_report_true_only_when_a_report_file_exists() {
+        let repo_root = temp_repo_root("milestone-report");
+        assert!(!milestone_has_completion_report(&repo_root, "M4"));
+
+        let dir = repo_root.join("blueprints/M4");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            !milestone_has_completion_report(&repo_root, "M4"),
+            "an empty milestone directory must not count as complete"
+        );
+
+        std::fs::write(dir.join("M4-COMPLETION-REPORT.md"), "done").unwrap();
+        assert!(milestone_has_completion_report(&repo_root, "M4"));
+    }
+
+    #[test]
+    fn load_and_verify_register_pushes_manifest_and_load_cases_for_a_clean_register() {
+        let repo_root = temp_repo_root("clean-register");
+        write_register_dir(
+            &repo_root,
+            r#"[
+                (steps: "session/*", packet: "minecraft:keep_alive", class: Timer, closes_with: None, expires: None),
+            ]"#,
+        );
+
+        let mut result = TierResult::new("protocol-diff");
+        let register = load_and_verify_register(&repo_root, &mut result);
+
+        assert_eq!(register.len(), 1);
+        let manifest_case = result
+            .cases
+            .iter()
+            .find(|c| c.name == "register-manifest")
+            .expect("register-manifest case present");
+        assert_eq!(manifest_case.status, Status::Pass);
+        let load_case = result
+            .cases
+            .iter()
+            .find(|c| c.name == "register-load")
+            .expect("register-load case present");
+        assert_eq!(load_case.status, Status::Pass);
+    }
+
+    #[test]
+    fn load_and_verify_register_fails_the_manifest_case_on_a_tampered_file() {
+        let repo_root = temp_repo_root("tampered-register");
+        write_register_dir(
+            &repo_root,
+            r#"[
+                (steps: "session/*", packet: "minecraft:keep_alive", class: Timer, closes_with: None, expires: None),
+            ]"#,
+        );
+        // Tamper with the register file after the manifest was computed from its
+        // original content — the manifest hash no longer matches the file on disk.
+        std::fs::write(
+            register_dir(&repo_root).join("known-divergences.ron"),
+            r#"[
+                (steps: "session/*", packet: "minecraft:set_time", class: Timer, closes_with: None, expires: None),
+            ]"#,
+        )
+        .unwrap();
+
+        let mut result = TierResult::new("protocol-diff");
+        let _ = load_and_verify_register(&repo_root, &mut result);
+
+        assert!(
+            result
+                .cases
+                .iter()
+                .any(|c| c.name.starts_with("register-manifest::") && c.status == Status::Fail),
+            "expected a failing register-manifest::<path> case, got: {:?}",
+            result.cases.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn load_and_verify_register_fails_on_an_expired_entry() {
+        let repo_root = temp_repo_root("expired-register");
+        write_register_dir(
+            &repo_root,
+            r#"[
+                (steps: "session/spawn", packet: "minecraft:commands", class: Missing, closes_with: Some("NET hardening"), expires: Some("M4")),
+            ]"#,
+        );
+        let blueprint_dir = repo_root.join("blueprints/M4");
+        std::fs::create_dir_all(&blueprint_dir).unwrap();
+        std::fs::write(blueprint_dir.join("M4-COMPLETION-REPORT.md"), "done").unwrap();
+
+        let mut result = TierResult::new("protocol-diff");
+        let _ = load_and_verify_register(&repo_root, &mut result);
+
+        let expired_case = result
+            .cases
+            .iter()
+            .find(|c| c.name.starts_with("register::expired::"))
+            .expect("an expired-entry case must be pushed");
+        assert_eq!(expired_case.status, Status::Fail);
+        let result = result.finalize();
+        assert_eq!(result.status, Status::Fail);
+    }
+
+    #[test]
+    fn body_preview_caps_at_32_bytes_but_names_the_real_length() {
+        let body: Vec<u8> = (0..200u16).map(|n| (n % 256) as u8).collect();
+        let preview = body_preview(&body);
+        assert!(preview.contains("len=200"));
+        // "first32=" plus exactly 32 bytes of hex (64 chars) is the whole tail.
+        let hex_part = preview.split('=').next_back().unwrap();
+        assert_eq!(hex_part.len(), 64);
     }
 }

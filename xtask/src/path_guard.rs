@@ -80,6 +80,10 @@ pub const PROTECTED_PATHS: &[ProtectedPath] = &[
         pattern: "crates/testing/gametest/corpus/redstone/**",
         reason: "committed contraption RON definitions + manifest (M3-B07, TEST-D42/D47)",
     },
+    ProtectedPath {
+        pattern: "crates/testing/gametest/corpus/protocol-diff/**",
+        reason: "TEST-D59 known-divergence register + manifest (M3.5-B03, governance/test-authoring only)",
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
