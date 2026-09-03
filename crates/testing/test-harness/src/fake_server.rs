@@ -362,7 +362,7 @@ fn run_step(
 /// `rusty_clanker_server::play::packets::LoginPlay`'s wire shape (module doc comment),
 /// plus the minimal follow-on Play-entry packets a real client needs to actually reach
 /// `Event::Spawn` (this match arm's own doc comment) — one all-air spawn chunk at
-/// `(0, 0)` (matching `SPAWN_POSITION`'s `(0, -59, 0)`, M1-B05's own placeholder spawn
+/// `(0, 0)` (matching `SPAWN_POSITION`'s `(0, -60, 0)`, M1-B05's own placeholder spawn
 /// point), bracketed by a chunk batch, preceded by the default-spawn-position/position-
 /// sync/game-event packets a real client's own chunk-loading bookkeeping expects first.
 fn encode_play_entry_sequence() -> Vec<BytesMut> {
@@ -433,7 +433,7 @@ fn encode_play_entry_sequence() -> Vec<BytesMut> {
     VarInt::new(0x48).encode(&mut synchronize_player_position);
     VarInt::new(1).encode(&mut synchronize_player_position); // id (teleport id)
     0.0f64.write_wire(&mut synchronize_player_position); // change.pos.x
-    (-59.0f64).write_wire(&mut synchronize_player_position); // change.pos.y
+    (-60.0f64).write_wire(&mut synchronize_player_position); // change.pos.y
     0.0f64.write_wire(&mut synchronize_player_position); // change.pos.z
     0.0f64.write_wire(&mut synchronize_player_position); // change.delta.x
     0.0f64.write_wire(&mut synchronize_player_position); // change.delta.y
@@ -500,10 +500,10 @@ fn encode_play_entry_sequence() -> Vec<BytesMut> {
     ]
 }
 
-/// `(0, -59, 0)` packed into a "Position" wire value (26-bit X, 26-bit Z, 12-bit Y,
+/// `(0, -60, 0)` packed into a "Position" wire value (26-bit X, 26-bit Z, 12-bit Y,
 /// two's complement — matches `rusty_clanker_server::play::packets::pack_position`'s
 /// own documented layout), written as one plain big-endian `i64`.
-const SPAWN_POSITION_PACKED: i64 = (-59i64) & 0xFFF;
+const SPAWN_POSITION_PACKED: i64 = (-60i64) & 0xFFF;
 
 /// The minimal network-NBT (unnamed root, no name field, `TAG_End`-terminated)
 /// `DimensionKindElement` compound a real client needs to resolve `dimension_type`

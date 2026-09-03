@@ -53,9 +53,9 @@ pub const OUT_PATH: &str = "target/verify/m3.5-block-entity-acceptance.json";
 
 /// Mirrors `rc_paritybot::block_entity_persistence`'s own identical constants — the
 /// three fixed test positions, all inside chunk (0,0).
-const CHEST_POS: (i32, i32, i32) = (2, -59, 0);
-const FURNACE_POS: (i32, i32, i32) = (3, -59, 0);
-const HOPPER_POS: (i32, i32, i32) = (2, -59, 1);
+const CHEST_POS: (i32, i32, i32) = (2, -60, 0);
+const FURNACE_POS: (i32, i32, i32) = (3, -60, 0);
+const HOPPER_POS: (i32, i32, i32) = (2, -60, 1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Mode {

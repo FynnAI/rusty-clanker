@@ -37,9 +37,9 @@ pub const BOT_USERNAME: &str = "rc_m35_be_bot";
 /// block-entity kind, all inside chunk (0,0) near `HardcodedWorld`'s own spawn,
 /// each clicked on the floor cell directly below it with face `Up` (mirrors
 /// `restart_persistence.rs`'s own established target-set/click convention).
-pub const CHEST_POS: (i32, i32, i32) = (2, -59, 0);
-pub const FURNACE_POS: (i32, i32, i32) = (3, -59, 0);
-pub const HOPPER_POS: (i32, i32, i32) = (2, -59, 1);
+pub const CHEST_POS: (i32, i32, i32) = (2, -60, 0);
+pub const FURNACE_POS: (i32, i32, i32) = (3, -60, 0);
+pub const HOPPER_POS: (i32, i32, i32) = (2, -60, 1);
 
 const AIM_SETTLE_TICKS: usize = 3;
 const ACTION_SETTLE_TICKS: usize = 6;

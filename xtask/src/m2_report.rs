@@ -41,11 +41,11 @@ const BOT_USERNAME: &str = "rc_m2_report_bot";
 /// raw id)` data — this module cannot reuse `rc_paritybot::restart_persistence::
 /// expected_state` (that crate is never a dependency of `xtask`, module doc comment).
 const EXPECTED_BLOCKS: [(i32, i32, i32, u32); 5] = [
-    (2, -59, 0, STONE.0),
-    (2, -59, 1, STONE.0),
-    (3, -59, 0, STONE.0),
-    (0, -60, 0, AIR.0),
-    (1, -60, 0, AIR.0),
+    (2, -60, 0, STONE.0),
+    (2, -60, 1, STONE.0),
+    (3, -60, 0, STONE.0),
+    (0, -61, 0, AIR.0),
+    (1, -61, 0, AIR.0),
 ];
 const EXPECTED_HEALTH: f32 = 20.0;
 

@@ -291,7 +291,7 @@ const SIDE_OF_WALL_FACE: Direction6 = Direction6::East;
 /// Pure geometry for one `ClickedFace`, relative to a scenario's own slot origin
 /// (`(0, 0, 0)` is the natural floor's own top surface — the exact position a real
 /// client's `Up`-face click against the world's superflat floor targets, matching
-/// `play_creative_hotbar_held_item.rs`'s own established `(1, -60, 0)` grass-column
+/// `play_creative_hotbar_held_item.rs`'s own established `(1, -61, 0)` grass-column
 /// convention up to the fixed vertical shift every slot applies uniformly).
 pub fn face_geometry(face: ClickedFace) -> FaceGeometry {
     match face {

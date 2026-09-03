@@ -111,11 +111,11 @@ pub struct ExpectedState {
 pub fn expected_state() -> ExpectedState {
     ExpectedState {
         blocks: vec![
-            (rc_core::BlockPos::new(2, -59, 0), STONE.0),
-            (rc_core::BlockPos::new(2, -59, 1), STONE.0),
-            (rc_core::BlockPos::new(3, -59, 0), STONE.0),
-            (rc_core::BlockPos::new(0, -60, 0), AIR.0),
-            (rc_core::BlockPos::new(1, -60, 0), AIR.0),
+            (rc_core::BlockPos::new(2, -60, 0), STONE.0),
+            (rc_core::BlockPos::new(2, -60, 1), STONE.0),
+            (rc_core::BlockPos::new(3, -60, 0), STONE.0),
+            (rc_core::BlockPos::new(0, -61, 0), AIR.0),
+            (rc_core::BlockPos::new(1, -61, 0), AIR.0),
         ],
         // Vanilla full health; nothing in this scenario can reduce it (Context).
         health: 20.0,
@@ -170,7 +170,7 @@ const ACTION_SETTLE_TICKS: usize = 5;
 ///
 /// Aiming at a clicked block's own volumetric *center* (`BlockPos::center`, half a block below
 /// its exposed top face) is unsound on this world's own content: M1-B05's superflat layer
-/// table (`crates/chunk-storage/src/superflat.rs`) makes the entire `y == -60` layer solid and
+/// table (`crates/chunk-storage/src/superflat.rs`) makes the entire `y == -61` layer solid and
 /// perfectly flat, so a ray aimed at a point half a block *below* the shared surface height
 /// necessarily crosses that surface height — becoming a hit — at a horizontal position that is
 /// strictly nearer the bot than the intended column, landing on a neighboring column instead
@@ -185,7 +185,7 @@ const ACTION_SETTLE_TICKS: usize = 5;
 /// too shallow (`t_delta` on the vertical axis too large, i.e. inset too close to `0.0`) can
 /// have its *entry* comfortably inside `max_distance` yet still be discarded because that
 /// far-boundary lookahead alone exceeds it. Hand-deriving the reachable window for this
-/// script's farthest position (`(3, -60, 0)`, from the recentered bot position `recenter_in_
+/// script's farthest position (`(3, -61, 0)`, from the recentered bot position `recenter_in_
 /// spawn_block` establishes below) gives a valid inset range of roughly `[0.226, 0.324]`
 /// blocks — too shallow (`< ~0.226`) trips the `max_distance` lookahead above, too deep
 /// (`> ~0.324`) starts clipping the neighboring column already placed by this same script's
@@ -336,7 +336,7 @@ async fn look_at_click(client: &Client, pos: azalea::BlockPos) {
 /// `SPAWN_POSITION` (`crates/server/src/play/connection.rs`) is joined at — an integer
 /// `BlockPos` cast straight to `f64`, never block-centered — to that same block's horizontal
 /// center. A brand-new player's corner position leaves this script's farthest target,
-/// `(3, -60, 0)`, geometrically unreachable by *any* look direction at all: hand-deriving
+/// `(3, -61, 0)`, geometrically unreachable by *any* look direction at all: hand-deriving
 /// `cast_ray`'s own DDA stepping for that specific origin shows every candidate aim either
 /// undershoots (the `max_distance`-lookahead miss `CLICK_AIM_INSET`'s own doc comment
 /// describes) or overshoots into the neighboring column, with no valid inset in between.
@@ -426,12 +426,12 @@ async fn apply_actions_inner(
     recenter_in_spawn_block(&client)?;
     client.wait_ticks(AIM_SETTLE_TICKS).await;
 
-    // Place `minecraft:stone` at (2,-59,0)/(2,-59,1)/(3,-59,0): right-click the block
+    // Place `minecraft:stone` at (2,-60,0)/(2,-60,1)/(3,-60,0): right-click the block
     // immediately below each target — `Face::Up`'s offset (`resolve_place_position`,
-    // `crates/server/src/play/block_action.rs`) adds `+1` to `y`. `(3,-60,0)` runs FIRST,
+    // `crates/server/src/play/block_action.rs`) adds `+1` to `y`. `(3,-61,0)` runs FIRST,
     // ahead of Context's own table order: from the recentered bot position, a straight line
-    // to `(3,-60,0)`'s own aim point passes directly through `(2,-59,0)`'s column once that
-    // column holds a solid block — placing `(2,-59,0)` first would self-occlude the very next
+    // to `(3,-61,0)`'s own aim point passes directly through `(2,-60,0)`'s column once that
+    // column holds a solid block — placing `(2,-60,0)` first would self-occlude the very next
     // action's own simulated aim (verified by hand-deriving `cast_ray`'s DDA stepping with
     // that block already solid). This ordering is no longer needed for the SERVER's own
     // sake (this module's own governance-note addendum, top of file: its real reach
@@ -443,9 +443,9 @@ async fn apply_actions_inner(
     // intended; an occluded aim there would still be a real (if now purely cosmetic) hit-
     // resolution ambiguity for that self-test to trip over.
     for (below, write) in [
-        ((3, -60, 0), rc_core::BlockPos::new(3, -59, 0)),
-        ((2, -60, 0), rc_core::BlockPos::new(2, -59, 0)),
-        ((2, -60, 1), rc_core::BlockPos::new(2, -59, 1)),
+        ((3, -61, 0), rc_core::BlockPos::new(3, -60, 0)),
+        ((2, -61, 0), rc_core::BlockPos::new(2, -60, 0)),
+        ((2, -61, 1), rc_core::BlockPos::new(2, -60, 1)),
     ] {
         let below_pos = azalea::BlockPos::new(below.0, below.1, below.2);
         look_at_click(&client, below_pos).await;
@@ -454,8 +454,8 @@ async fn apply_actions_inner(
         verify_effect(&client, "place", write, STONE.0)?;
     }
 
-    // Break the blocks at (0,-60,0)/(1,-60,0) directly.
-    for (x, y, z) in [(0, -60, 0), (1, -60, 0)] {
+    // Break the blocks at (0,-61,0)/(1,-61,0) directly.
+    for (x, y, z) in [(0, -61, 0), (1, -61, 0)] {
         let pos = azalea::BlockPos::new(x, y, z);
         look_at_click(&client, pos).await;
         client.mine(pos).await;
@@ -523,7 +523,7 @@ async fn observe_state_inner(
 /// `apply_actions` script every `dirty_period`") never actually provided: that left the
 /// churned chunk dirty only during each brief reconnect, producing large save-to-save gaps —
 /// flagged as violations — the rest of the time. `churn`'s own fixed toggle position, below.
-const CHURN_BELOW: (i32, i32, i32) = (2, -60, 0);
+const CHURN_BELOW: (i32, i32, i32) = (2, -61, 0);
 /// The position `churn` actually writes to — the block immediately above `CHURN_BELOW`,
 /// reused verbatim from `apply_actions_inner`'s own 2nd scripted placement (`Face::Up`'s own
 /// `+1` to `y`, `resolve_place_position`), a position this module's own script has already
@@ -531,7 +531,7 @@ const CHURN_BELOW: (i32, i32, i32) = (2, -60, 0);
 /// of `xtask::m2_report::EXPECTED_BLOCKS`' own positions — `churn` always runs against its
 /// own, separate, freshly-created world directory (`finish_after_cadence`'s own
 /// `cadence_world`), never the restart-round-trip leg's `restart_world`.
-const CHURN_WRITE: (i32, i32, i32) = (2, -59, 0);
+const CHURN_WRITE: (i32, i32, i32) = (2, -60, 0);
 
 /// `churn`'s own summary, printed by `restart_persistence_runner`'s `churn` mode (module doc
 /// comment there has the exact line-based output contract).

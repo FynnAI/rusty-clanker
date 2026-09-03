@@ -89,7 +89,7 @@ pub const GRID_CELL_BLOCKS: i32 = 256;
 
 pub const ARENA_MIN: (i32, i32) = (32, 32);
 pub const ARENA_MAX: (i32, i32) = (224, 224);
-pub const BASE_Y: i32 = -59;
+pub const BASE_Y: i32 = -60;
 pub const COLS: u32 = 5;
 pub const ROWS: u32 = 4;
 pub const PATROL_HALF_EXTENT: i32 = 3;
