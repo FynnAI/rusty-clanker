@@ -25,6 +25,25 @@
 //! overriding both sides' own subprocess deadline (default, when absent: unchanged —
 //! 3300s oracle / 3000s ours), which CI now passes as `5400` (the job may run up to
 //! ~3.5h; GitHub's own job limit is 6h).
+//!
+//! TEST-D58 (`docs/planning/09-testing-quality.md`): the first real scheduled run
+//! still spent 2h11m running both captures sequentially into their own deadlines
+//! on `windows-2025` and produced no diff and no per-step evidence at all, while the
+//! Linux leg hung on an orphaned pipe — the two captures are embarrassingly parallel
+//! and the diff itself is milliseconds of pure computation, so CI now runs them as
+//! three separate jobs per OS (`.github/workflows/ci.yml`):
+//! `protocol-capture-oracle`/`protocol-capture-ours` each drive one side of this same
+//! `run` (`--side oracle`/`--side ours`) and upload their own `.postcard` capture
+//! plus the timings/report JSON as artifacts; a third, cheap `protocol-diff` job
+//! downloads both artifacts and calls this verb again with `--diff-only
+//! --oracle-capture <path> --ours-capture <path>` — no subprocess, no Java, no EULA
+//! gate, just `read_capture` on both files followed by exactly the same
+//! `diff_into_result` fold the in-process `--side both` path already uses (single
+//! source of truth for "what counts as a diff", never duplicated). A missing or
+//! unreadable capture file becomes one `Fail` case naming the path
+//! (`capture-oracle`/`capture-ours`) rather than a panic — the two capture jobs run
+//! independently and either one can fail on its own budget before the diff job ever
+//! runs, and this job is `if: always()` specifically so it still reports that.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -45,7 +64,13 @@ const ORACLE_PORT: u16 = 25568;
 pub struct ProtocolDiffArgs {
     pub version: String,
     pub server_jar: Option<PathBuf>,
-    pub server_bin: PathBuf,
+    /// Required whenever `side` wants `ours` (`Side::Ours`/`Side::Both`) and
+    /// `diff_only` is `false` — `run` itself rejects a genuinely missing value at
+    /// that point with its own `resolve-server-bin` `Fail` case, no panic. `None` for
+    /// every other invocation shape (`--side oracle`, `--diff-only`), which is
+    /// exactly why this is optional at the clap level (TEST-D58 Deliverable 1) rather
+    /// than always-required.
+    pub server_bin: Option<PathBuf>,
     pub only: Option<String>,
     pub side: Side,
     pub accept_eula: bool,
@@ -54,6 +79,17 @@ pub struct ProtocolDiffArgs {
     /// subprocess deadline. `None` keeps today's per-side defaults (module doc
     /// comment).
     pub capture_deadline_secs: Option<u64>,
+    /// `--diff-only` (TEST-D58 Deliverable 1): skip capture entirely and diff two
+    /// already-captured files straight off disk via `run_diff_only`. Every field
+    /// above except `capture_deadline_secs`/`debug_hooks` is ignored when this is
+    /// `true` — clap's own `conflicts_with_all`/`required_if_eq` on the CLI struct
+    /// (`xtask::lib::Command::ProtocolDiff`) already guarantees `oracle_capture`/
+    /// `ours_capture` are both `Some` whenever this is `true`, and that none of
+    /// `side`/`server_bin`/`server_jar`/`accept_eula`/`only` were ever passed
+    /// alongside it.
+    pub diff_only: bool,
+    pub oracle_capture: Option<PathBuf>,
+    pub ours_capture: Option<PathBuf>,
 }
 
 fn repo_root() -> PathBuf {
@@ -472,16 +508,23 @@ fn write_timings(repo_root: &Path, timings: &Timings) {
 }
 
 /// I/O wrapper (`xtask protocol-diff [--version 26.2] [--server-jar <path>]
-/// --server-bin <path> [--only <step>] [--side oracle|ours|both] [--accept-eula]
-/// [--debug-hooks] [--capture-deadline-secs <n>]`). Structurally identical to
-/// `placement_diff::run`: EULA gate, zombie-oracle check, jar resolution +
-/// sha1-keyed cache, subprocess launch with concurrent pipe drain, `protocol_capture::
-/// diff_captures`, `TierResult` written to `target/verify/protocol-diff.json`, plus
-/// (module doc comment) per-side timings written to
+/// [--server-bin <path>] [--only <step>] [--side oracle|ours|both] [--accept-eula]
+/// [--debug-hooks] [--capture-deadline-secs <n>]`, or the disjoint `xtask
+/// protocol-diff --diff-only --oracle-capture <path> --ours-capture <path>` shape —
+/// dispatched to `run_diff_only` before any of the capture-only setup below ever
+/// runs). Structurally identical to `placement_diff::run`: EULA gate, zombie-oracle
+/// check, jar resolution + sha1-keyed cache, subprocess launch with concurrent pipe
+/// drain, `diff_into_result` (this file's own `protocol_capture::diff_captures`
+/// wrapper), `TierResult` written to `target/verify/protocol-diff.json`, plus (module
+/// doc comment) per-side timings written to
 /// `target/verify/protocol-diff-timings.json`. `--capture-deadline-secs` overrides
 /// both sides' own subprocess deadline; absent, each side keeps its own existing
 /// default (3300s oracle / 3000s ours).
 pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
+    if args.diff_only {
+        return run_diff_only(args);
+    }
+
     let repo_root = repo_root();
     let mut result = TierResult::new("protocol-diff");
     let mut timings = Timings::default();
@@ -612,7 +655,17 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     }
 
     if args.side.wants_ours() {
-        let server_bin = absolutize(&repo_root, &args.server_bin);
+        let server_bin = match &args.server_bin {
+            Some(server_bin) => absolutize(&repo_root, server_bin),
+            None => {
+                let message = "--server-bin is required when --side includes \"ours\" \
+                    (\"ours\" or \"both\")"
+                    .to_string();
+                eprintln!("protocol-diff: {message}");
+                result.push("resolve-server-bin", Status::Fail, Some(message));
+                return finish(&repo_root, result, &timings);
+            }
+        };
         let world = TempWorldDir::new("ours");
         let out_path = repo_root.join("target/verify/protocol-diff-ours.postcard");
         let mut runner_args = vec![
@@ -653,12 +706,30 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     }
 
     if let (Some(oracle), Some(ours)) = (&oracle_capture, &ours_capture) {
-        let report_by_step = diff_captures(oracle, ours);
-        push_diff_cases(&mut result, &report_by_step);
+        diff_into_result(&mut result, oracle, ours);
     }
 
     kill_leftover_rusty_clanker_server();
     finish(&repo_root, result, &timings)
+}
+
+/// TEST-D58 Deliverable 1: runs exactly the diff the `both` path above runs (§3.10's
+/// own "the diff is milliseconds" claim depends on this being nothing but that same
+/// pure fold) and pushes it into `result` — the "diff two already-read captures into
+/// a `TierResult`" step, factored out as its own pure function precisely so it is
+/// testable directly against small, hand-built `ProtocolCaptureFile`s with no files
+/// on disk at all (`xtask/tests/`'s own `diff_into_result` tests). Shared by `run`'s
+/// in-process `--side both` path and `run_diff_only`'s own artifact-diff path below —
+/// one source of truth for "what counts as a diff", so the two paths can never
+/// silently drift into producing different case names or statuses for the same pair
+/// of captures.
+pub fn diff_into_result(
+    result: &mut TierResult,
+    oracle: &ProtocolCaptureFile,
+    ours: &ProtocolCaptureFile,
+) {
+    let report_by_step = diff_captures(oracle, ours);
+    push_diff_cases(result, &report_by_step);
 }
 
 fn finish(repo_root: &Path, result: TierResult, timings: &Timings) -> std::process::ExitCode {
@@ -670,6 +741,75 @@ fn finish(repo_root: &Path, result: TierResult, timings: &Timings) -> std::proce
         return std::process::ExitCode::FAILURE;
     }
     crate::tier_result::exit_code_for(result.status)
+}
+
+/// `--diff-only` (TEST-D58 Deliverable 1): no subprocesses, no Java, no server, no
+/// EULA gate — reads both already-captured `.postcard` files straight off disk
+/// (`diff_only_side`, once per side) and folds them through `diff_into_result`, the
+/// exact same diff the capture-driving `run` path above uses. Never calls
+/// `write_timings` — the timings file is a capture-only artifact, already written by
+/// whichever `--side oracle`/`--side ours` run produced the two files this reads, and
+/// this path never re-derives it from anything (there is no subprocess stderr to
+/// parse here at all).
+fn run_diff_only(args: &ProtocolDiffArgs) -> std::process::ExitCode {
+    let mut result = TierResult::new("protocol-diff");
+
+    let oracle = diff_only_side(
+        &mut result,
+        "capture-oracle",
+        args.oracle_capture.as_deref(),
+    );
+    let ours = diff_only_side(&mut result, "capture-ours", args.ours_capture.as_deref());
+    if let (Some(oracle), Some(ours)) = (&oracle, &ours) {
+        diff_into_result(&mut result, oracle, ours);
+    }
+
+    let result = result.finalize();
+    print_case_table(&result);
+    if let Err(err) = crate::tier_result::write(&result) {
+        eprintln!("protocol-diff: failed to write result JSON: {err}");
+        return std::process::ExitCode::FAILURE;
+    }
+    crate::tier_result::exit_code_for(result.status)
+}
+
+/// Reads one `--diff-only` side's own capture file and pushes exactly one
+/// `case_name` (`"capture-oracle"`/`"capture-ours"`) case into `result`: `Pass` with
+/// detail `"from artifact <path>"` on success, `Fail` naming the path on any read
+/// error — `rc_gametest::protocol_capture::CaptureReadError`'s own `Display` already
+/// covers both "file not found" and "not a valid capture" without this function ever
+/// needing to distinguish them. `path: None` (clap's own `required_if_eq` on
+/// `--diff-only` should make this unreachable from the CLI, but this function never
+/// trusts that from the inside — no `.expect()`/`.unwrap()` anywhere in this path)
+/// produces the same kind of `Fail` case rather than panicking.
+fn diff_only_side(
+    result: &mut TierResult,
+    case_name: &'static str,
+    path: Option<&Path>,
+) -> Option<ProtocolCaptureFile> {
+    let Some(path) = path else {
+        let side = case_name.trim_start_matches("capture-");
+        let message = format!("--diff-only requires --{side}-capture <path>");
+        eprintln!("protocol-diff: {message}");
+        result.push(case_name, Status::Fail, Some(message));
+        return None;
+    };
+    match read_capture(path) {
+        Ok(capture) => {
+            result.push(
+                case_name,
+                Status::Pass,
+                Some(format!("from artifact {}", path.display())),
+            );
+            Some(capture)
+        }
+        Err(err) => {
+            let message = format!("failed to read {}: {err}", path.display());
+            eprintln!("protocol-diff: {message}");
+            result.push(case_name, Status::Fail, Some(message));
+            None
+        }
+    }
 }
 
 /// One `TierResult` case per step id (§3.9: "one `TierResult` case per step id" —

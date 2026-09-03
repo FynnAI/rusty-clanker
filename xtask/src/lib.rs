@@ -222,25 +222,34 @@ pub enum Command {
     /// oracle and our own real `rusty-clanker-server`, diffs the normalized
     /// clientbound streams per packet type at the byte level, and writes
     /// `target/verify/protocol-diff.json`. Never runs in Tier 1 (own scheduled CI
-    /// tier, `.github/workflows/ci.yml`).
+    /// tier, `.github/workflows/ci.yml`). TEST-D58: `--diff-only` is a second,
+    /// disjoint invocation shape that skips capture entirely and only diffs two
+    /// already-captured files (see its own doc comment below) — every flag above
+    /// that exists only to drive a capture is mutually exclusive with it.
     ProtocolDiff {
         #[arg(long, default_value = "26.2")]
         version: String,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "diff_only")]
         server_jar: Option<std::path::PathBuf>,
-        #[arg(long)]
-        server_bin: std::path::PathBuf,
+        /// Required whenever `--side` includes `"ours"` (`ours`/`both`, the
+        /// default) — never required with `--side oracle` or `--diff-only` (TEST-D58
+        /// Deliverable 1: made optional at the clap level for exactly that reason;
+        /// `xtask::corpus::protocol_diff::run` rejects a genuinely missing value with
+        /// its own `resolve-server-bin` `Fail` case when the requested side actually
+        /// needs it).
+        #[arg(long, conflicts_with = "diff_only")]
+        server_bin: Option<std::path::PathBuf>,
         /// Restrict to one step id (`session/...` or a redstone corpus id), for
         /// local iteration.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "diff_only")]
         only: Option<String>,
         /// `oracle` (capture/cache only, no diff), `ours` (capture only, no diff), or
         /// `both` (capture both sides and diff) — default `both`.
-        #[arg(long, default_value = "both")]
+        #[arg(long, default_value = "both", conflicts_with = "diff_only")]
         side: String,
         /// TEST-D41 legal consent, same flag shape as every other verb that launches
         /// the real vanilla oracle jar.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "diff_only")]
         accept_eula: bool,
         /// M3.5-B03 Constraint (f): passed through to the `ours` side's own
         /// `rusty-clanker-server --debug-hooks` flag only — the oracle side's
@@ -254,6 +263,29 @@ pub enum Command {
         /// (`docs/findings-for-planning.md`).
         #[arg(long)]
         capture_deadline_secs: Option<u64>,
+        /// TEST-D58 Deliverable 1: skip capture entirely and diff two already-
+        /// captured `.postcard` files directly (`--oracle-capture`/`--ours-capture`,
+        /// both required with this) — no subprocesses, no Java, no server, no EULA
+        /// gate. Mutually exclusive with every flag above that exists only to drive a
+        /// capture: `--side`, `--server-bin`, `--server-jar`, `--accept-eula`,
+        /// `--only`. This is `.github/workflows/ci.yml`'s own cheap `protocol-diff`
+        /// job's entire invocation, downstream of the two parallel
+        /// `protocol-capture-oracle`/`protocol-capture-ours` jobs.
+        #[arg(
+            long,
+            conflicts_with_all = ["side", "server_bin", "server_jar", "accept_eula", "only"]
+        )]
+        diff_only: bool,
+        /// Required with `--diff-only`: the oracle-side `.postcard` capture file,
+        /// e.g. as `--side oracle` writes it to
+        /// `target/verify/protocol-diff-oracle.postcard`.
+        #[arg(long, required_if_eq("diff_only", "true"))]
+        oracle_capture: Option<std::path::PathBuf>,
+        /// Required with `--diff-only`: the "ours"-side `.postcard` capture file,
+        /// e.g. as `--side ours` writes it to
+        /// `target/verify/protocol-diff-ours.postcard`.
+        #[arg(long, required_if_eq("diff_only", "true"))]
+        ours_capture: Option<std::path::PathBuf>,
     },
     /// TEST-D57: exact-count CLAIMS.md audit for one milestone's blueprints.
     VerifyClaims { milestone: String },

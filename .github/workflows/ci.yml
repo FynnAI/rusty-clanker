@@ -452,73 +452,181 @@ jobs:
             target/verify/parity-check-redstone-diffs/**
           if-no-files-found: warn
 
-  protocol-diff:
-    name: protocol-diff (${{ matrix.os }})
+  # TEST-D58 replaces the old single sequential `protocol-diff` job (which ran both
+  # captures one after another inside one job, then diffed in-process) with the three
+  # jobs below: `protocol-capture-oracle` and `protocol-capture-ours` run in parallel
+  # (each with its own budget and its own uploaded per-step timing log), and the cheap
+  # `protocol-diff` job downloads both capture artifacts and performs only the
+  # byte-level diff (`--diff-only`, milliseconds, no subprocess/Java/EULA gate at
+  # all). The first real scheduled run of the old shape spent 2h11m running both
+  # captures sequentially into their own deadlines on `windows-2025` and produced no
+  # diff and no per-step evidence at all, while the Linux leg hung on an orphaned pipe
+  # (`docs/findings-for-planning.md`) — the two captures are embarrassingly parallel
+  # and the diff itself is pure computation, so the sequential shape was wasting the
+  # runner and blinding the decision this tier exists to inform.
+  #
+  # `actions/upload-artifact@v4`'s own documented path-flattening behavior: when
+  # `path:` lists multiple files, the artifact preserves each file's location
+  # relative to the longest common ancestor directory of every listed path, not the
+  # full path from the repo root. Every path each capture job below uploads shares
+  # the common ancestor `target/verify` (`protocol-diff-oracle.postcard`/
+  # `protocol-diff-ours.postcard`, `protocol-diff-timings.json`, `protocol-diff.json`
+  # all live directly under it), so inside each artifact these three files sit at the
+  # artifact's own top level with no `target/verify/` prefix — which is exactly why
+  # the `protocol-diff` job's own `actions/download-artifact@v4` `path:` targets below
+  # (`captures/oracle`, `captures/ours`) are handed straight to `--oracle-capture`/
+  # `--ours-capture` as `captures/oracle/protocol-diff-oracle.postcard`/
+  # `captures/ours/protocol-diff-ours.postcard` with no extra nesting to account for.
+  protocol-capture-oracle:
+    name: protocol-capture-oracle (${{ matrix.os }})
     # M3.5-B03 (TEST-D54): "Runs as its own scheduled CI tier next to m*-acceptance;
-    # never part of Tier 1" — structurally identical to `m3-acceptance` above, never
-    # required to be meaningfully green until the M3.5-B03 blueprint's own final
-    # commit lands (this blueprint's own Tier-1 gate never depends on this job).
+    # never part of Tier 1" — never required to be meaningfully green until the
+    # M3.5-B03 blueprint's own final commit lands (this blueprint's own Tier-1 gate
+    # never depends on this job).
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025]
+    # TEST-D38/D41 consent, same one-time-per-CI-environment grant `m3-acceptance`
+    # already makes for its own live oracle run. `RUSTC_BOOTSTRAP=1`: building
+    # `xtask` itself pulls in `rc-nbt`'s unconditional `#![feature(portable_simd)]`
+    # (`gates` job's own identical top-of-file comment has the full citation).
+    env:
+      RC_ORACLE_EULA_ACCEPTED: "1"
+      RUSTC_BOOTSTRAP: "1"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install pinned toolchain (rust-toolchain.toml)
         run: rustup show
 
-      # TEST-D38/D41: a real Java 25+ runtime to run the pinned oracle server.jar.
+      # TEST-D38/D41: a real Java 25+ runtime to run the pinned oracle server.jar —
+      # this job alone carries it; `protocol-capture-ours` below needs no Java at all.
       - name: Install Java 25+
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "25"
 
+      # Distinct `key`/`shared-key` from `protocol-capture-ours`' own cache below —
+      # this job never builds `rusty-clanker-server` in release mode, so sharing one
+      # cache between the two would only ever thrash it.
       - uses: Swatinem/rust-cache@v2
-
-      - name: Cache cargo-nextest binary
-        id: nextest-cache
-        uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cargo-nextest*
-          key: nextest-${{ matrix.os }}-0.9.143
+          key: protocol-capture-oracle
+          shared-key: protocol-capture-oracle
 
-      - name: Install cargo-nextest (WS-D10 pin)
-        if: steps.nextest-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-nextest --locked --version 0.9.143
+      # No `rc-paritybot lint`/`test` steps here (TEST-D58) — those stay exactly
+      # where they already are, in `m3-acceptance` above; repeating them in both
+      # capture jobs would only duplicate that coverage on every scheduled run.
+      - name: protocol-diff (oracle side only)
+        run: cargo run -p xtask -- protocol-diff --side oracle --accept-eula --capture-deadline-secs 5400
 
-      # `rc-paritybot`'s own transitive `azalea` dependency requires a nightly Rust
-      # toolchain — identical precedent to `m3-acceptance`'s own steps above.
-      - name: rc-paritybot lint (nightly override)
-        working-directory: crates/testing/paritybot
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Upload oracle capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-capture-oracle-${{ matrix.os }}
+          path: |
+            target/verify/protocol-diff-oracle.postcard
+            target/verify/protocol-diff-timings.json
+            target/verify/protocol-diff.json
+          if-no-files-found: warn
+
+  protocol-capture-ours:
+    name: protocol-capture-ours (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: both the release `rusty-clanker-server` build and `xtask`
+    # itself need it (`gates` job's own identical top-of-file comment has the full
+    # citation) — no EULA/oracle consent needed on this side at all.
+    env:
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      # Distinct `key`/`shared-key` from `protocol-capture-oracle`'s own cache above.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-capture-ours
+          shared-key: protocol-capture-ours
 
       - name: Build rusty-clanker-server (monolithic)
-        env:
-          RUSTC_BOOTSTRAP: "1"
         run: cargo build --release -p rusty-clanker-server --no-default-features --features monolithic
 
-      - name: rc-paritybot test (nightly override)
-        working-directory: crates/testing/paritybot
-        run: cargo nextest run
+      # No `rc-paritybot lint`/`test` steps here either (TEST-D58) — see
+      # `protocol-capture-oracle`'s own identical comment above.
+      - name: protocol-diff (ours side only)
+        run: cargo run -p xtask -- protocol-diff --side ours --server-bin target/release/rusty-clanker-server --capture-deadline-secs 5400
 
-      - name: protocol-diff
-        shell: bash
-        env:
-          RUSTC_BOOTSTRAP: "1"
-          RC_ORACLE_EULA_ACCEPTED: "1"
-        run: |
-          cargo run -p xtask -- protocol-diff --server-bin target/release/rusty-clanker-server --accept-eula --capture-deadline-secs 5400
+      - name: Upload ours capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-capture-ours-${{ matrix.os }}
+          path: |
+            target/verify/protocol-diff-ours.postcard
+            target/verify/protocol-diff-timings.json
+            target/verify/protocol-diff.json
+          if-no-files-found: warn
+
+  protocol-diff:
+    name: protocol-diff (${{ matrix.os }})
+    needs: [protocol-capture-oracle, protocol-capture-ours]
+    # `always()`: this job's own conclusion is the one PLAN-D9(a) reads, so it must
+    # still run and report even when one capture job failed on its own budget —
+    # `needs:`'s own default `if` would otherwise skip it whenever either upstream
+    # job fails.
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: building `xtask` itself needs it (see the two capture
+    # jobs' own identical comment above) — this job never builds
+    # `rusty-clanker-server` or touches Java at all.
+    env:
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: protocol-diff
+          shared-key: protocol-diff
+
+      - name: Download oracle capture artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: protocol-capture-oracle-${{ matrix.os }}
+          path: captures/oracle
+
+      - name: Download ours capture artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: protocol-capture-ours-${{ matrix.os }}
+          path: captures/ours
+
+      - name: protocol-diff (--diff-only)
+        run: cargo run -p xtask -- protocol-diff --diff-only --oracle-capture captures/oracle/protocol-diff-oracle.postcard --ours-capture captures/ours/protocol-diff-ours.postcard
 
       - name: Upload protocol-diff report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: protocol-diff-${{ matrix.os }}
-          path: |
-            target/verify/protocol-diff.json
-            target/verify/protocol-diff-timings.json
+          path: target/verify/protocol-diff.json
           if-no-files-found: warn
