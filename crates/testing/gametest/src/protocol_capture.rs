@@ -576,6 +576,14 @@ pub struct ProtocolDiffReport {
     pub mismatches: Vec<PacketTypeDiff>,
     pub missing_in_oracle: Vec<i32>, // packet_id present only in ours
     pub missing_in_ours: Vec<i32>,   // packet_id present only in oracle
+    /// The first `Some` `packet_name` observed for each `packet_id` this step's own
+    /// two packet lists carried, on either side — covers every id in `mismatches`
+    /// *and* every id in `missing_in_oracle`/`missing_in_ours` (unlike
+    /// `PacketTypeDiff::packet_name`, which only names a mismatched id). TEST-D59's
+    /// `known_divergences::resolve_step` resolves every mismatch's own packet name
+    /// through this map — an id absent from it (every packet on both sides that
+    /// carried no `packet_name` at capture time) can never match any register entry.
+    pub packet_names: std::collections::BTreeMap<i32, String>,
 }
 
 /// §3.9, for one step's two packet lists (chunk-batch reordering + normalization
@@ -650,6 +658,7 @@ pub fn diff_step(oracle: &[CapturedPacket], ours: &[CapturedPacket]) -> Protocol
         }
     }
 
+    report.packet_names = names;
     report
 }
 

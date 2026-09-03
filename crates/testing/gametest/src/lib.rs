@@ -13,13 +13,19 @@
 //! `capture`/`trace`/`spec` items.
 
 pub mod capture;
+pub mod known_divergences;
 pub mod placement_spec;
 pub mod placement_trace;
 pub mod protocol_capture;
+pub mod protocol_packet_catalog;
 pub mod replay;
 pub mod spec;
 pub mod trace;
 
+pub use known_divergences::{
+    DivergenceClass, KnownDivergence, KnownEntryMatch, MismatchKind, StepVerdict, expired_entries,
+    load_register, resolve_step,
+};
 pub use placement_spec::{
     ApproachDirection, BlockKind, BotPitch, ClickedFace, Direction6, FaceGeometry,
     InteractionScenario, PlacementScenario,

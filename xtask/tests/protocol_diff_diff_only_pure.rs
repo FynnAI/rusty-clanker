@@ -10,11 +10,25 @@
 //! `ProtocolCaptureFile`s), against small, hand-built in-memory captures — no files
 //! on disk anywhere in this test file.
 
+use rc_gametest::known_divergences::{DivergenceClass, KnownDivergence};
 use rc_gametest::protocol_capture::{
     CapturedPacket, PROTOCOL_CAPTURE_FORMAT_VERSION, ProtocolCaptureFile, StepCapture,
 };
 use xtask::corpus::protocol_diff::diff_into_result;
 use xtask::tier_result::{Status, TierResult};
+
+/// A fresh, uniquely named temp directory `diff_into_result`'s own `repo_root`
+/// parameter can point at — its own `write_bodies_dump` needs somewhere to write
+/// `target/verify/protocol-diff-bodies.json` under, and this crate's own tests must
+/// never write into the real repository checkout.
+fn temp_repo_root(label: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "rc-protocol-diff-pure-test-{label}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
 
 /// `"block_update"` deliberately never appears in `protocol_capture::
 /// NORMALIZATION_RULES` (checked against the module's own table) — its raw bytes are
@@ -53,7 +67,8 @@ fn two_identical_captures_diff_to_an_all_pass_result() {
     let ours = capture("ours", steps);
 
     let mut result = TierResult::new("protocol-diff");
-    diff_into_result(&mut result, &oracle, &ours);
+    let repo_root = temp_repo_root("all-pass");
+    diff_into_result(&mut result, &oracle, &ours, &[], &repo_root);
     let result = result.finalize();
 
     assert_eq!(result.status, Status::Pass);
@@ -105,7 +120,8 @@ fn a_differing_packet_body_produces_exactly_that_steps_own_fail_case() {
     let ours = capture("ours", ours_steps);
 
     let mut result = TierResult::new("protocol-diff");
-    diff_into_result(&mut result, &oracle, &ours);
+    let repo_root = temp_repo_root("differing-body");
+    diff_into_result(&mut result, &oracle, &ours, &[], &repo_root);
     let result = result.finalize();
 
     assert_eq!(result.status, Status::Fail);
@@ -151,7 +167,8 @@ fn diff_into_result_only_ever_adds_diff_cases_never_replacing_existing_ones() {
         Status::Pass,
         Some("from artifact captures/ours/protocol-diff-ours.postcard".to_string()),
     );
-    diff_into_result(&mut result, &oracle, &ours);
+    let repo_root = temp_repo_root("append-only");
+    diff_into_result(&mut result, &oracle, &ours, &[], &repo_root);
     let result = result.finalize();
 
     assert_eq!(result.status, Status::Pass);
@@ -159,4 +176,139 @@ fn diff_into_result_only_ever_adds_diff_cases_never_replacing_existing_ones() {
     assert_eq!(result.cases[0].name, "capture-oracle");
     assert_eq!(result.cases[1].name, "capture-ours");
     assert_eq!(result.cases[2].name, "session/spawn");
+}
+
+#[test]
+fn a_registered_divergence_passes_with_a_known_detail_and_an_unregistered_one_still_fails() {
+    // Two step ids: `session/spawn` diverges by a packet type covered by a `Missing`
+    // register entry (must pass, with a "known" detail); `session/move` diverges by
+    // an *unregistered* packet type (must still fail) — proves resolution is applied
+    // per packet type, not blanket per step.
+    let oracle = capture(
+        "oracle:deadbeef",
+        vec![
+            StepCapture {
+                step_id: "session/spawn".to_string(),
+                packets: vec![CapturedPacket {
+                    index: 0,
+                    packet_id: 55,
+                    body: vec![1, 2, 3],
+                    packet_name: Some("commands".to_string()),
+                }],
+            },
+            StepCapture {
+                step_id: "session/move".to_string(),
+                packets: vec![packet(0, 200, vec![9, 9, 9])],
+            },
+        ],
+    );
+    let ours = capture(
+        "ours",
+        vec![
+            StepCapture {
+                step_id: "session/spawn".to_string(),
+                packets: vec![],
+            },
+            StepCapture {
+                step_id: "session/move".to_string(),
+                packets: vec![packet(0, 200, vec![9, 9, 8])],
+            },
+        ],
+    );
+
+    let register = vec![KnownDivergence {
+        steps: "session/spawn".to_string(),
+        packet: "minecraft:commands".to_string(),
+        class: DivergenceClass::Missing,
+        closes_with: Some("NET hardening: join sequence".to_string()),
+        expires: Some("M5".to_string()),
+    }];
+
+    let mut result = TierResult::new("protocol-diff");
+    let repo_root = temp_repo_root("registered-vs-unregistered");
+    diff_into_result(&mut result, &oracle, &ours, &register, &repo_root);
+    let result = result.finalize();
+
+    let spawn_case = result
+        .cases
+        .iter()
+        .find(|c| c.name == "session/spawn")
+        .expect("session/spawn case present");
+    assert_eq!(spawn_case.status, Status::Pass);
+    let detail = spawn_case.detail.as_deref().expect("known detail present");
+    assert!(detail.contains("known"), "unexpected detail: {detail}");
+    assert!(
+        detail.contains("NET hardening: join sequence"),
+        "unexpected detail: {detail}"
+    );
+    assert!(detail.contains("expires M5"), "unexpected detail: {detail}");
+
+    let move_case = result
+        .cases
+        .iter()
+        .find(|c| c.name == "session/move")
+        .expect("session/move case present");
+    assert_eq!(move_case.status, Status::Fail);
+
+    assert_eq!(result.status, Status::Fail);
+}
+
+#[test]
+fn a_body_mismatch_detail_never_carries_the_full_body_bytes() {
+    // A 200-byte body differing on both sides — the compact case detail
+    // (Deliverable 3) must never contain the full 200-byte hex dump, only a
+    // 32-byte-max preview plus the real length.
+    let big_oracle_body: Vec<u8> = (0..200u16).map(|n| (n % 256) as u8).collect();
+    let big_ours_body: Vec<u8> = (0..200u16).map(|n| ((n + 1) % 256) as u8).collect();
+
+    let oracle = capture(
+        "oracle:deadbeef",
+        vec![StepCapture {
+            step_id: "session/spawn".to_string(),
+            packets: vec![packet(0, 9, big_oracle_body.clone())],
+        }],
+    );
+    let ours = capture(
+        "ours",
+        vec![StepCapture {
+            step_id: "session/spawn".to_string(),
+            packets: vec![packet(0, 9, big_ours_body.clone())],
+        }],
+    );
+
+    let mut result = TierResult::new("protocol-diff");
+    let repo_root = temp_repo_root("bounded-detail");
+    diff_into_result(&mut result, &oracle, &ours, &[], &repo_root);
+    let result = result.finalize();
+
+    let spawn_case = result
+        .cases
+        .iter()
+        .find(|c| c.name == "session/spawn")
+        .expect("session/spawn case present");
+    assert_eq!(spawn_case.status, Status::Fail);
+    let detail = spawn_case.detail.as_deref().expect("detail present");
+
+    // The detail must stay small (a handful of lines' worth of text), never
+    // proportional to the 200-byte body — this is the exact defect the first real
+    // full diff hit (a 135 MB report).
+    assert!(
+        detail.len() < 1024,
+        "case detail is not compact: {} bytes: {detail}",
+        detail.len()
+    );
+    // It must still name the body's own real, full length...
+    assert!(detail.contains("len=200"), "detail: {detail}");
+    // ...and it must never contain a hex run long enough to encode the full
+    // 200-byte body (a 32-byte preview is at most 64 hex characters).
+    let longest_hex_run = detail
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        longest_hex_run <= 64,
+        "detail contains a hex run of {longest_hex_run} chars — looks like a full body \
+         dump, not a bounded preview: {detail}"
+    );
 }
