@@ -37,11 +37,28 @@
 //! `<out_capture_path>` via `rc_gametest::protocol_capture::write_capture`
 //! (postcard), which `xtask::corpus::protocol_diff` reads back directly. Exit code 0
 //! iff `RESULT=OK`.
+//!
+//! M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "no per-step
+//! progress output" finding): this binary also prints one stable, parseable progress
+//! line per stderr, so a long real run's own stderr — already captured by
+//! `crate::process::spawn_drained` on the `xtask` side and surfaced verbatim on a
+//! timeout — shows exactly how far it got:
+//! ```text
+//! protocol-diff-runner: begin <side> steps=<n> contraptions=<m>
+//! protocol-diff-runner: done <step-or-contraption-id> in <elapsed_ms> ms
+//! protocol-diff-runner: finished <side> total_ms=<ms>
+//! ```
+//! `begin`/`finished` are printed by this binary itself (`run_oracle_side`/
+//! `run_ours_side`); one `done` line per scripted-session step comes from
+//! `protocol_session::push_step`, and one per redstone-corpus contraption from
+//! `redstone_wire_capture::capture_contraption_over_wire` — `xtask::corpus::
+//! protocol_diff::parse_progress_lines` is this format's own sole parser.
 
 use std::cell::RefCell;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rc_gametest::protocol_capture::write_capture;
 use rc_gametest::spec::{ContraptionSpec, load_spec};
@@ -122,6 +139,18 @@ fn parse_tail(args: &[String]) -> Tail {
     Tail { debug_hooks, only }
 }
 
+/// How many of `specs` `redstone_wire_capture::run_redstone_wire_capture` will
+/// actually attempt, given `only` — `None` runs the full corpus; `Some(id)` runs at
+/// most the one matching contraption (that function's own `continue`-on-mismatch
+/// loop) — used only to report an accurate `contraptions=<m>` in the `begin`
+/// progress line (module doc comment).
+fn planned_contraption_count(specs: &[(usize, ContraptionSpec)], only: Option<&str>) -> usize {
+    match only {
+        None => specs.len(),
+        Some(id) => specs.iter().filter(|(_, spec)| spec.id == id).count(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -181,6 +210,14 @@ async fn run_oracle_side(
     let source_jar_sha1 = args[3].clone();
     let tail = parse_tail(&args[4..]);
     let _ = tail.debug_hooks; // accepted, silently ignored on the oracle side (module doc comment).
+
+    eprintln!(
+        "protocol-diff-runner: begin oracle steps={} contraptions={}",
+        protocol_session::SESSION_STEPS.len(),
+        planned_contraption_count(specs, tail.only.as_deref())
+    );
+    let _ = std::io::stderr().flush();
+    let side_started = Instant::now();
 
     // Governance fix (mirrors `placement_diff_runner`'s own identical concern): a
     // real end-to-end run shares this machine with other real, CPU-heavy work.
@@ -277,6 +314,12 @@ async fn run_oracle_side(
     // capture this run needed has already happened.
     drop(handle);
 
+    eprintln!(
+        "protocol-diff-runner: finished oracle total_ms={}",
+        side_started.elapsed().as_millis()
+    );
+    let _ = std::io::stderr().flush();
+
     write_capture(&out_capture_path, &capture)
         .map_err(|err| format!("failed to write {}: {err}", out_capture_path.display()))
 }
@@ -292,6 +335,14 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
     let world_dir = PathBuf::from(&args[1]);
     let out_capture_path = PathBuf::from(&args[2]);
     let tail = parse_tail(&args[3..]);
+
+    eprintln!(
+        "protocol-diff-runner: begin ours steps={} contraptions={}",
+        protocol_session::SESSION_STEPS.len(),
+        planned_contraption_count(specs, tail.only.as_deref())
+    );
+    let _ = std::io::stderr().flush();
+    let side_started = Instant::now();
 
     let mut config = rc_test_harness::process::ManagedServerConfig::new(server_bin);
     config.world_dir = Some(world_dir);
@@ -370,6 +421,12 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
     // `managed` is dropped only after the capture completes — same
     // guaranteed-teardown discipline as the oracle side above.
     drop(managed);
+
+    eprintln!(
+        "protocol-diff-runner: finished ours total_ms={}",
+        side_started.elapsed().as_millis()
+    );
+    let _ = std::io::stderr().flush();
 
     write_capture(&out_capture_path, &capture)
         .map_err(|err| format!("failed to write {}: {err}", out_capture_path.display()))

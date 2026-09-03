@@ -668,9 +668,15 @@ fn run_restart_persistence_subprocess(
                 "failed to poll restart_persistence_runner: {err}"
             ))
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => SubprocessOutcome::ProcessFailure(
-            format!("restart_persistence_runner did not exit within {deadline:?} of its own start"),
-        ),
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message = format!(
+                "restart_persistence_runner did not exit within {deadline:?} of its own start"
+            );
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            SubprocessOutcome::ProcessFailure(message)
+        }
     }
 }
 
@@ -728,10 +734,14 @@ fn run_churn_subprocess(
                 "failed to poll restart_persistence_runner (churn): {err}"
             ))
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => {
-            SubprocessOutcome::ProcessFailure(format!(
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message = format!(
                 "restart_persistence_runner (churn) did not exit within {deadline:?} of its own start"
-            ))
+            );
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            SubprocessOutcome::ProcessFailure(message)
         }
     }
 }

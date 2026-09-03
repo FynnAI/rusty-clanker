@@ -258,9 +258,14 @@ fn run_idle_stability_subprocess(
                 "failed to poll idle_stability_runner: {err}"
             ))
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => IdleStabilityOutcome::ProcessFailure(
-            format!("idle_stability_runner did not exit within {deadline:?} of its own start"),
-        ),
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message =
+                format!("idle_stability_runner did not exit within {deadline:?} of its own start");
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            IdleStabilityOutcome::ProcessFailure(message)
+        }
     }
 }
 

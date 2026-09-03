@@ -20,7 +20,8 @@
 //! "corrected" to force agreement) — recorded as a bounded fidelity limitation in
 //! `docs/findings-for-planning.md`.
 
-use std::time::Duration;
+use std::io::Write as _;
+use std::time::{Duration, Instant};
 
 use azalea::Client;
 use rc_gametest::placement_spec::{ApproachDirection, BlockKind, BotPitch, Direction6};
@@ -326,6 +327,12 @@ where
     F: Fn((i32, i32, i32), u32, &str) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    // M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "no per-step
+    // progress output" finding): covers this whole contraption's own real cost —
+    // stance walk, placement, scripted actions, the settle wait, and cleanup — the
+    // same "one line per completed unit" granularity `protocol_session.rs::push_step`
+    // reports for the scripted session's own steps.
+    let started = Instant::now();
     let origin = world_origin_for(index);
     let stance = (origin.0, origin.1 + 1, origin.2 - 3);
     placement_capture::walk_to(client, stance)
@@ -370,6 +377,10 @@ where
         setblock(world_pos(origin, rel), 0, "minecraft:air").await;
     }
     let _ = view; // reserved for a future settle-confirmation poll; not currently needed.
+
+    let elapsed_ms = started.elapsed().as_millis();
+    eprintln!("protocol-diff-runner: done {} in {elapsed_ms} ms", spec.id);
+    let _ = std::io::stderr().flush();
 
     Ok(StepCapture {
         step_id: spec.id.clone(),

@@ -474,10 +474,14 @@ fn run_block_entity_persistence_subprocess(
                 "failed to poll block_entity_persistence_runner: {err}"
             ))
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => {
-            SubprocessOutcome::ProcessFailure(format!(
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message = format!(
                 "block_entity_persistence_runner did not exit within {deadline:?} of its own start"
-            ))
+            );
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            SubprocessOutcome::ProcessFailure(message)
         }
     }
 }

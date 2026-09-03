@@ -11,6 +11,20 @@
 //! report. Never runs in Tier 1 — a real oracle process (network or a locally-cached
 //! jar), Java, and our own freshly built release binary, exactly like
 //! `fetch-corpus`/`parity-check`/`placement-diff`.
+//!
+//! Governance fix (`docs/findings-for-planning.md`): the first real scheduled CI run
+//! (`windows-2025`) hit both sides' own fixed subprocess deadline and produced
+//! nothing usable, because `protocol_diff_runner` printed no per-step progress and a
+//! timed-out `spawn_drained` call used to discard whatever it had captured so far.
+//! Two things now fix that: `protocol_diff_runner`'s own `begin`/`done`/`finished`
+//! stderr progress lines (its own module doc comment has the exact format), parsed
+//! here by `parse_progress_lines` from each side's captured stderr (success or
+//! timeout, `crate::process::SpawnDrainedError::TimedOut` now carries whatever it
+//! captured) into `target/verify/protocol-diff-timings.json` and into a timed-out
+//! side's own `TierResult` case detail; and a `--capture-deadline-secs <n>` flag
+//! overriding both sides' own subprocess deadline (default, when absent: unchanged —
+//! 3300s oracle / 3000s ours), which CI now passes as `5400` (the job may run up to
+//! ~3.5h; GitHub's own job limit is 6h).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -36,6 +50,10 @@ pub struct ProtocolDiffArgs {
     pub side: Side,
     pub accept_eula: bool,
     pub debug_hooks: bool,
+    /// `--capture-deadline-secs <n>`: overrides both sides' own `protocol_diff_runner`
+    /// subprocess deadline. `None` keeps today's per-side defaults (module doc
+    /// comment).
+    pub capture_deadline_secs: Option<u64>,
 }
 
 fn repo_root() -> PathBuf {
@@ -143,9 +161,124 @@ fn kill_leftover_rusty_clanker_server() {
         .status();
 }
 
+/// One completed step or contraption, parsed from one of `protocol_diff_runner`'s own
+/// `protocol-diff-runner: done <id> in <ms> ms` stderr lines — shared between
+/// `ProgressSummary` (the pure parse) and `TimingsSide` (the JSON this file writes),
+/// since both need exactly the same `{id, ms}` shape.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CompletedEntry {
+    pub id: String,
+    pub ms: u64,
+}
+
+/// `parse_progress_lines`'s own return value: everything this file can recover from
+/// one side's own captured stderr about how far `protocol_diff_runner` got.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProgressSummary {
+    /// From the `begin` line's own `steps=<n>` field, when present.
+    pub steps_total: Option<u64>,
+    /// From the `begin` line's own `contraptions=<m>` field, when present.
+    pub contraptions_total: Option<u64>,
+    /// Every `done` line, in the order it was printed.
+    pub completed: Vec<CompletedEntry>,
+    /// From the `finished` line's own `total_ms=<ms>` field, when present (i.e. the
+    /// side actually completed — never set on a timed-out or hard-failed run).
+    pub total_ms: Option<u64>,
+}
+
+/// The stable, parseable prefix `protocol_diff_runner`'s own three progress-line
+/// shapes (its own module doc comment has the exact format) all share.
+const PROGRESS_LINE_PREFIX: &str = "protocol-diff-runner: ";
+
+/// Pure parse of `protocol_diff_runner`'s own `begin`/`done`/`finished` stderr lines
+/// (Deliverable 1's own exact format) out of `stderr` — every other line (build
+/// output, `protocol_session`/`redstone_wire_capture`'s own diagnostic `eprintln!`s,
+/// cargo warnings, ...) is silently skipped, and a progress line that does not match
+/// the expected field shape is skipped rather than panicking (a future format change
+/// degrades this to "less timing detail", never a crash). Deliberately never sees a
+/// live process — `xtask::corpus::protocol_diff::run` only ever calls this against
+/// stderr `crate::process::spawn_drained` already fully captured (success or
+/// timeout), exactly like every other post-hoc parse in this file.
+pub fn parse_progress_lines(stderr: &str) -> ProgressSummary {
+    let mut summary = ProgressSummary::default();
+    for line in stderr.lines() {
+        let Some(rest) = line.trim().strip_prefix(PROGRESS_LINE_PREFIX) else {
+            continue;
+        };
+        let tokens: Vec<&str> = rest.split_whitespace().collect();
+        match tokens.first().copied() {
+            Some("begin") => {
+                for tok in tokens.iter().skip(2) {
+                    if let Some(n) = tok.strip_prefix("steps=").and_then(|v| v.parse().ok()) {
+                        summary.steps_total = Some(n);
+                    } else if let Some(m) = tok
+                        .strip_prefix("contraptions=")
+                        .and_then(|v| v.parse().ok())
+                    {
+                        summary.contraptions_total = Some(m);
+                    }
+                }
+            }
+            Some("done") => {
+                if tokens.len() >= 5
+                    && tokens[2] == "in"
+                    && tokens[4] == "ms"
+                    && let Ok(ms) = tokens[3].parse::<u64>()
+                {
+                    summary.completed.push(CompletedEntry {
+                        id: tokens[1].to_string(),
+                        ms,
+                    });
+                }
+            }
+            Some("finished") => {
+                for tok in tokens.iter().skip(2) {
+                    if let Some(ms) = tok.strip_prefix("total_ms=").and_then(|v| v.parse().ok()) {
+                        summary.total_ms = Some(ms);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    summary
+}
+
+/// Builds the timeout case-detail wording every side's own subprocess timeout uses
+/// (module doc comment's own governance-fix citation): the existing fixed wording
+/// (`"<runner> did not exit within Ns of its own start"`) plus how far the runner
+/// actually got, parsed straight from its own captured stderr (`parse_progress_lines`)
+/// — the child is already dead by the time this runs, so this is the only source of
+/// truth left. `M`/`K` fall back to `0` when the `begin` line itself was never even
+/// captured (the child died before printing anything) — the "last:" clause is simply
+/// omitted in that case rather than fabricating an id.
+fn timeout_detail(runner_name: &str, deadline: Duration, stderr: &str) -> String {
+    let summary = parse_progress_lines(stderr);
+    let total = summary.steps_total.unwrap_or(0) + summary.contraptions_total.unwrap_or(0);
+    let mut message = format!(
+        "{runner_name} did not exit within {}s of its own start — completed {} of {total} steps/contraptions",
+        deadline.as_secs(),
+        summary.completed.len()
+    );
+    if let Some(last) = summary.completed.last() {
+        message.push_str(&format!(", last: {} ({} ms)", last.id, last.ms));
+    }
+    message
+}
+
 enum RunnerOutcome {
     Ok,
     Failure(String),
+}
+
+/// One `run_protocol_diff_runner_subprocess` call's own full result: the subprocess'
+/// own captured stderr (needed afterward for both the timings JSON and, on a
+/// timeout, the case-detail message), whether it timed out, and the resolved
+/// `RunnerOutcome`.
+struct RunnerRun {
+    stderr: String,
+    timed_out: bool,
+    outcome: RunnerOutcome,
 }
 
 /// Runs `protocol_diff_runner` as a subprocess with `args`, draining stdout/stderr
@@ -153,12 +286,14 @@ enum RunnerOutcome {
 /// (M3.5-B06 — that module's own doc comment has the full pipe-buffer-deadlock
 /// diagnosis this file's own hand-rolled drain threads used to duplicate) — never
 /// read only after the child is observed to have exited, which is exactly the
-/// deadlock that diagnosis documents.
+/// deadlock that diagnosis documents. A timeout no longer discards whatever the
+/// child had already printed (module doc comment's own governance-fix citation) —
+/// `RunnerRun::stderr` carries it either way.
 fn run_protocol_diff_runner_subprocess(
     repo_root: &Path,
     args: &[String],
     deadline: Duration,
-) -> RunnerOutcome {
+) -> RunnerRun {
     let paritybot_dir = repo_root.join("crates/testing/paritybot");
 
     let mut command = Command::new("cargo");
@@ -176,20 +311,39 @@ fn run_protocol_diff_runner_subprocess(
     let (stdout, stderr) = match crate::process::spawn_drained(&mut command, deadline) {
         Ok(output) => (output.stdout, output.stderr),
         Err(crate::process::SpawnDrainedError::SpawnFailed(err)) => {
-            return RunnerOutcome::Failure(format!("failed to spawn protocol_diff_runner: {err}"));
+            return RunnerRun {
+                stderr: String::new(),
+                timed_out: false,
+                outcome: RunnerOutcome::Failure(format!(
+                    "failed to spawn protocol_diff_runner: {err}"
+                )),
+            };
         }
         Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
-            return RunnerOutcome::Failure(format!("failed to poll protocol_diff_runner: {err}"));
+            return RunnerRun {
+                stderr: String::new(),
+                timed_out: false,
+                outcome: RunnerOutcome::Failure(format!(
+                    "failed to poll protocol_diff_runner: {err}"
+                )),
+            };
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => {
-            return RunnerOutcome::Failure(format!(
-                "protocol_diff_runner did not exit within {deadline:?} of its own start"
-            ));
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let detail = timeout_detail("protocol_diff_runner", deadline, &captured.stderr);
+            return RunnerRun {
+                stderr: captured.stderr,
+                timed_out: true,
+                outcome: RunnerOutcome::Failure(detail),
+            };
         }
     };
 
     if stdout.lines().any(|line| line == "RESULT=OK") {
-        return RunnerOutcome::Ok;
+        return RunnerRun {
+            stderr,
+            timed_out: false,
+            outcome: RunnerOutcome::Ok,
+        };
     }
     let message = stdout
         .lines()
@@ -209,7 +363,11 @@ fn run_protocol_diff_runner_subprocess(
                 "protocol_diff_runner produced no RESULT=OK line; stdout: {stdout:?}; stderr (last 20 lines): {stderr_tail}"
             )
         });
-    RunnerOutcome::Failure(message)
+    RunnerRun {
+        stderr,
+        timed_out: false,
+        outcome: RunnerOutcome::Failure(message),
+    }
 }
 
 fn sha1_hex(bytes: &[u8]) -> String {
@@ -257,29 +415,91 @@ fn write_oracle_cache(
     std::fs::write(oracle_cache_sha1_path(repo_root), source_jar_sha1)
 }
 
+/// One side's own row in `target/verify/protocol-diff-timings.json` — `completed`
+/// straight from `ProgressSummary::completed`, `total_ms` from its own `finished`
+/// line (`None` when the side never completed), `timed_out` from whether
+/// `crate::process::spawn_drained` itself returned `TimedOut` for this side's own
+/// subprocess call, and `deadline_secs` the deadline that call actually used.
+/// Defaults to "this side never ran" (`--side oracle`/`--side ours` leaves the other
+/// side's own row at these defaults, and so does an early exit before either side's
+/// subprocess is ever launched — consent/zombie-check/jar-resolution failures).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct TimingsSide {
+    completed: Vec<CompletedEntry>,
+    total_ms: Option<u64>,
+    timed_out: bool,
+    deadline_secs: u64,
+}
+
+/// `target/verify/protocol-diff-timings.json`'s own top-level shape (Deliverable 3).
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct Timings {
+    oracle: TimingsSide,
+    ours: TimingsSide,
+}
+
+fn timings_side(run: &RunnerRun, deadline: Duration) -> TimingsSide {
+    let summary = parse_progress_lines(&run.stderr);
+    TimingsSide {
+        completed: summary.completed,
+        total_ms: summary.total_ms,
+        timed_out: run.timed_out,
+        deadline_secs: deadline.as_secs(),
+    }
+}
+
+/// Writes `timings` as pretty JSON to `target/verify/protocol-diff-timings.json`,
+/// best-effort (a write failure here must never turn an otherwise-successful
+/// `protocol-diff` run into a failure — logged and swallowed, exactly like this
+/// file's own `write_oracle_cache` failure handling above).
+fn write_timings(repo_root: &Path, timings: &Timings) {
+    let dir = repo_root.join("target/verify");
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        eprintln!("protocol-diff: failed to create {}: {err}", dir.display());
+        return;
+    }
+    let json = match serde_json::to_string_pretty(timings) {
+        Ok(json) => json,
+        Err(err) => {
+            eprintln!("protocol-diff: failed to serialize timings: {err}");
+            return;
+        }
+    };
+    let path = dir.join("protocol-diff-timings.json");
+    if let Err(err) = std::fs::write(&path, json) {
+        eprintln!("protocol-diff: failed to write {}: {err}", path.display());
+    }
+}
+
 /// I/O wrapper (`xtask protocol-diff [--version 26.2] [--server-jar <path>]
 /// --server-bin <path> [--only <step>] [--side oracle|ours|both] [--accept-eula]
-/// [--debug-hooks]`). Structurally identical to `placement_diff::run`: EULA gate,
-/// zombie-oracle check, jar resolution + sha1-keyed cache, subprocess launch with
-/// concurrent pipe drain, `protocol_capture::diff_captures`, `TierResult` written to
-/// `target/verify/protocol-diff.json`.
+/// [--debug-hooks] [--capture-deadline-secs <n>]`). Structurally identical to
+/// `placement_diff::run`: EULA gate, zombie-oracle check, jar resolution +
+/// sha1-keyed cache, subprocess launch with concurrent pipe drain, `protocol_capture::
+/// diff_captures`, `TierResult` written to `target/verify/protocol-diff.json`, plus
+/// (module doc comment) per-side timings written to
+/// `target/verify/protocol-diff-timings.json`. `--capture-deadline-secs` overrides
+/// both sides' own subprocess deadline; absent, each side keeps its own existing
+/// default (3300s oracle / 3000s ours).
 pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     let repo_root = repo_root();
     let mut result = TierResult::new("protocol-diff");
+    let mut timings = Timings::default();
+    let capture_deadline_override = args.capture_deadline_secs.map(Duration::from_secs);
 
     if args.side.wants_oracle()
         && let Err(message) = crate::corpus::fetch_corpus::eula_gate(&repo_root, args.accept_eula)
     {
         eprintln!("protocol-diff: {message}");
         result.push("consent", Status::Fail, Some(message));
-        return finish(result);
+        return finish(&repo_root, result, &timings);
     }
     if args.side.wants_oracle() {
         result.push("consent", Status::Pass, None);
         if let Err(message) = zombie_oracle_check(ORACLE_PORT) {
             eprintln!("protocol-diff: {message}");
             result.push("zombie-oracle-check", Status::Fail, Some(message));
-            return finish(result);
+            return finish(&repo_root, result, &timings);
         }
         result.push("zombie-oracle-check", Status::Pass, None);
     }
@@ -296,7 +516,7 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
                     let message = format!("failed to read {}: {err}", server_jar.display());
                     eprintln!("protocol-diff: {message}");
                     result.push("resolve-jar", Status::Fail, Some(message));
-                    return finish(result);
+                    return finish(&repo_root, result, &timings);
                 }
             }
         } else {
@@ -305,7 +525,7 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
                 Err(err) => {
                     eprintln!("protocol-diff: {err}");
                     result.push("resolve-jar", Status::Fail, Some(err.to_string()));
-                    return finish(result);
+                    return finish(&repo_root, result, &timings);
                 }
             }
         };
@@ -359,9 +579,14 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
             // subprocess's own `cargo run` compile time out of the same deadline
             // (a real, contended-machine, first-run compile measured well past 10
             // minutes) — generous enough to absorb that too, not just the scripted
-            // session/corpus wall-clock itself.
-            let deadline = Duration::from_secs(900) + Duration::from_secs(30) * 80;
-            match run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline) {
+            // session/corpus wall-clock itself. `--capture-deadline-secs` overrides
+            // this default outright (module doc comment's own governance-fix
+            // citation).
+            let deadline = capture_deadline_override
+                .unwrap_or(Duration::from_secs(900) + Duration::from_secs(30) * 80);
+            let run = run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline);
+            timings.oracle = timings_side(&run, deadline);
+            match run.outcome {
                 RunnerOutcome::Ok => match read_capture(&out_path) {
                     Ok(capture) => {
                         result.push("capture-oracle", Status::Pass, None);
@@ -403,9 +628,13 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
             runner_args.push(only.clone());
         }
         // As the oracle side's own identical deadline above — real-run finding,
-        // `docs/findings-for-planning.md`.
-        let deadline = Duration::from_secs(600) + Duration::from_secs(30) * 80;
-        match run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline) {
+        // `docs/findings-for-planning.md`. `--capture-deadline-secs` overrides this
+        // default outright, same as the oracle side.
+        let deadline = capture_deadline_override
+            .unwrap_or(Duration::from_secs(600) + Duration::from_secs(30) * 80);
+        let run = run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline);
+        timings.ours = timings_side(&run, deadline);
+        match run.outcome {
             RunnerOutcome::Ok => match read_capture(&out_path) {
                 Ok(capture) => {
                     result.push("capture-ours", Status::Pass, None);
@@ -429,12 +658,13 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
     }
 
     kill_leftover_rusty_clanker_server();
-    finish(result)
+    finish(&repo_root, result, &timings)
 }
 
-fn finish(result: TierResult) -> std::process::ExitCode {
+fn finish(repo_root: &Path, result: TierResult, timings: &Timings) -> std::process::ExitCode {
     let result = result.finalize();
     print_case_table(&result);
+    write_timings(repo_root, timings);
     if let Err(err) = crate::tier_result::write(&result) {
         eprintln!("protocol-diff: failed to write result JSON: {err}");
         return std::process::ExitCode::FAILURE;

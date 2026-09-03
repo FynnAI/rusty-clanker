@@ -511,7 +511,7 @@ jobs:
           RUSTC_BOOTSTRAP: "1"
           RC_ORACLE_EULA_ACCEPTED: "1"
         run: |
-          cargo run -p xtask -- protocol-diff --server-bin target/release/rusty-clanker-server --accept-eula
+          cargo run -p xtask -- protocol-diff --server-bin target/release/rusty-clanker-server --accept-eula --capture-deadline-secs 5400
 
       - name: Upload protocol-diff report
         if: always()
@@ -520,4 +520,5 @@ jobs:
           name: protocol-diff-${{ matrix.os }}
           path: |
             target/verify/protocol-diff.json
+            target/verify/protocol-diff-timings.json
           if-no-files-found: warn

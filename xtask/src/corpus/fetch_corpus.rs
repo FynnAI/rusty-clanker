@@ -91,9 +91,14 @@ fn run_fetch_corpus_runner_subprocess(
         Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
             RunnerOutcome::ProcessFailure(format!("failed to poll fetch_corpus_runner: {err}"))
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => RunnerOutcome::ProcessFailure(format!(
-            "fetch_corpus_runner did not exit within {deadline:?} of its own start"
-        )),
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message =
+                format!("fetch_corpus_runner did not exit within {deadline:?} of its own start");
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            RunnerOutcome::ProcessFailure(message)
+        }
     }
 }
 

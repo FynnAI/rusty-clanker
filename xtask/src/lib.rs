@@ -247,6 +247,13 @@ pub enum Command {
         /// equivalent hooks are always real console commands regardless.
         #[arg(long)]
         debug_hooks: bool,
+        /// M3.5-B03 governance fix: overrides both sides' own `protocol_diff_runner`
+        /// subprocess deadline (default, when absent: 3300s oracle / 3000s ours,
+        /// unchanged). CI passes 5400s (job limit is 6h) — the first real scheduled
+        /// run hit both default deadlines and produced nothing usable
+        /// (`docs/findings-for-planning.md`).
+        #[arg(long)]
+        capture_deadline_secs: Option<u64>,
     },
     /// TEST-D57: exact-count CLAIMS.md audit for one milestone's blueprints.
     VerifyClaims { milestone: String },

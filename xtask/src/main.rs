@@ -236,6 +236,7 @@ fn main() -> ExitCode {
             side,
             accept_eula,
             debug_hooks,
+            capture_deadline_secs,
         } => {
             let side = match xtask::corpus::placement_diff::Side::parse(&side) {
                 Ok(side) => side,
@@ -252,6 +253,7 @@ fn main() -> ExitCode {
                 side,
                 accept_eula,
                 debug_hooks,
+                capture_deadline_secs,
             };
             xtask::corpus::protocol_diff::run(&args)
         }

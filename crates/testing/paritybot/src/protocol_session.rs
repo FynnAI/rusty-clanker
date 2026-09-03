@@ -7,7 +7,8 @@
 //! `main` supplies `host`/`port` and the two gamemode closures (§4.5), mirroring
 //! `placement_capture::run_capture`'s own side-agnostic posture exactly.
 
-use std::time::Duration;
+use std::io::Write as _;
+use std::time::{Duration, Instant};
 
 use azalea::BlockPos as AzBlockPos;
 use azalea::Client;
@@ -180,12 +181,29 @@ fn to_captured(raw: Vec<(i32, Vec<u8>)>) -> Vec<CapturedPacket> {
         .collect()
 }
 
+/// Pushes `step_id`'s own `raw` capture into `out` (subject to `only`, as before), and
+/// first reports its own completion to stderr (M3.5-B03 governance fix,
+/// `docs/findings-for-planning.md`'s own "no per-step progress output" finding):
+/// `protocol-diff-runner: done <step_id> in <elapsed_ms> ms`, `elapsed_ms` measured
+/// since `clock`'s own last reset (i.e. since the previous step's own `push_step`
+/// call, or session start for the very first one) — `clock` is reset to now right
+/// after, so the next call measures only its own step's own real work. Reported
+/// regardless of whether `only` actually keeps this step's own capture: every
+/// scripted-session step's own real actions run unconditionally (`run_protocol_
+/// session`'s own module doc comment), `only` merely filters what ends up in `out`,
+/// so "done" here tracks real forward progress through the whole script either way.
 fn push_step(
     out: &mut ProtocolCaptureFile,
     only: Option<&str>,
     step_id: &str,
     raw: Vec<(i32, Vec<u8>)>,
+    clock: &mut Instant,
 ) {
+    let elapsed_ms = clock.elapsed().as_millis();
+    eprintln!("protocol-diff-runner: done {step_id} in {elapsed_ms} ms");
+    let _ = std::io::stderr().flush();
+    *clock = Instant::now();
+
     if only.is_some_and(|only| only != step_id) {
         return;
     }
@@ -298,6 +316,11 @@ pub async fn run_protocol_session(
         source_label,
         steps: Vec::new(),
     };
+    // M3.5-B03 governance fix (`push_step`'s own doc comment has the full "no per-step
+    // progress output" citation): reset right after every `push_step` call, so each
+    // step's own reported `elapsed_ms` covers only that step's own real work, starting
+    // from the connection this function just established.
+    let mut step_clock = Instant::now();
 
     // `session/login` + `session/configuration`: the handshake this connection's own
     // establishment already produced, re-split by phase (`split_handshake_phases`).
@@ -307,12 +330,19 @@ pub async fn run_protocol_session(
     let handshake = recorder.snapshot();
     recorder.clear();
     let (login_packets, configuration_packets, spawn_seed) = split_handshake_phases(&handshake);
-    push_step(&mut out, only, "session/login", login_packets);
+    push_step(
+        &mut out,
+        only,
+        "session/login",
+        login_packets,
+        &mut step_clock,
+    );
     push_step(
         &mut out,
         only,
         "session/configuration",
         configuration_packets,
+        &mut step_clock,
     );
 
     // `session/spawn`: seeded with the handshake's own tail, extended with a short
@@ -322,7 +352,13 @@ pub async fn run_protocol_session(
     let mut spawn_packets = spawn_seed;
     spawn_packets.extend(recorder.snapshot());
     recorder.clear();
-    push_step(&mut out, only, "session/spawn", spawn_packets);
+    push_step(
+        &mut out,
+        only,
+        "session/spawn",
+        spawn_packets,
+        &mut step_clock,
+    );
 
     let floor_y = discover_floor(&client, &view).await?;
     let mut seq = placement_capture::SeqCounter(0);
@@ -333,7 +369,13 @@ pub async fn run_protocol_session(
         eprintln!("protocol_session: session/move failed: {err}");
     }
     client.wait_ticks(SETTLE_TICKS).await;
-    push_step(&mut out, only, "session/move", recorder.snapshot());
+    push_step(
+        &mut out,
+        only,
+        "session/move",
+        recorder.snapshot(),
+        &mut step_clock,
+    );
     recorder.clear();
 
     // `session/sneak`: a real `ServerboundPlayerInput` press-then-release.
@@ -347,7 +389,13 @@ pub async fn run_protocol_session(
         ..Default::default()
     });
     client.wait_ticks(SETTLE_TICKS).await;
-    push_step(&mut out, only, "session/sneak", recorder.snapshot());
+    push_step(
+        &mut out,
+        only,
+        "session/sneak",
+        recorder.snapshot(),
+        &mut step_clock,
+    );
     recorder.clear();
 
     // `session/dig_stone_survival`: the one genuinely survival-timed dig (module doc
@@ -366,6 +414,7 @@ pub async fn run_protocol_session(
         only,
         "session/dig_stone_survival",
         recorder.snapshot(),
+        &mut step_clock,
     );
     recorder.clear();
     gamemode_creative().await;
@@ -388,12 +437,24 @@ pub async fn run_protocol_session(
         match place_at_slot(&client, &mut seq, floor_y, slot, kind).await {
             Ok(placed_pos) => {
                 client.wait_ticks(SETTLE_TICKS).await;
-                push_step(&mut out, only, &place_step, recorder.snapshot());
+                push_step(
+                    &mut out,
+                    only,
+                    &place_step,
+                    recorder.snapshot(),
+                    &mut step_clock,
+                );
                 recorder.clear();
 
                 placement_capture::break_block(&client, &mut seq, placed_pos).await;
                 client.wait_ticks(SETTLE_TICKS).await;
-                push_step(&mut out, only, &break_step, recorder.snapshot());
+                push_step(
+                    &mut out,
+                    only,
+                    &break_step,
+                    recorder.snapshot(),
+                    &mut step_clock,
+                );
                 recorder.clear();
             }
             Err(err) => {
@@ -428,6 +489,7 @@ pub async fn run_protocol_session(
                 only,
                 "session/disconnect_reconnect",
                 recorder.snapshot(),
+                &mut step_clock,
             );
             recorder.clear();
 
@@ -438,7 +500,13 @@ pub async fn run_protocol_session(
                 eprintln!("protocol_session: session/observe_chunk walk failed: {err}");
             }
             reconnect_client.wait_ticks(SETTLE_TICKS).await;
-            push_step(&mut out, only, "session/observe_chunk", recorder.snapshot());
+            push_step(
+                &mut out,
+                only,
+                "session/observe_chunk",
+                recorder.snapshot(),
+                &mut step_clock,
+            );
 
             reconnect_client.disconnect();
             drop(reconnect_observer);

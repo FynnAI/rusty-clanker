@@ -240,10 +240,13 @@ fn run_placement_diff_runner_subprocess(
         Err(crate::process::SpawnDrainedError::PollFailed(err)) => {
             return RunnerOutcome::Failure(format!("failed to poll placement_diff_runner: {err}"));
         }
-        Err(crate::process::SpawnDrainedError::TimedOut) => {
-            return RunnerOutcome::Failure(format!(
-                "placement_diff_runner did not exit within {deadline:?} of its own start"
-            ));
+        Err(crate::process::SpawnDrainedError::TimedOut(captured)) => {
+            let mut message =
+                format!("placement_diff_runner did not exit within {deadline:?} of its own start");
+            if let Some(tail) = crate::process::tail_lines(&captured.stderr, 5) {
+                message.push_str(&format!(" — last captured stderr: {tail}"));
+            }
+            return RunnerOutcome::Failure(message);
         }
     };
 
