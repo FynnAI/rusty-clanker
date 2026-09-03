@@ -513,60 +513,78 @@ impl MetadataValue {
 /// `OptionalTextComponent` value — this milestone's own bounded scope (Context: "Wire
 /// shape per constructed variant"). Byte-for-byte the identical shape
 /// `rc_protocol::wire::NbtTextComponent` already establishes and this project's own M1
-/// field report verified against a real client (a compound-wrapped `{"text": "..."}`
-/// equivalent, framed as `TAG_Compound(0x0A) -> TAG_String(0x08) "text" -> <u16-len,
-/// UTF-8 bytes> -> TAG_End(0x00)`, not a bare `TAG_String`) — this module reimplements
-/// it independently rather than depending on `rc-protocol` (WS-D3 rule 2), and
+/// field report verified against a real client — this module reimplements it
+/// independently rather than depending on `rc-protocol` (WS-D3 rule 2), and
 /// `rusty-clanker-server::entity_packets` (Deliverables) reuses `NbtTextComponent`
 /// itself directly for the identical wire shape, so the two stay byte-compatible by
 /// construction rather than by two independently-hand-matched implementations.
+///
+/// **Collapse rule** (M4-B01 field-report follow-up, `docs/findings-for-planning.md`
+/// section B "Text components on the wire collapse to a bare string" —
+/// `rc_protocol::wire::NbtTextComponent`'s own doc comment states the identical rule for
+/// its own type): vanilla's component codec collapses a component with no style, no
+/// siblings, and no translate/keybind/score/selector/nbt content to a bare, unnamed
+/// `TAG_String` holding the text directly; only a richer component becomes the
+/// `TAG_Compound` `{"text": "..."}` wrapper (`TAG_Compound(0x0A) -> TAG_String(0x08)
+/// "text" -> <u16-len, UTF-8 bytes> -> TAG_End(0x00)`). Every `OptionalTextComponent`
+/// value this module carries is plain text, so `encode_network_nbt_text` always takes
+/// the collapsed, bare-`TAG_String` path; `decode_network_nbt_text` accepts either root
+/// tag a peer might send.
 const NBT_TAG_COMPOUND: u8 = 0x0A;
 const NBT_TAG_STRING: u8 = 0x08;
 const NBT_TAG_END: u8 = 0x00;
 const NBT_TEXT_KEY: &[u8] = b"text";
 
 fn encode_network_nbt_text(text: &str, out: &mut Vec<u8>) {
-    out.push(NBT_TAG_COMPOUND);
     out.push(NBT_TAG_STRING);
-    out.extend_from_slice(&(NBT_TEXT_KEY.len() as u16).to_be_bytes());
-    out.extend_from_slice(NBT_TEXT_KEY);
     let bytes = text.as_bytes();
     out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
     out.extend_from_slice(bytes);
-    out.push(NBT_TAG_END);
 }
 
 fn decode_network_nbt_text(cursor: &mut Cursor<'_>) -> Result<String, MetadataDecodeError> {
     let root_tag = cursor.read_u8()?;
-    if root_tag != NBT_TAG_COMPOUND {
-        return Err(MetadataDecodeError::UnexpectedEof);
+    match root_tag {
+        NBT_TAG_STRING => {
+            let value_len_bytes = cursor.read_exact(2)?;
+            let value_len = u16::from_be_bytes(
+                value_len_bytes
+                    .try_into()
+                    .expect("read_exact(2) always returns 2 bytes"),
+            ) as usize;
+            let value = cursor.read_exact(value_len)?;
+            Ok(String::from_utf8_lossy(value).into_owned())
+        }
+        NBT_TAG_COMPOUND => {
+            let mut text: Option<String> = None;
+            loop {
+                let tag = cursor.read_u8()?;
+                if tag == NBT_TAG_END {
+                    break;
+                }
+                let key_len_bytes = cursor.read_exact(2)?;
+                let key_len = u16::from_be_bytes(
+                    key_len_bytes
+                        .try_into()
+                        .expect("read_exact(2) always returns 2 bytes"),
+                ) as usize;
+                let key = cursor.read_exact(key_len)?;
+                if tag != NBT_TAG_STRING {
+                    return Err(MetadataDecodeError::UnexpectedEof);
+                }
+                let value_len_bytes = cursor.read_exact(2)?;
+                let value_len = u16::from_be_bytes(
+                    value_len_bytes
+                        .try_into()
+                        .expect("read_exact(2) always returns 2 bytes"),
+                ) as usize;
+                let value = cursor.read_exact(value_len)?;
+                if key == NBT_TEXT_KEY {
+                    text = Some(String::from_utf8_lossy(value).into_owned());
+                }
+            }
+            text.ok_or(MetadataDecodeError::UnexpectedEof)
+        }
+        _ => Err(MetadataDecodeError::UnexpectedEof),
     }
-    let mut text: Option<String> = None;
-    loop {
-        let tag = cursor.read_u8()?;
-        if tag == NBT_TAG_END {
-            break;
-        }
-        let key_len_bytes = cursor.read_exact(2)?;
-        let key_len = u16::from_be_bytes(
-            key_len_bytes
-                .try_into()
-                .expect("read_exact(2) always returns 2 bytes"),
-        ) as usize;
-        let key = cursor.read_exact(key_len)?;
-        if tag != NBT_TAG_STRING {
-            return Err(MetadataDecodeError::UnexpectedEof);
-        }
-        let value_len_bytes = cursor.read_exact(2)?;
-        let value_len = u16::from_be_bytes(
-            value_len_bytes
-                .try_into()
-                .expect("read_exact(2) always returns 2 bytes"),
-        ) as usize;
-        let value = cursor.read_exact(value_len)?;
-        if key == NBT_TEXT_KEY {
-            text = Some(String::from_utf8_lossy(value).into_owned());
-        }
-    }
-    text.ok_or(MetadataDecodeError::UnexpectedEof)
 }
