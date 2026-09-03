@@ -1296,6 +1296,48 @@ Entries name the milestone that surfaced them and the code they concern.
   `format_diff_dump` now writes both full traces so the next occurrence is
   readable from the CI artifact alone.
 
+- **M3.5-B03 governance (protocol-diff-runner progress lines): a real
+  `--side ours --only <one contraption>` run's own new per-step progress
+  lines caught a `redstone_wire_capture` stance-walk timeout burning most of
+  that run's own wall-clock — a second, independent cost driver from the
+  PLAN-D9(a) budget entry above, worth folding into that same decision.**
+  `world_origin_for(index) = (index * 64, 4, 0)` fixes every contraption's
+  own placement origin at `y = 4`, and `capture_contraption_over_wire`
+  first walks to `(origin.0, origin.1 + 1, origin.2 - 3)` (i.e. `y = 5`)
+  before placing anything. Against a freshly created `ours`-side world
+  (`TempWorldDir::new("ours")`, a brand-new world dir every run — no shared
+  pre-built platform), a real local run targeting
+  `redstone/comparator/comparator_2tick_fixed_delay` (corpus index 2, origin
+  `x = 128`) never reached that stance: `azalea::pathfinder` logged
+  "No best node found, returning first node" / "(empty path)" in a tight
+  ~500ms retry loop, stuck at `BlockPos { x: 128, y: -59, z: -3 }` (this
+  world's own natural terrain floor near that column) for the full
+  `placement_capture::WALK_TIMEOUT` (90s), after which `capture_contraption_
+  over_wire` returned `WalkTimeout` and `redstone_wire_capture`'s own
+  per-contraption `Err` handling (already governance-fixed to never abort
+  the whole subprocess) logged it and moved on — `protocol-diff-runner:
+  finished ours total_ms=146254` with zero contraptions captured, `RESULT=OK`
+  still reported. Two back-to-back real runs reproduced the identical
+  timeout at the identical position. This suggests `y = 4` may not be
+  reliably walkable-to across a freshly generated `ours` world at every
+  contraption's own `x` offset (real terrain height varies by column;
+  `y = 4` may be underground rather than an open platform depending on
+  location) — if this reproduces across more of the 51 contraptions, each
+  one pays the full 90s `WALK_TIMEOUT` independently before its own capture
+  is skipped, which could dominate a real "ours" run's own wall-clock far
+  more than the actual per-step capture work the PLAN-D9(a) entry's own
+  option (c) ("profile the per-contraption cost") already asks for. Not
+  necessarily universal: an earlier real run in this same implementation
+  wave is recorded above as having captured all 51 contraptions
+  successfully (~21.5 MB capture, `capture-ours` Pass), so whether a given
+  `ours` world's terrain is walkable at `y = 4` may depend on the specific
+  world/seed a run happens to generate. Needs investigation — whether the
+  redstone-wire-capture pass should pre-build its own flat platform (e.g.
+  via the `setblock`/`debug-setblock` hook already available) rather than
+  assuming the world already has one, and/or whether `WALK_TIMEOUT` should
+  be shorter specifically for this pass so a stuck contraption fails fast
+  instead of costing 90s each — before deciding the PLAN-D9(a) budget.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M3.5-B03 execution shape — decided as TEST-D58 (2026-09-03):** the
