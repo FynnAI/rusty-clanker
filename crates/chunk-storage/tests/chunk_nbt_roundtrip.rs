@@ -7,8 +7,8 @@ use common::{codec, superflat_fixture};
 use proptest::prelude::*;
 use rc_chunk_storage::{
     BiomeColumn, BlockStateColumn, ChunkGenStatus, ChunkNbtDocument, ChunkPersistenceState,
-    ChunkStatus, HeightmapKind, HeightmapSet, LightColumn, SECTION_COUNT, WORLD_HEIGHT,
-    WORLD_MIN_Y,
+    ChunkStatus, HeightmapKind, HeightmapSet, LightColumn, LightNibbles, SECTION_COUNT,
+    WORLD_HEIGHT, WORLD_MIN_Y,
 };
 use rc_nbt::{Mutf8String, owned::NbtTag};
 
@@ -125,6 +125,14 @@ fn load_of_save_round_trips_for_an_all_air_uninhabited_chunk() {
     assert_document_matches_fixture(&document, &fixture);
 }
 
+/// `None` maps to `LightNibbles::Uninitialized` (WORLD-D8's own "not yet initialized"
+/// shortcut, the un-amended type's exact `None` case); `Some(bytes)` maps to
+/// `LightNibbles::Data(bytes)` (a fully materialized array, the un-amended type's
+/// exact `Some` case). `Filled(v)` is deliberately not exercised by this proptest --
+/// nothing in this crate's own on-disk NBT writer produces it yet (Context, M2
+/// field-report ledger entry); it is `chunk_nbt.rs`'s own `materialized_nibbles`
+/// helper that decides how a `Filled` value would round-trip, exercised directly by
+/// that module's own unit coverage instead.
 fn light_section_strategy() -> impl Strategy<Value = (Option<Vec<u8>>, Option<Vec<u8>>)> {
     (
         proptest::option::of(proptest::collection::vec(any::<u8>(), 2048)),
@@ -142,8 +150,12 @@ proptest! {
         let mut fixture = superflat_fixture();
         for (index, (sky, block)) in sections.into_iter().enumerate() {
             let section = fixture.light.section_mut(index);
-            section.sky = sky.map(|bytes| Box::new(<[u8; 2048]>::try_from(bytes).unwrap()));
-            section.block = block.map(|bytes| Box::new(<[u8; 2048]>::try_from(bytes).unwrap()));
+            section.sky = sky
+                .map(|bytes| LightNibbles::Data(Box::new(<[u8; 2048]>::try_from(bytes).unwrap())))
+                .unwrap_or(LightNibbles::Uninitialized);
+            section.block = block
+                .map(|bytes| LightNibbles::Data(Box::new(<[u8; 2048]>::try_from(bytes).unwrap())))
+                .unwrap_or(LightNibbles::Uninitialized);
         }
         let document = round_trip(&fixture, &[]);
         assert_light_equal(&fixture.light, &document.light);
