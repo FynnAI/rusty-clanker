@@ -3,10 +3,6 @@
 //! fluid kind, sharing one `Arc<Mutex<LevelRandom>>` between the water and lava instances of
 //! the same region (Context §L: vanilla's `Level.random` is one stream per region, not per
 //! fluid).
-//!
-//! Stub phase (test-authoring changeset, TEST-D45/D46): bodies are `todo!()`; the module
-//! imports below are what the real bodies (implementation changeset) need.
-#![allow(unused_imports)]
 
 use std::sync::{Arc, Mutex};
 
@@ -49,16 +45,51 @@ impl FluidBehavior {
 impl BlockBehavior for FluidBehavior {
     /// Context §L's complete driver.
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        let _ = (ctx, pos);
-        todo!()
+        let Some(state) = algorithm::fluid_state_at(ctx.world, &self.tables, pos) else {
+            return;
+        };
+
+        let effective = if !state.is_source() {
+            let new_state = algorithm::get_new_liquid(ctx.world, &self.tables, pos, self.kind);
+            let delay_new = new_state.unwrap_or(state);
+            let delay = {
+                let mut rng = self.rng.lock().unwrap();
+                spread::get_spread_delay(self.kind, &self.tables, Some(state), delay_new, &mut rng)
+            };
+
+            match new_state {
+                None => {
+                    ctx.set_block(pos, self.tables.air);
+                    None
+                }
+                Some(ns) if ns != state => {
+                    ctx.set_block(pos, self.tables.ranges.to_block_state_id(ns));
+                    ctx.schedule_fluid_tick(pos, delay, TickPriority::Normal);
+                    Some(ns)
+                }
+                Some(_) => Some(state),
+            }
+        } else {
+            Some(state)
+        };
+
+        if let Some(effective_state) = effective {
+            spread::spread(ctx, &self.tables, &self.waterlog, pos, effective_state);
+        }
     }
 
     /// Lava: `reaction::check_lava_water_contact` first (Context §I(A)); if it fired, return
     /// without re-arming. Otherwise, if `!ctx.scheduled.is_fluid_tick_in_current_batch(pos)`,
     /// `ctx.schedule_fluid_tick(pos, tables.tick_delay(kind), TickPriority::Normal)` (Context §K).
-    fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, from: Direction) {
-        let _ = (ctx, pos, from);
-        todo!()
+    fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
+        if self.kind == FluidKind::Lava
+            && reaction::check_lava_water_contact(ctx, &self.tables, pos)
+        {
+            return;
+        }
+        if !ctx.scheduled.is_fluid_tick_in_current_batch(pos) {
+            ctx.schedule_fluid_tick(pos, self.tables.tick_delay(self.kind), TickPriority::Normal);
+        }
     }
 
     /// Re-arms a fluid tick only (vanilla's `LiquidBlock.updateShape` never runs the
@@ -69,11 +100,13 @@ impl BlockBehavior for FluidBehavior {
         &self,
         ctx: &mut UpdateContext,
         pos: BlockPos,
-        from: Direction,
-        neighbor_state: BlockStateId,
+        _from: Direction,
+        _neighbor_state: BlockStateId,
     ) -> Option<BlockStateId> {
-        let _ = (ctx, pos, from, neighbor_state);
-        todo!()
+        if !ctx.scheduled.is_fluid_tick_in_current_batch(pos) {
+            ctx.schedule_fluid_tick(pos, self.tables.tick_delay(self.kind), TickPriority::Normal);
+        }
+        None
     }
 }
 
@@ -87,6 +120,21 @@ pub fn register_fluids(
     waterlog: Arc<WaterloggableRegistry>,
     rng: Arc<Mutex<LevelRandom>>,
 ) {
-    let _ = (registry, tables, waterlog, rng);
-    todo!()
+    let (water_start, water_end) = tables.ranges.water;
+    let (lava_start, lava_end) = tables.ranges.lava;
+    registry.register_range(
+        water_start,
+        water_end,
+        Arc::new(FluidBehavior::new(
+            FluidKind::Water,
+            Arc::clone(&tables),
+            Arc::clone(&waterlog),
+            Arc::clone(&rng),
+        )),
+    );
+    registry.register_range(
+        lava_start,
+        lava_end,
+        Arc::new(FluidBehavior::new(FluidKind::Lava, tables, waterlog, rng)),
+    );
 }

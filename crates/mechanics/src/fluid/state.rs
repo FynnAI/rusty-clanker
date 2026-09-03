@@ -31,45 +31,74 @@ pub struct FluidState {
 
 impl FluidState {
     pub fn source(kind: FluidKind) -> Self {
-        let _ = kind;
-        todo!()
+        FluidState {
+            kind,
+            variant: FluidVariant::Source,
+        }
     }
 
     /// Panics (debug-only `debug_assert!`) if `amount` is outside `1..=8`.
     pub fn flowing(kind: FluidKind, amount: u8, falling: bool) -> Self {
-        let _ = (kind, amount, falling);
-        todo!()
+        debug_assert!(
+            (1..=8).contains(&amount),
+            "FluidState::flowing: amount must be in 1..=8, got {amount}"
+        );
+        FluidState {
+            kind,
+            variant: FluidVariant::Flowing { amount, falling },
+        }
     }
 
     pub fn is_source(self) -> bool {
-        todo!()
+        matches!(self.variant, FluidVariant::Source)
     }
 
     pub fn falling(self) -> bool {
-        todo!()
+        match self.variant {
+            FluidVariant::Source => false,
+            FluidVariant::Flowing { falling, .. } => falling,
+        }
     }
 
     /// `8` for a source (Context §A: hardcoded, not stored).
     pub fn amount(self) -> u8 {
-        todo!()
+        match self.variant {
+            FluidVariant::Source => 8,
+            FluidVariant::Flowing { amount, .. } => amount,
+        }
     }
 
     /// `amount as f32 / 9.0f32` (Context §A — `getOwnHeight`, float division).
     pub fn own_height(self) -> f32 {
-        todo!()
+        self.amount() as f32 / 9.0f32
     }
 
     /// Context §A's exact formula, restated: `Source => 0`, `Flowing{amount,falling} =>
     /// (8 - amount.min(8)) + if falling {8} else {0}`.
     pub fn to_legacy_level(self) -> u8 {
-        todo!()
+        match self.variant {
+            FluidVariant::Source => 0,
+            FluidVariant::Flowing { amount, falling } => {
+                (8 - amount.min(8)) + if falling { 8 } else { 0 }
+            }
+        }
     }
 
     /// The documented vanilla quirk (Context §A): `level == 0` always decodes to `Source`,
     /// never to `Flowing{amount:8, falling:false}` even though both encode to the same level.
     pub fn from_legacy_level(kind: FluidKind, level: u8) -> Self {
-        let _ = (kind, level);
-        todo!()
+        debug_assert!(
+            level <= 15,
+            "from_legacy_level: level must be in 0..=15, got {level}"
+        );
+        if level == 0 {
+            return FluidState::source(kind);
+        }
+        if level < 8 {
+            FluidState::flowing(kind, 8 - level, false)
+        } else {
+            FluidState::flowing(kind, 16 - level, true)
+        }
     }
 }
 
@@ -108,22 +137,40 @@ impl FluidBlockRanges {
         water: (BlockStateId, BlockStateId),
         lava: (BlockStateId, BlockStateId),
     ) -> Option<Self> {
-        let _ = (water, lava);
-        todo!()
+        fn width(range: (BlockStateId, BlockStateId)) -> Option<u32> {
+            range.1.0.checked_sub(range.0.0)
+        }
+        if width(water) != Some(16) || width(lava) != Some(16) {
+            return None;
+        }
+        Some(Self { water, lava })
     }
 
     pub fn to_block_state_id(&self, state: FluidState) -> BlockStateId {
-        let _ = state;
-        todo!()
+        let (start, _) = match state.kind {
+            FluidKind::Water => self.water,
+            FluidKind::Lava => self.lava,
+        };
+        BlockStateId(start.0 + state.to_legacy_level() as u32)
     }
 
     pub fn kind_of(&self, id: BlockStateId) -> Option<FluidKind> {
-        let _ = id;
-        todo!()
+        if id.0 >= self.water.0.0 && id.0 < self.water.1.0 {
+            Some(FluidKind::Water)
+        } else if id.0 >= self.lava.0.0 && id.0 < self.lava.1.0 {
+            Some(FluidKind::Lava)
+        } else {
+            None
+        }
     }
 
     pub fn state_of(&self, id: BlockStateId) -> Option<FluidState> {
-        let _ = id;
-        todo!()
+        let kind = self.kind_of(id)?;
+        let start = match kind {
+            FluidKind::Water => self.water.0,
+            FluidKind::Lava => self.lava.0,
+        };
+        let level = (id.0 - start.0) as u8;
+        Some(FluidState::from_legacy_level(kind, level))
     }
 }

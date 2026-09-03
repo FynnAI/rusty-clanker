@@ -2,6 +2,9 @@
 //! takes: the scheduling table, gamerule defaults, reaction-block ids, and the dimension
 //! profile/`LevelRandom` stand-ins for data this project does not generate yet.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+
 use bevy_ecs::prelude::Resource;
 use rc_chunk_storage::BlockStateId;
 
@@ -25,14 +28,19 @@ pub struct FluidGameRules {
 
 impl Default for FluidGameRules {
     fn default() -> Self {
-        todo!()
+        Self {
+            water_source_conversion: true,
+            lava_source_conversion: false,
+        }
     }
 }
 
 impl FluidGameRules {
     pub fn allows_source_conversion(&self, kind: FluidKind) -> bool {
-        let _ = kind;
-        todo!()
+        match kind {
+            FluidKind::Water => self.water_source_conversion,
+            FluidKind::Lava => self.lava_source_conversion,
+        }
     }
 }
 
@@ -85,26 +93,59 @@ impl FluidTables {
         dimension: FluidDimensionProfile,
         air: BlockStateId,
     ) -> Self {
-        let _ = (ranges, reactions, dimension, air);
-        todo!()
+        Self {
+            ranges,
+            reactions,
+            dimension,
+            gamerules: FluidGameRules::default(),
+            air,
+            deny_hold_fluid: Vec::new(),
+            solid_face_exceptions: Vec::new(),
+            force_solid_on: Vec::new(),
+            force_solid_off: Vec::new(),
+        }
     }
 
     /// Context §M's table: water 5, lava 30/10 by `dimension.fast_lava`.
     pub fn tick_delay(&self, kind: FluidKind) -> u64 {
-        let _ = kind;
-        todo!()
+        match kind {
+            FluidKind::Water => 5,
+            FluidKind::Lava => {
+                if self.dimension.fast_lava {
+                    10
+                } else {
+                    30
+                }
+            }
+        }
     }
 
     /// Context §C/§D: water 1, lava 2/1 by `dimension.fast_lava`.
     pub fn drop_off(&self, kind: FluidKind) -> u8 {
-        let _ = kind;
-        todo!()
+        match kind {
+            FluidKind::Water => 1,
+            FluidKind::Lava => {
+                if self.dimension.fast_lava {
+                    1
+                } else {
+                    2
+                }
+            }
+        }
     }
 
     /// Context §E: water 4 always, lava 4/2 by `dimension.fast_lava`.
     pub fn slope_find_distance(&self, kind: FluidKind) -> u32 {
-        let _ = kind;
-        todo!()
+        match kind {
+            FluidKind::Water => 4,
+            FluidKind::Lava => {
+                if self.dimension.fast_lava {
+                    4
+                } else {
+                    2
+                }
+            }
+        }
     }
 }
 
@@ -114,22 +155,30 @@ impl FluidTables {
 #[derive(Clone, Debug)]
 pub struct LevelRandom(RcRandom);
 
+static ENTROPY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl LevelRandom {
     /// Production seeding — mirrors vanilla's own non-reproducible-across-restart entropy
-    /// source; never used by a determinism-sensitive test.
+    /// source; never used by a determinism-sensitive test. Combines the wall-clock time with a
+    /// process-local monotonic counter so two regions spawned within the same clock tick (e.g.
+    /// at server startup) never collide on an identical seed.
     pub fn from_entropy() -> Self {
-        todo!()
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let counter = ENTROPY_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let seed = (nanos ^ counter.wrapping_mul(0x9E3779B97F4A7C15)) as i64;
+        Self(RcRandom::new(seed))
     }
 
     /// Deterministic, test-only.
     pub fn from_seed(seed: i64) -> Self {
-        let _ = seed;
-        todo!()
+        Self(RcRandom::new(seed))
     }
 
     /// `next_int_bounded(bound)`.
     pub fn roll_next_int(&mut self, bound: i32) -> i32 {
-        let _ = bound;
-        todo!()
+        self.0.next_int_bounded(bound)
     }
 }

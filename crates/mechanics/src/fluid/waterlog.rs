@@ -2,9 +2,6 @@
 //! two-method contract as `WaterloggableBehavior` plus a range-based `WaterloggableRegistry`
 //! mirroring `BlockBehaviorRegistry`'s own shape exactly, and `SimpleWaterlogged`, a small
 //! reference implementation mirroring `SimpleWaterloggedBlock`'s shared default (water only).
-//!
-//! Stub phase (test-authoring changeset, TEST-D45/D46): bodies are `todo!()`.
-#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,7 +42,7 @@ pub struct WaterloggableRegistry {
 
 impl WaterloggableRegistry {
     pub fn new() -> Self {
-        todo!()
+        Self { ranges: Vec::new() }
     }
 
     /// Panics on overlap with an already-registered range (mirrors `BlockBehaviorRegistry`).
@@ -55,14 +52,26 @@ impl WaterloggableRegistry {
         end_exclusive: BlockStateId,
         behavior: Arc<dyn WaterloggableBehavior>,
     ) {
-        let _ = (start, end_exclusive, behavior);
-        todo!()
+        let overlaps = self
+            .ranges
+            .iter()
+            .any(|(s, e, _)| start < *e && *s < end_exclusive);
+        assert!(
+            !overlaps,
+            "WaterloggableRegistry::register_range: [{start:?}, {end_exclusive:?}) overlaps an already-registered range"
+        );
+        self.ranges.push((start, end_exclusive, behavior));
+        self.ranges.sort_by_key(|(start, _, _)| *start);
     }
 
     /// `None` (not a `LiquidBlockContainer`) for any unregistered id — the correct default.
     pub fn resolve(&self, state: BlockStateId) -> Option<&Arc<dyn WaterloggableBehavior>> {
-        let _ = state;
-        todo!()
+        for (start, end_exclusive, behavior) in &self.ranges {
+            if state >= *start && state < *end_exclusive {
+                return Some(behavior);
+            }
+        }
+        None
     }
 }
 
@@ -82,31 +91,33 @@ pub struct SimpleWaterlogged {
 
 impl SimpleWaterlogged {
     pub fn new(dry_to_wet: Vec<(BlockStateId, BlockStateId)>) -> Self {
-        let _ = dry_to_wet;
-        todo!()
+        Self {
+            dry_to_wet: dry_to_wet.into_iter().collect(),
+        }
     }
 }
 
 impl WaterloggableBehavior for SimpleWaterlogged {
     fn can_place_liquid(
         &self,
-        world: &dyn BlockWorldAccess,
-        pos: BlockPos,
+        _world: &dyn BlockWorldAccess,
+        _pos: BlockPos,
         state: BlockStateId,
         kind: FluidKind,
     ) -> bool {
-        let _ = (self, world, pos, state, kind);
-        todo!()
+        kind == FluidKind::Water && self.dry_to_wet.contains_key(&state)
     }
 
     fn waterlogged_state(
         &self,
-        world: &dyn BlockWorldAccess,
-        pos: BlockPos,
+        _world: &dyn BlockWorldAccess,
+        _pos: BlockPos,
         state: BlockStateId,
         kind: FluidKind,
     ) -> Option<BlockStateId> {
-        let _ = (self, world, pos, state, kind);
-        todo!()
+        if kind != FluidKind::Water {
+            return None;
+        }
+        self.dry_to_wet.get(&state).copied()
     }
 }

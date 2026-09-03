@@ -124,7 +124,9 @@ impl ScheduledTickQueue {
     }
 
     pub fn drain_due_fluid_ticks(&mut self, current_tick: u64) -> Vec<ScheduledTickEntry> {
-        Self::drain_due(&mut self.fluid_heap, current_tick)
+        let due = Self::drain_due(&mut self.fluid_heap, current_tick);
+        self.current_fluid_batch = due.iter().map(|e| e.pos).collect();
+        due
     }
 
     fn drain_due(
@@ -176,7 +178,6 @@ impl ScheduledTickQueue {
     /// replace or modify — both coexist). Calling `schedule_fluid_tick` does not itself affect
     /// this method's result; only a `drain_due_fluid_ticks` call does.
     pub fn is_fluid_tick_in_current_batch(&self, pos: BlockPos) -> bool {
-        let _ = pos;
-        todo!()
+        self.current_fluid_batch.contains(&pos)
     }
 }
