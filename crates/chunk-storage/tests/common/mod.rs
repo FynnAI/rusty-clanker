@@ -157,7 +157,7 @@ pub struct Fixture {
 }
 
 /// M1-B05's own layer table (Context's `common::superflat_fixture` doc comment):
-/// bedrock at `y == -64`, dirt at `y in -63..=-61`, grass at `y == -60`, air elsewhere.
+/// bedrock at `y == -64`, dirt at `y in -63..=-62`, grass at `y == -61`, air elsewhere.
 pub fn superflat_fixture() -> Fixture {
     superflat_fixture_at(ChunkKey::new(DimensionId::OVERWORLD, 0, 0))
 }
@@ -169,8 +169,8 @@ pub fn superflat_fixture_at(key: ChunkKey) -> Fixture {
         let world_y = WORLD_MIN_Y + local_y;
         let block = match world_y {
             -64 => BlockStateId(1),
-            -63..=-61 => BlockStateId(2),
-            -60 => BlockStateId(3),
+            -63..=-62 => BlockStateId(2),
+            -61 => BlockStateId(3),
             _ => BlockStateId(0),
         };
         if block.0 != 0 {
@@ -183,10 +183,10 @@ pub fn superflat_fixture_at(key: ChunkKey) -> Fixture {
     }
     let biomes = BiomeColumn::new(BiomeId(0), biome_thresholds);
     let light = LightColumn::new_uninitialized();
-    // First air Y is one above the topmost real block (the grass layer at y == -60):
+    // First air Y is one above the topmost real block (the grass layer at y == -61):
     // every one of the six heightmap types stays in lockstep (M2-B01's own
     // `note_block_change` invariant), so `new_uniform` is exact, not an approximation.
-    let heightmaps = HeightmapSet::new_uniform(-59);
+    let heightmaps = HeightmapSet::new_uniform(-60);
     Fixture {
         chunk_key: ChunkKeyTag(key),
         blocks,

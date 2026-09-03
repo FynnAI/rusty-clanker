@@ -35,7 +35,7 @@ use rusty_clanker_server::play::{
 // applies: a synthetic motion at `SPAWN_POSITION` looking straight down (`pitch: 90.0`) --
 // the only fallback orientation that can honestly resolve a reach check against this
 // hardcoded world's own always-below-spawn content (`world.rs`'s own doc comment on that
-// fallback). `(0, -60, 0)` (grass directly below spawn) is exactly what that fallback ray
+// fallback). `(0, -61, 0)` (grass directly below spawn) is exactly what that fallback ray
 // hits, so this test's own target needs no change beyond the variant rename. The same
 // fallback also has no `GameModeState`, defaulting to `instabuild: true` (creative) --
 // matching this test's own expectation of an immediate, unconditional break.
@@ -177,7 +177,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
         network_entity_id: phantom_id,
         connection: handle.clone(),
         kind: BlockActionKind::StartDestroy {
-            location: BlockPos::new(0, -60, 0),
+            location: BlockPos::new(0, -61, 0),
         },
         sequence: 42,
     });
@@ -228,7 +228,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             )
             .await;
             let update = decode_one::<BlockUpdate>(update).unwrap();
-            assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+            assert_eq!(update.location, pack_position(BlockPos::new(0, -61, 0)));
             assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
         },
         async {
@@ -244,7 +244,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             let bystander_update = decode_one::<BlockUpdate>(bystander_update).unwrap();
             assert_eq!(
                 bystander_update.location,
-                pack_position(BlockPos::new(0, -60, 0))
+                pack_position(BlockPos::new(0, -61, 0))
             );
             assert_eq!(bystander_update.block_state_id, blocks::AIR.0 as i32);
         },

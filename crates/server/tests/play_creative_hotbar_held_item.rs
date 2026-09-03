@@ -13,8 +13,8 @@
 //!
 //! Harness mirrors `play_block_break_place_full.rs`'s own shape
 //! (`placement_selects_the_held_items_own_block_and_orientation`'s own placement geometry:
-//! `UseItemOn` clicking the `Up` face of `(1, -60, 0)` -- the grass column directly beside
-//! spawn -- targets `(1, -59, 0)`, matching this file's own assertions below).
+//! `UseItemOn` clicking the `Up` face of `(1, -61, 0)` -- the grass column directly beside
+//! spawn -- targets `(1, -60, 0)`, matching this file's own assertions below).
 
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
@@ -169,14 +169,14 @@ async fn selecting_a_redstone_wire_hotbar_slot_places_wire_not_stone() {
         send_packet(&mut a, &SetCarriedItem { slot: 0 }).await;
         settle().await;
 
-        // Click the Up face of the grass column at (1, -60, 0) -- targets (1, -59, 0), never
-        // A's own body at spawn (0, -59, 0), matching `play_block_break_place_full.rs`'s own
+        // Click the Up face of the grass column at (1, -61, 0) -- targets (1, -60, 0), never
+        // A's own body at spawn (0, -60, 0), matching `play_block_break_place_full.rs`'s own
         // established placement geometry for this exact hardcoded world.
-        place_up_from(&mut a, &mut a_acc, BlockPos::new(1, -60, 0), 2).await;
+        place_up_from(&mut a, &mut a_acc, BlockPos::new(1, -61, 0), 2).await;
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(1, -59, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(1, -60, 0)));
         // M3 field-report test-authoring fix (Root Cause 2, wire connection resolution): an
         // isolated placed wire no longer stays at `blocks::REDSTONE_WIRE.0`'s own raw
         // all-disconnected default (`5171`) -- `apply_placement` now resolves its real
@@ -221,10 +221,10 @@ async fn switching_back_to_a_stone_slot_places_stone_again() {
         .await;
 
         // Select redstone wire first and place it (proves the tracking is live, not "first
-        // real item wins forever") at (1, -59, 0)...
+        // real item wins forever") at (1, -60, 0)...
         send_packet(&mut a, &SetCarriedItem { slot: 0 }).await;
         settle().await;
-        place_up_from(&mut a, &mut a_acc, BlockPos::new(1, -60, 0), 2).await;
+        place_up_from(&mut a, &mut a_acc, BlockPos::new(1, -61, 0), 2).await;
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         // M3 field-report test-authoring fix: this wire is also isolated (nothing else placed
         // yet) -- same `4591` "plus" resolution as the previous test's own identical citation.
@@ -237,10 +237,10 @@ async fn switching_back_to_a_stone_slot_places_stone_again() {
         // stone, not a stale carried-over redstone-wire selection.
         send_packet(&mut a, &SetCarriedItem { slot: 1 }).await;
         settle().await;
-        place_up_from(&mut a, &mut a_acc, BlockPos::new(2, -60, 0), 3).await;
+        place_up_from(&mut a, &mut a_acc, BlockPos::new(2, -61, 0), 3).await;
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(2, -59, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(2, -60, 0)));
         assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
     })
     .await

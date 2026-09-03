@@ -204,8 +204,8 @@ async fn run_inner(
     let read_column = |x: i32, z: i32| -> Result<DecodedColumn, ChunkDecodeError> {
         Ok(DecodedColumn {
             bedrock: get(BlockPos::new(x, -64, z))?.into(),
-            dirt: get(BlockPos::new(x, -61, z))?.into(),
-            grass: get(BlockPos::new(x, -60, z))?.into(),
+            dirt: get(BlockPos::new(x, -62, z))?.into(),
+            grass: get(BlockPos::new(x, -61, z))?.into(),
             air_is_air: get(BlockPos::new(x, 0, z))?.is_air(),
         })
     };

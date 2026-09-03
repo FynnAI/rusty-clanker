@@ -70,7 +70,7 @@ fn multiple_mismatches_are_all_reported_independently() {
 fn action_rejected_error_names_the_action_position_and_ids() {
     let err = ActionError::ActionRejected {
         action: "place",
-        pos: rc_core::BlockPos::new(3, -59, 0),
+        pos: rc_core::BlockPos::new(3, -60, 0),
         expected: 4321,
         observed: 0,
     };
@@ -108,15 +108,15 @@ mod aim_geometry {
     /// EXPECTED_BLOCKS`, the reverse direction of the identical restatement that module's own
     /// doc comment already explains; `xtask` never depends on `rc-paritybot` either).
     const SCRIPTED_CLICKS: [(i32, i32, i32); 5] = [
-        (3, -60, 0),
-        (2, -60, 0),
-        (2, -60, 1),
-        (0, -60, 0),
-        (1, -60, 0),
+        (3, -61, 0),
+        (2, -61, 0),
+        (2, -61, 1),
+        (0, -61, 0),
+        (1, -61, 0),
     ];
 
     /// A minimal `BlockShapeSource`: M1-B05's superflat layer table restricted to the one
-    /// layer (`y == -60`, solid grass) any ray in this test could ever actually reach — every
+    /// layer (`y == -61`, solid grass) any ray in this test could ever actually reach — every
     /// ray here originates well above it and stops at its first hit, so the deeper bedrock/
     /// dirt layers this test never exercises are intentionally omitted — plus explicit
     /// per-position overrides for this script's own place/break effects, applied as the test
@@ -144,7 +144,7 @@ mod aim_geometry {
                 .overrides
                 .get(&(pos.x, pos.y, pos.z))
                 .copied()
-                .unwrap_or(if pos.y == -60 { GRASS_BLOCK.0 } else { AIR.0 });
+                .unwrap_or(if pos.y == -61 { GRASS_BLOCK.0 } else { AIR.0 });
             tier1_shape_table().lookup(raw)
         }
     }
@@ -183,7 +183,7 @@ mod aim_geometry {
     /// solve, not merely a claim in a doc comment.
     #[test]
     fn a_level_look_from_the_spawn_corner_hits_none_of_the_5_scripted_positions() {
-        let eye = Vec3::new(0.0, -59.0 + PLAYER_EYE_HEIGHT, 0.0);
+        let eye = Vec3::new(0.0, -60.0 + PLAYER_EYE_HEIGHT, 0.0);
         let direction = server_look_vector(0.0, 0.0);
         let world = SuperflatWithOverrides::new();
 
@@ -205,11 +205,11 @@ mod aim_geometry {
     /// to a real `cast_ray` hit on that exact position — never a neighboring column, never a
     /// miss. Fails to even compile before this fix (`click_aim_point`/`CLICK_AIM_INSET` did
     /// not exist), and would fail its assertions against the pre-fix aim strategy (`BlockPos::
-    /// center`) or the pre-fix script order (`(2,-60,0)` before `(3,-60,0)`) — verified by
+    /// center`) or the pre-fix script order (`(2,-61,0)` before `(3,-61,0)`) — verified by
     /// hand while developing this fix, restated in this crate's own completion report.
     #[test]
     fn click_aim_point_resolves_every_scripted_position_in_script_order() {
-        let eye = Vec3::new(0.5, -59.0 + PLAYER_EYE_HEIGHT, 0.5); // recentered spawn block
+        let eye = Vec3::new(0.5, -60.0 + PLAYER_EYE_HEIGHT, 0.5); // recentered spawn block
         let azalea_eye = azalea::Vec3::new(eye.x, eye.y, eye.z);
         let mut world = SuperflatWithOverrides::new();
 
@@ -234,10 +234,10 @@ mod aim_geometry {
             );
 
             match (x, y, z) {
-                (3, -60, 0) => world.set(BlockPos::new(3, -59, 0), STONE.0),
-                (2, -60, 0) => world.set(BlockPos::new(2, -59, 0), STONE.0),
-                (2, -60, 1) => world.set(BlockPos::new(2, -59, 1), STONE.0),
-                (0, -60, 0) | (1, -60, 0) => world.set(BlockPos::new(x, y, z), AIR.0),
+                (3, -61, 0) => world.set(BlockPos::new(3, -60, 0), STONE.0),
+                (2, -61, 0) => world.set(BlockPos::new(2, -60, 0), STONE.0),
+                (2, -61, 1) => world.set(BlockPos::new(2, -60, 1), STONE.0),
+                (0, -61, 0) | (1, -61, 0) => world.set(BlockPos::new(x, y, z), AIR.0),
                 other => panic!("unexpected scripted click {other:?}"),
             }
         }

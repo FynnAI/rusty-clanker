@@ -192,7 +192,7 @@ async fn break_and_place_broadcast_and_persist() {
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -60, 0)),
+                location: pack_position(BlockPos::new(0, -61, 0)),
                 direction: 1,
                 sequence: 1,
             },
@@ -207,7 +207,7 @@ async fn break_and_place_broadcast_and_persist() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(0, -61, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
         // B, uninvolved, receives the identical broadcast -- scanned for on its own
@@ -217,11 +217,11 @@ async fn break_and_place_broadcast_and_persist() {
         let observed = decode_one::<BlockUpdate>(body).unwrap();
         assert_eq!(observed, update);
 
-        // --- Place above the still-intact grass block at (3, -60, 2) -- A moves to (2, -59,
+        // --- Place above the still-intact grass block at (3, -61, 2) -- A moves to (2, -60,
         // 2) first (still looking straight down; reach is a box-distance check with no
         // line-of-sight/aim component, `mining_reach_validation.rs`'s own doc comment), then
         // clicks the NEIGHBOURING column at x=3, not the one A is standing in: A's own body
-        // occupies the (2, -59, 2) cell right underfoot, and `mining::apply_placement`'s own
+        // occupies the (2, -60, 2) cell right underfoot, and `mining::apply_placement`'s own
         // obstruction gate (M3 field-report fix, Defect 1) now correctly rejects a placement
         // into a cell a player's own body overlaps, the placer's own body included -- clicking
         // one column over keeps this test's own "place above an intact grass block" intent
@@ -230,7 +230,7 @@ async fn break_and_place_broadcast_and_persist() {
             &mut a,
             &SetPlayerPositionAndRotation {
                 x: 2.0,
-                y: -59.0,
+                y: -60.0,
                 z: 2.0,
                 yaw: 0.0,
                 pitch: 90.0,
@@ -238,14 +238,14 @@ async fn break_and_place_broadcast_and_persist() {
             },
         )
         .await;
-        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -59.0, 2.0]))
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -60.0, 2.0]))
             .await;
 
         send_packet(
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(3, -60, 2)),
+                location: pack_position(BlockPos::new(3, -61, 2)),
                 direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 1.0,
@@ -265,7 +265,7 @@ async fn break_and_place_broadcast_and_persist() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(3, -59, 2)));
+        assert_eq!(update.location, pack_position(BlockPos::new(3, -60, 2)));
         assert_eq!(update.block_state_id, blocks::STONE.0 as i32);
 
         let body = recv_packet_of_type(&mut b, &mut b_acc, BlockUpdate::ID).await;
@@ -274,14 +274,14 @@ async fn break_and_place_broadcast_and_persist() {
 
         // --- Criterion 1's own "persisted state" half: in-memory, dirty-marked ---
         assert_eq!(
-            world.debug_query_block(BlockPos::new(0, -60, 0)).await,
+            world.debug_query_block(BlockPos::new(0, -61, 0)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::AIR.0,
                 dirty: true,
             })
         );
         assert_eq!(
-            world.debug_query_block(BlockPos::new(3, -59, 2)).await,
+            world.debug_query_block(BlockPos::new(3, -60, 2)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::STONE.0,
                 dirty: true,

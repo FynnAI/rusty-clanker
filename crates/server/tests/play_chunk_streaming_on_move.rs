@@ -151,7 +151,7 @@ async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cach
                 &mut a,
                 &SetPlayerPositionAndRotation {
                     x,
-                    y: -59.0,
+                    y: -60.0,
                     z: 0.0,
                     yaw: 0.0,
                     pitch: 0.0,
@@ -159,7 +159,7 @@ async fn crossing_a_chunk_boundary_streams_newly_visible_chunks_and_updates_cach
                 },
             )
             .await;
-            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -59.0, 0.0]))
+            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -60.0, 0.0]))
                 .await;
         }
 
@@ -221,7 +221,7 @@ async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_re
                 &mut a,
                 &SetPlayerPositionAndRotation {
                     x,
-                    y: -59.0,
+                    y: -60.0,
                     z: 0.0,
                     yaw: 0.0,
                     pitch: 0.0,
@@ -229,7 +229,7 @@ async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_re
                 },
             )
             .await;
-            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -59.0, 0.0]))
+            wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([x, -60.0, 0.0]))
                 .await;
         }
         assert_eq!(
@@ -244,7 +244,7 @@ async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_re
             &mut a,
             &SetPlayerPositionAndRotation {
                 x: final_x,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 yaw: 0.0,
                 pitch: 0.0,
@@ -259,7 +259,7 @@ async fn chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_re
         // record) -- confirms the final step landed, then immediately starts timing how long
         // the matching `SetChunkCacheCenter` takes to arrive.
         loop {
-            if sessions.with_record_mut(uuid, |r| r.data.pos) == Some([final_x, -59.0, 0.0]) {
+            if sessions.with_record_mut(uuid, |r| r.data.pos) == Some([final_x, -60.0, 0.0]) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(2)).await;

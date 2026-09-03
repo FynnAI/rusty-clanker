@@ -191,15 +191,15 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
-        // (20, -60, 20) sits in chunk (1, 1) -- one of the nine... locally-seeded chunks,
-        // grass at y=-60 -- but well outside the 6.0 creative-plus-buffer reach threshold
+        // (20, -61, 20) sits in chunk (1, 1) -- one of the nine... locally-seeded chunks,
+        // grass at y=-61 -- but well outside the 6.0 creative-plus-buffer reach threshold
         // (nearest-point distance ~28.3). No rotation setup needed: reach has no directional
         // component at all (this file's own top-of-file doc comment).
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(20, -60, 20)),
+                location: pack_position(BlockPos::new(20, -61, 20)),
                 direction: 1,
                 sequence: 5,
             },
@@ -222,7 +222,7 @@ async fn reach_rejects_out_of_range_target_with_ack_only() {
         .await;
 
         assert_eq!(
-            world.debug_query_block(BlockPos::new(20, -60, 20)).await,
+            world.debug_query_block(BlockPos::new(20, -61, 20)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::GRASS_BLOCK.0,
                 dirty: false,
@@ -260,7 +260,7 @@ async fn reach_accepts_in_range_target() {
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -60, 0)),
+                location: pack_position(BlockPos::new(0, -61, 0)),
                 direction: 1,
                 sequence: 6,
             },
@@ -275,7 +275,7 @@ async fn reach_accepts_in_range_target() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(0, -60, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(0, -61, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
     })
     .await
@@ -291,7 +291,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
         let sessions = world.player_sessions();
 
-        // M3-B03 test-authoring update: A moves above (2, -60, 2) and looks straight down,
+        // M3-B03 test-authoring update: A moves above (2, -61, 2) and looks straight down,
         // so the raycast's own claimed target (the packet's raw, clicked `location`) is
         // exactly the block A clicked -- `inside_block: true` then targets that same clicked
         // cell itself (GRASS_BLOCK, not AIR) for the placement-mutation logic.
@@ -299,7 +299,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
             &mut a,
             &SetPlayerPositionAndRotation {
                 x: 2.0,
-                y: -59.0,
+                y: -60.0,
                 z: 2.0,
                 yaw: 0.0,
                 pitch: 90.0,
@@ -307,14 +307,14 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
             },
         )
         .await;
-        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -59.0, 2.0]))
+        wait_until(|| sessions.with_record_mut(uuid_a, |r| r.data.pos) == Some([2.0, -60.0, 2.0]))
             .await;
 
         send_packet(
             &mut a,
             &UseItemOn {
                 hand: 0,
-                location: pack_position(BlockPos::new(2, -60, 2)),
+                location: pack_position(BlockPos::new(2, -61, 2)),
                 direction: 1,
                 cursor_x: 0.5,
                 cursor_y: 0.5,
@@ -334,7 +334,7 @@ async fn placement_into_non_air_target_is_rejected_with_correction() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let correction = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(correction.location, pack_position(BlockPos::new(2, -60, 2)));
+        assert_eq!(correction.location, pack_position(BlockPos::new(2, -61, 2)));
         assert_eq!(correction.block_state_id, blocks::GRASS_BLOCK.0 as i32);
 
         // The correction is actor-only, never broadcast.
@@ -368,14 +368,14 @@ async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_corre
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
-        // (20, -59, 20) is air (this world's own content sits entirely at y <= -60) and
+        // (20, -60, 20) is air (this world's own content sits entirely at y <= -61) and
         // nearest-point distance ~28.3 from A's own spawn eye -- far outside even the 6.0
         // creative-plus-buffer threshold.
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(20, -59, 20)),
+                location: pack_position(BlockPos::new(20, -60, 20)),
                 direction: 1,
                 sequence: 8,
             },
@@ -406,8 +406,8 @@ async fn breaking_a_distant_air_target_is_rejected_out_of_reach_not_with_a_corre
 /// already air -- had zero coverage in this suite (this file's own doc comment on the sibling
 /// test immediately above has the full "why" for `TargetAlreadyAir` existing as a real,
 /// distinguishable-from-`OutOfReach` rejection path since the box-distance reach predicate
-/// landed). `SPAWN_POSITION` itself (`(0, -59, 0)`, `connection.rs`) is air (this world's own
-/// content sits entirely at `y <= -60`) and sits essentially on top of a freshly-spawned
+/// landed). `SPAWN_POSITION` itself (`(0, -60, 0)`, `connection.rs`) is air (this world's own
+/// content sits entirely at `y <= -61`) and sits essentially on top of a freshly-spawned
 /// actor's own eye -- genuinely in reach under any threshold, old or new. Asserts the actor's
 /// own `respond_break`'s `Rejected` arm: exactly one corrective `Block Update` carrying the
 /// real (air) state, no `Level Event` (that packet is `Applied`-only, never sent on a
@@ -424,7 +424,7 @@ async fn breaking_an_in_reach_air_target_is_rejected_with_correction() {
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -59, 0)),
+                location: pack_position(BlockPos::new(0, -60, 0)),
                 direction: 1,
                 sequence: 9,
             },
@@ -439,7 +439,7 @@ async fn breaking_an_in_reach_air_target_is_rejected_with_correction() {
 
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let correction = decode_one::<BlockUpdate>(body).unwrap();
-        assert_eq!(correction.location, pack_position(BlockPos::new(0, -59, 0)));
+        assert_eq!(correction.location, pack_position(BlockPos::new(0, -60, 0)));
         assert_eq!(correction.block_state_id, blocks::AIR.0 as i32);
 
         assert_no_packet_of_type(

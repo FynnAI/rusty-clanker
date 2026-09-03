@@ -179,9 +179,9 @@ async fn sequence_acks_preserve_fifo_order_under_a_burst() {
         // shape, which a single fixed look direction could no longer all reach at once
         // under a real raycast.
         let targets = [
-            (BlockPos::new(0, -60, 0), 10),
-            (BlockPos::new(0, -61, 0), 11),
-            (BlockPos::new(0, -62, 0), 12),
+            (BlockPos::new(0, -61, 0), 10),
+            (BlockPos::new(0, -62, 0), 11),
+            (BlockPos::new(0, -63, 0), 12),
         ];
         for (location, sequence) in targets {
             send_packet(

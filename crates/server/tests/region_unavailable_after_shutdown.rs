@@ -77,7 +77,7 @@ async fn request_chunk_grid_and_queue_join_degrade_gracefully_once_the_region_th
         // tick-loop thread folds into that same `None` (`world.rs`'s own doc comment on
         // this method).
         let queried = world
-            .debug_query_block(rc_core::BlockPos::new(0, -60, 0))
+            .debug_query_block(rc_core::BlockPos::new(0, -61, 0))
             .await;
         assert!(queried.is_none());
     })

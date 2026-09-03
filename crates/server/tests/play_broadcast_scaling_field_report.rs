@@ -271,7 +271,7 @@ async fn collect_section_blocks_updates(
 async fn bystander_outside_view_distance_receives_nothing() {
     tokio::time::timeout(Duration::from_secs(300), async {
         let world = HardcodedWorld::new();
-        // B never moves -- stays at `SPAWN_POSITION = (0, -59, 0)`, so its own `sent_chunks`
+        // B never moves -- stays at `SPAWN_POSITION = (0, -60, 0)`, so its own `sent_chunks`
         // never grows past the joining grid's own `PLACEHOLDER_RADIUS_CHUNKS`-chunk radius
         // around spawn's chunk `(0, 0)`.
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
@@ -280,7 +280,7 @@ async fn bystander_outside_view_distance_receives_nothing() {
         let (mut a, mut a_acc) = spawn_actor(&world, "a", a_uuid_raw).await;
         let sessions = world.player_sessions();
 
-        // A walks from `(0, -59, 0)` to `(112, -59, 0)` in 14 legal 8-block steps (each step's
+        // A walks from `(0, -60, 0)` to `(112, -60, 0)` in 14 legal 8-block steps (each step's
         // own squared length is 64, comfortably under `evaluate_movement`'s own speed-check
         // budget) -- `112 >> 4 = 7` chunks out, well past the 5-chunk joining radius around
         // B's own spawn chunk `(0, 0)`.
@@ -292,7 +292,7 @@ async fn bystander_outside_view_distance_receives_nothing() {
                 &mut a,
                 &SetPlayerPositionAndRotation {
                     x,
-                    y: -59.0,
+                    y: -60.0,
                     z: 0.0,
                     yaw: 0.0,
                     pitch: 0.0,
@@ -301,7 +301,7 @@ async fn bystander_outside_view_distance_receives_nothing() {
             )
             .await;
             wait_until(|| {
-                sessions.with_record_mut(a_uuid, |r| r.data.pos) == Some([x, -59.0, 0.0])
+                sessions.with_record_mut(a_uuid, |r| r.data.pos) == Some([x, -60.0, 0.0])
             })
             .await;
         }
@@ -319,8 +319,8 @@ async fn bystander_outside_view_distance_receives_nothing() {
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let below_feet = BlockPos::new(112, -60, 0);
-        let placed_pos = BlockPos::new(112, -61, 0);
+        let below_feet = BlockPos::new(112, -61, 0);
+        let placed_pos = BlockPos::new(112, -62, 0);
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, below_feet, 0).await;
         assert_ne!(id, 0, "the stone placement must actually succeed");
 
@@ -354,29 +354,29 @@ async fn two_same_tick_same_section_changes_coalesce_into_one_section_blocks_upd
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
         let mut seq = 0;
 
-        // The support block, at `(2, -59, 2)` -- click the floor tile directly below with
+        // The support block, at `(2, -60, 2)` -- click the floor tile directly below with
         // `Face::Up` (direction 1).
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let support_pos = BlockPos::new(2, -59, 2);
+        let support_pos = BlockPos::new(2, -60, 2);
         let support_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 2), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 2), 1).await;
         assert_ne!(support_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
         // Two wall torches, both attached to the support's own horizontal faces -- North
-        // (direction 2, lands at `(2, -59, 1)`) and East (direction 5, lands at `(3, -59,
-        // 2)`) -- both within section `(chunk_x=0, chunk_z=0, section_y=(-59)>>4=-4)`.
+        // (direction 2, lands at `(2, -60, 1)`) and East (direction 5, lands at `(3, -60,
+        // 2)`) -- both within section `(chunk_x=0, chunk_z=0, section_y=(-60)>>4=-4)`.
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_north_pos = BlockPos::new(2, -59, 1);
+        let torch_north_pos = BlockPos::new(2, -60, 1);
         let torch_north_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, support_pos, 2).await;
         assert_ne!(torch_north_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
-        let torch_east_pos = BlockPos::new(3, -59, 2);
+        let torch_east_pos = BlockPos::new(3, -60, 2);
         let torch_east_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, support_pos, 5).await;
         assert_ne!(torch_east_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;

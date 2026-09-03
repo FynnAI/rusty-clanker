@@ -15,7 +15,7 @@
 //! M3). Breaking the block entity must remove it from a later joiner's own chunk packet.
 //!
 //! Coordinates: every actor stays at `HardcodedWorld`'s own default spawn (`SPAWN_POSITION =
-//! (0, -59, 0)`, `connection.rs`), so every placement target here lands inside chunk `(0, 0)`
+//! (0, -60, 0)`, `connection.rs`), so every placement target here lands inside chunk `(0, 0)`
 //! -- the one chunk `capture_chunk_zero`, below, extracts from each joiner's own Play-entry
 //! chunk batch. No two placements in one test ever target the same cell (`TargetNotAir` would
 //! otherwise reject the second one).
@@ -282,7 +282,7 @@ const FLOOR_COLS: [(i32, i32); 4] = [(1, 0), (2, 0), (3, 0), (1, 1)];
 
 fn floor(i: usize) -> BlockPos {
     let (dx, dz) = FLOOR_COLS[i];
-    BlockPos::new(dx, -60, dz)
+    BlockPos::new(dx, -61, dz)
 }
 
 #[tokio::test]
@@ -404,7 +404,7 @@ async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled_nondefault_ca
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;
 
-        // Floor torch at `floor(0)` -> final position `(1, -59, 0)`, lit=true (a freshly
+        // Floor torch at `floor(0)` -> final position `(1, -60, 0)`, lit=true (a freshly
         // placed torch is always lit, unpowered support -- `play_block_state_orientation_
         // real_client.rs`'s own `wall_and_floor_redstone_torch_orientation_over_real_
         // connection` test proves this same id independently).
@@ -414,7 +414,7 @@ async fn hopper_placed_beside_a_lit_redstone_torch_starts_disabled_nondefault_ca
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, floor(0), 1).await;
         assert_eq!(id, 6885, "floor torch -> lit=true");
 
-        // Hopper at `floor(1) = (2, -60, 0)`, Face::Up -> final position `(2, -59, 0)`,
+        // Hopper at `floor(1) = (2, -61, 0)`, Face::Up -> final position `(2, -60, 0)`,
         // horizontally adjacent (West neighbor is the torch) -- `TorchBehavior::
         // weak_signal_toward` gives `15` toward any direction except its own `Down` input
         // face, so this hopper's own `best_neighbor_signal` reads `> 0` (`redstone::signal`).

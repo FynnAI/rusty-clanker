@@ -12,7 +12,7 @@
 //!
 //! Coordinates: every actor here stays at `HardcodedWorld`'s own default spawn (never sends
 //! `SetPlayerPositionAndRotation`, mirroring `play_block_break_place_full.rs`'s own
-//! `creative_break_is_still_instant...` test, which targets `(0, -60, 0)` -- the column
+//! `creative_break_is_still_instant...` test, which targets `(0, -61, 0)` -- the column
 //! directly below spawn -- unmoved). Every target column below is a small offset from that
 //! same spawn column, comfortably inside creative reach (`BLOCK_INTERACTION_RANGE_CREATIVE`
 //! `5.0` + the `1.0` verification buffer, `mining.rs`), and no two placements in the same test
@@ -215,7 +215,7 @@ const FLOOR_COLS: [(i32, i32); 8] = [
 
 fn floor(i: usize) -> BlockPos {
     let (dx, dz) = FLOOR_COLS[i];
-    BlockPos::new(dx, -60, dz)
+    BlockPos::new(dx, -61, dz)
 }
 
 /// A reference-block floor column set well clear of every `FLOOR_COLS` entry above AND of
@@ -223,11 +223,11 @@ fn floor(i: usize) -> BlockPos {
 /// hopper-on-stone, torch-on-stone -- each place a reference Stone here, then click all 4 of
 /// ITS OWN horizontal faces; every one of those 4 target cells must land somewhere `FLOOR_COLS`
 /// itself never separately occupies, or the second placement would hit `TargetNotAir`). Still
-/// within creative reach of spawn (`(0, -59, 0)`-ish, per this file's own top-of-file doc
+/// within creative reach of spawn (`(0, -60, 0)`-ish, per this file's own top-of-file doc
 /// comment): the farthest of the 4 neighbor cells this produces is at Euclidean distance
 /// `sqrt(1^2 + 3^2) ~= 3.16` from spawn's own column, comfortably inside the `5.0 + 1.0`
 /// creative reach budget.
-const STONE_FLOOR: BlockPos = BlockPos::new(0, -60, 3);
+const STONE_FLOOR: BlockPos = BlockPos::new(0, -61, 3);
 
 #[tokio::test]
 async fn furnace_orientation_and_lit_state_over_real_connection() {

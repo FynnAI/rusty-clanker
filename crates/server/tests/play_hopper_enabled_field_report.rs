@@ -198,16 +198,16 @@ async fn torch_next_to_a_running_hopper_disables_it_and_removal_re_enables_it() 
         // facing=down). Click the floor tile directly below with `Face::Up` (direction 1),
         // mirroring `play_block_entity_chunk_list.rs`'s own already-proven
         // `hopper_placed_with_no_neighbor_signal_stays_enabled` geometry. `x=5` -- well clear
-        // of `SPAWN_POSITION = (0, -59, 0)`, which the (never-moving) actor's own body
+        // of `SPAWN_POSITION = (0, -60, 0)`, which the (never-moving) actor's own body
         // occupies for this whole test; a placement landing exactly on the actor's own spawn
         // cell would be rejected as self-obstructed (M3 field-report Defect 1 fix), unrelated
         // to this test's own point.
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Hopper))
             .await;
-        let hopper_pos = BlockPos::new(5, -59, 0);
+        let hopper_pos = BlockPos::new(5, -60, 0);
         let hopper_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(5, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(5, -61, 0), 1).await;
         assert_eq!(
             hopper_id, HOPPER.0 as i32,
             "hopper with no neighbor signal -> enabled=true, facing=down"
@@ -221,9 +221,9 @@ async fn torch_next_to_a_running_hopper_disables_it_and_removal_re_enables_it() 
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(4, -59, 0);
+        let torch_pos = BlockPos::new(4, -60, 0);
         let torch_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(4, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(4, -61, 0), 1).await;
         assert_ne!(
             torch_id, 0,
             "the floor torch placement must actually succeed"

@@ -8,7 +8,7 @@ use rc_nbt::{borrow, owned};
 #[test]
 fn fresh_default_round_trips_through_gzip_bytes() {
     let original =
-        LevelDat::fresh_default("New World", 1_700_000_000_000, (0, -59, 0, 0.0), "26.2");
+        LevelDat::fresh_default("New World", 1_700_000_000_000, (0, -60, 0, 0.0), "26.2");
 
     let bytes = original.to_gzip_bytes().unwrap();
     let decoded = LevelDat::from_gzip_bytes(&bytes).unwrap();
@@ -29,7 +29,7 @@ fn fresh_default_round_trips_through_gzip_bytes() {
 #[test]
 fn unknown_top_level_data_fields_survive_round_trip() {
     let original =
-        LevelDat::fresh_default("New World", 1_700_000_000_000, (0, -59, 0, 0.0), "26.2");
+        LevelDat::fresh_default("New World", 1_700_000_000_000, (0, -60, 0, 0.0), "26.2");
     let mut data = original.to_data_compound();
 
     let mut game_rules = owned::NbtCompound::new();
@@ -55,7 +55,7 @@ fn unknown_top_level_data_fields_survive_round_trip() {
 
 #[test]
 fn gzip_bytes_are_actually_gzip_compressed() {
-    let level = LevelDat::fresh_default("New World", 0, (0, -59, 0, 0.0), "26.2");
+    let level = LevelDat::fresh_default("New World", 0, (0, -60, 0, 0.0), "26.2");
     let bytes = level.to_gzip_bytes().unwrap();
 
     assert!(bytes.len() >= 2);

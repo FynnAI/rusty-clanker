@@ -110,7 +110,7 @@ fn load_miss_falls_back_to_superflat_and_marks_freshly_generated() {
     for x in 0u8..16 {
         for z in 0u8..16 {
             assert_eq!(loaded.block_states.get(x, -64, z), expected.bedrock);
-            assert_eq!(loaded.block_states.get(x, -60, z), expected.grass);
+            assert_eq!(loaded.block_states.get(x, -61, z), expected.grass);
             assert_eq!(loaded.block_states.get(x, 10, z), expected.air);
         }
     }

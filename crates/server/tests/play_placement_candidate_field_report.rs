@@ -233,7 +233,7 @@ async fn torch_ceiling_click_falls_back_to_floor_torch_over_real_connection_faci
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(2, -59, 0);
+        let torch_pos = BlockPos::new(2, -60, 0);
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, ceiling_pos, 0).await;
         assert_eq!(
             id, 6885,
@@ -285,8 +285,8 @@ async fn repeater_on_non_full_block_is_refused_over_real_connection() {
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let floor = BlockPos::new(2, -60, 0);
-        let torch_pos = BlockPos::new(2, -59, 0);
+        let floor = BlockPos::new(2, -61, 0);
+        let torch_pos = BlockPos::new(2, -60, 0);
         let torch_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, floor, 1).await;
         assert_eq!(torch_id, 6885);
 
@@ -324,8 +324,8 @@ async fn chest_beside_chest_same_facing_merges_into_left_right_pair_over_real_co
         rotate(&mut a, &world, uuid_a, YAW_FACING_NORTH, 90.0).await;
 
         // Chest 1, facing North.
-        let chest1_pos = BlockPos::new(2, -59, 0);
-        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 0), 1).await;
+        let chest1_pos = BlockPos::new(2, -60, 0);
+        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
         assert_eq!(
             id,
             chest_state_id(rc_mechanics::Direction::North, ChestType::Single) as i32,
@@ -335,8 +335,8 @@ async fn chest_beside_chest_same_facing_merges_into_left_right_pair_over_real_co
         // Chest 2, west of chest 1, same yaw (same base FACING North). Chest 2's own
         // clockwise-from-North neighbor direction is East -- exactly where chest 1 sits --
         // so this merges: chest 2 becomes LEFT, chest 1 flips to RIGHT.
-        let chest2_pos = BlockPos::new(1, -59, 0);
-        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+        let chest2_pos = BlockPos::new(1, -60, 0);
+        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_eq!(
             id,
             chest_state_id(rc_mechanics::Direction::North, ChestType::Left) as i32,
@@ -372,8 +372,8 @@ async fn sneak_place_beside_perpendicular_chest_adopts_its_facing_over_real_conn
 
         // Chest 1, facing North.
         rotate(&mut a, &world, uuid_a, YAW_FACING_NORTH, 90.0).await;
-        let chest1_pos = BlockPos::new(2, -59, 0);
-        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 0), 1).await;
+        let chest1_pos = BlockPos::new(2, -60, 0);
+        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
         assert_eq!(
             id,
             chest_state_id(rc_mechanics::Direction::North, ChestType::Single) as i32,
@@ -402,7 +402,7 @@ async fn sneak_place_beside_perpendicular_chest_adopts_its_facing_over_real_conn
         // Click chest 1's own East face directly (direction 5) -- a horizontal face
         // perpendicular to chest 1's own North/South facing axis, so the sneak-merge's own
         // axis-eligibility check passes. The new chest lands at chest1_pos + East.
-        let chest2_pos = BlockPos::new(3, -59, 0);
+        let chest2_pos = BlockPos::new(3, -60, 0);
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, chest1_pos, 5).await;
         assert_eq!(
             id,

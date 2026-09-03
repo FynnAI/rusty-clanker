@@ -15,7 +15,7 @@
 //! target (each step's own squared length is ~29.8, comfortably under the per-tick budget),
 //! confirming each step landed (`wait_until`, mirroring `play_movement_application.rs`'s
 //! own established pattern) before sending the next -- the final step's own claimed
-//! position is `(12.5, -58.0, -30.25)` exactly, unchanged from this test's original target.
+//! position is `(12.5, -59.0, -30.25)` exactly, unchanged from this test's original target.
 
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
@@ -115,14 +115,14 @@ async fn position_and_rotation_persist_across_a_real_disconnect_and_rejoin() {
             let mut acc = BytesMut::new();
             drain_play_entry(&mut client, &mut acc).await;
 
-            // Walks the straight line from `SPAWN_POSITION` (0, -59, 0) to the target
-            // (12.5, -58, -30.25) in six equal, speed-check-legal steps (M3-B02 test-
+            // Walks the straight line from `SPAWN_POSITION` (0, -60, 0) to the target
+            // (12.5, -59, -30.25) in six equal, speed-check-legal steps (M3-B02 test-
             // authoring fix, module doc comment) rather than one large jump.
             const STEPS: u32 = 6;
-            const TARGET: (f64, f64, f64) = (12.5, -58.0, -30.25);
+            const TARGET: (f64, f64, f64) = (12.5, -59.0, -30.25);
             for step in 1..=STEPS {
                 let t = step as f64 / STEPS as f64;
-                let pos = (TARGET.0 * t, -59.0 + (TARGET.1 - -59.0) * t, TARGET.2 * t);
+                let pos = (TARGET.0 * t, -60.0 + (TARGET.1 - -60.0) * t, TARGET.2 * t);
                 send_packet(
                     &mut client,
                     &SetPlayerPositionAndRotation {
@@ -179,7 +179,7 @@ async fn position_and_rotation_persist_across_a_real_disconnect_and_rejoin() {
 
         let sync = decode_one::<SynchronizePlayerPosition>(sync_body).unwrap();
         assert_eq!(sync.x, 12.5);
-        assert_eq!(sync.y, -58.0);
+        assert_eq!(sync.y, -59.0);
         assert_eq!(sync.z, -30.25);
         assert_eq!(sync.yaw, 91.0);
         assert_eq!(sync.pitch, -12.0);

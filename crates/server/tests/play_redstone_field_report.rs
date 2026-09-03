@@ -378,7 +378,7 @@ async fn isolated_redstone_wire_gets_the_connected_plus_shape_not_a_bare_dot() {
         // (Root Cause 2, "wire placement must run the vanilla placement-time connection
         // resolution"). `east=side(1), north=side(1), power=0, south=side(1), west=side(1)`:
         // `4011 + 1*432 + 1*144 + 0*9 + 1*3 + 1*1 = 4591`.
-        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+        let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_eq!(
             id, 4591,
             "isolated wire -> all four sides Side (the vanilla \"plus\")"
@@ -403,12 +403,12 @@ async fn two_adjacent_wires_connect_to_each_other_on_both_sides_orientation_case
             .await;
         let mut seq = 0;
 
-        let wire_a_pos = BlockPos::new(1, -59, 0);
-        let wire_b_pos = BlockPos::new(2, -59, 0);
+        let wire_a_pos = BlockPos::new(1, -60, 0);
+        let wire_b_pos = BlockPos::new(2, -60, 0);
 
         // Wire A, placed alone -> the isolated "plus" shape (previous test's own 4591).
         let id_a_isolated =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_eq!(id_a_isolated, 4591);
         // Drain B's own copy of that same broadcast so it does not interfere with this test's
         // own later scan.
@@ -422,7 +422,7 @@ async fn two_adjacent_wires_connect_to_each_other_on_both_sides_orientation_case
         // none(2)`, `power=0` (A itself carries no power yet):
         // `4011 + 1*432 + 2*144 + 0*9 + 2*3 + 1*1 = 4738`.
         let id_b =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
         assert_eq!(
             id_b, 4738,
             "wire B, placed beside A -> connects West toward A, auto-extends East"
@@ -463,21 +463,21 @@ async fn a_lit_wall_torch_powers_an_adjacent_wire_to_full_strength() {
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
         let mut seq = 0;
 
-        // A reference Stone at (1, -59, 0).
+        // A reference Stone at (1, -60, 0).
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let stone_pos = BlockPos::new(1, -59, 0);
+        let stone_pos = BlockPos::new(1, -60, 0);
         let stone_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_ne!(stone_id, 0);
 
-        // A redstone torch on the stone's own EAST face -> wall torch at (2, -59, 0), FACING =
+        // A redstone torch on the stone's own EAST face -> wall torch at (2, -60, 0), FACING =
         // East (points away from the wall, into the room), always lit at placement.
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(2, -59, 0);
+        let torch_pos = BlockPos::new(2, -60, 0);
         let torch_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, stone_pos, 5).await;
         assert_eq!(torch_id, 6893, "wall torch facing=east, lit=true");
 
@@ -486,9 +486,9 @@ async fn a_lit_wall_torch_powers_an_adjacent_wire_to_full_strength() {
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneWire))
             .await;
-        let wire_pos = BlockPos::new(2, -59, 1);
+        let wire_pos = BlockPos::new(2, -60, 1);
         let wire_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 1), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 1), 1).await;
 
         // The torch is a lit, non-conductor signal source: `weak_signal_toward` reads `15`
         // toward any direction other than its own input side (`West`, back into the wall) --
@@ -519,15 +519,15 @@ async fn a_floor_torch_pops_when_its_own_support_block_is_broken_nondefault_case
         let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
         let mut seq = 0;
 
-        // A reference Stone at (1, -59, 0), used purely as the torch's own removable support --
+        // A reference Stone at (1, -60, 0), used purely as the torch's own removable support --
         // NOT the world's own natural superflat floor, so breaking it is a clean, isolated
         // "support disappears" event this test fully controls.
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let support_pos = BlockPos::new(1, -59, 0);
+        let support_pos = BlockPos::new(1, -60, 0);
         let stone_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_ne!(stone_id, 0);
         // Drain B's own copy of the stone's own placement broadcast.
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
@@ -626,9 +626,9 @@ async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_act
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let s1_pos = BlockPos::new(1, -59, 0);
+        let s1_pos = BlockPos::new(1, -60, 0);
         let s1_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(1, -61, 0), 1).await;
         assert_ne!(s1_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
@@ -724,9 +724,9 @@ async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_ac
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let s2_pos = BlockPos::new(3, -59, 0);
+        let s2_pos = BlockPos::new(3, -60, 0);
         let s2_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -61, 0), 1).await;
         assert_ne!(s2_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
@@ -737,7 +737,7 @@ async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_ac
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let driver_pos = BlockPos::new(3, -59, -1);
+        let driver_pos = BlockPos::new(3, -60, -1);
         let driver_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s2_pos, 2).await;
         assert_eq!(driver_id, 6887, "driver wall torch, facing=north, lit=true");
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
@@ -750,9 +750,9 @@ async fn a_repeater_flips_powered_via_a_scheduled_tick_with_no_further_player_ac
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Repeater))
             .await;
-        let r2_pos = BlockPos::new(3, -59, -2);
+        let r2_pos = BlockPos::new(3, -60, -2);
         let r2_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, -2), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -61, -2), 1).await;
         assert_eq!(
             r2_id, 7041,
             "repeater facing=south, delay=1, locked=false, powered=false -- R2's OWN placement \
@@ -834,9 +834,9 @@ async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_t
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let s_pos = BlockPos::new(2, -59, 0);
+        let s_pos = BlockPos::new(2, -60, 0);
         let s_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
         assert_ne!(s_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
@@ -846,8 +846,8 @@ async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_t
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Piston))
             .await;
-        let piston_pos = BlockPos::new(3, -59, 0);
-        let head_pos = BlockPos::new(4, -59, 0);
+        let piston_pos = BlockPos::new(3, -60, 0);
+        let head_pos = BlockPos::new(4, -60, 0);
         let piston_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s_pos, 5).await;
         // PISTON default = 2263 (extended=false, facing=north); `full6_piston_index(East) == 1`:
         // 2263 + 1 = 2264 -- a plain retracted piston, no signal anywhere near it yet.
@@ -866,9 +866,9 @@ async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_t
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(3, -59, -1);
+        let torch_pos = BlockPos::new(3, -60, -1);
         let torch_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -60, -1), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -61, -1), 1).await;
         assert_eq!(torch_id, 6885, "floor torch -> lit=true");
 
         // The torch's OWN placement-time fan-out reaches the piston synchronously, this same
@@ -981,9 +981,9 @@ async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let s_pos = BlockPos::new(-2, -59, 0);
+        let s_pos = BlockPos::new(-2, -60, 0);
         let s_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-2, -60, 0), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-2, -61, 0), 1).await;
         assert_ne!(s_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
 
@@ -991,9 +991,9 @@ async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::StickyPiston))
             .await;
-        let piston_pos = BlockPos::new(-3, -59, 0);
-        let head_pos = BlockPos::new(-4, -59, 0);
-        let candidate_pos = BlockPos::new(-5, -59, 0);
+        let piston_pos = BlockPos::new(-3, -60, 0);
+        let head_pos = BlockPos::new(-4, -60, 0);
+        let candidate_pos = BlockPos::new(-5, -60, 0);
         let piston_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s_pos, 4).await;
         // STICKY_PISTON default = 2241 (extended=false, facing=north); `full6_piston_index(West)
         // == 3`: 2241 + 3 = 2244.
@@ -1008,9 +1008,9 @@ async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(-3, -59, -1);
+        let torch_pos = BlockPos::new(-3, -60, -1);
         let torch_id =
-            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-3, -60, -1), 1).await;
+            place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(-3, -61, -1), 1).await;
         assert_eq!(torch_id, 6885, "floor torch -> lit=true");
 
         let seen = staged(

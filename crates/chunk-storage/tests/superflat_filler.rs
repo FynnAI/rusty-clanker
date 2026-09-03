@@ -24,11 +24,11 @@ fn layer_table_matches_m1_b05_exactly() {
 
     for &(x, z) in &[(0u8, 0u8), (15, 15), (7, 3)] {
         assert_eq!(blocks.get(x, -64, z), f.bedrock, "bedrock at ({x},{z})");
-        for y in -63..=-61 {
+        for y in -63..=-62 {
             assert_eq!(blocks.get(x, y, z), f.dirt, "dirt at ({x},{y},{z})");
         }
-        assert_eq!(blocks.get(x, -60, z), f.grass, "grass at ({x},{z})");
-        assert_eq!(blocks.get(x, -59, z), f.air, "air at ({x},-59,{z})");
+        assert_eq!(blocks.get(x, -61, z), f.grass, "grass at ({x},{z})");
+        assert_eq!(blocks.get(x, -60, z), f.air, "air at ({x},-60,{z})");
         assert_eq!(blocks.get(x, 100, z), f.air, "air at ({x},100,{z})");
     }
 }
@@ -53,7 +53,7 @@ fn heightmap_reports_first_air_y() {
 
     for x in 0u8..16 {
         for z in 0u8..16 {
-            assert_eq!(heightmaps.world_y(HeightmapKind::WorldSurface, x, z), -59);
+            assert_eq!(heightmaps.world_y(HeightmapKind::WorldSurface, x, z), -60);
         }
     }
 }

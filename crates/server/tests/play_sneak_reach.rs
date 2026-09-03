@@ -136,7 +136,7 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 }
 
 /// The scripted geometry (Context, matching `mining_reach_validation.rs`'s own pure-function
-/// case): feet directly above the grass at `(0, -60, 0)`, high enough that the standing eye
+/// case): feet directly above the grass at `(0, -61, 0)`, high enough that the standing eye
 /// (`1.62`) sits just past the 5.5 survival threshold from the block's own nearest (top) face
 /// and the crouching eye (`1.27`) sits just inside it. Deliberately left Creative (the
 /// default -- no `debug_set_survival` call): a Creative break is always instant regardless of
@@ -146,8 +146,8 @@ async fn wait_until(mut check: impl FnMut() -> bool) {
 /// destroy never auto-finalizes without an explicit `StopDestroy` packet, no matter how many
 /// ticks pass (`mining.rs`'s own dig-packet-lifecycle doc comment) -- the wrong mode for a
 /// test that wants one action to unambiguously succeed or fail.
-const FEET_Y: f64 = -54.5;
-const TARGET: BlockPos = BlockPos::new(0, -60, 0);
+const FEET_Y: f64 = -55.5;
+const TARGET: BlockPos = BlockPos::new(0, -61, 0);
 
 #[tokio::test]
 async fn sneaking_makes_an_otherwise_out_of_reach_block_breakable() {

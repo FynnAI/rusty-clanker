@@ -136,8 +136,8 @@ fn superflat_section_zero_matches_a_hand_computed_indirect_palette() {
         let world_y = rc_chunk_storage::WORLD_MIN_Y + local_y;
         let expected_name = match world_y {
             -64 => "test:bedrock",
-            -63..=-61 => "test:dirt",
-            -60 => "test:grass_block",
+            -63..=-62 => "test:dirt",
+            -61 => "test:grass_block",
             _ => "test:air",
         };
         let expected_index = names.iter().position(|n| n == expected_name).unwrap();

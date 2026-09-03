@@ -161,7 +161,7 @@ async fn stage4_is_inert_with_no_registered_behavior() {
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -60, 0)),
+                location: pack_position(BlockPos::new(0, -61, 0)),
                 direction: 1,
                 sequence: 1,
             },
@@ -175,7 +175,7 @@ async fn stage4_is_inert_with_no_registered_behavior() {
         let body = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         assert_eq!(
             decode_one::<BlockUpdate>(body).unwrap().location,
-            pack_position(BlockPos::new(0, -60, 0))
+            pack_position(BlockPos::new(0, -61, 0))
         );
 
         assert_idle(

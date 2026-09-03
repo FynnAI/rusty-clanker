@@ -30,7 +30,7 @@ fn try_decode(bytes: &[u8]) -> Result<LoadedPlayerRecord, SchemaError> {
 
 #[test]
 fn fresh_default_round_trips_through_save_then_load() {
-    let original = LoadedPlayerRecord::fresh_default(DimensionId::OVERWORLD, [8.5, -59.0, -3.25]);
+    let original = LoadedPlayerRecord::fresh_default(DimensionId::OVERWORLD, [8.5, -60.0, -3.25]);
     let bytes = rc_nbt::write_owned(&owned::BaseNbt::new("", original.to_nbt()));
     let decoded = decode(&bytes);
 

@@ -195,7 +195,7 @@ fn synthetic_player_movement_drives_real_load_unload_and_persistence() {
         let mut found = false;
         for (tag, mut blocks, mut persistence) in query.iter_mut(&mut region.world) {
             if tag.0 == target {
-                blocks.set(0, -60, 0, BlockStateId(1)); // grass -> bedrock, a real mutation
+                blocks.set(0, -61, 0, BlockStateId(1)); // grass -> bedrock, a real mutation
                 persistence.mark_dirty();
                 found = true;
             }
@@ -251,7 +251,7 @@ fn synthetic_player_movement_drives_real_load_unload_and_persistence() {
             let doc = codec
                 .from_nbt(&compound, DimensionId::OVERWORLD)
                 .expect("a document this crate wrote always decodes");
-            if doc.blocks.get(0, -60, 0) == BlockStateId(1) {
+            if doc.blocks.get(0, -61, 0) == BlockStateId(1) {
                 break;
             }
         }
@@ -336,7 +336,7 @@ fn real_tick_region_never_observes_a_slow_chunk_write() {
         BlockStateColumn::new(BlockStateId(0), thresholds),
         BiomeColumn::new(BiomeId(0), biome_thresholds),
         LightColumn::new_uninitialized(),
-        HeightmapSet::new_uniform(-59),
+        HeightmapSet::new_uniform(-60),
         BlockEntityIndex::new(),
         BlockEntitySaveRecords::default(),
         ChunkStatus(ChunkGenStatus::Full),

@@ -170,9 +170,9 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
         let uuid = uuid::Uuid::from_u128(101);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 101).await;
 
-        // (9, -59, 0) is a single, speed-check-legal 9-block move from `SPAWN_POSITION`
+        // (9, -60, 0) is a single, speed-check-legal 9-block move from `SPAWN_POSITION`
         // (`9^2 = 81 <= SPEED_CHECK_THRESHOLD = 100.0`) that still lands the targeted block,
-        // (9, -60, 0), ~9.7 blocks from `SPAWN_POSITION`'s own eye position -- well outside
+        // (9, -61, 0), ~9.7 blocks from `SPAWN_POSITION`'s own eye position -- well outside
         // the 5.0 creative reach bound: before the M2 field-report fix, every reach check
         // used `SPAWN_POSITION` unconditionally, so this would always be rejected
         // `OutOfReach` no matter where the player actually claimed to stand.
@@ -183,12 +183,12 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
         // horizontally through open air forever in this hardcoded world's own always-below-
         // spawn content, never hitting the intended target. `SetPlayerPositionAndRotation`
         // moves and looks straight down (`pitch: 90.0`) in the same packet/tick, landing
-        // exactly on `(9, -60, 0)`, the block directly below the new position.
+        // exactly on `(9, -61, 0)`, the block directly below the new position.
         send_packet(
             &mut a,
             &SetPlayerPositionAndRotation {
                 x: 9.0,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 yaw: 0.0,
                 pitch: 90.0,
@@ -198,7 +198,7 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
         .await;
 
         let sessions = world.player_sessions();
-        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -59.0, 0.0]))
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -60.0, 0.0]))
             .await;
 
         // Now within ~2.2 blocks of the moved position -- accepted.
@@ -206,7 +206,7 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(9, -60, 0)),
+                location: pack_position(BlockPos::new(9, -61, 0)),
                 direction: 1,
                 sequence: 30,
             },
@@ -221,11 +221,11 @@ async fn reach_check_uses_the_live_position_after_a_movement_packet() {
 
         let update = recv_packet_of_type(&mut a, &mut a_acc, BlockUpdate::ID).await;
         let update = decode_one::<BlockUpdate>(update).unwrap();
-        assert_eq!(update.location, pack_position(BlockPos::new(9, -60, 0)));
+        assert_eq!(update.location, pack_position(BlockPos::new(9, -61, 0)));
         assert_eq!(update.block_state_id, blocks::AIR.0 as i32);
 
         assert_eq!(
-            world.debug_query_block(BlockPos::new(9, -60, 0)).await,
+            world.debug_query_block(BlockPos::new(9, -61, 0)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::AIR.0,
                 dirty: true,
@@ -243,15 +243,15 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
         let uuid = uuid::Uuid::from_u128(102);
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 102).await;
 
-        // (0, -60, 0) sits ~2.1 blocks from `SPAWN_POSITION` -- comfortably in reach at
-        // join time. Moving to (9, -59, 0) -- a single, speed-check-legal 9-block move
+        // (0, -61, 0) sits ~2.1 blocks from `SPAWN_POSITION` -- comfortably in reach at
+        // join time. Moving to (9, -60, 0) -- a single, speed-check-legal 9-block move
         // (`9^2 = 81 <= SPEED_CHECK_THRESHOLD = 100.0`) -- puts the player's own live eye
         // position ~8.8 blocks from the target, past the 5.0 creative bound.
         send_packet(
             &mut a,
             &SetPlayerPosition {
                 x: 9.0,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -259,14 +259,14 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
         .await;
 
         let sessions = world.player_sessions();
-        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -59.0, 0.0]))
+        wait_until(|| sessions.with_record_mut(uuid, |r| r.data.pos) == Some([9.0, -60.0, 0.0]))
             .await;
 
         send_packet(
             &mut a,
             &PlayerAction {
                 status: 0,
-                location: pack_position(BlockPos::new(0, -60, 0)),
+                location: pack_position(BlockPos::new(0, -61, 0)),
                 direction: 1,
                 sequence: 31,
             },
@@ -290,7 +290,7 @@ async fn moving_away_from_a_target_makes_it_go_out_of_reach() {
         .await;
 
         assert_eq!(
-            world.debug_query_block(BlockPos::new(0, -60, 0)).await,
+            world.debug_query_block(BlockPos::new(0, -61, 0)).await,
             Some(DebugBlockInfo {
                 raw_state: blocks::GRASS_BLOCK.0,
                 dirty: false,

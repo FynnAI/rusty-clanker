@@ -125,7 +125,7 @@ async fn small_in_range_move_is_accepted_silently() {
             &mut a,
             &SetPlayerPosition {
                 x: 0.1,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -159,7 +159,7 @@ async fn wildly_out_of_range_move_triggers_a_teleport_correction() {
             &mut a,
             &SetPlayerPosition {
                 x: 5000.0,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -178,7 +178,7 @@ async fn wildly_out_of_range_move_triggers_a_teleport_correction() {
         // id `1` (Context: `TeleportState::next_teleport_id`'s own starting value).
         assert_eq!(sync.teleport_id, 2);
         assert_eq!(sync.x, 0.0);
-        assert_eq!(sync.y, -59.0);
+        assert_eq!(sync.y, -60.0);
         assert_eq!(sync.z, 0.0);
         assert_eq!(sync.yaw, 0.0);
         assert_eq!(sync.pitch, 0.0);
@@ -200,7 +200,7 @@ async fn movement_is_ignored_while_awaiting_a_teleport_ack() {
             &mut a,
             &SetPlayerPosition {
                 x: 5000.0,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -222,7 +222,7 @@ async fn movement_is_ignored_while_awaiting_a_teleport_ack() {
             &mut a,
             &SetPlayerPosition {
                 x: 0.05,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -244,7 +244,7 @@ async fn movement_is_ignored_while_awaiting_a_teleport_ack() {
             &mut a,
             &SetPlayerPosition {
                 x: 0.05,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -276,7 +276,7 @@ async fn nan_position_disconnects_the_connection() {
             &mut a,
             &SetPlayerPosition {
                 x: f64::NAN,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 on_ground: true,
             },
@@ -373,7 +373,7 @@ async fn nan_rotation_paired_with_a_speed_violation_disconnects_before_any_corre
             &mut a,
             &SetPlayerPositionAndRotation {
                 x: 5000.0,
-                y: -59.0,
+                y: -60.0,
                 z: 0.0,
                 yaw: 0.0,
                 pitch: f32::NAN,
