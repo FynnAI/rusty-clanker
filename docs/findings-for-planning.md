@@ -676,7 +676,33 @@ Entries name the milestone that surfaced them and the code they concern.
   structural empty-mask semantics reproduce bit-identically. A small M2-B01
   field-report changeset (test-authoring for the light tests, implementation
   for `light.rs` and its chunk-packet mask use) must land before M4-B07's
-  implementation starts; M4-B07's Context §1 names the gap.
+  implementation starts; M4-B07's Context §1 names the gap. **Resolved**
+  during M4-B07's own Step 0 (test-authoring/implementation pair landed
+  ahead of the M4-B07 changesets themselves) — left here only until
+  planning deletes it, per this file's own review process.
+
+- **`cargo fmt --all` (and therefore `cargo run -p xtask -- fmt-check`,
+  which shells out to it unmodified) fails on this Windows machine with
+  `Der Dateiname oder die Erweiterung ist zu lang` / `os error 206`
+  (`ERROR_FILENAME_EXCED_RANGE`) once the workspace reaches its current
+  size (492 tracked `.rs` files), independent of any M4-B07 content —
+  surfaced while verifying M4-B07's own changesets, not caused by them.**
+  `cargo fmt -p <crate> [-p <crate> ...] -- --check`, scoped to a handful
+  of packages at a time, succeeds cleanly (confirmed clean for every
+  crate M4-B07 touches: `rc-chunk-storage`, `rc-messaging`, `rc-scheduler`,
+  `rc-mechanics`, `rusty-clanker-server`, `rc-gametest`) — the formatting
+  itself is compliant; only the single unscoped `--all` invocation across
+  the whole workspace fails, consistent with a Windows process-creation
+  command-line-length ceiling being exceeded once `cargo-fmt` enumerates
+  and passes every workspace source file's own full absolute path to
+  `rustfmt` in one process invocation (this worktree's own path prefix
+  alone is over 60 characters, multiplied across ~490 files). Needs a
+  decision: `09-testing-quality.md`'s CI tier definitions should record
+  whether the hosted CI runners hit the same ceiling (likely not on Linux,
+  where the practical command-line limit is far higher) or whether
+  `fmt-check`'s own implementation should switch to a manifest-driven,
+  batched invocation so a Windows development machine's local gate stays
+  usable as the workspace keeps growing.
 
 - **Text components on the wire collapse to a bare string — M1-B05's
   `NbtTextComponent` and M4-B01's metadata encoders emit the compound form
@@ -1829,6 +1855,82 @@ Entries name the milestone that surfaced them and the code they concern.
   Needs a decision on whether to correct the blueprint's own illustrative
   fixture text to match (or to a similarly non-colliding scheme) so a
   future reader is not misled by the same collision.
+### M4-B07 (light engine) — shipped deviations and simplifications
+
+- **`LightPropertiesRegistry` needed `#[derive(Resource)]`, which the
+  blueprint's own Deliverables snippet for `properties.rs` does not show.**
+  Context §8's own `run_stage8_lighting` contract reads it "as a Resource"
+  from a real `bevy_ecs::World`, which only compiles/inserts when the type
+  itself implements `bevy_ecs::system::Resource` — added
+  `#[derive(Clone, Default, Resource)]` on the struct. No behavioral
+  content changed; purely a missing derive the blueprint's own later
+  section already assumes.
+
+- **`LocalChunkLight` and `LightDirtyEntry` carry no `dimension` field of
+  their own, so every place this module needs a `ChunkKey` from a bare
+  `BlockPos` (`propagator.rs::defer_chunk_key`, `stage8.rs`'s dirty-entry
+  processing) fixes `DimensionId::OVERWORLD` rather than threading a real
+  value through.** A region never spans dimensions (ARCH-D5/D6), so every
+  chunk one `run_stage8_lighting` invocation processes already shares one
+  dimension in practice — this is a scoped simplification, not a
+  correctness gap, but it means the light engine's own local types have no
+  actual multi-dimension awareness until a real composition root threads
+  the true dimension value through `LocalChunkLight`/`LightDirtyEntry`
+  themselves. Needs a decision on whether that thread-through is worth
+  doing now or deferred to whichever future blueprint first exercises a
+  non-Overworld dimension's own lighting.
+
+- **The cross-chunk `ChannelState.outgoing` buffer's `increase_from_emission`
+  flag doubles as the "which target queue" discriminant on Stage 8's own
+  merge step, a convention the blueprint's own text never states
+  explicitly.** `propagate_increase_step`'s own deferred entries always set
+  `increase_from_emission: true`; `propagate_decrease_step`'s own deferred
+  entries always set it `false`. Stage 8's merge (Context §8 step 6) reads
+  that flag on each drained `outgoing` entry to decide whether the target
+  chunk's own increase or decrease queue receives it, rather than tracking
+  a separate origin tag. Self-consistent and exercised by
+  `light_chunk_border.rs`/`light_determinism.rs`, but the blueprint's own
+  prose describes `increase_from_emission` only in its original
+  `check_node_block`/`check_node_sky` seeding role, not this second,
+  overloaded use.
+
+- **`build_light_border_update`/`apply_inbound_light_border_update`'s own
+  face/directions/`increase_from_emission` handling resolves an
+  underspecified spot in the blueprint's own cross-region protocol
+  (Context §9/WORLD-D10).** The sending side's `face` names its own
+  outward edge; the wire event's `edge_face` stores
+  `direction_index(face.opposite())` (the receiving chunk's own inward
+  face); the receiving side seeds every direction except that inward face
+  (`all_except(edge_dir)`) with `increase_from_emission: true`. Recorded
+  here because the blueprint's own text names the fields but does not work
+  through which side's face convention `edge_face` stores, and getting the
+  wrong half produces the same face nibble array with the propagation
+  running backwards into the receiving chunk — caught only by
+  `light_chunk_border.rs`'s own round-trip assertions, not by any type
+  check.
+
+- **Two of `light_propagation_golden_grids.rs`'s own scenarios needed
+  geometry beyond what the blueprint's own literal prose describes, for a
+  real 3D BFS propagator to actually produce the single-path result the
+  test means to assert.** `opaque_wall_stops_propagation`'s own "a single
+  opaque block at x=3" leaves the propagator free to detour around it
+  vertically (nothing else in the volume is opaque); shipped as a full Y/Z
+  wall plane at x=3 instead. `stairs_like_partial_occlusion`'s own
+  directional `occludes_face[Up]` veto blocks only the straight-down entry
+  it is meant to test; without walls on the target cell's other five faces
+  the propagator finds an unvetoed detour in (around, down a level, back
+  up through the same cell's own unvetoed bottom face); shipped with
+  opaque blocks sealing every one of the target cell's reachable
+  neighbors except the one direct path under test. Neither the
+  `occludes_face` semantics nor the propagator algorithm changed — both
+  fixes are fixture geometry only, each with its own explanatory doc
+  comment in the test file. `skylight_column_punch_through`'s own
+  "opaque block only at y=99" fixture and
+  `removal_darkness_propagation_with_surviving_source`'s own literal
+  expected arrays needed the same class of correction (already detailed in
+  `light_propagation_golden_grids.rs`'s own module-level doc comment,
+  restated here per this project's own "every deviation recorded in the
+  ledger" rule).
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
