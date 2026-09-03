@@ -536,7 +536,7 @@ async fn a_floor_torch_pops_when_its_own_support_block_is_broken_nondefault_case
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(1, -58, 0);
+        let torch_pos = BlockPos::new(1, -59, 0);
         let torch_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, support_pos, 1).await;
         assert_eq!(torch_id, 6885, "floor torch -> lit=true");
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
@@ -638,7 +638,7 @@ async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_act
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let driver_pos = BlockPos::new(1, -58, 0);
+        let driver_pos = BlockPos::new(1, -59, 0);
         let driver_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, s1_pos, 1).await;
         assert_eq!(driver_id, 6885, "driver floor torch -> lit=true");
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
@@ -649,7 +649,7 @@ async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_act
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let b_pos = BlockPos::new(1, -57, 0);
+        let b_pos = BlockPos::new(1, -58, 0);
         let b_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, driver_pos, 1).await;
         assert_ne!(b_id, 0);
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
@@ -658,7 +658,7 @@ async fn a_floor_torch_turns_off_via_a_scheduled_tick_with_no_further_player_act
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
             .await;
-        let torch_pos = BlockPos::new(1, -56, 0);
+        let torch_pos = BlockPos::new(1, -57, 0);
         let torch_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, b_pos, 1).await;
         assert_eq!(
             torch_id, 6885,

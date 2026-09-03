@@ -216,8 +216,8 @@ async fn torch_ceiling_click_falls_back_to_floor_torch_over_real_connection_faci
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
             .await;
-        let ceiling_location = BlockPos::new(2, -57, 0);
-        let ceiling_pos = BlockPos::new(2, -58, 0);
+        let ceiling_location = BlockPos::new(2, -58, 0);
+        let ceiling_pos = BlockPos::new(2, -59, 0);
         let stone_id = place_and_read_id(&mut a, &mut a_acc, &mut seq, ceiling_location, 0).await;
         assert_eq!(stone_id, blocks::STONE.0 as i32, "reference ceiling block");
 
@@ -296,7 +296,7 @@ async fn repeater_on_non_full_block_is_refused_over_real_connection() {
         world
             .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Repeater))
             .await;
-        let target = BlockPos::new(2, -58, 0);
+        let target = BlockPos::new(2, -59, 0);
         let id = place_and_read_id(&mut a, &mut a_acc, &mut seq, torch_pos, 1).await;
         assert_eq!(
             id,
