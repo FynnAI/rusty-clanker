@@ -247,6 +247,79 @@ M3-B01's own Context flagged one further, separate gap: `apply_inbound_border_ev
 
 Every fluid mutation is an ordinary `BlockStateId` write through `UpdateContext::set_block`. Whatever composition root already broadcasts `Block Update` for M3-B03's own place/break path broadcasts a fluid's own spread identically — this blueprint adds no new packet, no new broadcast path, and does not touch `crates/server/`.
 
+### Claims to verify (TEST-D57)
+
+- A fluid cell's `FluidState` is hosted entirely through its `BlockState`'s legacy `LEVEL` property, ranged [0,15] (`BlockStateProperties.LEVEL`).
+- Water and lava each occupy a contiguous 16-wide `BlockStateId` range (one id per `LEVEL` value 0-15).
+- The legacy-level formula is: `legacy_level = if is_source { 0 } else { (8 - amount.min(8)) + if falling { 8 } else { 0 } }`.
+- A non-source flowing state at full amount (8), non-falling, also encodes to legacy level 0, indistinguishable from a genuine source once placed.
+- The inverse mapping (BlockStateId -> FluidState) always resolves legacy level 0 to Source, never to Flowing{amount:8, falling:false}, matching `LiquidBlock.getFluidState` deriving FluidState from the stored BlockState.
+- `FluidState.getAmount()` for a source is hardcoded 8 and not itself stored.
+- `getOwnHeight(state) = amount as f32 / 9.0f32` using float division (source height 8/9 approx 0.889).
+- `getHeight(state)` is exactly 1.0f32 whenever the cell directly above holds the same fluid type (any amount/falling combination), else it falls back to `getOwnHeight`.
+- `Direction.Plane.HORIZONTAL` iterates in the order NORTH, EAST, SOUTH, WEST, and this exact order is used by `getFlow`, `getNewLiquid`, `sourceNeighborCount`, `getSpread`, and `getSlopeDistance`.
+- The lava+water contact-conversion scan uses a second, independent order: UP, NORTH, SOUTH, WEST, EAST (`LiquidBlock.POSSIBLE_FLOW_DIRECTIONS` combined with `.getOpposite()`).
+- `getNewLiquid` looks only at the 4 horizontal neighbors and the cell above, never at the cell's own current contents, accumulating a highest-amount value and a source count.
+- If at least 2 qualifying source neighbors are found and the relevant gamerule allows source conversion, and the cell below is a full cube or an already-source cell of the same kind, the recompute returns Source; the floor check is a logical OR (solid floor or already-source cell below, either alone qualifies).
+- If the cell directly above holds the same fluid kind and can pass through the wall upward, the recompute returns Flowing{amount:8, falling:true}.
+- Otherwise the new amount is `highest - drop_off(kind)`; if that is <= 0 the result is Empty, else Flowing{amount, falling:false}.
+- The `water_source_conversion` gamerule defaults to true.
+- The `lava_source_conversion` gamerule defaults to false, so two adjacent lava sources do not spontaneously create a third by default.
+- `spread` checks the cell below first (down-before-sideways preference): if the block below can maybe pass through and can be replaced with and can hold the fluid, the fluid spreads down there.
+- After `spread` flows down into the cell below, if at least 3 source neighbors surround the origin cell it also tops up sideways in the same tick, even though the fluid already flowed down.
+- `spread` runs unconditionally every scheduled tick, including for source cells and immediately after `on_scheduled_tick`'s own recompute.
+- A non-source cell that finds an open shaft below but does not fall into it this tick (already full from a prior tick) skips sideways spreading entirely.
+- In `spread_to_sides`, the neighbor gate is 7 when the cell is falling (overriding the amount-based value), else `state.amount() - drop_off(kind)`; sideways spread happens only when this gate is > 0.
+- `getSpread` scans neighbors in order North, East, South, West; a strictly shorter slope distance found at a later direction clears all previously recorded tied candidates, while equal-or-shorter distances are kept (ties preserved).
+- `getSpread`'s `lowest` distance is updated to the newly measured distance even when the candidate is rejected by the replace-with check.
+- `is_hole(pos)` requires that the wall below can be passed through downward AND (the existing fluid below is already the same kind, OR the cell below could structurally hold that kind at all).
+- `get_slope_distance` is a greedy depth-first probe that returns immediately (short-circuits) on the first hole found at a given depth, in North, East, South, West order, never stepping directly back the direction it came from, and never performing a true shortest-path search.
+- `slope_find_distance` for water is 4, always.
+- `slope_find_distance` for lava is 4 if the dimension has fast lava (Nether-like), else 2 in a normal dimension.
+- A full-cube shape at the target position makes a wall impassable to fluid flow.
+- An empty shape at the target position makes a wall passable to fluid flow.
+- `canBeReplacedWith` against an empty/no existing fluid target is unconditionally true.
+- `canBeReplacedWith` against existing water is true only if the incoming direction is Down and the incoming kind is not water.
+- `canBeReplacedWith` against existing lava is true only if the existing lava's `get_height` is >= 0.44444445f32 (approximately 4/9, i.e. amount >= 4 for flowing, always true for a source at 8/9) and the incoming kind is water, with no direction restriction.
+- `getFlow` accumulates flow_x/flow_z as f64 by iterating neighbors in North, East, South, West order, testing whether the neighbor fluid is none or the same kind (affectsFlow).
+- In `getFlow`, when a neighbor's own height is 0.0 and that neighbor is not a full cube, the algorithm looks one cell further down; if that cell's fluid is none or the same kind and has height > 0.0, distance is computed as `own_height(state) - (bh - 0.8888889f32)` using the literal f32 constant 0.8888889, not a computed 8.0f32/9.0f32.
+- When a neighbor's own height is > 0.0, distance is `own_height(state) - neighbor_height`.
+- Flow accumulation multiplies the direction offset by distance in f32, then widens the product to f64 before adding.
+- If the fluid state is falling, and any of the 4 horizontal neighbors (or the cell above that neighbor) presents a solid face, the flow vector is normalized and then has 6.0 subtracted from its y component; the first matching direction wins and remaining directions are unchecked.
+- `normalize_or_zero` treats a vector with length below 1.0e-5f32 (compared after widening to f64) as exactly zero; otherwise divides each component by the length.
+- Lava+water contact conversion (reaction A) is triggered synchronously from a lava cell being placed, a neighbor changing, or a shape update.
+- Reaction A scans exactly 5 positions in the fixed order Up, North, South, West, East, a different order from the horizontal-only neighbor order used elsewhere.
+- In reaction A, the first scanned position that is water converts the lava cell's own position to obsidian if the lava is a source, else to cobblestone.
+- Reaction A returns immediately once the first water match is found; remaining scan positions are never checked that call.
+- In reaction A, if no position was water and the block directly below the lava is soul soil (caller-configured), the same 5 positions are rescanned for blue ice (caller-configured); a match converts the cell to basalt.
+- Reaction A is not gated by lava's own slow tick delay; it fires the same game tick the triggering neighbor-state-change is observed.
+- Reaction B (downward-spread conversion) applies only when direction == Down: if lava spreads downward into a cell whose existing fluid is water, the target becomes plain stone, never cobblestone or obsidian, and lava is never actually placed there.
+- Sideways spread of lava into a water cell can never reach reaction B, because water's own `canBeReplacedWith` already rejects any non-Down replacement attempt.
+- Fluid tick delay values: water is always 5 ticks; lava is 30 ticks when the dimension's `fast_lava` is false, and 10 ticks when `fast_lava` is true.
+- Drop-off values: water is 1; lava is 2 when `fast_lava` is false, 1 when `fast_lava` is true.
+- Slope-find distance values: water is always 4; lava is 2 when `fast_lava` is false, 4 when `fast_lava` is true.
+- `get_spread_delay` for lava rolls a 4-sided random check (`rng.roll_next_int(4)`) only when the old and new states are both non-empty, both non-falling, and the new state's height is strictly greater than the old's (lava "rising"); when the roll result is not 0 (a 75% chance), the delay is the table value multiplied by 4.
+- Water's spread delay always uses the flat table value with no randomized multiplier.
+- The RNG stream used for lava's rising-delay roll (vanilla's `Level.random`) is shared and non-deterministically seeded across every random-tick consumer in a tick, and is distinct from the per-chunk-per-tick determinism stream.
+- Block ticks drain completely before fluid ticks begin in every Stage-4 pass (`drain_due_block_ticks` fully processed, then `drain_due_fluid_ticks`).
+- Vanilla's 3-argument `scheduleTick(pos, fluid, delay)` overload used throughout the fluid-dynamics code defaults its tick priority to NORMAL (moderate confidence, standard default, not independently re-verified against decompiled source).
+- Vanilla's fixed denylist of blocks that can never hold any fluid regardless of shape includes doors, signs, ladder, sugar cane, bubble column, nether portal, end portal, end gateway, and structure void.
+- `is_solid_face(pos)` equals `is_full_cube(pos)` except for ice, which vanilla never treats as a solid face for flow-vector purposes regardless of its own actual solidity.
+- The neighbor_gate value in `spread_to_sides` only gates whether sideways spreading happens at all; the actual fluid amount placed at each spread-to neighbor comes independently from that neighbor's own `get_new_liquid` recompute inside `get_spread`, never from the gate value itself.
+- `getFlow` reads each neighbor's height via `getOwnHeight`, not `getHeight`, so the same-fluid-directly-above adjustment to 1.0 never applies when computing a neighbor's contribution to the flow vector.
+- Vanilla's `FluidState` carries a falling bit on both the source and flowing variants, though it is only meaningful, and only ever true, on the flowing variant.
+- When `getSpread`'s candidate for a target resolves to no fluid state, `spread_to` writes air at that position rather than a fluid block, matching `EMPTY.createLegacyBlock()`'s own vanilla behavior.
+- `spread_to` checks whether the target can hold the incoming fluid as a waterlogged container before ever hard-overwriting a non-air target, matching `FlowingFluid.spreadTo`'s own `instanceof LiquidBlockContainer` check ordering; a target that accepts it is waterlogged in place instead of being destroyed and replaced.
+- `SimpleWaterloggedBlock`'s shared default implementation accepts only water, never lava, as the fluid it can hold.
+- Placing a fluid into a waterloggable container via spread schedules a new fluid tick at that same position, mirroring `FlowingFluid.spreadTo`'s own re-arm behavior.
+- Vanilla's `willTickThisTick(pos, type)` guard, used before scheduling a duplicate tick, returns true only when `pos` is among the tick entries in the batch currently being processed this tick, not merely whenever any tick is pending, due or not.
+- The `willTickThisTick`-equivalent guard applies only at neighbor-changed, shape-update, and waterlog-placement re-arm sites; it never suppresses a scheduled tick's own unconditional self-reschedule after that same tick changes its own state.
+- A source cell's own scheduled tick never invokes `get_new_liquid` on itself; only a non-source cell's tick recomputes its state, while a source cell always proceeds directly to spreading with its existing state unchanged.
+- When a non-source cell's recompute yields a state identical to its current one, no self-reschedule occurs on that tick; the cell ticks again only once a future neighbor-changed event re-arms it.
+- The passability check used by the down-spread and slope-search paths additionally rejects a target that is already a source of the same fluid kind, independent of `canBeReplacedWith`'s own asymmetric water/lava rules.
+- `can_hold_specific_fluid` defers to the target's own waterloggable-container acceptance check when the target is registered as a fluid container, and otherwise defaults to true, subject only to the denylist.
+- On a lava cell's neighbor-changed dispatch, the contact-conversion check runs first; a fluid-tick re-arm is only considered if that check does not fire a reaction.
+
 ## Deliverables
 
 ### `crates/mechanics/Cargo.toml` (confirm/complete — merge, do not duplicate, if M3-B04 already added the `rc-physics` line)

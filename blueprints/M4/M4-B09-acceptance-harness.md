@@ -406,6 +406,37 @@ M4-B02, M4-B04, and M4-B05 were each derived in parallel against only M4-B01 as 
 - The `AttributeMap` reconciliation (Part B) is written against M4-B03's and M4-B05's own *blueprint text*, not their merged code — if either blueprint's actual implementation deviated from its own Deliverables in a way this reconciliation does not anticipate (e.g., a different module path chosen at implementation time), this blueprint's own governance changeset must adapt the mechanical substitution accordingly; the mapping table and the four new registry rows (the *values*) are the binding, stable part regardless of exact file layout.
 - Real production wiring of Stage-6a AI systems into a live `RcExecutor`/`HardcodedWorld` (as opposed to this blueprint's own lightweight scenario replay) remains unimplemented after this blueprint — flagged here as the same explicitly-open scope boundary M4-B03's own text already states, not newly introduced by this blueprint. (Stage-6b combat wiring is *not* in this same unimplemented category — Part I above states plainly that M4-B05's own combat registration is real, already-landed `HardcodedWorld` content this blueprint only reorders.)
 
+### Claims to verify (TEST-D57)
+
+- Registry attribute `ATTACK_SPEED` defaults to `4.0` within range `[0.0, 1024.0]`, and Zombie, Villager, and Cow each use `4.0` (Context Part B, attribute reconciliation table).
+- Registry attribute `SAFE_FALL_DISTANCE` defaults to `3.0` within range `[-1024.0, 1024.0]`, used by Zombie, Villager, and Cow (Context Part B, attribute reconciliation table).
+- Registry attribute `FALL_DAMAGE_MULTIPLIER` defaults to `1.0` within range `[0.0, 100.0]`, used by Zombie, Villager, and Cow (Context Part B, attribute reconciliation table).
+- Registry attribute `SWEEPING_DAMAGE_RATIO` defaults to `0.0` within range `[0.0, 1.0]`, used by Zombie, Villager, and Cow (Context Part B, attribute reconciliation table).
+- The clientbound Update Attributes packet has protocol id `0x83` (Context Part B, "Retiring the duplicate UpdateAttributes wire packet").
+- A Zombie's default `ATTACK_DAMAGE` attribute value is `3.0` (Deliverables, `ai_scenario_layout.rs` acceptance-test spec).
+- A Zombie's `FOLLOW_RANGE` attribute is `35.0` blocks; a target at `40.0` blocks is never acquired (Context Part G, scenario 3).
+- A Zombie's `NearestAttackableTargetGoal` is gated by `has_line_of_sight`, so a target within range but behind an opaque wall is never acquired (Context Part G, scenario 4).
+- A Cow's `target_selector` is constructed with zero goal entries, so a Cow never acquires an attack target (Context Part G, scenario 6).
+- A mob's `HurtByTargetGoal` sets its current target to the attacker on the tick immediately after taking damage, overriding ordinary range-based targeting (Context Part G, scenario 7).
+- A Cow's flee-on-damage behavior (`PanicGoal`) moves away from the attacker's last-known position at `1.5x` `MOVEMENT_SPEED`, the same multiplier as the Villager's `FleeFromHostile` goal (Context Part C.4, citing M4-B03).
+- A Villager's brain, on taking damage, sets both the `HurtBy` and `HurtByEntity` memory module types to the attacker's id (Context Part C.4).
+- A mob's pathfinding never returns a path where two consecutive nodes differ by more than `3` in y, a bounded Y-1..=Y-3 descent scan (Context Part G, scenario 2, citing M4-B03 section F).
+- A player's default, unenchanted `AttackDamage` attribute value is `2.0` (Context Part G, scenario 10).
+- Against a target with `10.0` armor and `0.0` armor toughness, a `2.0`-damage full-charge melee hit computes armor_fraction=clamp((10.0-2.0/2.0)/25.0,0,1)=0.36 and deals dealt=2.0*0.64=1.28 damage (Context Part G, scenario 10).
+- At attack-cooldown ticker `3` of a 5-tick charge window, the charge fraction is charge=clamp(3.5/5,0,1)=0.7 (Context Part G, scenario 10).
+- When a target's invulnerable_time exceeds `10` ticks, a second hit within that window computes raw damage as raw=(0.2+charge^2*0.8)*base_damage, which for charge=0.7 and base_damage=2.0 gives raw=(0.2+0.7^2*0.8)*2.0=1.184 (Context Part G, scenario 10).
+- If a top-up hit's computed gross damage does not exceed the previous hit's own dealt damage, the damage pipeline is a no-op and the target's health is unchanged (Context Part G, scenario 10).
+- Across the three hits of scenario 10, a `20.0`-health target's health sequence is 20.0 -> 18.72 -> 18.72 (unchanged) -> 17.44 (Context Part G, scenario 10).
+- A target's post-hit invulnerability window is `20` ticks, and a hit landing within that window still applies the damage top-up branch rather than dealing independent fresh damage (Context Part G, scenario 10 setup).
+- A critical hit multiplies damage by `1.5x` (Context Part G, scenario 11, citing M4-B05's can_critical_attack).
+- A critical hit is eligible only when the attacker is airborne: nonzero fall distance, not on the ground, not sprinting, and not in water (Context Part G, scenario 11, citing M4-B05's can_critical_attack).
+- At attack-cooldown ticker `0`, the charge scale is charge_scale=clamp(0.5/5,0,1)=0.1, giving a base-damage scale factor of base_damage_scale_factor=0.2+0.01*0.8=0.208 (Context Part G, scenario 11).
+- A fully-charged critical hit's damage-scale factor is `1.0`; after the 1.5x critical multiplier, the ratio of a fully-charged critical hit's damage to an uncharged hit's damage is (1.0*1.5)/0.208 approximately equal to 7.212 (Context Part G, scenario 11).
+- A mob's AI goal/target-selector evaluation is throttled to run only every other tick (the half-tick throttle, `should_full_tick`, M4-B03 §D), bounding any AI reaction to a newly eligible target or attack to at most one extra tick of latency beyond the triggering event (Context Part G, scenarios 5 and 9).
+- A Zombie's random-stroll goal is registered in its goal selector at priority `7` (Context Part G, scenario 9 setup).
+- A mob's per-tick AI evaluation order is: sensing, then goal-selector and target-selector evaluation, then brain evaluation (Villager only), then navigation and movement-intent application (Context Part D, citing M4-B03's `systems.rs` doc comment).
+- Each modifier entry in the Update Attributes packet's per-attribute modifier array carries an identifier, an amount, and an operation (Context Part B, "Retiring the duplicate UpdateAttributes wire packet").
+
 ## Deliverables
 
 ### `crates/testing/test-harness/src/lib.rs` (modify — one new `pub mod` line)

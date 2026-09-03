@@ -524,6 +524,117 @@ pub struct EntityIndex(std::collections::HashMap<rc_core::RcEntityId, bevy_ecs::
 pub struct NetworkEntityIndex(std::collections::HashMap<i32, bevy_ecs::entity::Entity>);
 ```
 
+### Claims to verify (TEST-D57)
+
+- AttributeInstance's value calculation stage 1: base = base_value, then add every AddValue modifier's amount to base.
+- AttributeInstance's value calculation stage 2: result = base; for every AddMultipliedBase modifier, add base * amount to result; multiple AddMultipliedBase modifiers are additive against each other, against the original base, not the running result.
+- AttributeInstance's value calculation stage 3: for every AddMultipliedTotal modifier, multiply result by (1 + amount) sequentially, so multiple AddMultipliedTotal modifiers compound with each other since each applies to the already-updated running total.
+- AttributeInstance's value calculation stage 4: clamp the result to [min, max].
+- Modifier application order within the AddMultipliedBase/AddMultipliedTotal buckets is registration/insertion order; ties within one operation type do not commute for AddMultipliedTotal since each factor applies to the already-updated running total.
+- AttackDamage attribute default is 2.0, range [0.0, 2048.0]; the Zombie override is 3.0.
+- AttackKnockback attribute default is 0.0, range [0.0, 5.0]; the Zombie override is also 0.0.
+- AttackSpeed attribute default is 4.0, range [0.0, 1024.0]; unused by mobs, which have no attack-cooldown charge curve.
+- Armor attribute default is 0.0, range [0.0, 30.0], identical across Zombie, Cow, and Villager.
+- ArmorToughness attribute default is 0.0, range [0.0, 20.0], identical across Zombie, Cow, and Villager.
+- KnockbackResistance attribute default is 0.0, range [-2.0, 1.0], identical across Zombie, Cow, and Villager.
+- MaxHealth attribute default is 20.0, range [1.0, 1024.0]; Zombie 20.0, Cow 10.0, Villager 20.0.
+- SafeFallDistance attribute default is 3.0, range [-1024.0, 1024.0]; Zombie, Cow, and Villager are all 3.0.
+- FallDamageMultiplier attribute default is 1.0, range [0.0, 100.0]; Zombie, Cow, and Villager are all 1.0.
+- SweepingDamageRatio attribute default is 0.0, range [0.0, 1.0].
+- The per-hit damage pipeline runs, in exact order: shield block, freezing/damaged-helmet multipliers, the invulnerability top-up gate, armor absorption, the Resistance status-effect reduction, the enchantment-protection-factor reduction, then absorption hearts.
+- The freezing damage multiplier is x5.0.
+- The damaged-helmet damage multiplier is x0.75.
+- If invulnerable_time > 10, not > 0, and the new damage is <= last_hurt, the hit is fully absorbed and produces no effect.
+- If invulnerable_time > 10 and the new damage is > last_hurt, only the delta (damage - last_hurt) is actually applied, last_hurt is updated to the new damage value, and invulnerable_time is NOT reset.
+- If invulnerable_time <= 10, the hit applies its full damage, sets last_hurt to that damage, resets invulnerable_time to 20, and sets hurt_time to 10.
+- invulnerable_time decrements by 1 every tick.
+- The BYPASSES_COOLDOWN damage-type tag is empty in vanilla at version 26.2, so no damage type bypasses the invulnerability window.
+- Armor-absorption formula: toughness = 2.0 + armor_toughness/4.0; real_armor = clamp(total_armor - damage/toughness, total_armor*0.2, 20.0); armor_fraction = clamp(real_armor/25.0, 0.0, 1.0); damage = damage * (1.0 - armor_fraction).
+- total_armor used in the armor-absorption formula is floor(AttributeMap[Armor]), the armor value is int-floored before use even though the rest of the formula is float.
+- Enchantment-protection-factor formula: epf_sum is the uncapped sum of protection_epf, fire_protection_epf, blast_protection_epf, projectile_protection_epf, and feather_falling_epf; real_epf = clamp(epf_sum, 0.0, 20.0); damage = damage * (1.0 - real_epf/25.0).
+- Protection's EPF is 1.0 per level, max level 4, max EPF 4.0.
+- Fire Protection's, Blast Protection's, and Projectile Protection's EPF are each 2.0 per level, max level 4, max EPF 8.0 each.
+- Feather Falling's EPF is 3.0 per level, max level 4, max EPF 12.0.
+- Feather Falling's EPF applies specifically to Fall damage, and this still applies even though Fall damage otherwise bypasses the armor-absorption step entirely.
+- Mob absorption-hearts path: original = damage; damage = max(damage - absorption, 0.0); absorption -= (original - damage); then if damage != 0.0, health -= damage AND absorption -= damage again, a second subtraction, mob path only.
+- Player absorption-hearts path: original = damage; damage = max(damage - absorption, 0.0); absorption -= (original - damage), only one subtraction; then if damage != 0.0, trigger food exhaustion for the damage type and health -= damage.
+- In both the mob and player absorption-hearts paths, absorption is clamped to >= 0.0, never negative, after the subtraction(s).
+- attack_strength_delay(ticks) = 1.0 / attack_speed_attribute * 20.0, which for the default AttackSpeed of 4.0 yields 5 ticks.
+- charge_scale(ticker, offset) = clamp((ticker + offset) / attack_strength_delay, 0.0, 1.0).
+- base_damage_scale_factor() = 0.2 + charge_scale(ticker, 0.5)^2 * 0.8.
+- attack_strength_ticker increments by 1 every player tick and resets to 0 whenever on_attack() fires, which happens at the start of every successful Interact{Attack} dispatch regardless of whether the swing dealt damage.
+- Player melee damage assembly order: base_damage = AttributeMap[AttackDamage]; charge_scale = charge_scale(ticker, 0.5); magic_boost = charge_scale * (enchanted_damage(base_damage, enchants) - base_damage), computed against the UNSCALED base_damage; base_damage is then multiplied by base_damage_scale_factor(), the charge curve is applied after magic_boost is computed; total_damage = base_damage + magic_boost.
+- full_strength = charge_scale > 0.9, the exact threshold.
+- knockback_attack = is_sprinting && full_strength, which adds +0.5 knockback and triggers the KNOCKBACK sound.
+- critical = full_strength && can_critical_attack(...); if critical, base_damage is multiplied by 1.5.
+- can_critical_attack = fall_distance > 0.0 && !on_ground && !on_climbable && !in_water && !is_sprinting; this check is deterministic and consumes no RNG.
+- sweep = full_strength && !critical && !knockback_attack && on_ground && horizontal_speed_sq < (movement_speed * 2.5)^2 && main_hand_is_sword.
+- enchanted_damage(base, enchants) = base + sharpness_bonus(sharpness_level) + smite_bonus(smite_level) if target is undead else 0.0, + bane_bonus(bane_of_arthropods_level) if target is arthropod else 0.0.
+- Sharpness's enchant-bonus formula is linear as base + per_level*(level-1) for level >= 1 else 0.0, with base 1.0 and per-level 0.5.
+- Smite's enchant-bonus formula is linear as base + per_level*(level-1) for level >= 1 else 0.0, with base 2.5 and per-level 2.5.
+- Bane of Arthropods's enchant-bonus formula is linear as base + per_level*(level-1) for level >= 1 else 0.0, with base 2.5 and per-level 2.5.
+- sweep_ratio = sweeping_edge_level / (sweeping_edge_level + 1) if sweeping_edge_level > 0, else 0.0.
+- sweep_base = 1.0 + sweep_ratio * base_damage, where base_damage is the post-charge, post-critical value.
+- A sweep attack hits every LivingEntity within the attacker's AABB inflated by (1.0, 0.25, 1.0) whose squared distance is < 9.0, excluding the attacker itself and the primary target.
+- Each sweep-hit nearby target takes enchanted_damage(sweep_base, enchants) * charge_scale.
+- On a successful sweep hit, the nearby target receives a knockback impulse directed by the attacker's yaw with a flat magnitude of 0.4 and no enchant term.
+- Mob melee damage = AttributeMap[AttackDamage] + enchant_bonus(target); this is fully deterministic with no critical hits, no sweep, no charge curve, and no RNG.
+- On a mob attack that deals damage, the target receives a knockback impulse with magnitude get_knockback(attacker, target), directed by the attacker's yaw.
+- Knockback impulse #1 fires unconditionally after any hit that dealt nonzero damage whose source has a fixed position; its direction is the normalized XZ-plane vector from the source's position to the victim's position, and its magnitude is a flat 0.4.
+- Fall and Starve damage sources carry no fixed position, self-inflicted, so knockback impulse #1 is a structural no-op for them.
+- Knockback impulse #2 fires strictly after impulse #1 has already mutated velocity; its direction is (sin(attacker_yaw_rad), -cos(attacker_yaw_rad)); its magnitude is get_knockback(attacker, target) + 0.5 if knockback_attack is true, else get_knockback(attacker, target), for players, mobs never have knockback_attack true.
+- get_knockback(attacker, target) = (attacker.AttributeMap[AttackKnockback] + knockback_enchant_bonus(level)) / 2.0.
+- knockback_enchant_bonus(level) = 1.0 + 1.0*(level-1) if level > 0, else 0.0.
+- In the knockback-impulse-application algorithm, power *= (1.0 - target.AttributeMap[KnockbackResistance]) is applied first, and if the resulting power <= 0.0, velocity is returned unchanged before any halving is applied.
+- In the knockback-impulse-application algorithm, if the direction vector's squared XZ magnitude is < 1e-5, degenerate, a fallback direction is drawn as xd = (rng.next_double() - rng.next_double()) * 0.01 and zd = (rng.next_double() - rng.next_double()) * 0.01.
+- In the knockback-impulse-application algorithm, the normalized direction scaled by power gives (dx, dz), and new_vx = old_vx/2.0 - dx; new_vz = old_vz/2.0 - dz; new_vy = min(0.4, old_vy/2.0 + power) if on_ground, else old_vy unchanged.
+- The knockback impulse function is called exactly twice per hit with two different (power, direction) inputs and its results are never merged into a single call, reproducing vanilla's own velocity-halving-per-call behavior.
+- fall_power = fall_distance + 1e-6 - AttributeMap[SafeFallDistance].
+- fall_damage = floor(fall_power * damage_modifier * AttributeMap[FallDamageMultiplier]), an integer result, with damage_modifier fixed at vanilla's own default of 1.0.
+- Fall damage is skipped entirely, not computed or applied at all, when the resulting fall_damage is <= 0, rather than being applied as a zero-value hit.
+- In vanilla, landing on a Bed halves fall distance.
+- In vanilla, landing on a Hay Bale multiplies fall distance by 0.2.
+- In vanilla, landing on a Slime Block multiplies fall distance by 0.0 unless the player is sneaking.
+- In vanilla, landing in Powder Snow grants full fall-damage immunity.
+- When the target is a player whose GameModeState.instabuild is true, the damage pipeline returns Invulnerable immediately, with no invulnerability-window consumption, no animation, and no packets sent, matching vanilla's own abilities.invulnerable short-circuit.
+- Difficulty scaling is applied to incoming player damage only, strictly before any of the pipeline's item-blocking/freeze/helmet-multiplier logic, and only for damage types whose scaling is WhenCausedByLivingNonPlayer when the attacker is a non-player living entity, or Always unconditionally.
+- Peaceful difficulty sets incoming player damage to 0.0.
+- Easy difficulty sets incoming player damage to min(damage/2.0 + 1.0, damage).
+- Hard difficulty sets incoming player damage to damage*1.5.
+- Normal difficulty leaves incoming player damage unchanged.
+- If difficulty scaling reduces the damage to exactly 0.0, the whole hit short-circuits with no invulnerability-window consumption.
+- Vanilla's own default world difficulty is Normal.
+- On mob death, vanilla broadcasts an Entity Event with event_id 3, death animation, to every viewer tracking that mob.
+- Health reaching <= 0.0 marks the target as dead and the pipeline outcome is Died rather than Dealt.
+- A dying mob's dropped item entities receive a randomized velocity spread of vx = rng.next_double()*0.2 - 0.1, vy = rng.next_double()*0.2, vz = rng.next_double()*0.2 - 0.1.
+- Vanilla villagers drop no items on death.
+- A vanilla zombie drops 0 to 2 rotten flesh on death, a uniform random count.
+- A vanilla cow drops 1 to 3 beef and, independently, 0 to 2 leather on death.
+- The default player entity-interaction range is approximately 3.0 blocks.
+- Zombie's and Villager's hitbox dimensions are 0.6 wide x 1.95 tall.
+- Cow's hitbox dimensions are 0.9 wide x 1.4 tall.
+- Item's hitbox dimensions are 0.25 wide x 0.25 tall.
+- Landing a melee attack costs a flat 0.1 exhaustion, EXHAUSTION_ATTACK.
+- PlayerAttack damage costs 0.1 exhaustion, scales WhenCausedByLivingNonPlayer, and does not bypass armor.
+- MobAttack damage costs 0.1 exhaustion, scales WhenCausedByLivingNonPlayer, and does not bypass armor.
+- Fall damage costs 0.0 exhaustion, scales WhenCausedByLivingNonPlayer, and bypasses armor.
+- Starve damage costs 0.0 exhaustion, scales WhenCausedByLivingNonPlayer, and bypasses armor.
+- A joining player's food stats start at food_level 20, range 0..=20, saturation 5.0, vanilla's own join default, and exhaustion 0.0 with a ceiling of 40.0.
+- add_exhaustion adds the given amount to exhaustion, clamped to a ceiling of 40.0.
+- Exhaustion-decay branch: if exhaustion > 4.0, subtract 4.0 from exhaustion, then reduce saturation by 1.0, floored at 0.0, if saturation > 0.0, else reduce food_level by 1, floored at 0, if difficulty is not Peaceful.
+- Fast, saturation-driven, natural regeneration: if saturation > 0.0 and the entity is hurt and food_level >= 20, a regen timer increments each tick and at 10 ticks heals health by min(saturation, 6.0)/6.0, capped at max_health, spends that same amount as exhaustion, and resets the timer.
+- Slow, food-driven, natural regeneration: if food_level >= 18 and the entity is hurt, and the fast-regen branch did not fire, a regen timer increments each tick and at 80 ticks heals 1.0 health, capped at max_health, adds 6.0 exhaustion, and resets the timer.
+- Starvation: if food_level <= 0, and neither regen branch fired, a regen timer increments each tick and at 80 ticks applies 1.0 Starve damage if health > 10.0, or difficulty is Hard, or health > 1.0 and difficulty is Normal; the timer then resets regardless.
+- is_hurt(health, max_health) is defined as health < max_health && health > 0.0.
+- The Interact packet is server-bound with packet ID 0x1A and fields, in wire order: entity_id (VarInt), interaction_type (VarInt: 0=Interact, 1=Attack, 2=InteractAt), then target_x/target_y/target_z (each f32) only if interaction_type==2, then hand (VarInt: 0=main hand, 1=off hand) only if interaction_type==0 or 2, then sneaking (bool).
+- The Set Health packet is client-bound with packet ID 0x68 and fields, in wire order: health (f32), food (VarInt), saturation (f32).
+- The Update Attributes packet is client-bound with packet ID 0x83 and fields, in wire order: entity_id (VarInt), then a VarInt-count-prefixed sequence of entries each shaped attribute_id (VarInt), base_value (f64), modifier_count (VarInt).
+- The Damage Event packet is client-bound with packet ID 0x19 and fields, in wire order: entity_id (VarInt), source_type_id (VarInt), source_cause_id (VarInt, network entity id + 1, 0 = none), source_direct_id (VarInt, network entity id + 1, 0 = none), has_source_position (bool), then source_x/source_y/source_z (each f64) only if has_source_position is true.
+- The Entity Event packet is client-bound with packet ID 0x22 and fields, in wire order: entity_id as a plain Int, not a VarInt, unlike every other entity-id field in this packet set, then event_id (u8); event_id 2 is the generic hurt/hurt-animation event and event_id 3 is the death-animation event.
+- The Player Combat Kill packet is client-bound with packet ID 0x44 and fields, in wire order: player_id (VarInt), message, a length-prefixed string.
+- After a hit applies both knockback impulses, only the single final post-both-impulses velocity is broadcast via one Set Entity Velocity packet, matching vanilla's own single velocity-update-packet-per-hit behavior even though the server-side math applies two separate impulses.
+- Health is broadcast via the entity metadata field at index 9, Set Entity Data, to viewers other than the entity's own owning player, who instead receive Set Health directly.
+
 ## Deliverables
 
 ### `crates/mechanics/src/entity/living.rs` (modify — add fields, declaration order matters only for the pre-existing `#[net_metadata(...)]` fields, which are unchanged and untouched)

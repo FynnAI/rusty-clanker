@@ -723,6 +723,123 @@ This blueprint hand-implements `RcPacket` for `UpdateAttributes` directly in `cr
 
 Every system this blueprint registers into `DomainGroup::EntityAiSelection` declares `Query<(&BaseEntity, &LivingEntity, Option<&mut GoalSelectorComponent>, Option<&mut TargetSelectorComponent>, Option<&mut BrainComponent>, &mut AttributeMap, &mut Sensing, &mut PathNavigation, &mut PendingMovementIntent)>` (read-only on `BaseEntity`/`LivingEntity` — the authoritative transform/health this blueprint never writes; mutable only on the six AI-owned component types this blueprint itself defines) and **zero** `Commands` usage — every one of this blueprint's own systems only ever mutates components it owns via direct `Query<&mut T>`, never spawns/despawns/adds/removes a component. This satisfies M0-B05's own build-time check (`RcExecutorBuilder::build` rejects a system whose `access.writes` intersects its own declared `structural_writes` — this blueprint's own systems declare `structural_writes: vec![]` uniformly) and is additionally proven, not merely declared, by this blueprint's own `ai_stage_registration.rs` test (Acceptance tests, below), which registers a **deliberately non-conforming** `Commands`-issuing probe system into `DomainGroup::EntityAiSelection` and asserts its structural change never lands — the concrete, executable proof that MECH-D32's rule holds structurally for any future author, not just this blueprint's own conforming systems.
 
+### Claims to verify (TEST-D57)
+
+- Vanilla's pathfinding node-expansion budget is `maxVisitedNodes = floor(FOLLOW_RANGE_blocks x 16)`.
+- Vanilla's `recomputePath()` never runs more than once per 20 ticks per entity (`MAX_TIME_RECOMPUTE`).
+- Every vanilla `Mob` owns two independent `GoalSelector` instances -> a behavior `goalSelector` and an attack/interaction-target-only `targetSelector` -> each an ordered list of `(priority, Goal)` pairs where a lower priority number means higher precedence.
+- Vanilla's goal-flag `EnumSet` has exactly four flags: MOVE, LOOK, JUMP, and TARGET.
+- A vanilla `Goal`'s default `canContinueToUse()` implementation simply returns `canUse()`.
+- A vanilla `Goal`'s default `isInterruptable()` value is `true`.
+- Vanilla's `GoalSelector.tick()` runs a fixed four-pass algorithm each call, in order: a cleanup pass, a flag-lock cleanup pass, a start pass, and a tick pass.
+- Vanilla's `GoalSelector` cleanup pass stops any running goal whose flags now intersect the disabled flags, or whose `canContinueToUse()` now returns false.
+- Vanilla's `GoalSelector` flag-lock cleanup pass drops any of the four flag locks whose owning entry is no longer running.
+- Vanilla's `GoalSelector` start pass, evaluated in declaration order, starts any non-running goal whose needed flags are unlocked or held only by interruptable goals of strictly lower precedence (a numerically greater priority number), and whose `canUse()` returns true, evicting and stopping whatever previously held each needed flag.
+- Vanilla's `GoalSelector` tick pass runs every currently-running goal, either every tick (for a goal that needs continuous updating) or only on the caller's full-tick pass.
+- Vanilla's goal-selector start pass breaks ties between equal-priority goals by insertion order, matching the underlying `ObjectLinkedOpenHashSet`.
+- Vanilla's `Mob.serverAiStep()` throttles a full `GoalSelector.tick()` (the cleanup+start passes) to run only every other tick, gated by `(tickCount + entityId) % 2`; on the intervening ("off") tick only `tickRunningGoals(false)` runs, while any already-running goal that needs continuous updating still ticks unconditionally on every tick regardless of this key.
+- In vanilla's Brain system, `forget_outdated_memories` (memory-TTL expiry) runs first, every brain tick, before any sensor runs.
+- In vanilla's Brain system, every registered `Sensor` runs unthrottled -> every sensor ticks on every brain tick.
+- A vanilla `Behavior`'s default minimum and maximum duration are both 60 ticks.
+- Vanilla's Activity/Behavior system registry has 26 entries.
+- Vanilla's Brain tick executes its five phases -> memory forgetting, sensors, activity selection, behavior starting, and behavior stopping/ticking -> in that fixed order every brain tick.
+- Vanilla's Brain activity-selection pass scans activity packages in declared order and switches to the first whose every `ActivityRequirement` is satisfied by the brain's current memory state, falling back to `Activity::Idle` when none match (`useDefaultActivity`).
+- Vanilla's Brain starts every not-yet-running behavior across all currently-active activity packages, in priority-ascending order, whenever its required memories are met and its extra start conditions pass.
+- Vanilla's Brain stops a currently-running behavior when its `can_still_use` check fails or its own randomized minimum-to-maximum-tick duration has elapsed, and otherwise ticks it -> checked in one flat pass across every active package, independent of priority order.
+- Vanilla's brain schedule-update throttle (`SCHEDULE_UPDATE_DELAY`) is 20 ticks.
+- In vanilla's pathfinding, the `PathType` values `Blocked`, `PowderSnow`, `Fence`, `Lava`, `UnpassableRail`, `DoorWoodClosed`, `DoorIronClosed`, `Leaves`, and `Damaging` each carry a default malus of -1 (impassable).
+- In vanilla's pathfinding, the `PathType` values `Water`, `WaterBorder`, `FireInNeighbor`, `DamagingInNeighbor`, and `StickyHoney` each carry a default malus of 8.
+- In vanilla's pathfinding, the `PathType` value `Fire` carries a default malus of 16.
+- In vanilla's pathfinding, the `PathType` values `Breach` and `BigMobsCloseToDanger` each carry a default malus of 4.
+- In vanilla's pathfinding, the `PathType` values `Open`, `Walkable`, `WalkableDoor`, `Trapdoor`, `OnTopOfPowderSnow`, `Rail`, `DoorOpen`, `Cocoa`, `DamageCautious`, and `OnTopOfTrapdoor` each carry a default malus of 0.
+- Vanilla's pathfinding `NodeEvaluator` system has four evaluator types: Walk, Fly, Amphibious, and Swim.
+- Vanilla's neighbor generation for pathfinding produces the 4 cardinal neighbors first (North, South, East, West, in that fixed order), then the 4 diagonal neighbors, and a diagonal neighbor is only emitted if both of its adjacent cardinal neighbors are themselves valid (non-impassable), preventing the path from cutting a solid corner (`isDiagonalValid`).
+- Vanilla's pathfinding neighbor generation tries up to three vertical placements per horizontal candidate -> the same elevation, one block up for a step-up, and a downward scan for the first elevation with sufficient clearance -> using the first vertically-valid placement found for that candidate.
+- Vanilla's pathfinding step-up size (`jumpSize`) is `floor(max(1.0, step_height))` blocks, and with the `STEP_HEIGHT` attribute's default value of 0.6, this evaluates to 1 block.
+- Vanilla's pathfinding disables the step-up (Y+1) candidate entirely whenever the block directly above the current node has a negative-malus `PathType`.
+- Vanilla's pathfinding computes a candidate neighbor's cost as the straight-line distance from the current node (1.0 for a cardinal move, the square root of 2 for a diagonal move) plus the destination's `PathType` malus.
+- Vanilla's pathfinding treats a negative `PathType` malus (`costMalus < 0`, impassable) as never crossable for a new candidate node, only for the node the search currently occupies (`isNeighborValid`).
+- Vanilla's real pathfinding vertical-placement search scans further than a fixed short downward range under certain conditions, rather than using one constant bounded descent depth.
+- Vanilla's A* pathfinding heuristic multiplier (`FUDGING`) is 1.5.
+- Vanilla's A* pathfinding search computes `g` as the accumulated edge cost from the start node and `h` as `FUDGING x straight_line_distance(node, nearest target)`, with `f = g + h`.
+- Vanilla's A* pathfinding search terminates the instant any target comes within Manhattan `reach_range` of the current best node, or once `max_visited_nodes` expansions have been used, whichever comes first.
+- Vanilla's pathfinding falls back to a best-effort route toward the closest-approached node when a search never reaches any target, rather than returning no path at all.
+- Vanilla's `Path` type applies no further geometric smoothing to the raw pathfinding node sequence beyond storing nodes and advancing between them.
+- Vanilla's real per-node path-advancement radius scales with the entity's own bounding-box width, rather than using one fixed distance threshold for every entity.
+- Vanilla's navigation recompute throttle (`MAX_TIME_RECOMPUTE`) is 20 ticks.
+- Vanilla's navigation recompute throttle still resets its cooldown window even when a path search fails to find a route, so a failed search consumes the same throttle period as a successful one.
+- Vanilla's navigation stuck-check interval (`STUCK_CHECK_INTERVAL`) is 100 ticks.
+- Vanilla's navigation stuck-detection distance factor (`STUCK_THRESHOLD_DISTANCE_FACTOR`) is 0.25.
+- Vanilla's navigation stuck check flags an entity as stuck when the squared distance it moved since the last check is below `(movement_speed_attribute x 20.0) squared x 0.25`.
+- Vanilla's `MoveControl.MAX_TURN` constant is 90 degrees per tick.
+- Vanilla's yaw convention computes a desired yaw as `atan2(dz, dx)` in degrees, minus 90.0.
+- Vanilla's look-control pitch convention computes pitch as the negative of `atan2(dy, horizontal_distance)` in degrees (a down-positive pitch convention).
+- Vanilla's look-control pitch turn rate is a separate, smaller constant than the yaw turn rate in some contexts, rather than sharing one shared per-tick turn-rate limit.
+- In vanilla, a mob's normal one-block pathfinding step-up is resolved through continuous ground/step-height contact during movement rather than a discrete jump impulse.
+- In vanilla, the per-tick sensing seen/unseen line-of-sight cache is cleared every tick, before any line-of-sight check that tick.
+- Vanilla's real line-of-sight test uses a block's exact partial `VoxelShape` for occlusion, not full-cube-only opacity.
+- Vanilla's `AttributeModifierOperation` enum has three values in this order: `AddValue` = 0, `AddMultipliedBase` = 1, `AddMultipliedTotal` = 2.
+- Vanilla's attribute-modifier `addOrReplacePermanentModifier` semantics replace any existing modifier sharing the same modifier id, rather than adding a duplicate.
+- Vanilla keys attribute modifiers by a namespaced string identifier rather than the older UUID-based scheme.
+- Vanilla attribute modifiers marked permanent survive an NBT save/reload, while transient (potion-effect-style) modifiers do not.
+- Vanilla's attribute value calculation runs its four stages -> AddValue, AddMultipliedBase, AddMultipliedTotal, then clamping -> in that fixed order.
+- Vanilla's attribute value calculation begins from the base value and adds every `AddValue` modifier's amount.
+- Vanilla's attribute value calculation applies every `AddMultipliedBase` modifier by adding `base x amount` computed against the original base value each time, so multiple such modifiers are mutually additive rather than compounding against each other.
+- Vanilla's attribute value calculation applies every `AddMultipliedTotal` modifier by multiplying the running result by `1.0 + amount`, sequentially, so multiple such modifiers do compound against each other.
+- Vanilla's attribute value calculation clamps its final result to the attribute's `[min, max]` range.
+- Vanilla applies a per-instance `FOLLOW_RANGE` individuality bonus at mob spawn time, drawn from a triangular distribution and consuming the region's shared RNG in a fixed relative order.
+- Vanilla's `MAX_HEALTH` attribute has a registry default value of 20.0 with range [1, 1024].
+- Vanilla's `MOVEMENT_SPEED` attribute has a registry default value of 0.7 with range [0, 1024].
+- Vanilla's `FOLLOW_RANGE` attribute has a registry default value of 32.0 with range [0, 2048].
+- Vanilla's `ATTACK_DAMAGE` attribute has a registry default value of 2.0 with range [0, 2048].
+- Vanilla's `ATTACK_KNOCKBACK` attribute has a registry default value of 0.0 with range [0, 5].
+- Vanilla's `KNOCKBACK_RESISTANCE` attribute has a registry default value of 0.0 with range [-2, 1].
+- Vanilla's `ARMOR` attribute has a registry default value of 0.0 with range [0, 30].
+- Vanilla's `ARMOR_TOUGHNESS` attribute has a registry default value of 0.0 with range [0, 20].
+- Vanilla's `STEP_HEIGHT` attribute has a registry default value of 0.6 with range [0, 10].
+- Vanilla's `JUMP_STRENGTH` attribute has a registry default value of 0.42 with range [0, 32].
+- Vanilla's Zombie has a `MAX_HEALTH` attribute value of 20.0.
+- Vanilla's Zombie has a `MOVEMENT_SPEED` attribute value of 0.23.
+- Vanilla's Zombie has a `FOLLOW_RANGE` attribute value of 35.0.
+- Vanilla's Zombie has an `ATTACK_DAMAGE` attribute value of 3.0.
+- Vanilla's Villager has a `MAX_HEALTH` attribute value of 20.0.
+- Vanilla's Villager has a `MOVEMENT_SPEED` attribute value of 0.5.
+- Vanilla's Villager has a `FOLLOW_RANGE` attribute value of 32.0.
+- Vanilla's Villager has no melee attack, an `ATTACK_DAMAGE` attribute value of 0.0.
+- Vanilla's Cow has a `MAX_HEALTH` attribute value of 10.0.
+- Vanilla's Cow has a `MOVEMENT_SPEED` attribute value of 0.2.
+- Vanilla's Cow has a `FOLLOW_RANGE` attribute value of 32.0.
+- Vanilla's Cow has an `ATTACK_DAMAGE` attribute value of 0.0.
+- Vanilla's Zombie entity hitbox is 0.6 blocks wide by 1.95 blocks tall.
+- Vanilla's Villager entity hitbox is 0.6 blocks wide by 1.95 blocks tall.
+- Vanilla's Cow entity hitbox is 0.9 blocks wide by 1.4 blocks tall.
+- Vanilla's clientbound `Update Attributes` (`update_attributes`) packet has id `0x83`.
+- Vanilla's `Update Attributes` packet layout is, in order: `entity_id` (VarInt), `count` (VarInt), then per entry: `attribute_id` (VarInt registry id), `base_value` (Double), `modifier_count` (VarInt), then per modifier: `id` (Identifier, VarInt-length-prefixed UTF-8 `namespace:path`), `amount` (Double), `operation` (VarInt: 0=AddValue, 1=AddMultipliedBase, 2=AddMultipliedTotal).
+- Vanilla's Zombie goal selector registers `FloatGoal` at priority 0 with the JUMP flag, always active, to swim up when submerged.
+- Vanilla's Zombie goal selector registers `ZombieAttackGoal` at priority 2 with the MOVE and LOOK flags.
+- Vanilla's Zombie goal selector registers `WaterAvoidingRandomStrollGoal` at priority 7 with the MOVE flag.
+- Vanilla's Zombie goal selector registers `LookAtPlayerGoal` and `RandomLookAroundGoal` both at priority 8 with the LOOK flag, mutually exclusive via the priority tie.
+- Vanilla's Zombie target selector registers `HurtByTargetGoal` at priority 1 with the TARGET flag.
+- Vanilla's Zombie target selector registers `NearestAttackableTargetGoal<Player>` at priority 2 with the TARGET flag.
+- Vanilla's `RandomStrollGoal`-family goals have roughly a 1-in-120 chance per tick to start when there is no current walk target.
+- Vanilla's Zombie `LookAtPlayerGoal` activates when a player is within roughly 8 blocks of the entity.
+- Vanilla's Cow goal selector registers `FloatGoal` at priority 0 with the JUMP flag.
+- Vanilla's Cow goal selector registers `PanicGoal` at priority 1 with the MOVE flag.
+- Vanilla's Cow goal selector registers `BreedGoal` at priority 2 with the MOVE flag.
+- Vanilla's Cow goal selector registers `TemptGoal` at priority 3 with the MOVE flag.
+- Vanilla's Cow goal selector registers `FollowParentGoal` at priority 4 with the MOVE flag.
+- Vanilla's Cow goal selector registers `WaterAvoidingRandomStrollGoal` at priority 5 with the MOVE flag.
+- Vanilla's Cow goal selector registers `LookAtPlayerGoal` at priority 6 with the LOOK flag.
+- Vanilla's Cow goal selector registers `RandomLookAroundGoal` at priority 7 with the LOOK flag.
+- Vanilla's Cow is never hostile and has no target-selector goals.
+- Vanilla's Villager brain has a Core activity (always active) running `SwimBehavior` and `LookAtTargetSink`.
+- Vanilla's Villager brain has an Idle default-fallback activity running a `WaterAvoidingRandomStrollGoal`-equivalent stroll behavior and an `InteractWithNearestVillager` behavior.
+- Vanilla's Villager brain has a Panic activity, requiring the `HurtBy` memory to be present, running `CalmDownCheck` and `FleeFromHostile`.
+- Vanilla's Villager panic-flee behavior moves the villager away from the hurt-by entity's position at 1.5x its `MOVEMENT_SPEED`.
+- Vanilla's Villager brain has `Work`, `Rest`, and `Meet` activities gated respectively by the `JobSite`, `Home`, and `MeetingPoint` memories being present.
+- Vanilla's Villager brain uses eight sensor types in total: `NearestPlayersSensor`, `HurtBySensor`, `VillagerHostilesSensor`, `SecondaryPoisSensor`, `GolemDetectedSensor`, `NearestBedSensor`, `VillagerBabiesSensor`, and `NearestItemsSensor`.
+- Vanilla's Brain system has roughly 90 distinct memory module types in total.
+
 ## Deliverables
 
 ### `crates/mechanics/Cargo.toml` (modify — one new optional dependency line, one feature-list edit; every existing line unchanged)

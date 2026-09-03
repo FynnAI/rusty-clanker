@@ -290,6 +290,67 @@ fn check_despawn(mob, nearest_player_dist_sqr: Option<f64>, category, rng, no_ac
 
 `no_action_ticks` increments by 1 every tick this function is called for a `Keep`-decided mob whose distance did not reset it (i.e. every Stage-6b tick a mob survives outside 32 blocks of the nearest player) — this blueprint's own `DespawnTimer.no_action_ticks` component field, mutated in place, mirroring vanilla's own `noActionTime` counter which increments unconditionally on every AI step regardless of goal-selector throttling. The random-roll check consumes exactly one `next_int_bounded(800)` call **only** when `no_action_ticks > 600`; it is not evaluated at all otherwise (zero RNG cost) — this blueprint's own `RandomTickContext`-equivalent, `SpawnCycleRandom`, is reused for this Stage-6b roll too, since despawn is likewise not a vanilla-bit-exact-reproducible quantity (it draws on the same non-deterministic `level.random` stream in vanilla).
 
+### Claims to verify (TEST-D57)
+
+- Villagers are never a `NaturalSpawner` biome-list entry in real vanilla.
+- In real vanilla, villagers spawn only via village structure generation and breeding, never through the per-tick natural spawn cycle.
+- `finalizeSpawn`'s individuality-bonus RNG cost is 3 calls: a follow-range triangle sample (2 calls) plus a left-handed roll (1 call).
+- Vanilla's own spawning RNG (`Level.random`) is not derived from the world seed at all - it is reseeded from wall-clock time on every server start via `RandomSupport.generateUniqueSeed()`, an `AtomicLong` uniquifier XORed with `System.nanoTime()`.
+- Because vanilla's spawning RNG is reseeded from wall-clock time on every server start rather than from the world seed, it is never bit-reproducible across two runs of the same world, even in vanilla itself.
+- `Monster` category (vanilla `MobCategory` declaration index 0): max 70 instances per chunk, not friendly, not persistent, despawn distance 128 blocks.
+- `Creature` category (declaration index 1): max 10 instances per chunk, friendly, persistent, despawn distance 128 blocks.
+- `Ambient` category (declaration index 2): max 15 instances per chunk, friendly, not persistent, despawn distance 128 blocks.
+- `Axolotls` category (declaration index 3): max 5 instances per chunk, friendly, not persistent, despawn distance 128 blocks.
+- `UndergroundWaterCreature` category (declaration index 4): max 5 instances per chunk, friendly, not persistent, despawn distance 128 blocks.
+- `WaterCreature` category (declaration index 5): max 5 instances per chunk, friendly, not persistent, despawn distance 128 blocks.
+- `WaterAmbient` category (declaration index 6): max 20 instances per chunk, friendly, persistent, despawn distance 64 blocks.
+- Vanilla's `no_despawn_distance` is a category-independent constant of 32 blocks - a hardcoded getter, not read from the per-instance field of the same name, which is dead and unused.
+- Vanilla's `MobCategory` enum declares its seven variants in exactly this order: Monster, Creature, Ambient, Axolotls, UndergroundWaterCreature, WaterCreature, WaterAmbient.
+- `MISC` (uncapped, category value -1) is never naturally spawned and is excluded from vanilla's own `spawningCategories`.
+- Vanilla's global mob-cap formula is `max_mob_count = category.max_instances_per_chunk() * spawnable_chunk_count / 289` using integer (floor) division, and a category may spawn globally only while `global_live_count[category] < max_mob_count`.
+- The global-cap magic number 289 equals 17 squared.
+- Vanilla checks the global mob cap once per category per tick, before any chunk is visited - a category whose global cap already denies is dropped from that tick's entire attempt list, the cap is never re-tightened mid-tick, and it is re-checked only at the top of the next tick.
+- Vanilla's local mob cap is checked per chunk per category: for every player within 128.0 blocks of the target chunk's center, the chunk's attempt for that category proceeds if at least one such player's own local count for that category is below the category's max-instances-per-chunk constant (the same, undivided constant used for the global formula, never divided by 289).
+- A mob with `persistence_required == true` is excluded from both the global and local mob-cap counters entirely in vanilla.
+- Real vanilla `ON_GROUND` spawn-placement legality checks per-species block tags: `ANIMALS_SPAWNABLE_ON`, `PREVENT_MOB_SPAWNING_INSIDE`, signal-source blocks, and per-species hazards.
+- In the overworld, vanilla's monster darkness gate uses `monster_spawn_block_light_limit = 0` and `monster_spawn_light_test = UniformInt(0, 7)`.
+- Vanilla's overworld monster darkness-gate algorithm: if sky light exceeds a `next_int_bounded(32)` roll the position fails immediately (1 RNG call, always paid); otherwise if block light is greater than 0 the position fails with no further roll (0 additional calls, since the overworld block-light limit is 0); otherwise the position passes only if `max(sky_light, block_light) <= next_int_bounded(8)` (1 more call) - total RNG cost is 1 call when the sky-light term fails, 2 calls otherwise.
+- Vanilla's animal spawn light rule (`Animal.checkAnimalSpawnRules`) requires `max(sky_light, block_light) >= 9`, at zero RNG cost.
+- Vanilla includes persistent-category mobs in the natural spawn cycle only on ticks where `current_tick % 400 == 0`.
+- Vanilla shuffles the candidate chunk list with a backward Fisher-Yates shuffle, consuming exactly `len - 1` calls to `next_int_bounded`, always fully consumed.
+- A vanilla pack-spawn attempt's anchor position is drawn with three RNG calls: an X offset via `next_int_bounded(16)`, a Z offset via `next_int_bounded(16)`, and a Y position via one more `next_int_bounded` call over the column's open range above the world's minimum Y - all three calls are always paid.
+- If a vanilla pack-spawn attempt's anchor block is a full opaque (redstone-conducting) cube, the whole attempt for that category and chunk is abandoned with no further RNG calls beyond the anchor roll.
+- A single vanilla pack-spawn attempt runs up to 3 group tries sharing one cluster-size counter across all three tries, never reset per group - up to 4 total mobs may result from one chunk's attempt for one category, never 4 per individual group try (MAX_SPAWN_CLUSTER_SIZE = 4).
+- Each vanilla group try's own maximum sub-spawn count is rolled as `(next_float() * 4.0).ceil()` (1 RNG call), yielding a value in the set {0, 1, 2, 3, 4}.
+- Within a vanilla group try, each candidate position offsets from the anchor by `next_int_bounded(6) - next_int_bounded(6)` on both the X and Z axes (2 RNG calls per axis, 4 calls per iteration).
+- A candidate vanilla spawn position is rejected if the nearest player is within 24 blocks, checked as squared distance against 576 (24 squared).
+- Once a species is picked for a vanilla group try, that group's own spawn count is re-rolled as `entry.min_count + next_int_bounded(1 + entry.max_count - entry.min_count)` - always exactly 1 RNG call once a species has been picked.
+- Each successful vanilla spawn draws a yaw of `next_float() * 360.0` (1 RNG call).
+- Vanilla's individuality-bonus sample (`finalizeSpawn`) is a triangle distribution with mean 0.0 and spread 0.11485000000000001, computed as `mean + spread * (next_double() - next_double())` (2 calls), followed by a left-handed roll `next_float() < 0.05` (1 call) - 3 RNG calls total, always paid on every successful spawn.
+- Vanilla's MAX_SPAWN_CLUSTER_SIZE is 4 - once the shared cluster-size counter reaches 4, all remaining group tries for that category-and-chunk attempt end immediately.
+- Vanilla's `isMaxGroupSizeReached` is false by default for every tier-2 kind (Zombie, Cow), so it never causes an early break in the group-try loop for either.
+- Vanilla's `WeightedList::getRandom` performs a cumulative-weight linear scan consuming exactly one `next_int_bounded(total_weight)` draw, or zero RNG calls if the list is empty or every weight is zero.
+- Vanilla's default max health is 20.0 for Zombie and 10.0 for Cow.
+- A naturally-spawned vanilla zombie has roughly a 55 percent chance to be able to pick up loot.
+- In vanilla, a live non-persistent mob despawns instantly and unconditionally, with no random roll, once the nearest player's squared distance exceeds the mob's category's own despawn distance squared (128 squared or 64 squared depending on category).
+- A vanilla mob becomes eligible for random despawn only once its own inactivity timer exceeds 600 ticks, and then despawns with probability 1/800 per tick (`next_int_bounded(800) == 0`), but only while its squared distance to the nearest player also exceeds the 32-block no-despawn-distance threshold (32 squared).
+- A vanilla mob's inactivity timer resets to 0 whenever its squared distance to the nearest player drops below the 32-block no-despawn threshold (32 squared).
+- Vanilla's own `noActionTime` counter increments unconditionally on every AI step, regardless of goal-selector throttling.
+- Vanilla's real determination of which chunks are spawn-eligible uses an exact BFS chunk-graph distance, not a Euclidean radius.
+- Vanilla's `NaturalSpawner` algorithm applies structure-specific and Nether Fortress spawn-list overrides as steps 1 and 2, before falling back to the biome spawn list.
+- Vanilla's `NaturalSpawner` algorithm includes a per-biome spawn charge (energy-budget) gate as a distinct algorithm step.
+- Vanilla's own `plains.json` biome definition declares an empty `spawn_costs` map.
+- Vanilla's chunk-generation-time mob spawning uses a structurally different algorithm from the tick-based `NaturalSpawner` cycle.
+- Vanilla runs slime-chunk spawning, zombie sieges, patrols, phantoms, and the cat and wandering-trader spawners as separate `CustomSpawner`s, executed after `NaturalSpawner`.
+- In vanilla, mob despawning (`Mob.checkDespawn`) is called once per mob during that mob's own tick, as a call site entirely independent from `NaturalSpawner`'s per-region spawn cycle.
+- In real vanilla, during thunderstorms the monster darkness gate's sky-light term is sampled over a 10-block radius rather than from a single block.
+- In vanilla's pack-spawn algorithm, if the sampled anchor Y position falls below one block above the world's minimum Y, the spawn attempt for that chunk and category is abandoned.
+- Vanilla's per-tick mob-cap live and local counts update progressively as chunks are processed in shuffled order, even though each category's global-cap check is evaluated only once at the start of the tick.
+- In vanilla's despawn check, a mob with `persistence_required` true is never despawned, and its inactivity timer is reset to zero on every tick regardless of its distance to the nearest player.
+- In vanilla's despawn check, when no player is loaded near a mob, despawn logic does not run for that mob that tick and it is kept unconditionally.
+- Vanilla's despawn random roll draws from the same non-deterministic `level.random` stream as the natural spawn cycle, so it is likewise never bit-reproducible across runs.
+- In vanilla, Zombie is classified as `MobCategory` `Monster`, and both Villager and Cow are classified as `MobCategory` `Creature`.
+
 ## Deliverables
 
 ### `crates/messaging/src/region_message.rs` (modify — additive)

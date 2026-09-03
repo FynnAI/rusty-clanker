@@ -289,6 +289,142 @@ M0-B05's own `Stage` enum already carries a single `EntityAiPhysics = 6` discrim
 
 **Breaking change to `Stage` — cited and necessary.** `crates/scheduler/tests/pipeline_ordering.rs`'s test 1 (`stages_4_6_8_9_11_execute_in_ascending_order`, M0-B05) asserts a literal `Vec<Stage>` log equal to `[Stage::ScheduledBlockTick, Stage::EntityAiPhysics, Stage::Lighting, Stage::ChunkSnapshot, Stage::NetworkOutboundEncode]` — a variant name (`EntityAiPhysics`) this blueprint removes. This is the one already-merged test file this blueprint's implementation changeset is explicitly permitted to touch, per this project's own TEST-D46 rule read correctly: that rule protects a blueprint's **own** test changeset from **its own** implementation changeset weakening it; it does not freeze every prior blueprint's test file against every future, deliberately-scoped, cited architectural change forever (M3-B06's own `DomainGroup` widening set the precedent of extending a prior blueprint's enum without breaking its tests, because that widening was purely additive — this blueprint's split is not purely additive, so the identical zero-test-edits outcome is not achievable, and pretending otherwise would leave the codebase non-compiling). The edit is minimal and **strictly non-weakening**: replace `Stage::EntityAiPhysics` in the asserted list with `Stage::EntityAiSelection, Stage::EntityPhysicsIntegration` (both now present, since this blueprint's own test setup registers one instrumented no-op system into each of the two new groups, exactly as it already did for the other five), and register the additional instrumented system alongside the pre-existing five — the test's own guarantee (inter-group ordering is enforced, worker-count-independent) becomes **more precise**, asserting six stage-transitions' correct order instead of five, never fewer or looser assertions than before.
 
+### Claims to verify (TEST-D57)
+
+- Vanilla's Java entity class hierarchy is Entity -> LivingEntity -> Mob -> PathfinderMob -> concrete type, with parallel Item/Projectile/Vehicle branches.
+- Every vanilla entity's NBT root actually carries a Pos field (world position), even though MECH-D30's own field list omits it.
+- The NBT key Pos is a List<Double> of 3 elements [x, y, z], world-absolute position.
+- The NBT key Motion is a List<Double> of 3 elements [dx, dy, dz], measured in blocks/tick.
+- The NBT key Rotation is a List<Float> of 2 elements [yaw, pitch], in degrees.
+- The NBT key FallDistance is of type Float (moderate confidence; long-stable as Float in every version cross-referenced).
+- The NBT key Fire is a Short holding the remaining fire-tick count, where -1 means not on fire and not yet eligible to be set alight this tick (moderate confidence).
+- The NBT key Air is a Short holding remaining breath, with a default TOTAL_AIR_SUPPLY of 300.
+- The NBT key OnGround is a Boolean.
+- The NBT key Invulnerable is a Boolean.
+- The NBT key PortalCooldown is an Int.
+- The NBT key UUID is stored as an IntArray of 4 elements: vanilla packs a UUID as four big-endian i32 chunks of the 128-bit value, most-significant chunk first, not as a string.
+- The NBT key CustomName is an optional String stored as the raw JSON text-component string.
+- The NBT key CustomNameVisible is a Boolean.
+- The NBT key Silent is a Boolean.
+- The NBT key NoGravity is a Boolean.
+- The NBT key Glowing is a Boolean.
+- The NBT key TicksFrozen is an Int.
+- The NBT key HasVisualFire is a Boolean.
+- The NBT key Tags is a List<String> of entity scoreboard tags.
+- The NBT key Passengers is a List<Compound>; vanilla nests a full recursive entity compound per passenger.
+- LivingEntity's Health NBT field is a Float.
+- LivingEntity's HurtTime NBT field is a Short.
+- LivingEntity's DeathTime NBT field is a Short.
+- Arrow count, stinger count, sleeping bed position, and potion-particle state are metadata-only fields in vanilla at the LivingEntity rung -> they have no independent NBT key of their own.
+- Potion effects persist to NBT under the ActiveEffects key in vanilla.
+- Vanilla's item entity NBT key Item is a Compound whose id field is a namespaced string such as "minecraft:diamond".
+- The item entity's PickupDelay NBT field is a Short.
+- The item entity's Age NBT field is a Short implementing MECH-D51's 6000-tick despawn timer.
+- Vanilla's Villager NBT key VillagerData is a Compound of the form { type: String, profession: String, level: Int }.
+- The entity metadata payload (Set Entity Data packet) is a sequence of entries, each (index: u8, type: VarInt, value: type-specific), terminated by a single sentinel byte 0xFF (255) in the index position, with no outer count prefix.
+- At protocol 776 a Spawn Entity packet itself carries no inline metadata; a Set Entity Data packet immediately follows for any entity whose fields differ from their type's own defaults.
+- The Java Edition protocol's entity-metadata type-ID table assigns id 0 to Byte (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 1 to VarInt (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 2 to VarLong (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 3 to Float (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 4 to String (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 5 to TextComponent (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 6 to OptionalTextComponent (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 7 to Slot (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 8 to Boolean (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 9 to Rotations (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 10 to Position (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 11 to OptionalPosition (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 12 to Direction (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 13 to OptionalLivingEntityReference (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 14 to BlockState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 15 to OptionalBlockState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 16 to Particle (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 17 to Particles (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 18 to VillagerData (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 19 to OptionalVarInt (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 20 to Pose (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 21 to CatVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 22 to CatSoundVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 23 to CowVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 24 to CowSoundVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 25 to WolfVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 26 to WolfSoundVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 27 to FrogVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 28 to PigVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 29 to PigSoundVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 30 to ChickenVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 31 to ChickenSoundVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 32 to ZombieNautilusVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 33 to OptionalGlobalPosition (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 34 to PaintingVariant (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 35 to SnifferState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 36 to ArmadilloState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 37 to CopperGolemState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 38 to WeatheringCopperState (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 39 to Vector3 (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 40 to Quaternion (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 41 to ResolvableProfile (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The Java Edition protocol's entity-metadata type-ID table assigns id 42 to HumanoidArm (moderate confidence, from a live wiki fetch, not yet reconciled against a real packets.json).
+- The entity-metadata Byte value's wire payload is 1 byte.
+- The entity-metadata VarInt value's wire payload is a VarInt.
+- The entity-metadata Float value's wire payload is 4 bytes, big-endian.
+- The entity-metadata String value's wire payload is VarInt-length-prefixed UTF-8.
+- The entity-metadata OptionalTextComponent value's wire payload is a 1-byte present flag followed by the text payload as network-NBT bytes when present.
+- The entity-metadata Boolean value's wire payload is 1 byte, 0x00 or 0x01.
+- The entity-metadata OptionalPosition value's wire payload is a present-flag bool followed by the packed-Position i64 when present.
+- The entity-metadata Pose value's wire payload is a VarInt holding the pose enum's own ordinal.
+- The entity-metadata VillagerData value's wire payload is three VarInts in the order kind, profession, level.
+- The entity-metadata Slot value's wire payload begins with a VarInt item count (0 = empty, encoding nothing further); when nonzero, vanilla continues with a VarInt item id, then a VarInt count of components to add, then a VarInt count of components to remove.
+- Vanilla's Pose enum assigns ordinal 0 to Standing and ordinal 2 to Sleeping.
+- The base+LivingEntity metadata index table assigns index 0 to the status-flags byte (fire/sneak/sprint/swim/invisible/glowing/elytra bits), kind Byte, default 0 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 1 to air ticks, kind VarInt, default 300 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 2 to custom name, kind OptionalTextComponent, default None (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 3 to custom name visible, kind Boolean, default false (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 4 to silent, kind Boolean, default false (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 5 to no gravity, kind Boolean, default false (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 6 to pose, kind Pose, default Standing (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 7 to freeze/ticks-frozen, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 8 to hand states (active-hand/riptide bits), kind Byte, default 0 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 9 to health, kind Float, default type-specific MAX_HEALTH (20.0 unless overridden) (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 12 to arrow count, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 13 to bee-stinger count, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 14 to sleeping bed position, kind OptionalPosition, default None (moderate confidence, from a live wiki fetch).
+- Indices 10 and 11 in the entity metadata index table are reserved for potion-effect particles and the ambient flag.
+- Vanilla's shared entity-flags metadata byte (DATA_SHARED_FLAGS_ID, index 0 above) assigns bit 0 to on-fire, bit 1 to sneaking, bit 3 to sprinting, bit 4 to swimming, bit 5 to invisible, bit 6 to glowing, and bit 7 to elytra-flying.
+- Vanilla's Mob rung contributes zero additional synced metadata indices beyond what LivingEntity already defines.
+- In vanilla, a Mob's PersistenceRequired and CanPickUpLoot fields are internal-only bookkeeping, neither independently persisted to NBT nor synced via entity metadata.
+- Item entity's Slot metadata occupies index 8, since Item is Entity-direct rather than LivingEntity-rung and index 8 is the first free slot after Entity's own indices 0-7.
+- EntityType.clientTrackingRange defaults to 5 chunks in vanilla.
+- EntityType.updateInterval defaults to 3 ticks in vanilla.
+- Vanilla's zombie entity type overrides the tracking-range default to 8 chunks (moderate confidence).
+- Vanilla's villager entity type overrides the tracking-range default to 8 chunks (moderate confidence).
+- Vanilla's cow entity type overrides the tracking-range default to 8 chunks (moderate confidence).
+- Vanilla's item entity type overrides the tracking-range default to 6 chunks (moderate confidence).
+- Vanilla's item entity (minecraft:item) is not a Mob.
+- Vanilla's item entity (minecraft:item) is never naturally spawned.
+- Vanilla's own client-tracking system re-discovers an entity that re-enters a player's tracking range as a fresh spawn, with no memory that it was previously tracked and despawned.
+- Vanilla's zombie (minecraft:zombie) uses the legacy GoalSelector AI system and belongs to the MONSTER mob category.
+- Vanilla's villager (minecraft:villager) uses the Brain AI system and belongs to the CREATURE mob category.
+- Vanilla's cow (minecraft:cow) uses the legacy GoalSelector AI system and belongs to the CREATURE mob category.
+- At protocol 776 the Spawn Entity packet is client-bound with packet ID 0x01 and fields, in wire order: entity_id (VarInt), uuid (16 raw bytes, big-endian), entity_type (VarInt), x/y/z (f64), pitch then yaw (each a 1-byte Angle, pitch before yaw), head_yaw (1-byte Angle), data (VarInt), velocity_x/velocity_y/velocity_z (i16 fixed-point).
+- Vanilla's Spawn Entity packet orders pitch before yaw, the reverse of every other entity-rotation packet.
+- Vanilla uses the Spawn Entity packet's data field for a kind-specific spawn payload, e.g. a thrown potion's effect id.
+- At protocol 776 the Set Entity Data packet is client-bound with packet ID 0x63.
+- At protocol 776 the Update Entity Position packet is client-bound with packet ID 0x35, carrying entity_id (VarInt), a per-axis fixed-point position delta as i16 (round((new - old) * 4096)) valid only for a per-axis delta within +/-8 blocks, and on_ground (bool).
+- At protocol 776 the Update Entity Position and Rotation packet is client-bound with packet ID 0x36, carrying entity_id, the same i16 position delta, yaw/pitch as 1-byte Angles, and on_ground.
+- At protocol 776 the Update Entity Rotation packet is client-bound with packet ID 0x38, carrying entity_id, yaw/pitch as 1-byte Angles, and on_ground.
+- At protocol 776 the Teleport Entity (entity_position_sync) packet is client-bound with packet ID 0x23, carrying entity_id, x/y/z (f64), velocity_x/y/z (f64), yaw/pitch as full 4-byte Float degrees (not the 1-byte Angle encoding), and on_ground.
+- At protocol 776 the Set Head Rotation packet is client-bound with packet ID 0x53, carrying entity_id and head_yaw as a 1-byte Angle.
+- At protocol 776 the Set Entity Velocity packet is client-bound with packet ID 0x65, carrying entity_id and velocity_x/y/z as i16 fixed-point values.
+- At protocol 776 the Remove Entities packet is client-bound with packet ID 0x4D, carrying a list of entity ids where each id is individually VarInt-encoded (not a single length-prefixed array of plain i32).
+- Vanilla's Angle wire encoding is a single byte computed as round(degrees / 360.0 * 256.0).
+- Vanilla's entity-velocity wire encoding is round(v * 8000.0), clamped to [-32768, 32767], stored as i16 (derived from Entity.getVelocityUpdatePacket / Mth.clamp).
+- WORLD-D29 fixes the entities/ region-file schema as entities/r.<X>.<Z>.mca with root compound { DataVersion: Int, Position: [x, z] as a 2-element IntArray, Entities: List<Compound> }, one compound per entity in vanilla's own generic { id: String, ...entity fields } shape.
+- This engine's entity persistence uses DataVersion stamp 4903 (WORLD-D16).
+- Vanilla assigns a freshly-spawned entity's UUID via java.util.UUID.randomUUID(), which is SecureRandom-backed, not java.util.Random-backed.
+- Vanilla re-assigns a fresh network entity id and internal object identity to an entity on every load; only UUID is load-stable across a save/load cycle.
+
 ## Deliverables
 
 ### `crates/entity-macros/Cargo.toml` (modify)

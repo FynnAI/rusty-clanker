@@ -286,6 +286,98 @@ For every `PlayerMarker`, for every id in that player's own `tracked_entities` (
 
 Restated, not silently dropped: **projectiles** are M4-B01's own already-cited exclusion (§B above); **vehicles/riding** (`14 §3.10`) have no producer (no boat/minecart placeable content exists); **mob death drops** (a zombie/cow's own loot table on death) are **not** this blueprint's scope — death itself requires the combat/health system this blueprint's own §H hook explicitly defers to a sibling M4 blueprint (B05), so a mob loot table has no trigger point to hang off yet. This blueprint's own loot engine (§J/§K) is written generically enough that B05's own future death-drop call site needs no new engine code, only a new `LootTable` value and a new call to the already-shipped `roll_loot_table`.
 
+### Claims to verify (TEST-D57)
+
+- Item entity gravity is 0.04 blocks per tick, subtracted from vertical velocity before collision resolution each tick.
+- Item entity air drag is 0.98: after collision resolution, velocity is multiplied on all three axes by 0.98, with X/Z further multiplied by ground_friction when the item is on the ground.
+- When an item entity is on the ground and its vertical velocity is still negative after the drag multiply, vertical velocity is halved and inverted (velocity.y *= -0.5).
+- The item-entity tick order is: subtract gravity from vertical velocity, run collision resolution, apply the drag multiply, then apply the conditional halve-and-invert.
+- Living tier-2 mobs use a default gravity of 0.08 blocks per tick (Attributes.GRAVITY default).
+- The living-entity tick order computes horizontal movement input first, runs collision resolution using the previous tick's post-drag velocity, then computes this tick's gravity/drag afterward for storage as next tick's velocity.
+- Living-entity air drag is computed via a friction-modification function with a base value of 0.98.
+- Item entities do not step up onto low ledges the way a player does (effective step height 0.0).
+- An entity's no-gravity flag gates the gravity step exactly as vanilla's Entity.getGravity() checks its own isNoGravity() flag.
+- Item entities have a 0.25 x 0.25 collision box (width x height), i.e. a half-width of 0.125 blocks.
+- Zombies have a 0.6-wide, 1.95-tall collision box.
+- Villagers have a 0.6-wide, 1.95-tall collision box.
+- Cows have a 0.9-wide, 1.4-tall collision box.
+- An entity's default eye height is its own height multiplied by 0.85.
+- Living tier-2 mobs use the same step height as players, 0.6 blocks.
+- The AABB used to scan for touched fluid cells is inset by 0.001 blocks on every axis from the entity's own collision box.
+- Vanilla tracks fluid interaction with one independent tracker per relevant fluid tag (e.g. separate trackers for water and lava).
+- When a touched fluid cell's own height is below 0.4, its contribution to the entity's accumulated flow vector is scaled down proportionally (own_height / 0.4); at or above 0.4 it contributes at full scale.
+- The water push-scale constant is 0.014.
+- The fast-lava push-scale constant (used when the dimension's fast-lava flag is set) is 0.007.
+- The slow-lava push-scale constant (used when the dimension's fast-lava flag is not set) is 0.00233.
+- Only a player entity receives vanilla's averaged, non-normalized fluid-flow push; every other entity receives the plain, normalized push vector.
+- A stationary entity's scaled fluid-push impulse is renormalized up to a floor magnitude of 0.0045 so it always receives some perceptible push in a current.
+- The fluid push impulse is applied as an additive, post-tick impulse layered on top of the entity's ordinary gravity/drag step, not a replacement for it.
+- Vanilla's real water-slowdown shape is per-axis (slowDown, 0.8, slowDown) — the Y axis always uses a flat 0.8 multiplier, not the same value as X/Z.
+- Vanilla's water-slowdown slowDown value applied to the X/Z axes is 0.9 while sprinting and 0.8 otherwise.
+- Vanilla clamps fall speed in water to a floor of -gravity/16.0 before applying the water-slowdown multiply.
+- An entity fully submerged in lava has its velocity multiplied by (0.5, 0.5, 0.5) with an additional gravity/4.0 subtracted from vertical velocity.
+- An entity only shallowly in lava (not fully submerged) has its velocity multiplied by (0.5, 0.8, 0.5).
+- Vanilla's total air-supply constant is 300 ticks.
+- Each tick a living entity's eyes are submerged in water, its air supply decreases by 1 down to a floor of -20 ticks; otherwise it increases by 1 up to the 300-tick cap.
+- When a living entity's air supply newly reaches the -20 floor, it resets to 0 and triggers a drowning-damage event.
+- Item entities never take fall damage in vanilla, because ItemEntity overrides causeFallDamage to a no-op.
+- A dropped item entity's spawn position offset on each axis is drawn uniformly within [0.25, 0.75] of the broken block's own unit cell.
+- A dropped item entity's initial velocity is Vec3(triangle(0.0, 0.11485), triangle(0.2, 0.1116), triangle(0.0, 0.11485)), where triangle(mean, spread) = mean + spread * (next_double() - next_double()).
+- A newly spawned dropped item entity's pickup delay defaults to 10 ticks.
+- The loot-roll algorithm processes a loot table's pools in declaration order.
+- Each pool's roll count is computed as rolls.resolve(rng) + floor(bonus_rolls.resolve(rng) * luck).
+- Within a roll, a loot pool's entries are evaluated in declaration order.
+- Each loot entry's effective weight is computed as max(0, base_weight + floor(quality * luck)).
+- When exactly one loot-table entry in a pool has positive weight, it is chosen with no RNG draw; otherwise exactly one next_int_bounded(total_weight) draw selects the entry by weighted walk.
+- A Uniform count or roll provider resolves as: if min >= max return min with no draw, otherwise return min + next_int_bounded(max - min + 1).
+- Breaking a Stone block drops 1 Cobblestone.
+- Breaking a Dirt block drops 1 Dirt.
+- Breaking a Grass Block drops 1 Dirt.
+- Breaking Redstone Wire drops 1 Redstone (dust).
+- Breaking a Redstone Torch or Redstone Wall Torch drops 1 Redstone Torch.
+- Breaking a Repeater drops 1 Repeater (the block itself).
+- Breaking a Comparator drops 1 Comparator (the block itself).
+- Breaking a Piston or Sticky Piston drops the block itself.
+- Breaking a Chest drops 1 Chest (the block itself).
+- Breaking a Hopper drops 1 Hopper (the block itself).
+- Breaking a Furnace, Blast Furnace, or Smoker drops the block itself.
+- Since Minecraft 1.20, a block's loot-table random_sequence id follows the convention minecraft:blocks/<block_id>.
+- Xoroshiro128++'s golden-ratio-64 constant is -7046029254386353131 (hex 0x9E3779B97F4A7C15).
+- Xoroshiro128++'s silver-ratio-64 constant is 7640891576956012809 (hex 0x6A09E667F3BCC909).
+- The Stafford mix13 finalizer multiplies by the two constants -4658895280553007687 and -7723592293110705685 (with intervening XOR-shifts of 30 and 27 bits) before a final XOR-shift of 31 bits.
+- Upgrading a legacy 64-bit seed to the unmixed 128-bit Xoroshiro seed pair computes lo = legacy_seed XOR SILVER_RATIO_64 and hi = lo + GOLDEN_RATIO_64 (wrapping add).
+- Xoroshiro128++'s next_long step computes the output as rotate_left(s0 + s1, 17) + s0, then updates state via s1 ^= s0, new_lo = rotate_left(s0, 49) XOR s1 XOR (s1 << 21), new_hi = rotate_left(s1, 28).
+- Xoroshiro's next_int() truncates next_long() to its low 32 bits.
+- Xoroshiro's next_float() is next_bits(24) scaled by 2^-24.
+- Xoroshiro's next_double() is next_bits(53) scaled by 2^-53.
+- Vanilla's bounded-integer draw (next_int_bounded) uses a Lemire-style multiply-and-reject algorithm on the unsigned product of a random 32-bit value and the bound, not the legacy rejection-loop algorithm.
+- A random_sequence's MD5-based seed is the first 8 bytes and last 8 bytes of the MD5 hash of the sequence id's UTF-8 bytes, each read as a big-endian i64.
+- Creating a random_sequence XORs the (optionally included) world seed with a salt, upgrades that to the 128-bit unmixed seed pair, XORs in the MD5-seed halves of the (optionally included) sequence id, and mixes both resulting words with Stafford mix13.
+- Vanilla's default random_sequence creation uses salt = 0 and includes both the world seed and the sequence id.
+- Xoroshiro128++ seeded with 0 produces the five consecutive next_long() values 3038984756725240190, -3694039286755638414, 4633751808701151732, 2160572957309072155, 1839370574944072389.
+- Xoroshiro128++ seeded with 42 produces the three consecutive next_long() values -4695948378737616609, 7341713790291473579, -7542733514721318211.
+- Upgrading and mixing a legacy seed of 0 into the 128-bit Xoroshiro seed pair yields exactly (3847398142028685078, 7192185014346937746).
+- Vanilla item stack sizes vary per item rather than a single uniform cap; for example eggs stack to only 16.
+- Two item entities merge in vanilla when they hold the same item id and components and are within 0.5 blocks of each other.
+- Vanilla's real item pickup detection is based on AABB collision-box overlap between the player and the item entity, not a fixed pickup-radius constant.
+- A dropped item entity becomes eligible for player pickup only once its age reaches its pickup delay (10 ticks by default).
+- Vanilla's inventory insertion for a picked-up item tries the currently selected hotbar slot first, if it is empty or already holds a mergeable stack of the same item.
+- Failing the selected slot, vanilla scans occupied inventory slots hotbar-then-main-inventory in ascending index order for a mergeable partial stack to top up.
+- Failing a mergeable partial stack, vanilla fills the first empty slot found in that same hotbar-then-main-inventory scan order.
+- Any remainder of a picked-up stack that does not fit in any slot is left on the item entity rather than being picked up.
+- An item entity's age increments by 1 every tick unconditionally, including ticks where it does not move.
+- A dropped item entity despawns once its age reaches 6000 ticks (5 minutes).
+- Vanilla's per-entity network position/velocity resync interval defaults to every 3 ticks (updateInterval default).
+- The delta-encoded entity position update packet form only covers a per-axis range of plus or minus 8 blocks, beyond which an absolute teleport packet must be used instead.
+- The Take Item Entity clientbound play packet is assigned id 0x71 and carries, in order, collected_entity_id, collector_entity_id, and pickup_item_count (all varint-encoded).
+- A living entity's eyes are considered to be in a fluid of a given kind when that fluid's surface height at the block containing the eye position exceeds the eye position's own y coordinate.
+- Item entities carry an air-supply field that is never consumed, matching vanilla's own harmless-but-unused air field on non-LivingEntity kinds.
+- Fall-impact damage evaluation triggers on the tick an entity newly transitions onto the ground, having been airborne the previous tick, while carrying a positive accumulated fall distance.
+- Vanilla maintains two independent RNG streams: a general per-world random source used for non-deterministic effects such as a dropped item's spawn position/velocity jitter, and a separate, deterministic random_sequence stream used for loot-table rolls.
+- Vanilla exempts certain item entities from age-based despawn: those given a custom name, and those on a fixed persistent-category list.
+- Xoroshiro's next_bits(n) is computed as an unsigned right shift of next_long() by (64 - n) bits.
+- Xoroshiro's next_bool() is true when the low bit of next_long() is set.
+
 ## Deliverables
 
 ### `crates/mechanics/Cargo.toml` (modify — one new unconditional path dependency)

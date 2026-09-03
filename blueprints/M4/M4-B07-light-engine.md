@@ -659,6 +659,61 @@ pub fn build_update_light_payload(column: &LightColumn) -> UpdateLightPayload;
 
 **PERF-D17** names light propagation itself as one of this project's explicitly enumerated "non-parity-sensitive SIMD/autovectorization safe zones" — "already documented as order-independent by construction and excluded from `09`'s TEST-D10 strict-parity hash" — which is the direct planning-level confirmation backing this blueprint's own §2 design choice (final converged fixed-point values matter; per-round intra-tick visitation order does not need to match vanilla bit-for-bit). No SIMD implementation is required or expected at M4 (this blueprint's own scope is a "reference implementation," per the milestone's own BOUNDARIES: "no optimized backends (PERF gate later)"), but the hot inner loops this blueprint specifies (nibble read/write, face extraction, per-section mask/array bucketing) should still follow PERF-D17's stated autovectorization-friendly hygiene for when a future PERF-gated pass revisits them: prefer `chunks_exact`/fixed-stride iteration over the 4096-entry nibble arrays where a loop naturally visits every entry (`build_update_light_payload`'s own "is every nibble zero" scan is exactly such a loop); keep small leaf helpers (`get_nibble`/`set_nibble`/`light_nibble_index`) `#[inline]`; hoist the rare, data-dependent branch (a section transitioning from `None` to `Some` on first write) out of any loop that runs once per nibble, not once per section.
 
+### Claims to verify (TEST-D57)
+
+- World bottom is at Y = -64 (`WORLD_MIN_Y = -64`).
+- The world spans 384 blocks vertically (`WORLD_HEIGHT = 384`).
+- There are 24 real block sections per column (`SECTION_COUNT = 24`).
+- Vanilla's block-index formula within one section is `block_index(x, local_y, z) = (local_y << 8) \| (z << 4) \| x` (4096 entries per section, vanilla's own axis order).
+- Vanilla's light-section layout pads the tracked column with one extra section below the lowest real block section and one above the highest, giving 26 light sections total (`SECTION_COUNT + 2`), matching `LevelLightEngine.LIGHT_SECTION_PADDING`'s own hard edge.
+- Each light section's 4096 light values are packed as 4-bit nibbles, two nibbles per byte, in a 2048-byte array.
+- The `WorldSurface` heightmap value for a column is the first non-opaque (air-or-transparent) world Y at or above the topmost "not air" block in that column.
+- Sky light and block light are two independent channels that share one propagator algorithm but run separately, with no shared queue and no shared state between the two channels.
+- Each light channel maintains two per-chunk work queues, an increase queue and a decrease queue.
+- The propagation algorithm is push-based: a queued item names a position whose value just became authoritative, and processing it pushes further work onto neighbors only when a neighbor's value must actually change, never by pulling from neighbors.
+- In the block-light channel's `check_node`, when a block's emission decreases below the position's currently stored light level, vanilla zeroes the stored value and enqueues a decrease entry carrying the pre-zeroing stored level with all 6 directions.
+- In the block-light channel's `check_node`, when a block's emission stays the same or increases, or only its opacity/shape changed, vanilla enqueues a synthetic decrease-queue "pull request" entry with `from_level: 1` and all 6 directions, letting already-lit neighbors probe whether they can push a brighter value back into the position (the restatement of vanilla's `PULL_LIGHT_IN_ENTRY` sentinel).
+- In the block-light channel's `check_node`, when a block's new emission is greater than 0, vanilla additionally enqueues an increase entry at that emission's magnitude with all 6 directions and `increase_from_emission` set.
+- The sky-light channel's `check_node` is identical in shape to the block-light channel's, substituting "is this position a sky source" for stored emission and the value 15 for the emission magnitude.
+- In `propagate_increase_step`, when an entry is marked `increase_from_emission` and the position's current stored level is still below the entry's `from_level`, vanilla bumps the stored value up to `from_level` before propagating further (lazy materialization of emission).
+- In `propagate_increase_step`, if a dequeued entry's `from_level` no longer matches the position's current stored level (after any lazy bump), the entry is stale and is discarded without further propagation.
+- In `propagate_increase_step`, for each direction being propagated, the maximum value that can reach the neighbor is `from_level.saturating_sub(1)`, and propagation in that direction stops immediately if that value is 0.
+- In `propagate_increase_step`, propagation toward a neighbor is skipped early, without even reading the neighbor's block properties, whenever the computed `max_possible` is not strictly greater than the neighbor's current stored value.
+- In `propagate_increase_step`, the new value written at a neighbor is `new_level = from_level.saturating_sub(get_opacity(neighbor_properties))`, written only if `new_level` is strictly greater than the neighbor's current stored value.
+- In `propagate_increase_step`, when a neighbor's new value exceeds 1, vanilla enqueues a further increase entry that fans out to every direction except the one just walked in from — propagation never immediately bounces straight back toward its own source direction.
+- In `propagate_decrease_step`, a dequeued entry's `from_level` field records the value the position just dropped from, not the position's current value.
+- In `propagate_decrease_step`, if a neighbor's current stored value is 0, the step does nothing further for that neighbor.
+- In `propagate_decrease_step`, if a neighbor's current stored value is less than or equal to `from_level.saturating_sub(1)`, the neighbor's value could only have derived from the position being processed, so vanilla zeroes the neighbor's stored value.
+- In `propagate_decrease_step`, after zeroing such a neighbor, if the neighbor's own baseline source strength is less than its former stored value, vanilla cascades the darkness further by enqueueing another decrease entry at the neighbor carrying its former current value.
+- In `propagate_decrease_step`, after zeroing such a neighbor, if the neighbor's own baseline source strength is greater than 0, vanilla immediately writes that source strength back at the neighbor and enqueues a full-fan-out increase entry so the neighbor reclaims its own baseline glow without waiting for a separate change event.
+- In `propagate_decrease_step`, if a neighbor's current stored value is strictly greater than `from_level.saturating_sub(1)`, the neighbor has an independent, still-valid, stronger source, and vanilla enqueues a single-direction "probe" onto the increase queue, fanning out in exactly the one direction back toward the darkened position, never a full 6-direction fan-out.
+- Within one chunk's one round, the decrease queue is drained to empty completely before the increase queue is touched at all; decreases may enqueue increases, but increases never enqueue decreases.
+- Scalar light opacity (vanilla's `getLightDampening` value) ranges 0..=15.
+- A fully solid-rendering block has opacity 15.
+- A non-full block that "propagates skylight down" has opacity 0.
+- Every other non-full block has opacity 1.
+- The effective opacity used by propagation is `props.opacity.max(1)`, a minimum opacity floor of 1, so every propagation hop costs at least 1 light level regardless of a block's declared opacity.
+- Vanilla's shape-occlusion veto for a propagation step in direction `dir` fires if either the source block's face in `dir`, or the destination block's face in `dir.opposite()`, is declared to fully occlude the shared face between them — either side alone is sufficient.
+- For an ordinary block that does not opt into shape-based occlusion (the vanilla default), every face is non-occluding and the shape-occlusion veto never fires, so only the scalar opacity subtraction governs; shape-accurate occlusion is opted into by only a handful of blocks.
+- Vanilla's air block is the default light-property state: fully transparent (zero opacity) and non-emitting (zero block-light emission).
+- Block-light emission is a value 0..=15 (`MAX_LEVEL = 15`).
+- Sky light has no per-block emission field of its own; its source strength derives from column position instead.
+- A block's `propagates_skylight_down` property is true only for a block whose own shape is non-full and which carries no fluid.
+- Vanilla packs a light propagation queue entry's 6-direction fan-out metadata into bit-flags inside one packed `u64` field.
+- A light value's magnitude is capped at 15 and decays by at least 1 level per propagation hop, so a single light-affecting change can never travel more than 15 blocks from its origin in any direction.
+- A chunk is 16 blocks wide horizontally, so a light value can cross at most one chunk boundary before fully decaying, barring a corner case that can cross two boundaries near a chunk corner.
+- A position `(x, world_y, z)` is a sky-light source (level 15, no decay needed) if and only if its world Y is at or above the column's sky-source boundary Y.
+- The sky-source boundary Y starts at the `WorldSurface` heightmap value for that column and continues scanning downward one block at a time while each successively lower block's `propagates_skylight_down` is true, stopping at (and excluding) the first block whose `propagates_skylight_down` is false.
+- Vanilla retains a chunk's persisted/saved light data on chunk load rather than recomputing it, when the persisted light status was already recorded as correct.
+- At protocol 776, the `Level Chunk with Light` packet's id is `0x2C`.
+- The `Level Chunk with Light` packet's light-relevant fields are, in order: `sky_light_mask` (BitSet), `block_light_mask` (BitSet), `empty_sky_light_mask` (BitSet), `empty_block_light_mask` (BitSet), a VarInt-length-prefixed `sky_light_arrays` (each entry `[u8; 2048]`), and a VarInt-length-prefixed `block_light_arrays` (each entry `[u8; 2048]`).
+- The standalone `Update Light` packet carries the same six light fields as `Level Chunk with Light`, preceded by `chunk_x: VarInt` and `chunk_z: VarInt` (moderate confidence — this packet's own numeric id is not pinned in this project's corpus).
+- A `LightColumn` section that is untracked (`None`) contributes to neither its mask nor its empty mask, and no array entry is sent for it.
+- A tracked section whose 4096 nibbles are all 0 contributes only to the corresponding empty mask (bit set, no bytes sent) — the client fills that section with all-zero light on receipt.
+- A tracked section with at least one nonzero nibble contributes to the corresponding non-empty mask and has its full `[u8; 2048]` array sent, in ascending section-index order matching the mask's own bit order.
+- Vanilla's own "border-only broadcast" optimization sends full section light state on a chunk's initial send.
+- On a later in-place light change, vanilla's "border-only broadcast" optimization sends only the border-adjacent subset of sections, relying on a bit-identical client-side local light engine to fill in the rest.
+
 ## Deliverables
 
 ### `crates/messaging/src/region_message.rs` (MODIFY — additive)

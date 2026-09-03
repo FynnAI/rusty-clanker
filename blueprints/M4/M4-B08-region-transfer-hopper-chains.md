@@ -241,6 +241,20 @@ Per-hopper cadence (M3-B06's own already-specified, already-tested algorithm, re
 
 Because `region_chunks()` is fixed, ascending `(x, z)` order (M3-B06's own explicit, cited, non-vanilla-order-dependent design choice — "this blueprint's own reproducible substitute for vanilla's load-history-dependent chunk order, licensed by the identical 'no vanilla-observable mechanic depends on cross-chunk order' reasoning ARCH-D14's own rationale already states," a claim M3-B06's own text extends from Stage 5 to Stage 7 explicitly), a hopper `A` in a lower-ordered chunk that successfully pushes into a hopper `B` in a higher-ordered chunk, **within the same region-tick**, makes that pushed item visible to `B`'s own tick call later in that *same* `run_block_entity_tick` pass (single live-mutation state, no `Commands` deferral for Stage 7, M3-B06's own already-established design) — so if `B`'s own `transfer_cooldown` was already `0`, `B` can itself push the item onward in that same region-tick, a two-hop cascade within one tick. This is a genuinely order-dependent property (swap which chunk is processed first and the cascade direction/possibility changes) — this blueprint does **not** claim it reproduces any particular real vanilla placement scenario bit-for-bit (M3-B06's own already-accepted stance: cross-chunk block-entity tick order is a deterministic, reproducible substitute, not a vanilla-bit-exact one, the identical status Stage 5's random-tick draw order already has). What this blueprint's own acceptance test proves is narrower and precisely what the M4 roadmap's own acceptance criterion 2 actually asks for: that the **per-hopper cadence** (the 8/7-tick rule) holds correctly, deterministically, and reproducibly for a chain whose hops cross a chunk border — restated in the hand-derived tick table below, which explicitly documents (rather than hides) the one cascade tick this project's own chunk-ordering convention produces.
 
+### Claims to verify (TEST-D57)
+
+- A hopper does not attempt a push or pull on a tick where it is redstone-locked.
+- A hopper attempting a transfer on a tick where transfer_cooldown == 0 pushes first, then pulls only if the push did not succeed.
+- A successful hopper push sets transfer_cooldown = 7 if the destination was completely empty immediately before the push, else 8.
+- A successful hopper pull always sets transfer_cooldown = 8.
+- Vanilla hopper push/pull behavior and its transfer_cooldown cadence apply per hopper, independent of whether the hopper's push/pull target lies in the same chunk as the hopper or in a neighboring chunk.
+- In vanilla, Zombie entities use the GoalSelector AI system.
+- In vanilla, Cow entities use the GoalSelector AI system.
+- In vanilla, Villager entities use the Brain AI system.
+- Item entities are not Mob-rung entities and have no AiSystemKind/MobMarker AI-system classification in vanilla.
+- The Minecraft Java server ticks at 20 TPS (ticks per second).
+- None of a Mob-rung entity's MobMarker fields (the ai_system classification, persistence_required, and can_pick_up_loot) are independently persisted in NBT or synced over the network in vanilla.
+
 ## Deliverables
 
 ### `crates/scheduler/src/messaging_bridge.rs` (MODIFY — additive; Context, Part 1.2)
