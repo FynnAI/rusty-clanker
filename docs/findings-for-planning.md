@@ -1395,6 +1395,41 @@ Entries name the milestone that surfaced them and the code they concern.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
+- **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
+  all corrected in the blueprints; planning documents may still carry the
+  superseded facts.** The nine M4 blueprints had no "Claims to verify"
+  subsection; the pass extracted one per blueprint (B01 133, B02 89, B03 114,
+  B04 58, B05 108, B06 70, B07 52, B08 11, B09 28), verified every claim
+  against the decompiled 26.2 reference and the datagen output, and an
+  independent re-check upheld every WRONG verdict. Recurring error classes:
+  26.2's snake_case entity NBT keys (`fall_distance` as Double,
+  `active_effects`, `sleeping_pos`) where the blueprints carried the pre-1.21
+  PascalCase names; synced-metadata defaults and index chains (Mob rung adds
+  index 15; health default 1.0, not max health); entity-type registration
+  facts (Villager is MISC and never natural-spawns, tracking ranges 10 not 8);
+  packet layouts; per-kind attribute builders (no ATTACK_DAMAGE on Villager/
+  Cow); despawn predicates (`removeWhenFarAway` false for animals); fluid
+  push ordering and lava submersion thresholds; item pickup-delay countdown;
+  merge-scan cadence; Brain tick phases and push-based PANIC; sky-light
+  source structure and structural light-layer emptiness; hopper cooldown
+  attribution (the receiving hopper's cooldown is set by the insertion
+  itself). Decisions taken by the planning role on the 29 design
+  consequences (applied to the blueprints): metadata indices vanilla-exact
+  per kind with reserved intermediate-rung indices; MobMarker persistence of
+  `PersistenceRequired`/`CanPickUpLoot`; `CustomName` patch-preserved as the
+  raw component tag; per-kind fluid push ordering; real jump impulse above
+  step height; attribute queries return absence, never 0.0; four-phase Brain
+  tick with push-based PANIC; `MobCategory::Misc`; per-kind despawn
+  predicate; darkness gate with explicit `sky_darken`; modifier order kept
+  as insertion order under a guarded single-modifier exception; real
+  solidity heuristic and per-face sturdiness test in fluids; sky-light
+  sources and light-section fill state per the amended WORLD-D7/WORLD-D8;
+  hopper cascade section re-derived. Planning reconciliation to check:
+  `docs/planning/05-game-mechanics.md` and `02-protocol-networking.md`
+  wherever they restate entity NBT key names, metadata indices, tracking
+  ranges, mob categories or attribute tables — the blueprints are now the
+  corrected source; any contradiction found is a doc-05/doc-02 error.
+
 - **M3.5-B03 execution shape — decided as TEST-D58 (2026-09-03):** the
   sequential two-capture `protocol-diff` job is replaced by two parallel
   capture jobs per OS plus a cheap diff job, with per-step timing artifacts
