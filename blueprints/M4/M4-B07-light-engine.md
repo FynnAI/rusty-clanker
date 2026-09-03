@@ -28,7 +28,7 @@ Done when:
 
 ### 1. What already exists and is reused unmodified
 
-`rc-chunk-storage`'s `LightColumn` (WORLD-D8, M2-B01): `LightColumn { sections: Vec<LightSection> }`, `LightSection { pub sky: Option<Box<[u8; 2048]>>, pub block: Option<Box<[u8; 2048]>> }` — nibble-packed (2 entries/byte), `None` = vanilla's own "not yet initialized" shortcut, section count `LIGHT_SECTION_COUNT = 26` (`SECTION_COUNT + 2`, one padding section below the lowest real block section, one above the highest). `LightColumn::new_uninitialized()` gives every section `LightSection::default()` (both fields `None`). Accessors: `sections()`, `sections_mut()`, `section(i)`, `section_mut(i)`. This blueprint reads/writes `LightSection`'s two public fields directly (byte-array nibble math, below); it does **not** modify `rc-chunk-storage` at all — every accessor this blueprint needs already exists.
+`rc-chunk-storage`'s `LightColumn` (WORLD-D8, M2-B01): `LightColumn { sections: Vec<LightSection> }`, `LightSection { sky: LightNibbles, block: LightNibbles }` with `LightNibbles { Uninitialized, Filled(u8), Data(Box<[u8; 2048]>) }` — nibble-packed (2 entries/byte) once materialized. `Uninitialized` is vanilla's own "not yet initialized" shortcut (no `DataLayer` object at all for this section/channel); `Filled(v)` is vanilla's own allocated-but-implicit-value layer whose backing array was never materialized (`v == 0` is exactly vanilla's own structural "empty" case, Context §12 below); `Data(arr)` is a fully materialized, heterogeneous per-nibble array. Section count `LIGHT_SECTION_COUNT = 26` (`SECTION_COUNT + 2`, one padding section below the lowest real block section, one above the highest). `LightColumn::new_uninitialized()` gives every section `LightSection::default()` (both fields `LightNibbles::Uninitialized`, `LightNibbles`'s own default variant). Accessors: `sections()`, `sections_mut()`, `section(i)`, `section_mut(i)`. This blueprint reads/writes `LightSection`'s two public fields directly (nibble math over all three `LightNibbles` variants, below); it does **not** modify `rc-chunk-storage` at all — every accessor this blueprint needs already exists. **Prerequisite gap, flagged for reconciliation, not a decision this blueprint makes:** `rc-chunk-storage`'s own shipped `LightSection` (M2-B01) has not yet been brought into line with WORLD-D8's current, authoritative `LightNibbles` shape above — its currently-shipped code still carries the superseded two-state `Option<Box<[u8; 2048]>>` form. This blueprint's own text is written against WORLD-D8's current specification; landing M4-B07 in practice additionally requires M2-B01's own shipped `LightSection` to be updated to match first — an M2-B01-scoped follow-up, not a change this blueprint's own Deliverables perform.
 
 World geometry constants (M2-B01, `rc_chunk_storage::column`): `WORLD_MIN_Y = -64`, `WORLD_HEIGHT = 384`, `SECTION_COUNT = 24` (real block sections), block-index formula `block_index(x, local_y, z) = (local_y << 8) | (z << 4) | x` (vanilla's own axis order, 4096 entries/section).
 
@@ -47,7 +47,7 @@ Two independent channels — **sky light** and **block light** — share one pro
 **`check_node`** — the block-change entry point (research doc §3.3, restated): given a position `pos` whose relevant properties changed from `old` to `new` (for block light: emission; for sky light: "is this position a sky source," §6 below):
 
 - **Block light channel:** if `new.block_emission < current_stored_level(pos)`, zero the stored value and enqueue a decrease entry `{ pos, from_level: current_stored_level_before_zeroing, directions: ALL, from_empty_shape: false }`. Otherwise — a single comparison against the position's *current stored level*, not against its own previous emission, and never a test of what changed: the pull-request branch fires whenever the position's current emission is greater than or equal to its current stored level, regardless of whether that is because emission stayed the same or increased, or because only opacity/shape changed (an opacity-or-shape-only change at a position lit by a neighbor, e.g. emission 0 with a stored level of 10, still takes the *decrease* branch above, since `0 < 10`) — enqueue a **pull-request**: for a synthetic entry `{ pos, from_level: 1, directions: ALL, from_empty_shape: false }` pushed onto the **decrease** queue — its `from_level: 1` makes every neighbor-check's `stored <= from_level - 1` test (`stored <= 0`) false for any already-lit neighbor, so this decrease step does no damage to any neighbor but its own internal "neighbor has an independent source, probe it" branch (§4's decrease algorithm, the `else` branch) still fires for every already-lit neighbor, asking each "can you push a brighter value back into `pos`" — this is this blueprint's own restatement of vanilla's `PULL_LIGHT_IN_ENTRY` sentinel (research doc §3.2/§3.5), reproduced by ordinary use of the same decrease algorithm rather than a second code path. If `new.block_emission > 0`, additionally enqueue an increase entry `{ pos, from_level: new.block_emission, directions: ALL, from_empty_shape: false, increase_from_emission: true }`.
-- **Sky light channel:** structurally different from the block-light branch above, not merely a substitution of source-status for emission. Before this per-position branch, vanilla first (conditionally, gated on this chunk's section light being on) runs a whole-column sky-source-boundary maintenance pass (§6) that itself writes stored levels and enqueues work — block light has no such column-wide pass. For a source position (`is_sky_source(pos)` true) vanilla enqueues **both** a decrease entry and an increase entry unconditionally, each at `from_level: 15` with `directions: all_except(Up)` — five directions, skipping `Up`, never all six — and the increase entry carries no `increase_from_emission` flag (the level 15 is written directly by the column-maintenance pass itself, not lazily materialized on propagation). For a non-source position, the decrease-vs-pull-request branch is chosen by whether the position's current stored level is greater than `0` (zero it and cascade a decrease if so, otherwise enqueue the pull-request), never by any emission-style comparison — there is no per-block emission for sky light to compare against.
+- **Sky light channel:** structurally different from the block-light branch above, not merely a substitution of source-status for emission. Before this per-position branch, vanilla first (conditionally, gated on this chunk's section light being on) runs a whole-column sky-source-boundary maintenance pass (§6, realized by this blueprint's own `SkyLightSourceColumn::recompute_column` plus Stage-8's own affected-range loop, §8 step 1) that itself writes stored levels and enqueues work — block light has no such column-wide pass. For a source position (`SkyLightSourceColumn::is_source(pos)` true) vanilla enqueues **both** a decrease entry and an increase entry unconditionally, each at `from_level: 15` with `directions: all_except(Up)` — five directions, skipping `Up`, never all six — and the increase entry carries no `increase_from_emission` flag (the level 15 is written directly by the column-maintenance pass itself, not lazily materialized on propagation). For a non-source position, the decrease-vs-pull-request branch is chosen by whether the position's current stored level is greater than `0` (zero it and cascade a decrease if so, otherwise enqueue the pull-request), never by any emission-style comparison — there is no per-block emission for sky light to compare against.
 
 **`propagate_increase_step`** (research doc §3.4, restated) — given a dequeued increase entry: re-read `pos`'s *current* stored level; if `increase_from_emission` is set and the stored level is still below `from_level`, bump the stored value up to `from_level` first (lazy materialization — an emission increase is only "spent" once it is actually about to propagate). If the (possibly just-bumped) stored level no longer equals the entry's own `from_level`, the entry is stale (superseded by a larger increase queued after it) — discard it, do nothing further. Otherwise, for each `dir` in the entry's `directions` set: compute `max_possible = from_level.saturating_sub(1)`; if `max_possible == 0`, skip (nothing left to propagate). If `dir.apply(pos)` falls outside this chunk's own horizontal extent or outside the tracked vertical light range, defer to the **cross-boundary outgoing mechanism** (§5) instead of reading a neighbor directly. Otherwise: if `max_possible` is not already strictly greater than the neighbor's current stored value, skip (no improvement — this early bail avoids reading the neighbor's block properties at all in the common case, matching the vanilla behavior the research doc's §3.4 describes). Otherwise resolve `shape_occludes` (§3 below) between `pos`'s and the neighbor's `LightProperties`; if it occludes, skip. Otherwise compute `new_level = from_level.saturating_sub(get_opacity(neighbor_properties))`; if `new_level` is not strictly greater than the neighbor's current stored value, skip; otherwise write `new_level` at the neighbor and, if `new_level > 1`, enqueue a further increase entry `{ pos: neighbor, from_level: new_level, directions: all_except(dir.opposite()), from_empty_shape: false, increase_from_emission: false }` (never immediately bounce back toward the direction just walked in from).
 
@@ -62,7 +62,7 @@ No generated per-block light-property table exists yet (`rc-registries`'s genera
 - **Scalar opacity**: `pub opacity: u8` (0..=15, vanilla's own `getLightDampening` value — 15 for a fully solid-rendering block, 0 for a non-full block that "propagates skylight down," 1 for every other non-full block). `get_opacity(props) = props.opacity.max(1)` — `MIN_OPACITY = 1`, every hop costs at least 1 level regardless of a block's declared opacity (research doc §5's constants table).
 - **Shape occlusion veto**: `pub occludes_face: [bool; 6]` (indexed `[West, East, North, South, Down, Up]`, `Direction`'s own declaration order) — `true` means this block's face in that direction is declared to fully occlude the shared face with a neighbor in that direction, an unconditional propagation veto independent of what the scalar-opacity subtraction would have produced. `shape_occludes(from_props, to_props, dir) = from_props.occludes_face[dir_index(dir)] || to_props.occludes_face[dir_index(dir.opposite())]` — either side alone claiming full occlusion of the shared face is sufficient (mirrors research doc §3.7's "union of the two adjoining faces fully covers the shared face" test, simplified to booleans since neither side needs partial-coverage geometry to prove full coverage). For an ordinary block that does not opt into shape-based occlusion at all (the vanilla default), every entry of `occludes_face` is `false` and this veto never fires — the scalar `opacity` field alone governs, exactly matching vanilla's own "shape-accurate occlusion... opted into by a handful of blocks" default-off framing.
 - **Emission**: `pub block_emission: u8` (0..=15, `MAX_LEVEL`). Sky light has no per-block emission field — its own source strength is derived from column position, §6.
-- **`propagates_skylight_down`**: `pub bool` — vanilla's *default* rule (a block whose own shape is non-full *and* carries no fluid, research doc §3.7's dampen-by-0 case) governs most blocks, but vanilla overrides it in both directions for 15 block classes: five (`TransparentBlock` and its glass family, `BambooStalkBlock`, `HangingMossBlock`, `MossyCarpetBlock`, `VineBlock`) return `true` unconditionally regardless of shape — glass has a full-cube shape yet still propagates skylight down, which is exactly how the glass-roof case (§6) works; four (`TintedGlassBlock`, `ShulkerBoxBlock`, `LiquidBlock`, `PipeBlock`) return `false` unconditionally; four (`BarrierBlock`, `VegetationBlock`, `LightBlock`, `GlowLichenBlock`) test only the fluid condition; two (`CrossCollisionBlock`, `WallBlock`) test only whether the block is waterlogged. `LightPropertiesRegistry` (§3) assigns this field per registered range, so these overrides are ordinary registration data, not a rule this project's own code re-derives; consumed exclusively by §6's sky-source-boundary scan, never by ordinary propagation math.
+- **No `propagates_skylight_down` field.** Vanilla's own `propagatesSkylightDown()` (research doc §3.7's dampen-by-0 case, overridden in both directions for 15 block classes — documented as a pure vanilla fact in the Claims bullet below) is **not** modeled as a distinct `LightProperties` field: WORLD-D7 explicitly rules out driving the sky-source boundary off "a single 'propagates skylight down' flag." The sky-source boundary (§6) is instead determined directly from the two fields already above — `opacity` (nonzero dampens) and `occludes_face` (the two-sided face-occlusion veto) — via the exact two-part stop test §6 restates from vanilla's own `isEdgeOccluded`. This reproduces the glass-roof case (§6) for the identical underlying reason vanilla's own mechanism does: glass registers `opacity: 0` (a non-full-shape-equivalent transparent block) and non-occluding `occludes_face`, so neither half of the two-part test fires at a glass block — no dedicated flag is needed to get the right answer.
 
 ```rust
 // crates/mechanics/src/light/properties.rs
@@ -77,7 +77,6 @@ use rc_chunk_storage::BlockStateId;
 pub struct LightProperties {
     pub block_emission: u8,
     pub opacity: u8,
-    pub propagates_skylight_down: bool,
     pub occludes_face: [bool; 6],
 }
 
@@ -230,40 +229,115 @@ This extra latency is bounded and small: a light value's magnitude is capped at 
 
 `Y` never needs this deferral mechanism at all: one chunk entity's `LightColumn` already spans the chunk's **entire** column height (all 26 light sections, WORLD-D8), so a `Down`/`Up` propagation step never leaves the processing chunk's own entity — it only ever needs the ordinary local-write path. The only positions requiring deferral are `West`/`East`/`North`/`South` steps that cross the chunk's own `x`/`z` extent, and (a hard stop, not a deferral) any `Down`/`Up` step that would leave the tracked vertical light range entirely (`world_y < LIGHT_MIN_Y` or `>= LIGHT_MIN_Y + LIGHT_HEIGHT`, §6) is simply dropped — mirroring vanilla's own fixed padding-section boundary (WORLD-D8's "+2 padding," matching `LevelLightEngine.LIGHT_SECTION_PADDING`'s own hard edge, research doc §3.1).
 
-### 6. Sky-light source columns — this blueprint's own algorithm, adapted from `HeightmapSet::WORLD_SURFACE` (WORLD-D7)
+### 6. Sky-light source columns — `SkyLightSourceColumn`, this blueprint's own equivalent of vanilla's `ChunkSkyLightSources` (WORLD-D7)
 
-A position `(x, world_y, z)` is a sky-light **source** (level 15, no BFS decay needed to reach it) iff `world_y >= source_boundary_y(x, z)`. Vanilla's own boundary scan (research doc §3.8) reads no heightmap at all: it starts at the top of the chunk's own highest non-empty section, maintains its result in a dedicated per-chunk 256-entry `BitStorage` kept incrementally up to date on every block change, and its per-pair stop test is `isEdgeOccluded` — the lower block's light dampening being nonzero, *or* a two-sided face-occlusion test between the adjacent pair — returning the *upper* block's Y of the first occluding pair (one above the occluder, the lowest Y that is still a source), or the world floor minus one if the downward scan reaches the bottom without finding one. WORLD-D7 directs this blueprint to build `source_boundary_y` on top of the already-existing `HeightmapSet::WORLD_SURFACE` instead of reproducing that separate incremental structure: this blueprint's own scan starts at `HeightmapSet::world_y(WorldSurface, x, z)` (everything at or above this Y is unconditionally air, hence unconditionally a source — `WorldSurface`'s own value is exactly (highest non-air block's Y) + 1, §1) and continues scanning **downward** one block at a time while each successively lower block's `LightProperties::propagates_skylight_down` is `true` (this blueprint's own proxy for vanilla's "light dampening is 0" half of `isEdgeOccluded` — a glass roof, for instance, does not stop the heightmap's own "not air" scan, since glass is not air, but *does* let sky light continue past it, so the source boundary must extend below the heightmap's own recorded value in that case). The scan stops at, and excludes, the first block whose `propagates_skylight_down` is `false`. This blueprint's algorithm does not model vanilla's separate face-occlusion half of `isEdgeOccluded` (`occludes_face`, §3, plays no part in this scan) — a documented, bounded simplification of WORLD-D7's own chosen design, not a claim of exact reproduction of vanilla's own mechanism.
+A position `(x, world_y, z)` is a sky-light **source** (level 15, no BFS decay needed to reach it) iff `world_y >= boundary_y(x, z)`, where `boundary_y` is read from a genuine per-chunk structure this blueprint maintains — **never** a value recomputed by scanning `HeightmapSet::WORLD_SURFACE` at query time. WORLD-D7 is explicit on this point: the heightmap only ever *seeds* the structure's own initial scan (a starting-point optimization) — it is **not** the source of truth for where the boundary actually sits; the two-part stop test against real block state, below, is. Vanilla's own equivalent, `ChunkSkyLightSources` (research doc §3.8, one instance per chunk): a 16×16 array recording, per `(x,z)` column, the lowest Y at which sky light transitions from "guaranteed full sun" to "must be propagated." Vanilla's own per-pair stop test, `isEdgeOccluded(upper, lower)` — this blueprint's own `is_sky_edge_occluded` below — is **two-part**: the downward scan through a column stops at, and the boundary sits at, the first pair `(upper, lower)` (`lower` directly below `upper`) for which **either** (a) `lower`'s scalar opacity is nonzero (`LightProperties::opacity != 0` — vanilla's own `getLightDampening() != 0`, the cheap common-case check vanilla runs first), **or** (b) the pair's shared horizontal face is fully occluded by the two-sided face-occlusion test §3 already defines (`shape_occludes(upper, lower, Direction::Down)` — vanilla's own `Shapes.faceShapeOccludes` test, the identical mechanism §3's ordinary propagation veto already uses, applied here between vertically-stacked blocks instead of a propagation step). The boundary is recorded as the *upper* block's own Y of the first such occluding pair (one above the occluder, the lowest Y that is still unconditionally a source) — or the world floor if the downward scan reaches the bottom without finding one.
 
 ```rust
 // crates/mechanics/src/light/sky_source.rs
+use bevy_ecs::prelude::Component;
 use rc_chunk_storage::{BlockStateColumn, HeightmapSet, HeightmapKind};
-use crate::light::properties::LightPropertiesRegistry;
+use crate::direction::Direction;
+use crate::light::properties::{shape_occludes, LightProperties, LightPropertiesRegistry};
 
-/// Context §6's algorithm, computed on demand (no caching — this blueprint's own
-/// "reference implementation, PERF gate later" scope, §9). Reads only this chunk's
-/// own `BlockStateColumn`/`HeightmapSet` — never a neighbor's (sky-source status
-/// never crosses a chunk boundary in this blueprint's design, since the heightmap
-/// itself is already a whole-column-height, single-chunk-owned structure).
-pub fn sky_source_boundary_y(
-    blocks: &BlockStateColumn,
-    heightmap: &HeightmapSet,
-    properties: &LightPropertiesRegistry,
-    x: u8,
-    z: u8,
-) -> i32;
+/// One chunk's own per-`(x,z)`-column sky-light-source boundary (Context §6,
+/// WORLD-D7's own `ChunkSkyLightSources` equivalent) — a genuine per-chunk
+/// structure this blueprint maintains against real block state, never a value
+/// recomputed from `HeightmapSet::WORLD_SURFACE` at query time (the heightmap
+/// only ever *seeds* a fresh scan's own starting Y, WORLD-D7's own "starting
+/// point only" wording). Attached alongside `LightColumn`/`LightPropagatorState`
+/// on every chunk entity by whichever future chunk-lifecycle blueprint first
+/// spawns real chunk entities — the identical deferred-wiring status
+/// `LightPropagatorState` already carries (Constraints (f)), except that, unlike
+/// `LightPropagatorState`, this structure's own content is not ephemeral/tick-
+/// scoped: it represents a real per-chunk fact that should survive across ticks
+/// exactly as `LightColumn` itself does; this blueprint scopes its own lifecycle
+/// identically to `LightColumn`'s (Context §9) — rebuilt via `recompute`
+/// whenever a chunk's own persisted value is unavailable or stale — while
+/// leaving whether it needs its own on-disk persistence format to a future,
+/// WORLD-D8/WORLD-D22-scoped decision (out of this blueprint's own scope,
+/// Constraints (f)).
+#[derive(Component, Clone, Debug)]
+pub struct SkyLightSourceColumn {
+    // private: Box<[i32; 256]>, indexed by `column_index(x, z) = x + z * 16`
+    // (mirrors `ChunkSkyLightSources`'s own `index(x, z)` exactly)
+}
 
-/// `world_y >= sky_source_boundary_y(..)`.
-pub fn is_sky_source(
-    blocks: &BlockStateColumn,
-    heightmap: &HeightmapSet,
-    properties: &LightPropertiesRegistry,
-    x: u8,
-    world_y: i32,
-    z: u8,
-) -> bool;
+impl SkyLightSourceColumn {
+    /// Builds a fresh structure for a chunk with no previously-known boundary
+    /// state, by calling `recompute_column` for every one of the 256 `(x, z)`
+    /// columns (below) — an unconditional full-chunk scan, this blueprint's own
+    /// chunk-load-time / fresh-chunk-recompute entry point (Context §8 step 2,
+    /// §9).
+    pub fn recompute(
+        blocks: &BlockStateColumn,
+        heightmap: &HeightmapSet,
+        properties: &LightPropertiesRegistry,
+    ) -> Self;
+
+    /// This column's own boundary Y for `(x, z)` (`0..16` each) — `world_y >=
+    /// boundary_y(x, z)` is exactly `is_source`'s own definition.
+    pub fn boundary_y(&self, x: u8, z: u8) -> i32;
+
+    /// `world_y >= self.boundary_y(x, z)`.
+    pub fn is_source(&self, x: u8, world_y: i32, z: u8) -> bool;
+
+    /// Recomputes exactly this one `(x, z)` column's own boundary (Context §6)
+    /// — the structural-maintenance operation Stage 8's own seeding step (§8
+    /// step 1) calls once per `LightDirtyEntry`, and `recompute` (above) calls
+    /// once per column for a full-chunk build. Scans downward one block at a
+    /// time starting at `HeightmapSet::world_y(WorldSurface, x, z)` (everything
+    /// at or above this Y is unconditionally air, hence unconditionally a
+    /// source — `WorldSurface`'s own value is exactly (highest non-air block's
+    /// Y) + 1, §1), applying `is_sky_edge_occluded` (below) to each successive
+    /// `(upper, lower)` pair read via `BlockStateColumn::get`/`properties.
+    /// resolve`, stopping at and recording the first occluding pair's own upper
+    /// Y; a scan reaching `WORLD_MIN_Y` without an occluding pair records
+    /// `WORLD_MIN_Y` (every position at or below the world floor that has no
+    /// occluder above it is, degenerately, itself a source — matches an
+    /// all-air world column, a pathological but well-defined edge case this
+    /// function must not panic on). Returns `(old_boundary_y, new_boundary_y)`
+    /// — the caller's own signal for exactly which Y-range's source status
+    /// flipped (Context §8 step 1). **This blueprint's own scoped
+    /// simplification of vanilla's own algorithm**: vanilla's real
+    /// `ChunkSkyLightSources::update` re-examines only the one or two edges
+    /// immediately adjacent to a changed position, walking further only if the
+    /// old boundary edge itself stopped occluding (an amortized partial
+    /// update); vanilla's `SkyLightEngine` additionally skips whole runs of
+    /// untracked (all-air) sections in bulk (research doc §3.8's
+    /// `countEmptySectionsBelowIfAtBorder`/`propagateFromEmptySections`
+    /// optimizations). This blueprint instead always performs a full downward
+    /// rescan of the one changed column, from the heightmap's own seed value
+    /// down to the first occluding pair (or the world floor) — strictly
+    /// simpler, and produces the identical final boundary value, since both
+    /// approaches apply the same stop test to the same block states; only the
+    /// *number of blocks touched* differs, which PERF-D17 already classifies as
+    /// non-parity-sensitive (Context §13) and squarely within M4's own
+    /// "reference implementation, no perf optimization required" scope. Neither
+    /// vanilla's own partial-edge-update algorithm nor its empty-section-shaft
+    /// optimizations are reproduced by this blueprint.
+    pub fn recompute_column(
+        &mut self,
+        blocks: &BlockStateColumn,
+        heightmap: &HeightmapSet,
+        properties: &LightPropertiesRegistry,
+        x: u8,
+        z: u8,
+    ) -> (i32, i32);
+}
+
+/// Vanilla's own `isEdgeOccluded` two-part stop test (Context §6, research doc
+/// §3.8): the downward scan stops at, and the boundary sits at, the pair
+/// `(upper, lower)` — `upper` directly above `lower` — iff EITHER (a)
+/// `lower.opacity != 0` (vanilla's own `getLightDampening() != 0`), OR (b)
+/// `shape_occludes(upper, lower, Direction::Down)` (§3's own two-sided
+/// face-occlusion veto, applied to the pair's shared horizontal face). Never a
+/// single "propagates skylight down" flag (WORLD-D7's own explicit wording) —
+/// both parts test real `LightProperties` state.
+pub fn is_sky_edge_occluded(upper: LightProperties, lower: LightProperties) -> bool;
 ```
 
-`sky_source_boundary_y`'s scan reads `BlockStateColumn::get(x, y, z)` (M2-B01's own API) only for `y` strictly inside `WORLD_MIN_Y..WORLD_MIN_Y+WORLD_HEIGHT` (real block sections); once the downward scan would step below `WORLD_MIN_Y`, it stops and returns `WORLD_MIN_Y` (every position at or below the world floor that has no occluding block above it is, degenerately, itself a source — matches an all-air world column, a pathological but well-defined edge case this function must not panic on).
+`recompute`/`recompute_column` read `BlockStateColumn::get(x, y, z)` (M2-B01's own API) only for `y` strictly inside `WORLD_MIN_Y..WORLD_MIN_Y+WORLD_HEIGHT` (real block sections); once the downward scan would step below `WORLD_MIN_Y`, it stops (the `WORLD_MIN_Y` edge case above).
 
 ### 7. The block-change enqueue seam — extending M3-B01's `UpdateContext::set_block`
 
@@ -370,25 +444,44 @@ pub struct LightTickReport {
 }
 
 /// Stage 8's complete driver (Context §8). Reads/writes `LightPropagatorState`,
-/// `LightColumn`, `BlockStateColumn`, `HeightmapSet`, `ChunkKeyTag` on every chunk
-/// entity in `world`; reads `LightPropertiesRegistry`, `RegionOwnership`,
-/// `LightDirtyQueue`, `LightBorderInbox` as `Resource`s; writes `RegionMessageOutbox`
-/// (all four resource types must already be present on `world` — Constraints (f)).
+/// `LightColumn`, `SkyLightSourceColumn`, `BlockStateColumn`, `HeightmapSet`,
+/// `ChunkKeyTag` on every chunk entity in `world`; reads `LightPropertiesRegistry`,
+/// `RegionOwnership`, `LightDirtyQueue`, `LightBorderInbox` as `Resource`s; writes
+/// `RegionMessageOutbox` (all four resource types must already be present on
+/// `world` — Constraints (f)).
 /// Algorithm precisely (WORLD-D9):
 ///
 /// **Seeding (round -1, sequential, single-threaded):**
-/// 1. Drain `LightDirtyQueue` (§7); for each `LightDirtyEntry`, resolve its owning
-///    chunk entity and run `check_node` (§2) for both channels against the *old*
-///    vs *new* `LightProperties`/sky-source status at that position, appending the
-///    resulting queue entries onto that chunk's own `LightPropagatorState`.
+/// 1. Drain `LightDirtyQueue` (§7); for each `LightDirtyEntry` at `pos = (x, y, z)`:
+///    **block-light channel** — run `check_node_block` (§2) against the *old* vs
+///    *new* emission at `pos`, appending the resulting queue entries onto that
+///    chunk's own `LightPropagatorState`. **Sky-light channel** — call
+///    `SkyLightSourceColumn::recompute_column(blocks, heightmap, properties,
+///    x_local, z_local)` (§6) for `pos`'s own `(x, z)` column, obtaining
+///    `(old_boundary_y, new_boundary_y)`; for every `y'` in the Y-range between
+///    `old_boundary_y` and `new_boundary_y` (the positions whose source status
+///    just flipped) call `check_node_sky(local, BlockPos::new(x, y', z), is_source
+///    = y' >= new_boundary_y, &mut state.sky)` — this blueprint's own realization
+///    of vanilla's whole-column source-maintenance pass (§2/§6), applied per
+///    affected Y via the ordinary per-position `check_node_sky` mechanism rather
+///    than vanilla's own neighbor-boundary-aware skip optimization (a documented,
+///    bounded simplification, §6). Additionally, always call
+///    `check_node_sky(local, pos, is_source = y >= new_boundary_y, &mut
+///    state.sky)` for `pos`'s own `y` if it was not already covered by that
+///    range (vanilla's own per-position branch runs unconditionally on every
+///    block change, regardless of whether the column boundary itself moved).
 /// 2. For every chunk entity whose `LightColumn` is freshly `new_uninitialized()`
-///    (every section `None` on both fields, a full chunk-load-time recompute
-///    trigger — Context §9) and not already covered by step 1: seed a full
-///    recompute — for block light, run `check_node`'s emission branch for every
-///    non-air block in the column (a bulk emission-seed pass); for sky light, mark
-///    the sky-source boundary "changed from nothing to real" for every `(x,z)`
-///    column, which the ordinary `check_node` sky branch (§2/§6) already handles
-///    via the same code path as an ordinary heightmap change.
+///    (every section `LightNibbles::Uninitialized` on both fields, a full
+///    chunk-load-time recompute trigger — Context §9) and not already covered by
+///    step 1: seed a full recompute — for block light, run `check_node_block`'s
+///    emission branch for every non-air block in the column (a bulk emission-seed
+///    pass); for sky light, build `SkyLightSourceColumn::recompute` (§6) for the
+///    whole chunk and, for every `(x, z)` column and every `y` at or above that
+///    column's own `boundary_y`, call `check_node_sky(local, BlockPos::new(x, y,
+///    z), is_source = true, &mut state.sky)` — the sky-channel equivalent of
+///    block light's bulk emission-seed pass: every genuine source is seeded
+///    directly, and ordinary decrease/increase propagation carries the value
+///    outward and downward from there, exactly as for any other source.
 /// 3. Drain `LightBorderInbox` (§10); for each inbound `LightBorderUpdate`, resolve
 ///    its target chunk/section/face and inject it as increase-queue seeds via
 ///    `light::border::apply_inbound_light_border_update` (§10).
@@ -401,8 +494,9 @@ pub struct LightTickReport {
 /// 5. `touched = ` every chunk entity whose `LightPropagatorState::is_idle()` is
 ///    `false`. If `touched.is_empty()`, stop — converged.
 /// 6. Collect `Vec<(Entity, &mut LightPropagatorState, &LightColumn is actually
-///    `&mut LightColumn`, &BlockStateColumn, &HeightmapSet, ChunkKeyTag)>` for
-///    every entity in `touched`, via one ordinary sequential `Query::iter_mut()`
+///    `&mut LightColumn`, &mut SkyLightSourceColumn, &BlockStateColumn,
+///    &HeightmapSet, ChunkKeyTag)>` for every entity in `touched`, via one
+///    ordinary sequential `Query::iter_mut()`
 ///    pass over `world` (bevy_ecs's own disjoint-entity aliasing guarantee — every
 ///    `&mut` obtained this way is already non-aliasing by construction, requiring
 ///    no `unsafe`, exactly as WORLD-D9's own rationale text describes: "bevy_ecs's
@@ -479,9 +573,9 @@ pub fn lighting_stage_driver(world: &mut bevy_ecs::world::World, pool: &RcWorker
 
 ### 9. Chunk-load lighting — trust-vs-recompute policy
 
-`03-world-chunks-persistence.md` does not itself pin a chunk-load trust policy beyond WORLD-D7-D10's algorithm/scheduling decisions; this blueprint supplies the necessary extension, mirroring vanilla's own "retain saved light if the persisted status was already correct" concept (research doc §3.13) adapted to this project's own load pipeline (WORLD-D22, not a prerequisite of this blueprint but referenced for context only): a freshly-spawned chunk entity whose `LightColumn` was populated from a persisted, correct on-disk value (M2-B02's future job, not this blueprint's) already has real `Some(..)` section data — this blueprint's Stage-8 seeding step (§8, step 2) explicitly **skips** any chunk whose `LightColumn` is not `new_uninitialized()`'s all-`None` shape, trusting the loaded data outright, exactly matching vanilla's own retain-data fast path. A chunk whose `LightColumn` **is** still `new_uninitialized()` (a freshly generated chunk, or — at M4's own scope, per BOUNDARIES — the superflat filler world M1-B05 already ships) is the trigger for a full recompute pass.
+`03-world-chunks-persistence.md` does not itself pin a chunk-load trust policy beyond WORLD-D7-D10's algorithm/scheduling decisions; this blueprint supplies the necessary extension, mirroring vanilla's own "retain saved light if the persisted status was already correct" concept (research doc §3.13) adapted to this project's own load pipeline (WORLD-D22, not a prerequisite of this blueprint but referenced for context only): a freshly-spawned chunk entity whose `LightColumn` was populated from a persisted, correct on-disk value (M2-B02's future job, not this blueprint's) already has real `Data(..)`/`Filled(..)` section data (`LightNibbles`, §1) — this blueprint's Stage-8 seeding step (§8, step 2) explicitly **skips** any chunk whose `LightColumn` is not `new_uninitialized()`'s all-`Uninitialized` shape, trusting the loaded data outright, exactly matching vanilla's own retain-data fast path. A chunk whose `LightColumn` **is** still `new_uninitialized()` (a freshly generated chunk, or — at M4's own scope, per BOUNDARIES — the superflat filler world M1-B05 already ships) is the trigger for a full recompute pass. The identical trust-vs-recompute policy applies to `SkyLightSourceColumn` (§6): a freshly-spawned chunk entity's own persisted boundary data (again M2-B02's future job) is trusted outright; one with no persisted value is built fresh via `SkyLightSourceColumn::recompute` as part of the same step-2 full-recompute pass.
 
-**Superflat filler lighting**: `HeightmapSet::new_uniform(first_air_world_y)` (M2-B01's own constructor, already designed for exactly this uniform-height case) gives every `(x,z)` column an identical `WorldSurface` height — this blueprint's `sky_source_boundary_y` (§6) applied to such a heightmap, combined with a `BlockStateColumn` whose filler layer is registered with `propagates_skylight_down: false` (an ordinary opaque filler block) and everything above it left as the default `LightProperties::AIR`, produces the expected result with zero special-casing: full sun (15) at and above the filler surface, zero sky light immediately below it (block light 0 throughout, absent any registered emitting block), settled within a single Stage-8 pass.
+**Superflat filler lighting**: `HeightmapSet::new_uniform(first_air_world_y)` (M2-B01's own constructor, already designed for exactly this uniform-height case) gives every `(x,z)` column an identical `WorldSurface` height — this blueprint's `SkyLightSourceColumn::recompute` (§6) applied to such a heightmap, combined with a `BlockStateColumn` whose filler layer is registered with a nonzero `opacity` (e.g. `LightProperties::OPAQUE`, an ordinary opaque filler block — sufficient on its own to satisfy the two-part stop test's part (a), §6) and everything above it left as the default `LightProperties::AIR`, produces the expected result with zero special-casing: full sun (15) at and above the filler surface, zero sky light immediately below it (block light 0 throughout, absent any registered emitting block), settled within a single Stage-8 pass.
 
 ### 10. Cross-region propagation (WORLD-D10) — `LightBorderUpdate`, face extraction, one-tick latency
 
@@ -512,9 +606,15 @@ pub struct LightBorderUpdate {
     /// exact function that produces this value on the sending side).
     pub section_index: u8,
     pub edge_face: u8,
-    /// Nibble-packed 16×16 face slice (256 4-bit entries, 128 bytes), `None`
-    /// matching `LightSection`'s own "uninitialized" convention (WORLD-D8) — this
-    /// specific section/channel had no tracked data on the sending side.
+    /// Nibble-packed 16×16 face slice (256 4-bit entries, 128 bytes). `None`
+    /// matches `LightNibbles::Uninitialized` (WORLD-D8, §1) — this specific
+    /// section/channel had no tracked data on the sending side. `Some` covers
+    /// both `LightNibbles::Data` (extracted as-is) and `LightNibbles::Filled(v)`
+    /// (materialized into a uniformly-packed `[u8; 128]` on the sending side,
+    /// `section_ops::uniform_face`, below) — this message carries only
+    /// materialized bytes, never a third variant of its own, since a
+    /// one-tick-latency cross-region seed has no laziness requirement to
+    /// preserve (unlike the client-facing wire payload, §12).
     pub sky: Option<[u8; 128]>,
     pub block: Option<[u8; 128]>,
 }
@@ -535,6 +635,7 @@ pub enum RegionMessage {
 
 ```rust
 // crates/mechanics/src/light/section_ops.rs
+use rc_chunk_storage::LightNibbles;
 use crate::direction::Direction;
 
 pub const LIGHT_MIN_Y: i32 = rc_chunk_storage::WORLD_MIN_Y - 16;   // -80
@@ -559,6 +660,24 @@ pub fn get_nibble(data: &[u8; 2048], index: usize) -> u8;
 /// Writes one nibble at `index`, touching only its own 4 bits of its containing byte.
 pub fn set_nibble(data: &mut [u8; 2048], index: usize, value: u8);
 
+/// Reads one nibble at `index` (`0..4096`) from a `LightNibbles` value (WORLD-D8,
+/// §1), regardless of which of its three representations is active — the single
+/// low-level primitive every other read path in this module goes through so no
+/// caller needs its own `Uninitialized`/`Filled`/`Data` match: `Uninitialized`
+/// reads as `0`, `Filled(v)` reads as `v` (neither ever consults or allocates a
+/// `[u8; 2048]` array), `Data(arr)` reads through to `get_nibble(arr, index)`.
+pub fn nibble_at(nibbles: &LightNibbles, index: usize) -> u8;
+
+/// Packs `value` into every nibble of a fresh `[u8; 2048]` array (Context §12/§13)
+/// — the materialization `LightNibbles::Filled(value)` stands in for whenever a
+/// caller genuinely needs the full byte array (e.g. the wire-payload builder, §12).
+pub fn uniform_array(value: u8) -> [u8; 2048];
+/// Packs `value` into every nibble of a fresh `[u8; 128]` array (Context §10) — the
+/// face-slice-sized equivalent of `uniform_array`, used to materialize a
+/// `LightNibbles::Filled(value)` section's own face without ever allocating the
+/// full 2048-byte array first.
+pub fn uniform_face(value: u8) -> [u8; 128];
+
 /// Extracts one `LightSection` face (256 positions, 128 bytes) for cross-region
 /// transmission (Context §10). `face` must be `West`, `East`, `North`, or `South`
 /// (`debug_assert!`s otherwise — `Down`/`Up` never cross a region boundary, §5/§10).
@@ -569,6 +688,14 @@ pub fn extract_face(section: &[u8; 2048], face: Direction) -> [u8; 128];
 /// Inverse of `extract_face` — writes `face_data` into `section`'s own matching
 /// 256 positions, leaving every other position in `section` untouched.
 pub fn inject_face(section: &mut [u8; 2048], face: Direction, face_data: &[u8; 128]);
+
+/// Extracts one channel's face slice (Context §10) directly from a `LightNibbles`
+/// value, handling all three representations without ever forcing a `Filled`
+/// section to materialize its full `[u8; 2048]` array first: `Uninitialized`
+/// produces `None` (nothing tracked, mirrors `LightSection`'s own "not tracked"
+/// convention); `Filled(v)` produces `Some(uniform_face(v))`; `Data(arr)` produces
+/// `Some(extract_face(arr, face))`.
+pub fn extract_face_from_nibbles(nibbles: &LightNibbles, face: Direction) -> Option<[u8; 128]>;
 ```
 
 **Outbound construction and inbound application** (`crates/mechanics/src/light/border.rs`):
@@ -582,8 +709,10 @@ use crate::border::RegionOwnership;
 use crate::direction::Direction;
 
 /// Builds one outbound `LightBorderUpdate` for `column`'s own `section_index`/`face`
-/// (Context §8 step 10's own caller) — `None` sky/block matches `LightSection`'s own
-/// "not tracked" state, extracted via `section_ops::extract_face` when tracked.
+/// (Context §8 step 10's own caller) — `None` sky/block matches `LightNibbles::
+/// Uninitialized` (WORLD-D8, §1), extracted via `section_ops::
+/// extract_face_from_nibbles` when tracked (handles `Data` and `Filled(v)` alike,
+/// §10).
 pub fn build_light_border_update(
     receiving_chunk: ChunkKey,
     section_index: u8,
@@ -610,17 +739,17 @@ pub fn apply_inbound_light_border_update(
 
 ### 11. Sky-light heightmap interaction — restated summary
 
-`HeightmapSet::WORLD_SURFACE` is the **only** heightmap this light engine reads (§6) — none of the other five WORLD-D5 heightmap types (`WorldSurfaceWg`, `OceanFloor`/`OceanFloorWg`, `MotionBlocking`/`MotionBlockingNoLeaves`) feed into lighting at all (those are worldgen/collision/mob-spawning inputs, `04-worldgen-parity.md`/`05-game-mechanics.md`'s own domains, out of scope here). `HeightmapSet::note_block_change` (M2-B01's own hook, called by whichever future block-write primitive owns it) is what keeps `WorldSurface` itself correct; this blueprint never calls `note_block_change` — it only ever *reads* the resulting heightmap value. A `WorldSurface` change (a block placed/removed at what was the recorded height) is exactly one more kind of `LightDirtyEntry`-equivalent trigger for the sky channel's `check_node` — this blueprint's own `stage8.rs` seeding step (§8 step 1) treats "the block at `LightDirtyEntry.pos` crossed the sky-source boundary" (recomputed via `sky_source_boundary_y`, before vs. after the heightmap's own already-updated value) as the sky-channel equivalent of block light's "emission changed" trigger — no separate heightmap-change event type is needed, since every block write that could move `WorldSurface` already produces an ordinary `LightDirtyEntry` through the same §7 seam.
+`HeightmapSet::WORLD_SURFACE` is the **only** heightmap this light engine reads (§6) — none of the other five WORLD-D5 heightmap types (`WorldSurfaceWg`, `OceanFloor`/`OceanFloorWg`, `MotionBlocking`/`MotionBlockingNoLeaves`) feed into lighting at all (those are worldgen/collision/mob-spawning inputs, `04-worldgen-parity.md`/`05-game-mechanics.md`'s own domains, out of scope here). It is consulted only as `SkyLightSourceColumn::recompute`/`recompute_column`'s own scan-starting seed value (§6) — never read directly by Stage 8's per-`LightDirtyEntry` seeding step, and never itself compared before-vs-after, since `recompute_column`'s own `(old_boundary_y, new_boundary_y)` return value (§8 step 1) is what actually reports whether — and where — the sky-source boundary moved; `WorldSurface`'s own value only affects the scan's *starting point*, never the answer (WORLD-D7's own "seed, not source of truth" rule, §6). `HeightmapSet::note_block_change` (M2-B01's own hook, called by whichever future block-write primitive owns it) is what keeps `WorldSurface` itself correct; this blueprint never calls `note_block_change` — it only ever *reads* the resulting heightmap value, and only as that seed. No separate heightmap-change event type is needed: every ordinary block write that could move either the heightmap or the sky-source boundary already produces an ordinary `LightDirtyEntry` through the same §7 seam, and Stage 8's own seeding step (§8 step 1) recomputes the affected column's real boundary from actual block state on every such entry, regardless of whether the heightmap itself happened to move.
 
 ### 12. Client sync: the `Update Light` / `Level Chunk with Light` packet at protocol 776
 
 `02-protocol-networking.md`'s own illustrative packet sketch (protocol 776, `Level Chunk with Light`, packet id `0x2D`) fixes the six light-relevant fields this blueprint's payload builder must produce values for, field-by-field: `sky_light_mask: BitSet`, `block_light_mask: BitSet`, `empty_sky_light_mask: BitSet`, `empty_block_light_mask: BitSet`, `sky_light_arrays: Vec<[u8; 2048]>` (the list itself `VarInt`-count-prefixed, and on the wire each entry additionally carries its own `VarInt` length prefix — always `2048` — before its 2048 bytes, never a bare 2048-byte block), `block_light_arrays: Vec<[u8; 2048]>` (the identical two-level prefixing) — plus, for the standalone `Update Light` packet (sent for a light-only change to an already-sent chunk, not accompanying a full `Level Chunk with Light`), the same six fields preceded by `chunk_x: VarInt`, `chunk_z: VarInt` (public MC protocol convention, moderate confidence — this packet's exact numeric id is **not** pinned anywhere in this project's planning/research corpus at the time of writing; flagged as a reconciliation item, Constraints (g)).
 
-Per-section bucketing (research doc §3.12), corrected for this blueprint's own simplified section representation: vanilla's own empty-vs-non-empty test is a purely structural predicate on its `DataLayer` object — "no backing array has ever been allocated for this section, and the implicit fill value is zero" — never a scan of the 4096 nibbles; a section whose backing array *is* allocated is never reported empty, however many of its nibbles happen to be zero. `LightSection`'s own `sky`/`block` fields are a plain `Option<Box<[u8; 2048]>>` (WORLD-D8) with no separate "allocated but still at its implicit fill value" state, so this blueprint's own `build_update_light_payload` applies the closest in-scope equivalent of vanilla's structural rule: a `LightColumn` section contributes to **neither** mask and **no** array entry if untracked (`None`); otherwise (`Some` — the section's backing array is allocated, matching the "array is not null" half of vanilla's own structural test) it *always* contributes to the corresponding **non-empty** mask (bit set) and its full `[u8; 2048]` array is appended to the corresponding array list, in ascending section-index order matching the mask's own bit order — regardless of whether every nibble happens to be zero. This blueprint's own output therefore never sets `empty_sky_light_mask`/`empty_block_light_mask` (always `0`), since `LightSection`'s two-state representation has no distinct "tracked but structurally empty" state left to report there; this is a documented, bounded, justified deviation from vanilla's own wire byte count (never from vanilla's client-visible light, since a client that fills an unset-empty-mask section with zero light produces the identical result to receiving that section's own all-zero bytes explicitly) — extending `LightSection` with a genuine third state to close this wire-byte gap is a `rc-chunk-storage` change outside this blueprint's own scope (Context §1).
+Per-section bucketing (research doc §3.12) is reproduced **exactly**, not merely approximated: vanilla's own empty-vs-non-empty test is a purely structural predicate on its `DataLayer` object — "no backing array has ever been allocated for this section, and the implicit fill value is zero" — never a scan of the 4096 nibbles. `LightSection`'s own `sky`/`block` fields are `LightNibbles` (WORLD-D8, §1), whose three variants map onto vanilla's own structural outcomes one-to-one: `Uninitialized` contributes to **neither** mask and **no** array entry (untracked — vanilla's own "no `DataLayer` object at all" case); `Filled(0)` contributes to the corresponding **empty** mask (bit set) and **no** array entry (vanilla's own real `isEmpty()` case, `data == null && defaultValue == 0`); `Filled(v)` for `v > 0`, and `Data(arr)`, both contribute to the corresponding **non-empty** mask (bit set) and a full `[u8; 2048]` array to the corresponding array list — `Filled(v)`'s own array is materialized on demand via `section_ops::uniform_array(v)` (mirroring vanilla's own `getData()`, which lazily allocates and fills a real byte array from `defaultValue` the moment a homogeneous layer is actually read for the wire — Context §13's own laziness discipline preserved right up to the point of unavoidable materialization), `Data(arr)`'s own array is `arr` unchanged — in both cases regardless of whether every nibble happens to be zero (an allocated array, or an explicit nonzero fill, is never reported empty by vanilla). Array entries appear in ascending section-index order matching each mask's own bit order. This is a structural, variant-only dispatch — `build_update_light_payload` never scans a `Data` section's own 4096 nibbles to decide which mask it belongs to — reproducing vanilla's exact wire byte count and mask bits, not merely its client-visible light: an earlier version of this blueprint accepted a documented byte-count deviation here, since `LightSection`'s then-two-state representation had no distinct "tracked but structurally empty" state to report; `LightNibbles`'s third variant closes that gap (subject to the `rc-chunk-storage` reconciliation flagged in Context §1).
 
 ```rust
 // crates/mechanics/src/light/wire.rs
-use rc_chunk_storage::LightColumn;
+use rc_chunk_storage::{LightColumn, LightNibbles};
 
 /// The six wire-relevant fields, computed as plain data — this crate cannot depend
 /// on `rc-protocol` (WS-D3 Rule 2: `rc-mechanics` is in `SIM`, `rc-protocol` is in
@@ -655,9 +784,9 @@ pub fn build_update_light_payload(column: &LightColumn) -> UpdateLightPayload;
 
 **PERF-D59's per-stage tick budget table** (seed defaults, not yet calibrated against real hardware — this project's own standing house style for unvalidated numeric thresholds) fixes Stage 8's target at **3.0 ms** (monolithic 16c/32t reference), **4.5 ms** (cluster-node 8c/16t reference), **7.0 ms** (VPS 4-vCPU reference), at nominal (not worst-case) region load — this blueprint's implementation must stay inside this envelope at nominal load; it is not a hard per-commit gate at M4 (that gate is `09-testing-quality.md`'s job, not this blueprint's), but the round-loop design above (§8) — bounded 16-round cap, disjoint no-lock/no-atomic parallel dispatch, deferred rather than blocking cross-boundary reads — is specifically shaped to fit this budget rather than merely "work eventually."
 
-**PERF-D61's memory budget** explicitly names `LightColumn`'s own `Option`-based lazy materialization (`None` until a section is actually touched) as "the single highest-leverage memory lever chunk storage has" toward its ≤115 KiB per-loaded-chunk-column RSS ceiling — this blueprint's own implementation must never defeat that laziness: `stage8.rs`'s round loop (§8) allocates a real `Box<[u8; 2048]>` for a `LightSection`'s `sky`/`block` field **only** the first time a `set_nibble`-equivalent write actually touches that section (i.e., the propagator's own local-write helper, not shown as a separate Deliverable above since it is a straightforward internal helper of `propagate_increase_step`/`propagate_decrease_step`'s implementation, must check for `None` and allocate a zero-filled array on first write, never eagerly on chunk-entity spawn or on every round).
+**PERF-D61's memory budget** explicitly names `LightColumn`'s own lazy materialization (`LightNibbles::Uninitialized` until a section is actually touched — WORLD-D8, §1) as "the single highest-leverage memory lever chunk storage has" toward its ≤115 KiB per-loaded-chunk-column RSS ceiling — this blueprint's own implementation must never defeat that laziness: `stage8.rs`'s round loop (§8) allocates a real `Box<[u8; 2048]>` for a `LightSection`'s `sky`/`block` field **only** the first time a `set_nibble`-equivalent write actually touches that section (i.e., the propagator's own local-write helper `set_stored`, not shown as a separate Deliverable above since it is a straightforward internal helper of `propagate_increase_step`/`propagate_decrease_step`'s implementation, must check whether the field is currently `Uninitialized` or `Filled(v)` and materialize a real array — zero-filled or `v`-filled respectively, via `section_ops::uniform_array` for the latter — only on that first per-nibble write, never eagerly on chunk-entity spawn or on every round). This blueprint's own Stage-8 propagator never itself *produces* a `Filled(v)` section — every write it performs transitions a section straight to `Data`; `Filled(v)` is a state this blueprint's own code must correctly *read* (§12), not one its own propagation path needs to *write* — a future persisted-load or bulk-seed optimization outside this blueprint's own scope (Constraints (f)) is the natural producer of a genuine `Filled(v)` section.
 
-**PERF-D17** names light propagation itself as one of this project's explicitly enumerated "non-parity-sensitive SIMD/autovectorization safe zones" — "already documented as order-independent by construction and excluded from `09`'s TEST-D10 strict-parity hash" — which is the direct planning-level confirmation backing this blueprint's own §2 design choice (final converged fixed-point values matter; per-round intra-tick visitation order does not need to match vanilla bit-for-bit). No SIMD implementation is required or expected at M4 (this blueprint's own scope is a "reference implementation," per the milestone's own BOUNDARIES: "no optimized backends (PERF gate later)"), but the hot inner loops this blueprint specifies (nibble read/write, face extraction, per-section mask/array bucketing) should still follow PERF-D17's stated autovectorization-friendly hygiene for when a future PERF-gated pass revisits them: prefer `chunks_exact`/fixed-stride iteration over the 4096-entry nibble arrays where a loop naturally visits every entry (`build_update_light_payload`'s own "is every nibble zero" scan is exactly such a loop); keep small leaf helpers (`get_nibble`/`set_nibble`/`light_nibble_index`) `#[inline]`; hoist the rare, data-dependent branch (a section transitioning from `None` to `Some` on first write) out of any loop that runs once per nibble, not once per section.
+**PERF-D17** names light propagation itself as one of this project's explicitly enumerated "non-parity-sensitive SIMD/autovectorization safe zones" — "already documented as order-independent by construction and excluded from `09`'s TEST-D10 strict-parity hash" — which is the direct planning-level confirmation backing this blueprint's own §2 design choice (final converged fixed-point values matter; per-round intra-tick visitation order does not need to match vanilla bit-for-bit). No SIMD implementation is required or expected at M4 (this blueprint's own scope is a "reference implementation," per the milestone's own BOUNDARIES: "no optimized backends (PERF gate later)"), but the hot inner loops this blueprint specifies (nibble read/write, face extraction, per-section mask/array bucketing) should still follow PERF-D17's stated autovectorization-friendly hygiene for when a future PERF-gated pass revisits them: prefer `chunks_exact`/fixed-stride iteration over the 4096-entry nibble arrays where a loop naturally visits every entry (`build_update_light_payload`'s own "is every nibble zero" scan is exactly such a loop); keep small leaf helpers (`get_nibble`/`set_nibble`/`light_nibble_index`) `#[inline]`; hoist the rare, data-dependent branch (a section materializing from `Uninitialized`/`Filled` into `Data` on first write) out of any loop that runs once per nibble, not once per section.
 
 ### Claims to verify (TEST-D57)
 
@@ -709,7 +838,7 @@ pub fn build_update_light_payload(column: &LightColumn) -> UpdateLightPayload;
 - The `Level Chunk with Light` packet's light-relevant fields are, in order: `sky_light_mask` (BitSet), `block_light_mask` (BitSet), `empty_sky_light_mask` (BitSet), `empty_block_light_mask` (BitSet), a VarInt-count-prefixed `sky_light_arrays` whose own entries each additionally carry their own VarInt length prefix (always 2048) before their 2048 bytes, and a VarInt-count-prefixed `block_light_arrays` with the identical two-level prefixing.
 - The standalone `Update Light` packet carries the same six light fields as `Level Chunk with Light`, preceded by `chunk_x: VarInt` and `chunk_z: VarInt` (moderate confidence — this packet's own numeric id is not pinned in this project's corpus).
 - A `LightColumn` section that is untracked (`None`) contributes to neither its mask nor its empty mask, and no array entry is sent for it.
-- Vanilla's tracked-section empty test is purely structural (no backing array ever allocated, implicit fill value zero) — it never scans the 4096 nibbles, so a tracked section whose backing array is allocated is never reported empty, however many of its nibbles happen to be zero; this blueprint's own `Option`-based `LightSection` has no separate "allocated but still implicit" state, so every tracked (`Some`) section always contributes to the corresponding non-empty mask with its full bytes sent, regardless of content.
+- Vanilla's tracked-section empty test is purely structural (no backing array ever allocated, implicit fill value zero) — it never scans the 4096 nibbles, so a tracked section whose backing array is allocated is never reported empty, however many of its nibbles happen to be zero; this blueprint's own `LightNibbles`-based `LightSection` (WORLD-D8) carries this same structural distinction as its own explicit `Filled(v)` variant, so `Filled(0)` alone maps to vanilla's empty case (empty mask bit set, no array sent) and `Filled(v > 0)`/`Data` both map to vanilla's non-empty case (non-empty mask bit set, a full array sent — `Filled`'s materialized on demand) — a structural, variant-only dispatch, never a scan of `Data`'s own nibble content.
 - A tracked section with at least one nonzero nibble contributes to the corresponding non-empty mask and has its full `[u8; 2048]` array sent, in ascending section-index order matching the mask's own bit order.
 - Vanilla's own "border-only broadcast" optimization sends full section light state on a chunk's initial send.
 - On a later in-place light change, vanilla's own "border-only broadcast" optimization restricts who receives the packet — only players for whom the chunk sits on the edge of their own tracked/view-distance area — not which sections are in it: every section whose light actually changed that tick is always sent, with no notion of border-adjacency among the sections themselves; every other viewer relies on their own bit-identical client-side local light engine to fill in the rest.
@@ -760,9 +889,10 @@ pub use registry::{ExecutorBuildError, LightingStageDriver, SystemFactory, Syste
 pub mod light;
 pub use light::{
     apply_inbound_light_border_update, build_light_border_update, build_update_light_payload,
-    direction_index, is_sky_source, shape_occludes, sky_source_boundary_y,
+    direction_index, is_sky_edge_occluded, shape_occludes,
     ChannelState, DirectionSet, LightDirtyEntry, LightDirtyQueue, LightPropagatorState,
-    LightProperties, LightPropertiesRegistry, LightTickReport, QueueEntry, UpdateLightPayload,
+    LightProperties, LightPropertiesRegistry, LightTickReport, QueueEntry, SkyLightSourceColumn,
+    UpdateLightPayload,
 };
 #[cfg(feature = "server-systems")]
 pub use light::stage8_ecs::lighting_stage_driver;
@@ -789,14 +919,15 @@ pub mod stage8_ecs;
 
 pub use properties::{direction_index, shape_occludes, LightProperties, LightPropertiesRegistry};
 pub use section_ops::{
-    extract_face, get_nibble, inject_face, light_local_y, light_nibble_index,
-    light_section_index_for_y, set_nibble, LIGHT_HEIGHT, LIGHT_MIN_Y, LIGHT_SECTION_COUNT,
+    extract_face, extract_face_from_nibbles, get_nibble, inject_face, light_local_y,
+    light_nibble_index, light_section_index_for_y, nibble_at, set_nibble, uniform_array,
+    uniform_face, LIGHT_HEIGHT, LIGHT_MIN_Y, LIGHT_SECTION_COUNT,
 };
 pub use queue::{
     all_except, contains, only, ChannelState, DirectionSet, LightDirtyEntry, LightDirtyQueue,
     LightPropagatorState, QueueEntry, ALL_DIRECTIONS,
 };
-pub use sky_source::{is_sky_source, sky_source_boundary_y};
+pub use sky_source::{is_sky_edge_occluded, SkyLightSourceColumn};
 pub use propagator::{check_node_block, check_node_sky, propagate_decrease_step, propagate_increase_step, LightChannel};
 pub use border::{apply_inbound_light_border_update, build_light_border_update};
 pub use stage8::{run_stage8_lighting, LightTickReport, ParallelDispatch};
@@ -810,22 +941,26 @@ Full public API surfaces already given in Context §3–§12 above; not repeated
 ### `crates/mechanics/src/light/propagator.rs` (new)
 
 ```rust
-use rc_chunk_storage::{BlockStateColumn, HeightmapSet, LightColumn};
+use rc_chunk_storage::{BlockStateColumn, HeightmapSet, LightColumn, LightNibbles};
 use rc_core::BlockPos;
 use crate::light::properties::LightPropertiesRegistry;
 use crate::light::queue::{ChannelState, DirectionSet, QueueEntry};
+use crate::light::sky_source::SkyLightSourceColumn;
 
 /// Which of the two independent channels a propagator call operates on (Context §2).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LightChannel { Sky, Block }
 
 /// Every reference one chunk's own local propagator step needs — bundles `LightColumn`
-/// (read/write), `BlockStateColumn`/`HeightmapSet` (read-only) for exactly this one
-/// chunk (never a neighbor's, Context §5). `chunk_origin_x`/`chunk_origin_z` are this
-/// chunk's own block-coordinate origin (`chunk_key.x * 16`, `chunk_key.z * 16`) —
-/// used by `is_local` to detect a cross-boundary step.
+/// (read/write), `SkyLightSourceColumn` (read/write — mutated only by the seeding
+/// step's own `recompute`/`recompute_column` calls, §6/§8, read-only otherwise),
+/// `BlockStateColumn`/`HeightmapSet` (read-only) for exactly this one chunk (never a
+/// neighbor's, Context §5). `chunk_origin_x`/`chunk_origin_z` are this chunk's own
+/// block-coordinate origin (`chunk_key.x * 16`, `chunk_key.z * 16`) — used by
+/// `is_local` to detect a cross-boundary step.
 pub struct LocalChunkLight<'a> {
     pub light: &'a mut LightColumn,
+    pub sky_sources: &'a mut SkyLightSourceColumn,
     pub blocks: &'a BlockStateColumn,
     pub heightmap: &'a HeightmapSet,
     pub properties: &'a LightPropertiesRegistry,
@@ -839,14 +974,15 @@ pub struct LocalChunkLight<'a> {
 /// separately by callers via `section_ops::LIGHT_MIN_Y`/`LIGHT_HEIGHT`.
 pub fn is_local(pos: BlockPos, chunk_origin_x: i32, chunk_origin_z: i32) -> bool;
 
-/// Reads `pos`'s current stored nibble for `channel` (`0` if the containing
-/// `LightSection`'s relevant field is still `None` — matches `LightSection`'s own
-/// "not yet initialized" convention, WORLD-D8).
+/// Reads `pos`'s current stored nibble for `channel` via `section_ops::nibble_at`
+/// (handles all three `LightNibbles` variants — `Uninitialized`/`Filled`/`Data` —
+/// without ever allocating, WORLD-D8/§1).
 pub fn get_stored(local: &LocalChunkLight, pos: BlockPos, channel: LightChannel) -> u8;
-/// Writes `pos`'s stored nibble for `channel`, lazily allocating the containing
-/// `LightSection`'s field (`Some(Box::new([0u8; 2048]))`) on first write to a
-/// previously-`None` section (PERF-D61's own laziness requirement, Context §13) —
-/// never eagerly.
+/// Writes `pos`'s stored nibble for `channel`, lazily materializing the containing
+/// `LightSection`'s field into `LightNibbles::Data` on first write to a section
+/// still `Uninitialized` (zero-filled) or `Filled(v)` (`v`-filled, via
+/// `section_ops::uniform_array`) — PERF-D61's own laziness requirement, Context
+/// §13 — never eagerly, and never for a section already `Data`.
 pub fn set_stored(local: &mut LocalChunkLight, pos: BlockPos, channel: LightChannel, value: u8);
 
 /// Context §2's `check_node`, block-light channel.
@@ -857,13 +993,20 @@ pub fn check_node_block(
     new_emission: u8,
     state: &mut ChannelState,
 );
-/// Context §2's `check_node`, sky channel (`old_source`/`new_source`: `true` iff
-/// `pos` was/is a sky source per `sky_source::is_sky_source`).
+/// Context §2's `check_node`, sky channel — `is_source`: `true` iff `pos` is
+/// *currently* a sky source per `SkyLightSourceColumn::is_source` (Context §6).
+/// Unlike the block-light channel, this branch consults no "old" value of its
+/// own — matching vanilla's real `SkyLightEngine.checkNode`, which never compares
+/// a before/after emission-equivalent at the per-position level; the "old vs new"
+/// comparison that *does* matter (which positions' source status just flipped) is
+/// performed once, up front, by `SkyLightSourceColumn::recompute_column`'s own
+/// `(old_boundary_y, new_boundary_y)` return value, and it is the *caller*
+/// (Stage 8's seeding step, §8 step 1) that turns that range into one
+/// `check_node_sky` call per affected position.
 pub fn check_node_sky(
     local: &mut LocalChunkLight,
     pos: BlockPos,
-    old_source: bool,
-    new_source: bool,
+    is_source: bool,
     state: &mut ChannelState,
 );
 
@@ -884,8 +1027,8 @@ pub fn propagate_decrease_step(
 );
 
 /// `channel`'s own baseline glow at `pos` — block: `properties.resolve(blocks.get(..)).
-/// block_emission`; sky: `15` if `sky_source::is_sky_source(..)` else `0` (Context §2's
-/// decrease-cascade "own source" check).
+/// block_emission`; sky: `15` if `local.sky_sources.is_source(..)` else `0` (Context
+/// §2's decrease-cascade "own source" check).
 pub fn own_source_strength(local: &LocalChunkLight, pos: BlockPos, channel: LightChannel) -> u8;
 ```
 
@@ -906,38 +1049,43 @@ pub fn own_source_strength(local: &LocalChunkLight, pos: BlockPos, channel: Ligh
 3. `light_section_index_for_y_padding_boundaries` — `light_section_index_for_y(-80) == 0` (bottom padding section start), `light_section_index_for_y(-65) == 0` (still bottom padding), `light_section_index_for_y(-64) == 1` (first real block section, matches `rc_chunk_storage::column::section_index_for_y(-64) == 0`, shifted by exactly `+1`), `light_section_index_for_y(319) == 24` (last real block section, matches `section_index_for_y(319) == 23`, shifted by `+1`), `light_section_index_for_y(320) == 25` (top padding), `light_section_index_for_y(335) == 25`; a call with `world_y == 336` or `world_y == -81` panics (`#[should_panic]`, two separate test functions).
 4. `extract_face_west_matches_hand_computed_values` — a `[u8; 2048]` array built via `set_nibble` at every `(x=0, local_y, z)` position for `local_y in 0..16, z in 0..16`, each set to `(local_y + z) % 16` (a simple, hand-verifiable pattern); `extract_face(&data, Direction::West)`'s byte `i` (for `i in 0..128`) equals the nibble-packed pair of `(local_y = (2*i)/16, z = (2*i)%16)` and `(local_y = (2*i+1)/16, z = (2*i+1)%16)`'s own `(local_y+z)%16` values — assert at least the first 3 and last 3 bytes match hand-computed expected values (`byte[0]` = pack of `local_y=0,z=0 -> 0` and `local_y=0,z=1 -> 1` = `0x10`; `byte[127]` = pack of `local_y=15,z=14 -> 13` and `local_y=15,z=15 -> 14` = `0xE_D`, i.e. `0xED`).
 5. `extract_then_inject_face_round_trips` (`proptest!`) — a random `[u8; 2048]` array (every byte arbitrary); for each of `Direction::West/East/North/South`, `let face = extract_face(&data, dir); let mut data2 = [0u8;2048]; inject_face(&mut data2, dir, &face);` — assert every one of the 256 face positions in `data2` equals the corresponding position in `data`, and every **non**-face position in `data2` is still `0` (proves `inject_face` touches only its own face's positions).
+6. `nibble_at_handles_all_light_nibbles_variants` — `nibble_at(&LightNibbles::Uninitialized, 0) == 0` and `nibble_at(&LightNibbles::Uninitialized, 4095) == 0`; `nibble_at(&LightNibbles::Filled(7), 0) == 7` and `nibble_at(&LightNibbles::Filled(7), 4095) == 7` (no array ever allocated to answer either query); a `[u8; 2048]` array with `set_nibble(&mut arr, 0, 0xA)` wrapped as `LightNibbles::Data(Box::new(arr))` gives `nibble_at(.., 0) == 0xA` and `nibble_at(.., 1) == 0` (reads through to `get_nibble`).
+7. `uniform_array_and_uniform_face_pack_every_nibble` — `get_nibble(&uniform_array(9), i) == 9` for `i` in `{0, 1, 4095}` (every nibble of a fresh 2048-byte array equals the fill value); `uniform_face(9) == [0x99; 128]` (both nibbles of every byte equal `9`, i.e. `(9 << 4) | 9 = 0x99`).
+8. `extract_face_from_nibbles_dispatches_per_variant` — `extract_face_from_nibbles(&LightNibbles::Uninitialized, Direction::West) == None`; `extract_face_from_nibbles(&LightNibbles::Filled(5), Direction::West) == Some(uniform_face(5))`; for a `[u8; 2048]` array built exactly as test 4's own hand-verified West-face pattern, `extract_face_from_nibbles(&LightNibbles::Data(Box::new(arr)), Direction::West) == Some(extract_face(&arr, Direction::West))` (delegates to the same raw-array helper test 4 already verifies).
 
 ### `crates/mechanics/tests/light_properties_registry.rs`
 
 1. `unregistered_state_resolves_to_air` — a fresh `LightPropertiesRegistry::new()`; `resolve(BlockStateId(999))` equals `LightProperties::AIR` field-for-field.
-2. `register_range_and_resolve` — `register_range(BlockStateId(10), BlockStateId(20), LightProperties { opacity: 15, block_emission: 0, propagates_skylight_down: false, occludes_face: [true;6] })`; `resolve(BlockStateId(15))` equals that value; `resolve(BlockStateId(9))` and `resolve(BlockStateId(20))` both equal `LightProperties::AIR` (exclusive upper bound, no underflow into the neighboring id).
+2. `register_range_and_resolve` — `register_range(BlockStateId(10), BlockStateId(20), LightProperties { opacity: 15, block_emission: 0, occludes_face: [true;6] })`; `resolve(BlockStateId(15))` equals that value; `resolve(BlockStateId(9))` and `resolve(BlockStateId(20))` both equal `LightProperties::AIR` (exclusive upper bound, no underflow into the neighboring id).
 3. `register_range_panics_on_overlap` (`#[should_panic]`) — register `(10,20,..)` then `(15,25,..)`.
 4. `shape_occludes_either_side_sufficient` — `let full = LightProperties { occludes_face: [true;6], ..LightProperties::AIR };` `let plain = LightProperties::AIR;` assert `shape_occludes(full, plain, Direction::West) == true` and `shape_occludes(plain, full, Direction::West) == true` (either side alone suffices) and `shape_occludes(plain, plain, Direction::West) == false`.
 5. `get_opacity_floors_at_one` — `LightProperties { opacity: 0, ..LightProperties::AIR }.get_opacity() == 1`; `LightProperties { opacity: 5, ..LightProperties::AIR }.get_opacity() == 5`.
 
 ### `crates/mechanics/tests/light_propagation_golden_grids.rs` — hand-derived canonical arrangements, pure propagator, no ECS/executor
 
-Test harness note (applies to every test below): construct one `LocalChunkLight` directly (no `bevy_ecs::World`, no `RcExecutor`) over a `BlockStateColumn::new(BlockStateId(0), PaletteThresholds::blocks(15))` (air-filled, M2-B01's own constructor), a `LightColumn::new_uninitialized()`, and a `HeightmapSet` as each test requires; drive convergence via a small test-local helper `fn drain_to_fixed_point(local: &mut LocalChunkLight, state: &mut ChannelState, channel: LightChannel)` that alternates `propagate_decrease_step`/`propagate_increase_step` calls (decrease queue fully first, per round) until both queues are empty, capped at 16 rounds (`assert!` if not converged by then — a golden-grid test converging in fewer than 15 hops always finishes well inside this cap by Context §5's own derivation).
+Test harness note (applies to every test below): construct one `LocalChunkLight` directly (no `bevy_ecs::World`, no `RcExecutor`) over a `BlockStateColumn::new(BlockStateId(0), PaletteThresholds::blocks(15))` (air-filled, M2-B01's own constructor), a `LightColumn::new_uninitialized()`, a `HeightmapSet` as each test requires, and a `SkyLightSourceColumn::recompute(&blocks, &heightmap, &properties)` (built once from that same setup — every block-light-only test below, 1/2/4/5/6, never queries it, so its own boundary value is immaterial there; test 3 relies on it directly); drive convergence via a small test-local helper `fn drain_to_fixed_point(local: &mut LocalChunkLight, state: &mut ChannelState, channel: LightChannel)` that alternates `propagate_decrease_step`/`propagate_increase_step` calls (decrease queue fully first, per round) until both queues are empty, capped at 16 rounds (`assert!` if not converged by then — a golden-grid test converging in fewer than 15 hops always finishes well inside this cap by Context §5's own derivation).
 
 1. `single_torch_open_corridor` — a straight line of air blocks along `x = 0..16` at fixed `y = 0, z = 0` inside one chunk (all other positions irrelevant/air); register `BlockStateId(1)` with `block_emission: 14` at `x = 0`; seed via `check_node_block(&mut local, BlockPos::new(0,0,0), 0, 14, &mut state.block)`, drain to fixed point. Assert `get_stored(&local, BlockPos::new(x,0,0), LightChannel::Block) == (14u8.saturating_sub(x as u8))` for every `x in 0..16` (i.e. `14,13,12,...,1,0,0`).
 2. `opaque_wall_stops_propagation` — as test 1, but additionally register `BlockStateId(2)` with `opacity: 15` and place it at `x = 3` (via `local.blocks`'s own `set`, bypassing `check_node` — this test only needs the *opacity lookup* to reflect the wall, not a full block-change event). Assert `get_stored(.., x=0) == 14`, `x=1 == 13`, `x=2 == 12`, `x=3 == 0` (opaque, saturates before storing anything positive — `12.saturating_sub(15) == 0`), `x=4 == 0`, `x=5 == 0` (light never reaches past the wall, since `x=3`'s own stored value, `0`, cannot propagate anything further).
-3. `skylight_column_punch_through` — a 3×3×20-block region (`x,z in 0..3`, `y in 90..110`) where the single column `(x=1,z=1)` is air all the way from `y=90` to `y=109`, and every other `(x,z)` column in that footprint has an opaque block at `y=99` (roof) with air above and below; `HeightmapSet` constructed so `world_y(WorldSurface, x=1, z=1) == 110` (open shaft, first air Y at the very top of the tested range) and `world_y(WorldSurface, x, z) == 100` for the other 8 columns (opaque roof at `y=99`, first air at `y=100`). Register the roof/wall block with `propagates_skylight_down: false`. Seed sky light for the whole footprint via `check_node_sky` at every position whose source status differs from a freshly-uninitialized (`false`) starting state, drain to fixed point. Assert every position in the `(1,1)` shaft column (`y in 90..110`) reads `15` (a full-sun source at every level, no decay — Context §6's own "guaranteed opacity 0 extends the boundary down" behavior) and every position immediately adjacent at `(0,1)`/`(2,1)`/`(1,0)`/`(1,2)` and below the `y=99` roof (e.g. `y=95`) reads `0` (blocked to the sides, no leak from the open shaft into the walled-off neighbor columns since the propagator only ever travels through explicit BFS steps, never "column-adjacent" for free).
-4. `stairs_like_partial_occlusion` — a synthetic test-double block (`BlockStateId(3)`, `opacity: 1`, `occludes_face: [Down: true, else: false]`, `propagates_skylight_down: false`) placed at `BlockPos::new(2,0,0)`, with a block-light source (`emission: 10`) at `BlockPos::new(0,0,0)` and air everywhere else along the `x = 0..5, y = 0, z = 0` line except the block at `x=2`. Assert: propagating along `x` (a `West`/`East`-direction step *into* `x=2`, i.e. testing the `North`/`South`/horizontal path, not `Down`) is governed by scalar opacity only (`occludes_face[West]`/`[East]` are both `false`) — `get_stored(x=0) == 10`, `x=1 == 9`, `x=2 == 8` (opacity 1 subtracted, not vetoed), `x=3 == 7`, `x=4 == 6`. A second sub-test: propagating `Down` *from* `x=2,y=1` (an emitting block placed directly above the stairs-like block, `emission: 10` at `BlockPos::new(2,1,0)`) *into* `BlockPos::new(2,0,0)` is fully vetoed (`occludes_face[Down] == true` on the stairs-like block itself, i.e. `to_props.occludes_face[Up]`... — precisely: the step direction is `Down`, so `shape_occludes` checks `from_props.occludes_face[Down] || to_props.occludes_face[Up]`; construct the test so the **emitting** block at `y=1` is plain air (`occludes_face` all `false`) and the **stairs-like** destination block at `y=0` has `occludes_face[Up]: true` instead of `[Down]` — restate the synthetic properties precisely as `occludes_face` with only the `Up` entry `true` for this sub-test, matching "a bottom-slab-like shape blocks light arriving from directly above") — assert `get_stored(BlockPos::new(2,0,0), Block) == 0` after seeding and draining (fully vetoed, never receives the value the scalar-opacity math alone would have produced, `9`).
+3. `skylight_column_punch_through` — a 3×3×20-block region (`x,z in 0..3`, `y in 90..110`) where the single column `(x=1,z=1)` is air all the way from `y=90` to `y=109`, and every other `(x,z)` column in that footprint has an opaque block at `y=99` (roof) with air above and below; `HeightmapSet` constructed so `world_y(WorldSurface, x=1, z=1) == 110` (open shaft, first air Y at the very top of the tested range) and `world_y(WorldSurface, x, z) == 100` for the other 8 columns (opaque roof at `y=99`, first air at `y=100`). Register the roof/wall block as `LightProperties::OPAQUE` (opacity 15 alone already satisfies the two-part stop test's part (a), §6 — no `occludes_face` setup needed). Build `local.sky_sources = SkyLightSourceColumn::recompute(&blocks, &heightmap, &properties)` for this footprint (§6) — this must yield `boundary_y(1,1) == WORLD_MIN_Y` (the shaft column has no occluding pair anywhere in the air-filled default `BlockStateColumn`, an all-air column down to the world floor, §6's own degenerate edge case) and `boundary_y(x,z) == 100` for the other 8 columns (the roof at `y=99` is the first occluding pair, recorded at its own upper Y). For every `(x,z)` in the footprint and every `y` in `local.sky_sources.boundary_y(x,z).max(90)..=109` (this test's own bulk-seed emulation of Context §8 step 2's fresh-chunk sky pass, restricted to the tested region — positions below `y=90` are never asserted and need no seeding), call `check_node_sky(&mut local, BlockPos::new(x,y,z), true, &mut state.sky)`; drain to fixed point. Assert every position in the `(1,1)` shaft column (`y in 90..110`) reads `15` (a full-sun source at every level, no decay) and every position immediately adjacent at `(0,1)`/`(2,1)`/`(1,0)`/`(1,2)` and below the `y=99` roof (e.g. `y=95`) reads `0` (blocked to the sides, no leak from the open shaft into the walled-off neighbor columns since the propagator only ever travels through explicit BFS steps, never "column-adjacent" for free).
+4. `stairs_like_partial_occlusion` — a synthetic test-double block (`BlockStateId(3)`, `opacity: 1`, `occludes_face: [Down: true, else: false]`) placed at `BlockPos::new(2,0,0)`, with a block-light source (`emission: 10`) at `BlockPos::new(0,0,0)` and air everywhere else along the `x = 0..5, y = 0, z = 0` line except the block at `x=2`. Assert: propagating along `x` (a `West`/`East`-direction step *into* `x=2`, i.e. testing the `North`/`South`/horizontal path, not `Down`) is governed by scalar opacity only (`occludes_face[West]`/`[East]` are both `false`) — `get_stored(x=0) == 10`, `x=1 == 9`, `x=2 == 8` (opacity 1 subtracted, not vetoed), `x=3 == 7`, `x=4 == 6`. A second sub-test: propagating `Down` *from* `x=2,y=1` (an emitting block placed directly above the stairs-like block, `emission: 10` at `BlockPos::new(2,1,0)`) *into* `BlockPos::new(2,0,0)` is fully vetoed (`occludes_face[Down] == true` on the stairs-like block itself, i.e. `to_props.occludes_face[Up]`... — precisely: the step direction is `Down`, so `shape_occludes` checks `from_props.occludes_face[Down] || to_props.occludes_face[Up]`; construct the test so the **emitting** block at `y=1` is plain air (`occludes_face` all `false`) and the **stairs-like** destination block at `y=0` has `occludes_face[Up]: true` instead of `[Down]` — restate the synthetic properties precisely as `occludes_face` with only the `Up` entry `true` for this sub-test, matching "a bottom-slab-like shape blocks light arriving from directly above") — assert `get_stored(BlockPos::new(2,0,0), Block) == 0` after seeding and draining (fully vetoed, never receives the value the scalar-opacity math alone would have produced, `9`).
 5. `removal_darkness_propagation_no_survivor` — as test 1 (single torch, corridor), fully converged (`14,13,...,0`); then `check_node_block(&mut local, BlockPos::new(0,0,0), 14, 0, &mut state.block)` (the torch removed) and drain again. Assert every position `x in 0..16` reads `0`.
 6. `removal_darkness_propagation_with_surviving_source` — as test 1's setup but with a **second** emitter (`emission: 8`) at `x = 10` (seeded and drained to a combined fixed point first — the corridor's values are the pointwise max of each source's own decay curve: `x=0..8` dominated by the `x=0` source's `14-x`, `x` near `10` dominated by the `x=10` source's `8-|x-10|`, precise hand-derivation: `x=0:14,1:13,2:12,3:11,4:10,5:9,6:8,7:8→max(7,8)=8` — restate the full expected array explicitly in the test as `[14,13,12,11,10,9,8,8,8,8,8,7,6,5,4,3]` for `x in 0..16`, hand-verified as the pointwise max of `max(0,14-x)` and `max(0,8-|x-10|)`); then remove the `x=0` source (`check_node_block(.., 14, 0, ..)`) and drain again. Assert the final array equals the second source's own curve alone: `[0,0,0,0,0,0,0,0,8,7,8,7,6,5,4,3]` for `x in 0..16` (`max(0,8-|x-10|)`; note `x=8` and `x=9` both recover via the "own-source reclaim"/cascade path, Context §2's decrease algorithm, not by re-deriving from scratch).
 
 ### `crates/mechanics/tests/light_wire_payload.rs`
 
-1. `untracked_section_contributes_to_neither_mask` — a `LightColumn::new_uninitialized()` (every section `None`); `build_update_light_payload`'s result has `sky_light_mask == 0`, `empty_sky_light_mask == 0`, `sky_light_arrays.is_empty()` (and the symmetric block-light assertions).
-2. `all_zero_tracked_section_still_contributes_non_empty_mask_and_array` — section `0`'s `sky` set to `Some(Box::new([0u8; 2048]))` (tracked, allocated, all-zero content); assert bit `0` is set in `sky_light_mask` (an allocated section is always non-empty in this blueprint's own corrected bucketing, Context §12 — it never scans nibble content), clear in `empty_sky_light_mask`, and `sky_light_arrays.len() == 1` with `sky_light_arrays[0] == [0u8; 2048]` (the full all-zero array is sent, not omitted).
-3. `nonuniform_section_contributes_array_and_mask_bit` — section `3`'s `sky` set to a `[u8;2048]` with byte `0` equal to `0x0F` (one nonzero nibble, rest zero); assert bit `3` is set in `sky_light_mask`, clear in `empty_sky_light_mask`, and `sky_light_arrays.len() == 1` with `sky_light_arrays[0]` equal to the exact array supplied.
-4. `arrays_appear_in_ascending_section_index_order` — sections `2` and `5` both tracked-nonuniform (distinct, recognizable byte patterns); assert `sky_light_arrays.len() == 2` and `sky_light_arrays[0]` corresponds to section `2`'s data, `sky_light_arrays[1]` to section `5`'s (ascending index order, not insertion/declaration order — this test constructs them in reverse order, `5` then `2`, to prove the function itself sorts by index rather than merely preserving caller order).
+1. `untracked_section_contributes_to_neither_mask` — a `LightColumn::new_uninitialized()` (every section `LightNibbles::Uninitialized`); `build_update_light_payload`'s result has `sky_light_mask == 0`, `empty_sky_light_mask == 0`, `sky_light_arrays.is_empty()` (and the symmetric block-light assertions).
+2. `filled_zero_section_goes_into_empty_mask_only` — section `0`'s `sky` set to `LightNibbles::Filled(0)` (tracked, no array allocated, vanilla's own real `isEmpty()` case, Context §12); assert bit `0` is **clear** in `sky_light_mask`, **set** in `empty_sky_light_mask`, and `sky_light_arrays.is_empty()` (no array sent for an empty section — the structural fact `Filled(0)` records directly, never a scan of `Data`'s own nibbles, since this section has no `Data` array to scan in the first place).
+3. `filled_nonzero_section_contributes_non_empty_mask_and_materialized_array` — section `1`'s `sky` set to `LightNibbles::Filled(15)` (tracked, no array allocated, uniform nonzero fill); assert bit `1` is set in `sky_light_mask`, clear in `empty_sky_light_mask`, and `sky_light_arrays.len() == 1` with `sky_light_arrays[0] == section_ops::uniform_array(15)` (every byte `0xFF` — the array is materialized on demand from the fill value, mirroring vanilla's own `getData()`, Context §12).
+4. `all_zero_data_section_still_contributes_non_empty_mask_and_array` — section `2`'s `sky` set to `LightNibbles::Data(Box::new([0u8; 2048]))` (tracked, allocated, all-zero content — distinct from `Filled(0)`: a real array is allocated here); assert bit `2` is set in `sky_light_mask` (an allocated `Data` array is always non-empty, Context §12 — it never scans nibble content to decide), clear in `empty_sky_light_mask`, and `sky_light_arrays.len() == 1` with `sky_light_arrays[0] == [0u8; 2048]` (the full all-zero array is sent, not omitted — vanilla's own `data != null` half of `isEmpty()`'s test is what governs, never content).
+5. `nonuniform_data_section_contributes_array_and_mask_bit` — section `3`'s `sky` set to `LightNibbles::Data(Box::new(arr))` where `arr`'s byte `0` is `0x0F` (one nonzero nibble, rest zero); assert bit `3` is set in `sky_light_mask`, clear in `empty_sky_light_mask`, and `sky_light_arrays.len() == 1` with `sky_light_arrays[0]` equal to the exact array supplied.
+6. `arrays_appear_in_ascending_section_index_order` — sections `2` and `5` both `LightNibbles::Data` with distinct, recognizable byte patterns; assert `sky_light_arrays.len() == 2` and `sky_light_arrays[0]` corresponds to section `2`'s data, `sky_light_arrays[1]` to section `5`'s (ascending index order, not insertion/declaration order — this test constructs them in reverse order, `5` then `2`, to prove the function itself sorts by index rather than merely preserving caller order).
 
 ### `crates/mechanics/tests/light_chunk_border.rs` — cross-chunk-same-region, via `bevy_ecs::World` (no `RcExecutor` needed — direct component manipulation + `run_stage8_lighting`)
 
-1. `light_crosses_a_same_region_chunk_boundary` — two chunk entities, `ChunkKey::new(OVERWORLD, 0, 0)` and `ChunkKey::new(OVERWORLD, 1, 0)` (adjacent along `+x`), each with `BlockStateColumn`/`LightColumn`/`HeightmapSet`/`ChunkKeyTag`/`LightPropagatorState` spawned into one fresh `World`, plus `LightPropertiesRegistry`, `RegionOwnership::always_local(Address::Region(RegionId(1)))`, `RegionMessageOutbox::default()`, `LightDirtyQueue::default()`, `LightBorderInbox::default()` inserted as resources. A block-light emitter (`emission: 14`) placed at local `(15, 0, 0)` of chunk `(0,0)` — i.e. world `x=15` — recorded into `LightDirtyQueue` (mimicking `UpdateContext::set_block`'s own seam) before calling `run_stage8_lighting(&mut world, &TestDispatch)` (a trivial `ParallelDispatch` test double that just runs every task sequentially, single-threaded, in `Vec` order — sufficient to prove correctness independent of real parallelism, which the separate determinism test below covers). Assert, after the call: chunk `(0,0)`'s own stored value at world `x=15` is `14`; chunk `(1,0)`'s own stored value at world `x=16` (its own local `x=0`) is `13` (crossed the boundary, decayed by exactly one more hop); `world_x=17` (chunk `(1,0)`'s local `x=1`) is `12`.
+1. `light_crosses_a_same_region_chunk_boundary` — two chunk entities, `ChunkKey::new(OVERWORLD, 0, 0)` and `ChunkKey::new(OVERWORLD, 1, 0)` (adjacent along `+x`), each with `BlockStateColumn`/`LightColumn`/`SkyLightSourceColumn`/`HeightmapSet`/`ChunkKeyTag`/`LightPropagatorState` spawned into one fresh `World`, plus `LightPropertiesRegistry`, `RegionOwnership::always_local(Address::Region(RegionId(1)))`, `RegionMessageOutbox::default()`, `LightDirtyQueue::default()`, `LightBorderInbox::default()` inserted as resources. A block-light emitter (`emission: 14`) placed at local `(15, 0, 0)` of chunk `(0,0)` — i.e. world `x=15` — recorded into `LightDirtyQueue` (mimicking `UpdateContext::set_block`'s own seam) before calling `run_stage8_lighting(&mut world, &TestDispatch)` (a trivial `ParallelDispatch` test double that just runs every task sequentially, single-threaded, in `Vec` order — sufficient to prove correctness independent of real parallelism, which the separate determinism test below covers). Assert, after the call: chunk `(0,0)`'s own stored value at world `x=15` is `14`; chunk `(1,0)`'s own stored value at world `x=16` (its own local `x=0`) is `13` (crossed the boundary, decayed by exactly one more hop); `world_x=17` (chunk `(1,0)`'s local `x=1`) is `12`.
 2. `light_border_update_emitted_and_applied_for_cross_region_case` — as test 1's setup, but `RegionOwnership`'s `resolve` closure returns `Address::Region(RegionId(2))` (a different region) for `ChunkKey::new(OVERWORLD, 1, 0)` specifically, `Address::Region(RegionId(1))` (local) otherwise. After `run_stage8_lighting`, assert `RegionMessageOutbox` contains exactly one buffered `(Address::Chunk(ChunkKey::new(OVERWORLD,1,0)), RegionMessage::LightBorderUpdate(..))` entry whose `chunk == ChunkKey::new(OVERWORLD,1,0)`, `edge_face == 0` (`West`, Direction's own declaration-order index — the update crosses chunk `(0,0)`'s East face, but the field names the *receiving* chunk's own edge, which faces *West* toward the sender — restate this precisely as whichever of the two conventions this blueprint's own `build_light_border_update` implementation actually produces, and assert against that concretely once written; the test's binding requirement is "exactly one message, addressed to the correct chunk, carrying `sky: None` and a `block` face array whose position corresponding to `(local_y=0, z=0)` decodes to `14`" — not the specific `edge_face` numeric convention, which Implementation step 9 fixes once and for all).
-3. `inbound_light_border_update_seeds_round_zero` (the "first emitter adds its own inbound-path coverage" requirement, mirroring M3-era `BorderUpdateKind::NeighborChanged`'s own deferred item) — a **single** chunk entity `ChunkKey::new(OVERWORLD, 5, 5)`, freshly spawned (no dirty entries, no local emitters at all); insert one `LightBorderUpdate` into `LightBorderInbox` directly (bypassing the outbound side entirely — this test proves the **inbound** application path stands alone), addressed to that chunk, `section_index` matching `y=0`'s own light-section index, `edge_face` = whichever value names the chunk's own **West** edge (local `x=0`), `block: Some([..])` with the byte pattern encoding `14` at face position `(local_y=0, perp=0)` (i.e. local `(x=0,y=0,z=0)`) and `0` elsewhere, `sky: None`. Call `run_stage8_lighting`. Assert this chunk's own stored block-light value at local `(0,0,0)` becomes `13` (one hop of decay applied on receipt, matching `apply_inbound_light_border_update`'s own "treat the received value as an incoming `from_level`, seed an ordinary increase step" semantics, Context §10) and local `(1,0,0)` becomes `12`.
+3. `inbound_light_border_update_seeds_round_zero` (the "first emitter adds its own inbound-path coverage" requirement, mirroring M3-era `BorderUpdateKind::NeighborChanged`'s own deferred item) — a **single** chunk entity `ChunkKey::new(OVERWORLD, 5, 5)`, freshly spawned with the same full component set as test 1 (no dirty entries, no local emitters at all); insert one `LightBorderUpdate` into `LightBorderInbox` directly (bypassing the outbound side entirely — this test proves the **inbound** application path stands alone), addressed to that chunk, `section_index` matching `y=0`'s own light-section index, `edge_face` = whichever value names the chunk's own **West** edge (local `x=0`), `block: Some([..])` with the byte pattern encoding `14` at face position `(local_y=0, perp=0)` (i.e. local `(x=0,y=0,z=0)`) and `0` elsewhere, `sky: None`. Call `run_stage8_lighting`. Assert this chunk's own stored block-light value at local `(0,0,0)` becomes `13` (one hop of decay applied on receipt, matching `apply_inbound_light_border_update`'s own "treat the received value as an incoming `from_level`, seed an ordinary increase step" semantics, Context §10) and local `(1,0,0)` becomes `12`.
 
 ### `crates/scheduler/tests/lighting_stage_dispatch.rs`
 
@@ -947,7 +1095,7 @@ Test harness note (applies to every test below): construct one `LocalChunkLight`
 
 ### `crates/mechanics/tests/light_determinism.rs`
 
-1. `stage8_final_state_identical_across_worker_counts` — the same two-chunk cross-boundary setup as `light_chunk_border.rs` test 1, run three times from **fresh** `World`/`LightPropagatorState`/component state each time, once per `RcWorkerPool::new(n)` for `n in {1, 2, 8}` (via `stage8_ecs::lighting_stage_driver`/`ParallelDispatch for RcWorkerPool`, a real `RcWorkerPool`, not the sequential test double). Assert all three runs produce byte-identical `LightColumn` state for both chunks (every section's `sky`/`block` arrays, `None`-vs-`Some` status included).
+1. `stage8_final_state_identical_across_worker_counts` — the same two-chunk cross-boundary setup as `light_chunk_border.rs` test 1, run three times from **fresh** `World`/`LightPropagatorState`/component state each time, once per `RcWorkerPool::new(n)` for `n in {1, 2, 8}` (via `stage8_ecs::lighting_stage_driver`/`ParallelDispatch for RcWorkerPool`, a real `RcWorkerPool`, not the sequential test double). Assert all three runs produce byte-identical `LightColumn` state for both chunks (every section's `sky`/`block` `LightNibbles` value, variant included).
 2. `stage8_emitted_light_border_update_sequence_identical_across_worker_counts` — as test 1, using the cross-*region* variant (`light_chunk_border.rs` test 2's own `RegionOwnership` setup); assert the sequence of `LightBorderUpdate` messages buffered into `RegionMessageOutbox` (order, count, and every field) is identical across `n in {1, 2, 8}` (PERF-D3's own cross-worker-count invariance rule, restated as this blueprint's own concrete instance of it).
 
 ## Implementation steps
@@ -960,10 +1108,10 @@ Test harness note (applies to every test below): construct one `LocalChunkLight`
 6. **`crates/mechanics/src/light/properties.rs`.** `LightProperties::AIR`/`OPAQUE` consts, `get_opacity`, `direction_index` (a plain 6-arm match, `West=>0,East=>1,North=>2,South=>3,Down=>4,Up=>5` — matching every other restatement of this same order in this blueprint and in M3-B01's own `SHAPE_UPDATE_ORDER`/`NEIGHBOR_CHANGED_ORDER` declaration order), `shape_occludes`, `LightPropertiesRegistry` (mirror `BlockBehaviorRegistry`'s own sorted-`Vec`-of-ranges implementation exactly, substituting `LightProperties::AIR` for `NoOpBehavior` as the default). Observable: `light_properties_registry.rs`'s 5 cases pass.
 7. **`crates/mechanics/src/light/section_ops.rs`.** `light_section_index_for_y`/`light_local_y`/`light_nibble_index` (direct arithmetic per Context §10/§11 doc comments); `get_nibble`/`set_nibble` (byte/nibble-shift arithmetic, identical shape to `rc_chunk_storage::bits::read_slot`/`write_slot`'s own pattern but fixed at 4 bits/entry, 2 entries/byte); `extract_face`/`inject_face` (nested loop over `local_y in 0..16`, `perp in 0..16`, computing the fixed axis position per `Direction`, reading/writing via `light_nibble_index`+`get_nibble`/`set_nibble`, and the face-local index `local_y*16+perp` into the 128-byte output/input array via the same nibble read/write helpers applied to a `[u8;128]` instead of `[u8;2048]` — the two array sizes need either a small generic helper or duplicated 4-line nibble-index math; either is acceptable). Observable: `light_bits_and_faces.rs`'s 5 cases pass.
 8. **`crates/mechanics/src/light/queue.rs`.** `DirectionSet`/`all_except`/`only`/`contains` (bit arithmetic over `direction_index`); `QueueEntry`/`ChannelState`/`LightPropagatorState`/`LightDirtyQueue`/`LightDirtyEntry` per Deliverables' doc comments (all straightforward field/derive bodies — `is_idle` checks all four `VecDeque`s empty across both channels; `LightDirtyQueue::drain` is `std::mem::take(&mut self.0)`). Observable: compiles; exercised indirectly by later steps.
-9. **`crates/mechanics/src/light/sky_source.rs`.** `sky_source_boundary_y`: start `y = heightmap.world_y(HeightmapKind::WorldSurface, x, z)`; while `y - 1 >= WORLD_MIN_Y` and `properties.resolve(blocks.get(x, y-1, z)).propagates_skylight_down` is `true`, decrement `y`; return `y.max(WORLD_MIN_Y)`. `is_sky_source`: `world_y >= sky_source_boundary_y(..)`. Observable: exercised by `light_propagation_golden_grids.rs` test 3, and indirectly by every other golden-grid test's sky-channel setup.
-10. **`crates/mechanics/src/light/propagator.rs`.** `is_local`/`get_stored`/`set_stored` (straightforward, `set_stored`'s lazy-allocate-on-first-write per Context §13); `check_node_block`/`check_node_sky`/`propagate_increase_step`/`propagate_decrease_step` exactly per Context §2's algorithm restatement (this is the single most detail-sensitive step in this blueprint — implement it directly against Context §2's prose, do not simplify further); `own_source_strength`. **Fix `direction_index`'s canonical form once here** and reuse it everywhere else in this crate that needs a direction-to-array-index mapping (`occludes_face`, `DirectionSet`) — do not let two different orderings drift apart. Observable: `light_propagation_golden_grids.rs`'s 6 cases pass (this is the step that proves the propagator's core correctness end-to-end).
-11. **`crates/mechanics/src/light/wire.rs`.** `build_update_light_payload`: iterate `column.sections()` by ascending index; for each, classify `None`/`Some` per Context §12 — `None` sets neither mask and appends nothing; `Some` always sets the non-empty mask bit and appends the full `[u8; 2048]` array, regardless of content — never scanning the array's own nibbles. Observable: `light_wire_payload.rs`'s 4 cases pass.
-12. **`crates/mechanics/src/light/border.rs`.** `build_light_border_update`: resolve `section_index`/face via `light_section_index_for_y`/the target chunk's own known edge direction (the direction from the *sending* chunk toward the *receiving* one — restate and fix this convention concretely against test 2 of `light_chunk_border.rs` once written, since that test's own assertion is deliberately left open on this exact point); `extract_face` the relevant `LightSection`'s `sky`/`block` fields (`None` in, `None` out, matching `LightSection`'s own convention). `apply_inbound_light_border_update`: for each of the 256 face positions, decode the received nibble as `from_level`, compute the corresponding **local** `BlockPos` on this chunk's own bordering edge (the position immediately across `edge_face` from the message's own conceptual "outside" — precisely: `edge_face` names *this* chunk's own edge, so the seeded position is the first local position stepping *inward* from that edge), and if `sky`/`block` is `Some`, push one increase `QueueEntry { pos, from_level, directions: all_except(opposite-of-edge_face-as-a-Direction), increase_from_emission: false }` per position (256 pushes; a genuinely converged sender's face is typically far from uniform, so most pushes will simply fail their `max_possible <= current` early-bail check on the very next round and cost nothing further — no special-casing needed). Observable: `light_chunk_border.rs`'s 3 cases pass.
+9. **`crates/mechanics/src/light/sky_source.rs`.** `is_sky_edge_occluded(upper, lower)`: `lower.opacity != 0 || shape_occludes(upper, lower, Direction::Down)` (Context §6's exact two-part test). `SkyLightSourceColumn::recompute_column(blocks, heightmap, properties, x, z)`: read `old = self.boundary_y(x, z)`; scan `y = heightmap.world_y(HeightmapKind::WorldSurface, x, z)` downward one block at a time, applying `is_sky_edge_occluded` to each `(upper = block at y, lower = block at y-1)` pair read via `properties.resolve(blocks.get(x, ·, z))`, stopping at and recording the first occluding pair's own upper `y`; if `y - 1 < WORLD_MIN_Y` is reached without an occluding pair, record `WORLD_MIN_Y`; write the recorded value back into `self`, return `(old, new)`. `recompute`: call `recompute_column` for all 256 `(x, z)` pairs. `boundary_y`/`is_source`: direct array lookup/comparison. Observable: exercised by `light_propagation_golden_grids.rs` test 3, and indirectly by every other golden-grid test's sky-channel setup.
+10. **`crates/mechanics/src/light/propagator.rs`.** `is_local`/`get_stored` (via `section_ops::nibble_at`, straightforward)/`set_stored` (lazily materializes `Uninitialized`/`Filled(v)` into `Data` on first write per Context §13, via `section_ops::uniform_array` for the `Filled(v)` case); `check_node_block`/`check_node_sky`/`propagate_increase_step`/`propagate_decrease_step` exactly per Context §2's algorithm restatement, with `check_node_sky` taking a single `is_source: bool` (no "old" comparison of its own, §2/§6) — this is the single most detail-sensitive step in this blueprint — implement it directly against Context §2's prose, do not simplify further; `own_source_strength` (reads `local.sky_sources.is_source(..)` for the sky channel). **Fix `direction_index`'s canonical form once here** and reuse it everywhere else in this crate that needs a direction-to-array-index mapping (`occludes_face`, `DirectionSet`, `is_sky_edge_occluded`'s own `Direction::Down` use) — do not let two different orderings drift apart. Observable: `light_propagation_golden_grids.rs`'s 6 cases pass (this is the step that proves the propagator's core correctness end-to-end).
+11. **`crates/mechanics/src/light/wire.rs`.** `build_update_light_payload`: iterate `column.sections()` by ascending index; for each channel's `LightNibbles`, match on the variant per Context §12 — `Uninitialized` sets neither mask and appends nothing; `Filled(0)` sets the empty mask bit and appends nothing; `Filled(v)` for `v > 0` sets the non-empty mask bit and appends `section_ops::uniform_array(v)`; `Data(arr)` sets the non-empty mask bit and appends `arr` unchanged — a structural match on the variant alone, never scanning a `Data` array's own nibbles. Observable: `light_wire_payload.rs`'s 6 cases pass.
+12. **`crates/mechanics/src/light/border.rs`.** `build_light_border_update`: resolve `section_index`/face via `light_section_index_for_y`/the target chunk's own known edge direction (the direction from the *sending* chunk toward the *receiving* one — restate and fix this convention concretely against test 2 of `light_chunk_border.rs` once written, since that test's own assertion is deliberately left open on this exact point); `extract_face_from_nibbles` the relevant `LightSection`'s `sky`/`block` fields (`Uninitialized` in, `None` out; `Filled`/`Data` in, `Some` out, matching `section_ops::extract_face_from_nibbles`'s own convention, §10). `apply_inbound_light_border_update`: for each of the 256 face positions, decode the received nibble as `from_level`, compute the corresponding **local** `BlockPos` on this chunk's own bordering edge (the position immediately across `edge_face` from the message's own conceptual "outside" — precisely: `edge_face` names *this* chunk's own edge, so the seeded position is the first local position stepping *inward* from that edge), and if `sky`/`block` is `Some`, push one increase `QueueEntry { pos, from_level, directions: all_except(opposite-of-edge_face-as-a-Direction), increase_from_emission: false }` per position (256 pushes; a genuinely converged sender's face is typically far from uniform, so most pushes will simply fail their `max_possible <= current` early-bail check on the very next round and cost nothing further — no special-casing needed). Observable: `light_chunk_border.rs`'s 3 cases pass.
 13. **`crates/mechanics/src/light/stage8.rs`.** `run_stage8_lighting` exactly per Context §8's 10-step algorithm (`ParallelDispatch` trait, `LightTickReport`). This is the second most detail-sensitive step — implement the seeding phase, the round loop (collect-disjoint-mutable-refs via one sequential `Query::iter_mut()` pass, dispatch via `pool.run_batch`, single-threaded deterministic merge in ascending `ChunkKey` order), and the cross-region emission pass directly against Context §8's prose. Observable: `light_chunk_border.rs` tests 1–2 (via a trivial sequential `ParallelDispatch` test double defined in that test file) pass.
 14. **`crates/mechanics/src/light/stage8_ecs.rs`** (feature `server-systems`). `impl ParallelDispatch for RcWorkerPool` (one line), `lighting_stage_driver`. Observable: `light_determinism.rs`'s 2 cases pass, using a real `RcWorkerPool`.
 15. **`crates/mechanics/src/light/mod.rs`, `crates/mechanics/src/lib.rs`.** Wire module declarations and re-exports exactly per Deliverables. Observable: `cargo build -p rc-mechanics --all-features` succeeds with zero `todo!()` remaining.
@@ -983,7 +1131,7 @@ Test harness note (applies to every test below): construct one `LocalChunkLight`
 
 (e) **`UpdateContext`'s pre-existing fields and `set_block`'s pre-existing write-then-fan-out behavior (M3-B01) are never altered beyond the one additive field and the one additive statement Context §7 specifies.** No method of `UpdateContext`, and no other file M3-B01 created (`neighbor_update.rs`, `scheduled_tick.rs`, `block_event.rs`, `border.rs`, `stage4/ecs.rs`, `direction.rs`, `random.rs`, `world_access.rs`), is modified by this blueprint. **`stage4.rs` is the one exception, narrowly scoped**: this blueprint edits its two `UpdateContext`-constructing call sites (`run_scheduled_phase`/`run_block_event_subphase`, M3-B01's own doc comment on `UpdateContext.ownership` names both) to additionally supply `light_dirty`, sourced from a new `LightDirtyQueue` resource this blueprint's own Stage-4→Stage-8 handoff owns (Deliverables) — no other line of `stage4.rs` changes. **This blueprint's implementation changeset additionally performs the coordinated update M4-B06's own Context §L explicitly anticipated**: every already-merged test file under `crates/mechanics/tests/` shipped by M3-B01, M3-B04, M3-B06, and (if already landed) M4-B06 that constructs an `UpdateContext` value via struct-literal syntax gains exactly one additive `light_dirty: &mut <a throwaway or shared `LightDirtyQueue` local to that test>,` line — the sole permitted exception to Constraint (a)'s test-first boundary, restated there. This is the identical "cited, minimal, non-weakening test-file edit for a real, necessary architectural change" precedent M4-B01 already established for its own `Stage` breaking change, applied here to the analogous `UpdateContext` field addition M4-B06's own text names as needing exactly this treatment.
 
-(f) **Chunk-entity spawning (attaching `LightPropagatorState`, or any of WORLD-D1's own seven components, to a real chunk entity in a real region `World`) is out of scope**, exactly as M2-B01 already deferred "spawning chunk entities into a real region `World`... a future `rc-scheduler`/`rc-worldgen` integration blueprint's job." This blueprint's own tests spawn synthetic chunk entities with the full needed component set directly in test setup; production wiring is a future chunk-lifecycle blueprint's responsibility.
+(f) **Chunk-entity spawning (attaching `LightPropagatorState`, `SkyLightSourceColumn`, or any of WORLD-D1's own seven components, to a real chunk entity in a real region `World`) is out of scope**, exactly as M2-B01 already deferred "spawning chunk entities into a real region `World`... a future `rc-scheduler`/`rc-worldgen` integration blueprint's job." This blueprint's own tests spawn synthetic chunk entities with the full needed component set directly in test setup; production wiring is a future chunk-lifecycle blueprint's responsibility. Whether `SkyLightSourceColumn` needs its own on-disk persistence format (it is not ephemeral/tick-scoped the way `LightPropagatorState` is, Context §6) is likewise deferred — a future WORLD-D8/WORLD-D22-scoped decision, not this blueprint's to make.
 
 (g) **No border-only/partial `Update Light` broadcast optimization, and no literal `rc-protocol` packet encoding.** Context §12's conservative "always send every tracked section" policy stands as shipped — do not add a section-subset parameter to `build_update_light_payload` or otherwise implement the border-only optimization research doc §3.12 describes; that is explicitly deferred to a future, Phase-2-client-aware blueprint. Do not add a dependency on `rc-protocol` or write any `VarInt`/`BitSet` byte-encoding logic — this blueprint's `UpdateLightPayload` is plain data, consumed by a future wire-integration blueprint exactly as M2-B01's types are consumed by M1-B05's own hand-rolled (not yet type-shared) encoder. The standalone `Update Light` packet's numeric id is unpinned in this project's corpus at the time of writing — flagged, not guessed at, per this project's standing "mark moderate-confidence, add a reconciliation step" convention; a future blueprint pins it once `xtask codegen`'s packet-id table exists.
 
@@ -1005,4 +1153,4 @@ cargo run -p xtask -- lint-deps
 cargo run -p xtask -- test
 ```
 
-Expected: every command exits 0. `cargo nextest run` covers `light_border_update.rs` (3) + `light_bits_and_faces.rs` (5) + `light_properties_registry.rs` (5) + `light_propagation_golden_grids.rs` (6) + `light_wire_payload.rs` (4) + `light_chunk_border.rs` (3) + `lighting_stage_dispatch.rs` (3) + `light_determinism.rs` (2) = 31 test cases named in Acceptance tests, plus every pre-existing M0-B02/M0-B05/M3-B01 test in the three touched crates (unmodified, still passing) — all pass. CI (`.github/workflows/ci.yml`, M0-B01) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.
+Expected: every command exits 0. `cargo nextest run` covers `light_border_update.rs` (3) + `light_bits_and_faces.rs` (8) + `light_properties_registry.rs` (5) + `light_propagation_golden_grids.rs` (6) + `light_wire_payload.rs` (6) + `light_chunk_border.rs` (3) + `lighting_stage_dispatch.rs` (3) + `light_determinism.rs` (2) = 36 test cases named in Acceptance tests, plus every pre-existing M0-B02/M0-B05/M3-B01 test in the three touched crates (unmodified, still passing) — all pass. CI (`.github/workflows/ci.yml`, M0-B01) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.

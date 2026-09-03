@@ -32,7 +32,7 @@ Done when:
 
 ### Entity composition model (MECH-D29), restated, with one cited correction
 
-Vanilla's Java entity class hierarchy (`Entity` → `LivingEntity` → `Mob` → `PathfinderMob` → concrete type, plus parallel `Item`/`Projectile`/`Vehicle` branches) is mapped onto ECS **composition, not inheritance**: a fixed base bundle applies to every entity, and each rung of the hierarchy a concrete vanilla type descends from contributes one additional bundle. This blueprint implements exactly the two rungs tier-2 needs — `Base` and `Living` — plus one small per-kind bundle each for the four tier-2 kinds (Context, "Tier-2 entity kind list"). `Mob`'s own rung contributes no additional *fields* at M4's own scope (05's Entity Composition Model diagram lists `GoalSet-or-Brain`, `PersistenceRequired`, `CanPickUpLoot` — this blueprint ships the two boolean markers, `PersistenceRequired`/`CanPickUpLoot`, and an `AiSystemKind` marker recording which of MECH-D31's two AI systems a mob uses, but **not** `GoalSet`/`Brain` themselves, which need real AI content a future M4 blueprint supplies).
+Vanilla's Java entity class hierarchy (`Entity` → `LivingEntity` → `Mob` → `PathfinderMob` → concrete type, plus parallel `Item`/`Projectile`/`Vehicle` branches) is mapped onto ECS **composition, not inheritance**: a fixed base bundle applies to every entity, and each rung of the hierarchy a concrete vanilla type descends from contributes one additional bundle. This blueprint implements exactly the two rungs tier-2 needs — `Base` and `Living` — plus one small per-kind bundle each for the four tier-2 kinds (Context, "Tier-2 entity kind list"). `Mob`'s own rung contributes no additional *fields* at M4's own scope (05's Entity Composition Model diagram lists `GoalSet-or-Brain`, `PersistenceRequired`, `CanPickUpLoot` — this blueprint ships the two boolean markers, `PersistenceRequired`/`CanPickUpLoot` (persisted to NBT exactly as vanilla's own `Mob.java` does, Context, "`PersistenceRequired`/`CanPickUpLoot`... `MobMarker`," below), and an `AiSystemKind` marker recording which of MECH-D31's two AI systems a mob uses, but **not** `GoalSet`/`Brain` themselves, which need real AI content a future M4 blueprint supplies).
 
 **Cited correction to MECH-D30's own text.** `05-game-mechanics.md`'s MECH-D30 names the base bundle's field set as "`Motion`, `Rotation`... `FallDistance`, `Fire`, `Air`, `OnGround`, `Invulnerable`, `PortalCooldown`, `UUID`, `CustomName`, `CustomNameVisible`, `Silent`, `NoGravity`, `Glowing`, `TicksFrozen`, `HasVisualFire`, `Tags`, `Passengers`" — omitting `Pos` (world position), the one field every entity manifestly needs and every vanilla entity's NBT root actually carries. This blueprint adds `Pos` to the base bundle as a corrected, binding restatement (mirroring M2-B06's own identically-structured correction of WORLD-D14's `playerdata/` folder name, and M2-B07's correction of MECH-D63's sequence-allocation direction) — not a silent divergence. `05-game-mechanics.md`'s next revision should fold `Pos` into MECH-D30's own field list.
 
@@ -108,7 +108,7 @@ Restated from MECH-D30 (corrected, Context above) plus a live fetch of `minecraf
 | `Invulnerable` | `Boolean` | `invulnerable: bool` | |
 | `PortalCooldown` | `Int` | `portal_cooldown: i32` | |
 | `UUID` | `IntArray`, 4 elements | `uuid: EntityUuid` | vanilla stores a UUID as four big-endian `i32` chunks of the 128-bit value (most-significant chunk first), **not** a string — this blueprint's `ToNbtField`/`FromNbtField` impl for `EntityUuid` (Deliverables, `nbt.rs`) performs exactly that packing/unpacking |
-| `CustomName` | `String` or `Compound`, optional | `custom_name: Option<String>` | encoded via vanilla's component codec over native NBT, not a JSON string: a component that collapses to plain text (no siblings, no style) encodes as a bare NBT string holding the literal text; a richer component encodes as a compound instead. This blueprint's `custom_name: Option<String>` round-trips only the plain-text case — a bounded, documented deviation (mirroring `ItemStackRecord.item_id`'s own `Int`-not-`String` exception): a loaded record whose `CustomName` is a compound fails this field's own decode, and MECH's own rich-text-component work stays out of scope here; field entirely omitted from the compound when `None` |
+| `CustomName` | `String` or `Compound`, optional | `custom_name: Option<rc_nbt::owned::NbtTag>` | encoded via vanilla's component codec over native NBT, not a JSON string: a component that collapses to plain text (no siblings, no style) encodes as a bare NBT string holding the literal text; a richer component encodes as a compound instead. This blueprint's own field stores whichever raw tag vanilla actually wrote — bare `TAG_String` or `TAG_Compound`, verbatim — and re-emits it unchanged on save (patch-preserving, not re-derived through a text-component codec this project does not implement): both forms now round-trip losslessly, never a decode failure. `custom_name_text(&self) -> Option<&str>` (Deliverables, `base.rs`) is the plain-text-only accessor — `Some` when the stored tag is the bare-string form, `None` otherwise (including the compound form) — that every plain-text caller (the network metadata encode path among them, Deliverables, `metadata.rs`) uses instead of the raw tag; field entirely omitted from the compound when `None` |
 | `CustomNameVisible` | `Boolean` | `custom_name_visible: bool` | |
 | `Silent` | `Boolean` | `silent: bool` | |
 | `NoGravity` | `Boolean` | `no_gravity: bool` | |
@@ -185,6 +185,8 @@ This blueprint's `MetadataValue` enum (Deliverables, `metadata.rs`) constructs *
 
 `Pose`'s own ordinal table (this blueprint constructs only the two values tier-2 entities need, `Standing = 0`, `Sleeping = 2` — vanilla's real registration order interleaves several other values between/after these that no tier-2 entity in this milestone ever adopts; `Pose`'s `enum` is written non-`#[non_exhaustive]` with a doc comment directing a future blueprint to insert any further ordinal it needs at its own correct numeric position, reconciled against a live capture at that time, rather than appended past the end).
 
+**Exception, cited: `custom_name`'s own declared field type is not one of `MetadataValue`'s ten variant payload types.** `BaseEntity.custom_name` is `Option<rc_nbt::owned::NbtTag>` (Context, corrected — patch-preserving raw NBT), not `Option<String>`, so `#[derive(EntityMetadataFields)]`'s own rule 1 (Context, "exact expansion algorithm") needs one extra `impl` this field's type alone requires: `metadata.rs` (Deliverables) provides `impl From<Option<rc_nbt::owned::NbtTag>> for MetadataValue`, applying the identical bare-string-only extraction rule `BaseEntity::custom_name_text` itself uses (both call one shared, private helper, so the two can never drift apart) to produce `MetadataValue::OptionalTextComponent(extracted_text)`. A compound (rich) `CustomName` therefore metadata-encodes as `OptionalTextComponent(None)` — correctly never sent to the network as text — never a decode failure and never a panic, exactly matching this blueprint's own pre-existing, still-accurate scope boundary that rich-text-component wire support does not exist yet.
+
 ### Base + `LivingEntity` metadata index table
 
 Restated from the same live fetch as the type-ID table above (same moderate-confidence caveat):
@@ -205,7 +207,59 @@ Restated from the same live fetch as the type-ID table above (same moderate-conf
 | 13 | bee-stinger count | `VarInt` | `0` |
 | 14 | sleeping bed position | `OptionalPosition` | `None` |
 
-Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by this blueprint (no status-effect system exists, MECH-D46 out of scope) — reserved, unused, matching this project's own "reserve the seam, do not fabricate content for it" convention. `Mob`'s own rung contributes **one** additional synced index beyond what `LivingEntity` defines: a shared Mob-flags byte (`DATA_MOB_FLAGS_ID`, covering `NoAI`/`LeftHanded`/`Aggressive`), landing at index **15** because `LivingEntity` ends at 14. This blueprint does not model that byte at all — none of `NoAI`/`LeftHanded`/`Aggressive` exists at this milestone's scope — so index 15 is reserved and unused, the identical "reserve the seam" treatment indices 10/11 already get. Per-kind indices for a `Mob`-rung kind therefore start at index **16**, not 15: `Villager`'s own `VillagerData` occupies index 16 in this blueprint's own scheme. **Bounded, documented exception:** vanilla's real wire index for `Villager`'s own `VillagerData` is higher still (its full class chain interposes further synced fields this blueprint's two-rung `Base`/`Living` composition model does not represent as their own rungs) — index 16 is this blueprint's own internal choice, not proven vanilla-wire-exact, flagged here rather than silently assumed correct (`findings-for-planning.md`). `Item`'s own `Slot` is unaffected by any of this — it stays at index 8, since `Item` is `Entity`-direct, bypassing `LivingEntity` and `Mob` entirely (restated explicitly in `kinds.rs`'s own doc comments to avoid the easy mistake of reusing `LivingEntity`'s 8–14 range for a non-`LivingEntity` kind).
+Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by this blueprint (no status-effect system exists, MECH-D46 out of scope) — reserved, unused, matching this project's own "reserve the seam, do not fabricate content for it" convention. `Mob`'s own rung contributes **one** additional synced index beyond what `LivingEntity` defines: a shared Mob-flags byte (`DATA_MOB_FLAGS_ID`, covering `NoAI`/`LeftHanded`/`Aggressive`), landing at index **15** because `LivingEntity` ends at 14 — reserved and unused by this blueprint (none of `NoAI`/`LeftHanded`/`Aggressive` exists at this milestone's scope), the identical "reserve the seam" treatment indices 10/11 already get. `Item`'s own `Slot` is unaffected by anything past this point — it stays at index 8, since `Item` is `Entity`-direct, bypassing `LivingEntity` and `Mob` entirely (restated explicitly in `kinds.rs`'s own doc comments to avoid the easy mistake of reusing `LivingEntity`'s 8–14 range for a non-`LivingEntity` kind).
+
+### Per-kind synced-data index table — vanilla-exact, full class chain
+
+Every index past 15 depends on the exact rung sequence vanilla's own `net.minecraft.network.syncher.SynchedEntityData.defineId`/`net.minecraft.util.ClassTreeIdRegistry` mechanism assigns (ASSET-D18(f) reference, read directly rather than assumed): `defineId(clazz, serializer)` looks up the calling class's own last-assigned id, and if that class has never itself called `defineId`, walks the superclass chain to the nearest ancestor that has, then assigns `that id + 1` — so a rung with no `defineSynchedData` override at all (confirmed for `PathfinderMob`, `Monster`, `Animal`, `AbstractCow` — none of the four ever calls `defineId`) is fully transparent to the walk and contributes zero indices. This resolves this blueprint's own prior "index 16 is this blueprint's own internal choice, not proven vanilla-wire-exact" framing completely: every shipped kind's full synced-data index table below is read directly off that real class chain, vanilla-exact rather than a bounded internal guess. A row's own "Modeled" column is `yes` only when this blueprint's shipped bundle (Deliverables, `kinds.rs`) actually carries that field; every other row is `reserved, never sent` — the identical "reserve the seam, do not fabricate content for it" convention indices 10/11/15 already establish, now extended down each kind's own full chain instead of stopping at the `Mob` rung.
+
+**Zombie** (`Entity` → `LivingEntity` → `Mob` → `PathfinderMob` → `Monster` → `Zombie`; `net/minecraft/world/entity/monster/zombie/Zombie.java:82-84,141-145` — `Monster extends PathfinderMob`, `monster/Monster.java:30`, defines no synced field of its own):
+
+| Index | Contributing class | Field | Kind | Default | Modeled |
+|---|---|---|---|---|---|
+| 0-7 | `Entity` | (base bundle, table above) | — | — | yes — `BaseEntity` |
+| 8-14 | `LivingEntity` | (living bundle, table above) | — | — | yes — `LivingEntity` |
+| 15 | `Mob` | `DATA_MOB_FLAGS_ID` | `Byte` | `0` | reserved, never sent |
+| — | `PathfinderMob` | (no `defineSynchedData` override) | — | — | n/a |
+| — | `Monster` | (no `defineSynchedData` override) | — | — | n/a |
+| 16 | `Zombie` | `DATA_BABY_ID` | `Boolean` | `false` | reserved, never sent |
+| 17 | `Zombie` | `DATA_SPECIAL_TYPE_ID` | `VarInt` | `0` | reserved, never sent |
+| 18 | `Zombie` | `DATA_DROWNED_CONVERSION_ID` | `Boolean` | `false` | reserved, never sent |
+
+`ZombieBundle` (Deliverables, `kinds.rs`) is a correctly-empty marker struct at this milestone's own scope: every one of `Zombie`'s own three real indices (16-18) is genuinely unmodeled, not merely unindexed.
+
+**Villager** (`Entity` → `LivingEntity` → `Mob` → `PathfinderMob` → `AgeableMob` → `AbstractVillager` → `Villager`; `net/minecraft/world/entity/AgeableMob.java:28-30`, `npc/villager/AbstractVillager.java:55,57`, `npc/villager/Villager.java:96,98-99`):
+
+| Index | Contributing class | Field | Kind | Default | Modeled |
+|---|---|---|---|---|---|
+| 0-7 | `Entity` | (base bundle) | — | — | yes — `BaseEntity` |
+| 8-14 | `LivingEntity` | (living bundle) | — | — | yes — `LivingEntity` |
+| 15 | `Mob` | `DATA_MOB_FLAGS_ID` | `Byte` | `0` | reserved, never sent |
+| — | `PathfinderMob` | (no `defineSynchedData` override) | — | — | n/a |
+| 16 | `AgeableMob` | `DATA_BABY_ID` | `Boolean` | `false` | reserved, never sent |
+| 17 | `AgeableMob` | `AGE_LOCKED` | `Boolean` | `false` | reserved, never sent |
+| 18 | `AbstractVillager` | `DATA_UNHAPPY_COUNTER` | `VarInt` | `0` | reserved, never sent |
+| 19 | `Villager` | `DATA_VILLAGER_DATA` | `VillagerData` | `createDefaultVillagerData()` — type `PLAINS`, profession `NONE`, level `1` | **yes — `VillagerBundle.villager_data`, corrected from this blueprint's own prior internal choice of index 16 (a self-flagged, never-proven guess) to the vanilla-exact index 19** |
+| 20 | `Villager` | `DATA_VILLAGER_DATA_FINALIZED` | `Boolean` | `false` | reserved, never sent |
+
+**Cow** (`Entity` → `LivingEntity` → `Mob` → `PathfinderMob` → `AgeableMob` → `Animal` → `AbstractCow` → `Cow`; `net/minecraft/world/entity/AgeableMob.java:28-30`, `animal/cow/Cow.java:32-36,45-49`; `Animal`/`AbstractCow` define no synced field of their own):
+
+| Index | Contributing class | Field | Kind | Default | Modeled |
+|---|---|---|---|---|---|
+| 0-7 | `Entity` | (base bundle) | — | — | yes — `BaseEntity` |
+| 8-14 | `LivingEntity` | (living bundle) | — | — | yes — `LivingEntity` |
+| 15 | `Mob` | `DATA_MOB_FLAGS_ID` | `Byte` | `0` | reserved, never sent |
+| — | `PathfinderMob` | (no `defineSynchedData` override) | — | — | n/a |
+| 16 | `AgeableMob` | `DATA_BABY_ID` | `Boolean` | `false` | reserved, never sent |
+| 17 | `AgeableMob` | `AGE_LOCKED` | `Boolean` | `false` | reserved, never sent |
+| — | `Animal` | (no `defineSynchedData` override) | — | — | n/a |
+| — | `AbstractCow` | (no `defineSynchedData` override) | — | — | n/a |
+| 18 | `Cow` | `DATA_VARIANT_ID` | `CowVariant` | `TEMPERATE` | reserved, never sent |
+| 19 | `Cow` | `DATA_SOUND_VARIANT_ID` | `CowSoundVariant` | `CLASSIC` (or the registry's own first available fallback) | reserved, never sent |
+
+`CowBundle` stays a correctly-empty marker struct — no cow-variant system exists at this milestone's own scope (a future blueprint's job, alongside the general variant-registry work every one of `CatVariant`/`WolfVariant`/etc. in the type-ID table above already awaits), so indices 18-19 stay reserved exactly like `Zombie`'s own three.
+
+**Item** (`Entity` → `ItemEntity`; `item/ItemEntity.java:39-40`) needs no chain walk beyond `Entity`'s own 0-7 — `Item` never reaches `LivingEntity` or `Mob` at all, so `DATA_ITEM` lands at index 8 directly, confirmed unchanged by any of the above.
 
 ### Tier-2 entity kind list — this blueprint's own justified selection
 
@@ -213,7 +267,7 @@ Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by 
 
 | Kind | Vanilla `EntityType` | AI system (MECH-D31) | `MobCategory` (MECH-D34) | Why this milestone needs it |
 |---|---|---|---|---|
-| Item entity | `minecraft:item` | — (not a `Mob`) | — (never naturally spawned) | Named explicitly in the M4 roadmap ("item entities and pickup," MECH-D51) |
+| Item entity | `minecraft:item` | — (not a `Mob`) | `MISC` (vanilla registers the item entity type as `MISC`; never naturally spawned) | Named explicitly in the M4 roadmap ("item entities and pickup," MECH-D51) |
 | Zombie | `minecraft:zombie` | GoalSelector (legacy) | `MONSTER` | The GoalSelector-side AI exerciser; satisfies M4's own acceptance criterion 3 ("mob AI pathfinding... engages in combat") with the single most iconic, simplest hostile mob |
 | Villager | `minecraft:villager` | Brain | `MISC` | The Brain-side AI exerciser — MECH-D31's own binding text requires **both** AI systems be reproducible, not just one; research doc §3.7 independently names Villager "the fullest showcase of the brain system," making it the natural single Brain-side representative. `MISC` (not `CREATURE`) also means vanilla excludes Villager from natural spawning entirely — irrelevant to this blueprint's own zero-spawning scope, but restated here so a future spawning blueprint does not inherit a wrong category |
 | Cow | `minecraft:cow` | GoalSelector (legacy) | `CREATURE` | The one `CREATURE`-category, non-combat, purely-pathfinding mob in this tier-2 set (Villager, corrected above, is actually `MISC`, not a second `CREATURE` kind) — gives mob-spawning's own per-category cap accounting (MECH-D34, a future M4 blueprint) a `CREATURE`-category kind to exercise beyond `MONSTER`, at zero additional AI-system surface (it reuses the same GoalSelector machinery Zombie already exercises) |
@@ -590,11 +644,12 @@ pub trait EntityNbtFields: Sized {
 
 /// One scalar/small-composite field's NBT conversion — the mapping table this
 /// blueprint's Context names (`bool`->Byte, `[f64;3]`->`List<Double>`, `EntityUuid`->
-/// `IntArray` of 4, `RegistryEntryId`->`Int`, `Option<String>`->`String`-or-omitted,
-/// ...). Implemented in this file for every concrete type this blueprint's bundles
-/// use; a future bundle needing a new field type adds one more `impl` here, no
-/// `rc-entity-macros` change required (mirrors `rc-protocol`'s own `WireWrite`/
-/// `WireRead` extensibility story, M1-B01).
+/// `IntArray` of 4, `RegistryEntryId`->`Int`, `Option<rc_nbt::owned::NbtTag>`->raw-tag-
+/// or-omitted (`custom_name`'s own corrected, patch-preserving type — the stored tag is
+/// written/read verbatim, never interpreted as a `String`), ...). Implemented in this
+/// file for every concrete type this blueprint's bundles use; a future bundle needing a
+/// new field type adds one more `impl` here, no `rc-entity-macros` change required
+/// (mirrors `rc-protocol`'s own `WireWrite`/`WireRead` extensibility story, M1-B01).
 pub trait ToNbtField {
     fn to_nbt_field(&self, name: &str, out: &mut owned::NbtCompound);
 }
@@ -606,32 +661,48 @@ pub trait FromNbtField: Sized {
     ) -> Result<Self, SchemaError>;
 }
 
-// Implemented for: bool, i8, i16, i32, i64, f32, f64, String, Option<String>,
+// Implemented for: bool, i8, i16, i32, i64, f32, f64, String, Option<rc_nbt::owned::NbtTag>,
 // [f64; 3], [f32; 2], crate::entity::ids::EntityUuid, rc_registries::generated_v776::
 // RegistryEntryId — bodies specified in Implementation steps, each a direct,
-// mechanical application of Context's own mapping table.
+// mechanical application of Context's own mapping table. The `Option<owned::NbtTag>`
+// impl is the one raw-passthrough exception: `from_nbt_field` never returns
+// `SchemaError` because the tag's shape does not matter (`TAG_String` and
+// `TAG_Compound` both succeed identically), and `to_nbt_field` writes it back verbatim.
 
 /// One persisted entity: the typed, corrected base+living+kind-specific fields, plus
 /// the untouched original compound for every field this blueprint does not model
 /// (Context: "Unknown-field preservation," M2-B06's identical pattern). `base` is
-/// `None` for a freshly-spawned, never-loaded entity.
+/// `None` for a freshly-spawned, never-loaded entity. `mob` is `Some` exactly when
+/// `kind.ai_system()` is `Some` (every tier-2 kind except `Item`, Context:
+/// "`PersistenceRequired`/`CanPickUpLoot`... `MobMarker`") and `None` otherwise —
+/// `Item` has no `Mob` rung and therefore never carries a `MobMarker`.
 pub struct EntityRecord {
     pub base: Option<owned::NbtCompound>,
     pub entity: super::BaseEntity,
     pub living: Option<super::LivingEntity>,
+    pub mob: Option<super::MobMarker>,
     pub payload: super::EntityPayload,
 }
 
 impl EntityRecord {
     /// Builds this entity's complete, ready-to-store-in-`Entities`-list NBT compound:
     /// a fresh clone of `base` (or an empty compound if `base` is `None`) with
-    /// `entity`/`living`/`payload`'s own modeled fields inserted on top, plus the
-    /// vanilla-required `id` string (`super::EntityKind::namespaced_id`).
+    /// `entity`/`living`/`payload`'s own modeled fields inserted on top; when `mob` is
+    /// `Some`, `CanPickUpLoot`/`PersistenceRequired` are then written unconditionally as
+    /// NBT `Byte`s from its two booleans (mirroring vanilla's own `Mob.java`
+    /// `addAdditionalSaveData`, which writes both unconditionally too — Context); then
+    /// the vanilla-required `id` string (`super::EntityKind::namespaced_id`).
     pub fn to_nbt(&self, kind: super::EntityKind) -> owned::NbtCompound;
 
     /// Inverse: `kind` selects which `EntityPayload` variant to decode `compound`'s
-    /// kind-specific fields into. `path` is the caller's own path prefix (this
-    /// blueprint's own per-chunk entity-list caller supplies e.g. `<root>.Entities[3]`).
+    /// kind-specific fields into. When `kind.ai_system()` is `Some`, `mob` is built as
+    /// `Some(MobMarker { ai_system: kind.ai_system().unwrap(), persistence_required:
+    /// <"PersistenceRequired" read as a Boolean, defaulting to `false` if absent>,
+    /// can_pick_up_loot: <"CanPickUpLoot", identically> })` — `ai_system` itself is
+    /// never read from the compound (vanilla never persists it, Context); `mob` is
+    /// `None` when `kind.ai_system()` is `None`. `path` is the caller's own path prefix
+    /// (this blueprint's own per-chunk entity-list caller supplies e.g.
+    /// `<root>.Entities[3]`).
     pub fn from_nbt(
         compound: &borrow::NbtCompound<'_, '_>,
         path: &NbtPath,
@@ -686,9 +757,15 @@ pub struct BaseEntity {
     pub portal_cooldown: i32,
     #[nbt(name = "UUID")]
     pub uuid: EntityUuid,
+    /// Patch-preserving raw NBT (Context, corrected): stores whichever tag vanilla
+    /// actually wrote (bare `TAG_String` for a plain-text name, `TAG_Compound` for a
+    /// richer one), re-emitted unchanged on save. `custom_name_text` (below) is the
+    /// plain-text-only accessor; the `#[net_metadata(...)]` wire value is derived from
+    /// the same extraction rule via `MetadataValue`'s own `From<Option<owned::NbtTag>>`
+    /// impl (`metadata.rs`), not from this field's raw type directly.
     #[nbt(name = "CustomName")]
     #[net_metadata(index = 2, kind = "OptionalTextComponent")]
-    pub custom_name: Option<String>,
+    pub custom_name: Option<rc_nbt::owned::NbtTag>,
     #[nbt(name = "CustomNameVisible")]
     #[net_metadata(index = 3, kind = "Boolean")]
     pub custom_name_visible: bool,
@@ -709,6 +786,16 @@ pub struct BaseEntity {
     pub ticks_frozen: i32,
     #[nbt(name = "HasVisualFire")]
     pub has_visual_fire: bool,
+}
+
+impl BaseEntity {
+    /// `Some(text)` only when `custom_name` is the bare `TAG_String` form (via
+    /// `owned::NbtTag`'s own `.string()` accessor); `None` for the `TAG_Compound` form,
+    /// any other tag shape, or `custom_name` itself being `None`. The one shared,
+    /// private helper `MetadataValue`'s own `From<Option<owned::NbtTag>>` impl
+    /// (`metadata.rs`) also calls, so the plain-text accessor and the network wire value
+    /// can never drift apart (Context, "Exception, cited").
+    pub fn custom_name_text(&self) -> Option<&str>;
 }
 ```
 
@@ -770,27 +857,36 @@ impl EntityKind {
     pub const fn client_tracking_range_blocks(self) -> f64;
     /// Whether this kind has a `LivingEntity` rung (`false` only for `Item`).
     pub const fn is_living(self) -> bool;
+    /// Which of MECH-D31's two AI systems a `Mob`-rung kind uses, or `None` for `Item`
+    /// (no `Mob` rung at all). Vanilla never persists this choice — it is a static
+    /// property of the vanilla type, not per-instance state — so this is the *sole*
+    /// source `MobMarker.ai_system` is ever populated from (Context, "`PersistenceRequired`/
+    /// `CanPickUpLoot`... `MobMarker`," and `nbt.rs`'s own `EntityRecord::from_nbt`,
+    /// Deliverables above): never `Default::default()`, never read from a compound.
+    pub const fn ai_system(self) -> Option<AiSystemKind>;
 }
 
 /// Which of MECH-D31's two AI systems a `Mob`-rung kind uses. Not consulted by any
-/// system this blueprint ships — a marker for a future AI blueprint to read.
+/// system this blueprint ships — a marker for a future AI blueprint to read. Carries no
+/// `Default` impl and needs none: every `MobMarker` this blueprint ever constructs
+/// receives an explicit `ai_system` value from `EntityKind::ai_system` (never from
+/// `Default::default()` and never read from a compound — vanilla does not persist it).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AiSystemKind { GoalSelector, Brain }
 
-/// `Mob`'s own rung (MECH-D29 diagram: `PersistenceRequired`, `CanPickUpLoot`) plus
-/// the `AiSystemKind` marker. In vanilla, `PersistenceRequired`/`CanPickUpLoot` are
-/// **not** internal-only bookkeeping — both are independently persisted to NBT as
-/// unconditional Booleans (real tag names, restated for a future persistence pass:
-/// `PersistenceRequired`, `CanPickUpLoot`). Neither is synced via entity metadata,
-/// which is the only half of the original scope note that holds. This blueprint's own
-/// `MobMarker` does not yet round-trip those two booleans through `EntityRecord` (no
-/// `#[nbt(...)]`/`#[net_metadata(...)]` attribute here, and `EntityRecord`'s own
-/// `to_nbt`/`from_nbt` never call into `MobMarker` at all) — a scope gap this
-/// correction surfaces rather than closes; wiring it in is left to a future
-/// persistence-focused blueprint, since it also needs a chosen default for
-/// `AiSystemKind` before `MobMarker` could itself derive `EntityNbtFields`. This
-/// struct exists purely as an ECS component future AI/persistence blueprints attach
-/// and query, not as an `EntityNbtFields`/`EntityMetadataFields` implementer.
+/// `Mob`'s own rung (MECH-D29 diagram: `PersistenceRequired`, `CanPickUpLoot`) plus the
+/// `AiSystemKind` marker. In vanilla (`Mob.java`'s own `addAdditionalSaveData`/
+/// `readAdditionalSaveData`), `PersistenceRequired`/`CanPickUpLoot` are **not**
+/// internal-only bookkeeping — both are independently, unconditionally written as NBT
+/// `Boolean`s and read back defaulting to `false` when absent (`getBooleanOr(key,
+/// false)`); neither is synced via entity metadata. This blueprint's own `MobMarker`
+/// round-trips both booleans through `EntityRecord` directly (`nbt.rs`'s own `to_nbt`/
+/// `from_nbt`, Deliverables above — the identical "write/read outside the generic
+/// derive" treatment `EntityRecord`'s own `id` field already gets, not through
+/// `#[derive(EntityNbtFields)]`, since `ai_system` is never itself an NBT field and so
+/// cannot round-trip through that derive's own all-fields-or-`Default` rule). This
+/// struct is an ECS component every `Mob`-rung tier-2 kind's `EntityRecord` now carries
+/// (`mob: Some(..)`), not an `EntityNbtFields`/`EntityMetadataFields` implementer itself.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MobMarker {
     pub ai_system: AiSystemKind,
@@ -820,19 +916,31 @@ pub struct ItemBundle {
 }
 
 /// No kind-specific NBT/metadata at this milestone's scope (Context) — a marker-only
-/// bundle a future AI blueprint attaches real `Goal`/behavior state alongside.
+/// bundle a future AI blueprint attaches real `Goal`/behavior state alongside. Vanilla's
+/// real `Zombie`-rung indices (16-18: `DATA_BABY_ID`, `DATA_SPECIAL_TYPE_ID`,
+/// `DATA_DROWNED_CONVERSION_ID`, Context: "Per-kind synced-data index table") stay
+/// reserved, never sent — this struct declares none of them.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ZombieBundle;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize,
     rc_entity_macros::EntityNbtFields, rc_entity_macros::EntityMetadataFields)]
 pub struct VillagerBundle {
+    /// Index 19, not 16 — vanilla-exact per `Villager`'s own full class chain
+    /// (`Entity`→`LivingEntity`→`Mob`(15)→`PathfinderMob`(none)→`AgeableMob`(16,17)→
+    /// `AbstractVillager`(18)→`Villager`(19), Context: "Per-kind synced-data index
+    /// table"), corrected from this blueprint's own prior internal, never-proven guess
+    /// of 16. Vanilla's own `DATA_VILLAGER_DATA_FINALIZED` (index 20) stays reserved,
+    /// never sent — this struct does not model it.
     #[nbt(name = "VillagerData")]
-    #[net_metadata(index = 16, kind = "VillagerData")]
+    #[net_metadata(index = 19, kind = "VillagerData")]
     pub villager_data: crate::entity::metadata::VillagerData,
 }
 
-/// No kind-specific NBT/metadata at this milestone's scope (Context).
+/// No kind-specific NBT/metadata at this milestone's scope (Context). Vanilla's real
+/// `Cow`-rung indices (18-19: `DATA_VARIANT_ID`, `DATA_SOUND_VARIANT_ID`, Context:
+/// "Per-kind synced-data index table") stay reserved, never sent — this struct declares
+/// none of them.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CowBundle;
 
@@ -942,6 +1050,18 @@ pub enum MetadataValue {
     Pose(Pose),
     VillagerData(VillagerData),
     Slot(Option<crate::entity::kinds::ItemStackRecord>),
+}
+
+/// `custom_name`'s own one exception (Context: "Exception, cited," under "Wire shape
+/// per constructed variant"): `BaseEntity.custom_name`'s declared type
+/// (`Option<rc_nbt::owned::NbtTag>`) is not itself one of `MetadataValue`'s ten variant
+/// payload types, so `#[derive(EntityMetadataFields)]`'s own rule 1 needs this one extra
+/// `impl` to satisfy its `Into<MetadataValue>` bound. Calls the identical private,
+/// shared extraction helper `BaseEntity::custom_name_text` (`base.rs`) itself calls, so
+/// the plain-text accessor and this wire conversion can never drift apart; a compound
+/// (rich) `CustomName` therefore always converts to `OptionalTextComponent(None)`.
+impl From<Option<rc_nbt::owned::NbtTag>> for MetadataValue {
+    fn from(tag: Option<rc_nbt::owned::NbtTag>) -> Self;
 }
 
 /// Implemented by `#[derive(EntityMetadataFields)]` for one bundle struct.
@@ -1369,11 +1489,14 @@ Uses two test-local structs defined directly in this file (never in `rc-entity-m
 
 For each of the four tier-2 kinds, construct a representative `BaseEntity`/`LivingEntity` (where applicable)/`EntityPayload`, wrap in `EntityRecord { base: None, .. }`, call `.to_nbt(kind)`, write via `rc_nbt::write_owned`, read back via `rc_nbt::read_borrowed`, call `EntityRecord::from_nbt`, and assert every modeled field equals the original (never comparing `base`, which is `None` on both sides for a freshly-constructed record):
 
-1. `zombie_round_trips` — a `BaseEntity` with a non-default `pos`/`velocity`/`rotation`/`uuid`, `LivingEntity` with `health: 14.0`, `EntityPayload::Zombie(ZombieBundle)`.
-2. `villager_round_trips` — as above, `EntityPayload::Villager(VillagerBundle { villager_data: VillagerData { villager_type: PLAINS, profession: NONE, level: 1 } })` (using whichever `rc_registries::generated_v776::registries::{villager_type, villager_profession}` constants this blueprint's own Implementation steps name).
-3. `cow_round_trips` — `EntityPayload::Cow(CowBundle)`.
-4. `item_round_trips` — `BaseEntity` only (no `LivingEntity`), `EntityPayload::Item(ItemBundle { item: ItemStackRecord { item_id: <a registry constant>, count: 5, components: None }, pickup_delay_ticks: 10, age_ticks: 0 })`.
+1. `zombie_round_trips` — a `BaseEntity` with a non-default `pos`/`velocity`/`rotation`/`uuid`, `LivingEntity` with `health: 14.0`, `EntityPayload::Zombie(ZombieBundle)`, `mob: Some(MobMarker { ai_system: AiSystemKind::GoalSelector, persistence_required: true, can_pick_up_loot: false })` — asserts the reconstructed record's `mob` equals the original (`CanPickUpLoot`/`PersistenceRequired` present as NBT `Byte`s in the intermediate encoded compound).
+2. `villager_round_trips` — as above, `EntityPayload::Villager(VillagerBundle { villager_data: VillagerData { villager_type: PLAINS, profession: NONE, level: 1 } })` (using whichever `rc_registries::generated_v776::registries::{villager_type, villager_profession}` constants this blueprint's own Implementation steps name), `mob: Some(MobMarker { ai_system: AiSystemKind::Brain, persistence_required: false, can_pick_up_loot: true })`.
+3. `cow_round_trips` — `EntityPayload::Cow(CowBundle)`, `mob: Some(MobMarker { ai_system: AiSystemKind::GoalSelector, persistence_required: false, can_pick_up_loot: false })`.
+4. `item_round_trips` — `BaseEntity` only (no `LivingEntity`), `EntityPayload::Item(ItemBundle { item: ItemStackRecord { item_id: <a registry constant>, count: 5, components: None }, pickup_delay_ticks: 10, age_ticks: 0 })`, `mob: None` (`Item` has no `Mob` rung — `EntityKind::Item.ai_system()` is `None`, Context) — asserts `EntityRecord::from_nbt` never expects or reads `CanPickUpLoot`/`PersistenceRequired` for this kind.
 5. `unmodeled_fields_survive_a_load_then_resave_cycle` (the patch-over-original proof, mirroring M2-B06's own identical test shape) — hand-construct a compound containing every one of this blueprint's own modeled `BaseEntity` keys **plus** one extra, unmodeled key (`"Tags"`, a `List<String>` with one entry `"custom_tag"`) directly via `owned::NbtCompound::from_values`; `EntityRecord::from_nbt` (kind `Zombie`) succeeds and its `base` is `Some(..)`; call `.to_nbt(Zombie)` on the result immediately, without modifying any field; assert the re-encoded compound still contains `"Tags"` with the identical one-entry value.
+6. `mob_persistence_fields_default_to_false_when_absent_from_a_loaded_compound` — hand-construct a compound (kind `Zombie`) containing every modeled `BaseEntity`+`LivingEntity` key but omitting both `CanPickUpLoot` and `PersistenceRequired` entirely; `EntityRecord::from_nbt` succeeds and the reconstructed `mob` equals `Some(MobMarker { ai_system: AiSystemKind::GoalSelector, persistence_required: false, can_pick_up_loot: false })` — the exact `getBooleanOr(key, false)` default vanilla's own `Mob.java` `readAdditionalSaveData` uses (Context).
+7. `custom_name_round_trips_the_compound_form_verbatim` — a hand-built `CustomName` `TAG_Compound` (representing a rich, multi-run text component) is fed through `EntityRecord::from_nbt` (kind `Zombie`), then immediately `.to_nbt(Zombie)` with no field mutated; assert the re-encoded `CustomName` sub-tree is byte-identical to the original compound — the case the field's own pre-correction `Option<String>` type could not represent at all (Context: `EntityRecord::from_nbt` no longer fails to decode it).
+8. `custom_name_plain_text_accessor_returns_some_only_for_the_bare_string_form` — two `BaseEntity` values: one with `custom_name: Some(NbtTag::String("Bob".into()))` (assert `.custom_name_text() == Some("Bob")`), one with `custom_name: Some(NbtTag::Compound(..))` (assert `.custom_name_text() == None`).
 
 ### `crates/mechanics/tests/entity_metadata_wire.rs`
 
@@ -1387,6 +1510,16 @@ Known-answer vectors, mirroring M2-B02's own `known_answer_vectors.rs` structure
 6. `multi_entry_round_trips_through_decode` — `encode_metadata_entries` on a 4-entry mixed-kind list (one each of `Byte`, `VarInt`, `Boolean`, `Pose`), then `decode_metadata_entries` on the result, equals the original list.
 7. `decode_rejects_unknown_type_id` — hand-built bytes `[0x00, 0x7F, 0xFF]` (`index=0`, `type=127`, no such type); `decode_metadata_entries` returns `Err(MetadataDecodeError::UnknownTypeId(127))`.
 8. `villager_data_entry_encodes_three_varints_in_order` — `encode_metadata_entries(&[(15, MetadataValue::VillagerData(VillagerData{villager_type: RegistryEntryId(0), profession: RegistryEntryId(0), level: 1}))])` decodes back (via `decode_metadata_entries`) to the identical `VillagerData` value (a round-trip assertion, not a hand-derived byte vector, since this test's own registry-id inputs are arbitrary test values, not vanilla-meaningful ones).
+
+### `crates/mechanics/tests/entity_metadata_index_table.rs`
+
+Pins every shipped kind's own `#[net_metadata(index = ...)]` declarations against the vanilla-exact indices Context's own "Per-kind synced-data index table" derives class-chain-by-class-chain (ASSET-D18(f) reference) — a regression guard asserting the *value* each struct's own `metadata_entries()` actually returns, not merely the source attribute text, so a future edit cannot silently drift a declared index away from the cited vanilla number:
+
+1. `base_entity_metadata_indices_match_entity_java` — construct a representative `BaseEntity`, call `.metadata_entries()`, assert the returned indices are exactly `[0,1,2,3,4,5,6,7]` in that order (`net/minecraft/world/entity/Entity.java:260-276`, `Entity`'s own first eight `defineId` calls).
+2. `living_entity_metadata_indices_match_living_entity_java` — construct a representative `LivingEntity`, assert `.metadata_entries()` returns exactly `[8,9,12,13,14]` in that order (`LivingEntity.java:179-189`, skipping reserved indices 10/11 this blueprint's own `LivingEntity` struct never declares).
+3. `villager_bundle_metadata_index_is_19_not_the_prior_16` — construct a `VillagerBundle`, assert `.metadata_entries() == [(19, MetadataValue::VillagerData(..))]` — the corrected, vanilla-exact index (class chain `Entity`→`LivingEntity`→`Mob`(15)→`PathfinderMob`(none)→`AgeableMob`(16,17)→`AbstractVillager`(18)→`Villager`(19): `AgeableMob.java:29-30`, `npc/villager/AbstractVillager.java:57`, `npc/villager/Villager.java:98`).
+4. `item_bundle_metadata_index_is_8` — construct an `ItemBundle`, assert `.metadata_entries() == [(8, MetadataValue::Slot(..))]` (`item/ItemEntity.java:39-40` — `Item` is `Entity`-direct, bypassing `LivingEntity`/`Mob` entirely, so index 8 is correct here despite also being `LivingEntity`'s own first index for a `LivingEntity`-rung kind).
+5. `zombie_and_cow_bundles_declare_no_metadata_at_this_milestones_scope` — structural, not a runtime encode assertion (mirroring `derive_expansion.rs`'s own case 3 precedent for a property these particular types cannot runtime-assert without content that does not exist yet, since neither `ZombieBundle` nor `CowBundle` derives `EntityMetadataFields` at all, Deliverables): construct one `ZombieBundle` and one `CowBundle` and assert only `PartialEq` reflexivity (`ZombieBundle == ZombieBundle`, `CowBundle == CowBundle`) — the regression guard that a future edit giving either struct a real field turns this test's own construction site into a compile error, forcing that future blueprint to consciously touch this test rather than silently drift `Zombie`'s real indices 16-18 or `Cow`'s real indices 18-19 into being sent unmodeled.
 
 ### `crates/mechanics/tests/entity_snapshot.rs`
 
@@ -1419,10 +1552,10 @@ Pure, no `bevy_ecs`, no networking — `compute_tracking_delta` directly:
 1. **`rc-entity-macros`.** Add the three dependency lines. Implement `derive_entity_nbt_fields`/`derive_entity_metadata_fields` per Context's own two "exact expansion algorithm" subsections, using `syn::DeriveInput`/`Data::Struct`/`Fields::Named` (mirroring `rc-protocol-macros`' own already-merged parsing shape, M1-B01) to walk fields and their `#[nbt(...)]`/`#[net_metadata(...)]` attributes. Observable: `crates/entity-macros/tests/derive_expansion.rs` passes.
 2. **`rc-mechanics` — `Cargo.toml`, `lib.rs`, `entity/mod.rs`.** Add the four new dependency lines (plus `thiserror` if not already present) and the `pub mod entity;` declaration. Observable: `cargo build -p rc-mechanics` resolves dependencies; source files still `todo!()`-stubbed.
 3. **`entity/ids.rs`.** `EntityUuid::new_random` is `Self(uuid::Uuid::new_v4().as_u128())`. `NetworkEntityIdAllocator` mirrors `rc_core::RcEntityIdAllocator`'s own already-merged implementation exactly (`AtomicI32::new(1)`, `fetch_add(1, Ordering::Relaxed)`). Observable: `entity_ids.rs` acceptance tests pass.
-4. **`entity/nbt.rs` — `ToNbtField`/`FromNbtField` impls.** One `impl` block per concrete type Context's mapping table names: primitives delegate directly to `rc_nbt::schema::NbtCompoundExt`'s existing `require_*`/`owned::NbtCompound::insert` (M2-B02); `[f64;3]`/`[f32;2]` build/read a `List<Double>`/`List<Float>` via `owned::NbtList::Double(vec)`/`borrow::NbtList::doubles()` (mirroring M2-B06's own already-established `Pos`/`Motion`/`Rotation` handling, restated for this crate); `EntityUuid` packs/unpacks its `u128` into 4 big-endian `i32` chunks via an `IntArray`/`int_array()` pair (`((self.0 >> 96) as i32, (self.0 >> 64) as i32, (self.0 >> 32) as i32, self.0 as i32)`, and the exact inverse via `((a as u32 as u128) << 96) | ((b as u32 as u128) << 64) | ((c as u32 as u128) << 32) | (d as u32 as u128)`); `RegistryEntryId` writes/reads a plain `Int` (`self.0 as i32`/`raw as u32`); `Option<rc_core::BlockPos>` (`sleeping_bed_pos`'s own `#[nbt(name = "sleeping_pos")]`) writes/reads a `{X: Int, Y: Int, Z: Int}` compound when `Some`, omitting the key entirely when `None` (mirroring `CustomNameVisible`-class "write only when present" fields already in this same struct, not `storeNullable`'s own null-marker shape). Observable: compiles.
-5. **`entity/nbt.rs` — `EntityRecord`.** `to_nbt`: clone `base.unwrap_or_default()` (an empty `owned::NbtCompound`), call `entity.write_nbt_fields`/`living.map(|l| l.write_nbt_fields(...))`/the payload variant's own `write_nbt_fields` against it, then `insert("id", owned::NbtTag::String(kind.namespaced_id().into()))`. `from_nbt`: `BaseEntity::read_nbt_fields`, `living: if kind.is_living() { Some(LivingEntity::read_nbt_fields(...)?) } else { None }`, the payload variant matching `kind`, and `base: Some(compound.to_owned())`. Observable: `entity_nbt_roundtrip.rs` passes.
-6. **`entity/base.rs`, `entity/living.rs`, `entity/kinds.rs`.** Field lists, attributes, and derives exactly as Deliverables. `EntityKind`'s four `const fn` match arms per Context's own tables. `status_flags`'s bit layout (documented, not itself tested by this blueprint's own acceptance suite beyond round-tripping as an opaque `u8`): bit 0 = on fire, bit 4 = invisible... (full vanilla bit table, restated from the research doc's own §3.1 `DATA_SHARED_FLAGS_ID` enumeration: fire=0, sneak=1, sprint=3, swim=4, invisible=5, glowing=6, elytra=7) — computed from `on_ground`/`glowing`/etc. at the point a future blueprint's own encode call site builds a `BaseEntity` for the wire, not stored redundantly; this blueprint's own tests construct `status_flags` directly as a literal `u8`. Observable: compiles; `entity_nbt_roundtrip.rs`'s four per-kind cases pass.
-7. **`entity/metadata.rs`.** `type_id` module: 43 `pub const` literals exactly as Deliverables. `Pose::to_ordinal`/`from_ordinal`: a two-arm match each. `encode_metadata_entries`: for each `(index, value)`, push `index`, then the value's own `type_id::*` constant VarInt-encoded (this file's own small, private VarInt writer — LEB128, identical algorithm to `rc-protocol`'s own M1-B01 restatement, reimplemented here since this crate cannot depend on `rc-protocol`), then the value's own payload per the Deliverables wire-shape table; finally push `0xFF`. `decode_metadata_entries`: loop reading one `u8` index; if `0xFF`, stop; else read a VarInt type id, dispatch on it to construct the matching `MetadataValue`, `Err(UnknownTypeId)` for any id not in this blueprint's own ten-variant set. Observable: `entity_metadata_wire.rs` passes.
+4. **`entity/nbt.rs` — `ToNbtField`/`FromNbtField` impls.** One `impl` block per concrete type Context's mapping table names: primitives delegate directly to `rc_nbt::schema::NbtCompoundExt`'s existing `require_*`/`owned::NbtCompound::insert` (M2-B02); `[f64;3]`/`[f32;2]` build/read a `List<Double>`/`List<Float>` via `owned::NbtList::Double(vec)`/`borrow::NbtList::doubles()` (mirroring M2-B06's own already-established `Pos`/`Motion`/`Rotation` handling, restated for this crate); `EntityUuid` packs/unpacks its `u128` into 4 big-endian `i32` chunks via an `IntArray`/`int_array()` pair (`((self.0 >> 96) as i32, (self.0 >> 64) as i32, (self.0 >> 32) as i32, self.0 as i32)`, and the exact inverse via `((a as u32 as u128) << 96) | ((b as u32 as u128) << 64) | ((c as u32 as u128) << 32) | (d as u32 as u128)`); `RegistryEntryId` writes/reads a plain `Int` (`self.0 as i32`/`raw as u32`); `Option<rc_core::BlockPos>` (`sleeping_bed_pos`'s own `#[nbt(name = "sleeping_pos")]`) writes/reads a `{X: Int, Y: Int, Z: Int}` compound when `Some`, omitting the key entirely when `None` (mirroring `CustomNameVisible`-class "write only when present" fields already in this same struct, not `storeNullable`'s own null-marker shape); `Option<rc_nbt::owned::NbtTag>` (`custom_name`'s own corrected, patch-preserving type) writes the tag verbatim under `name` when `Some`, omits the key when `None`, and reads back whichever raw `borrow::NbtTag` is found at `name` (`.to_owned()`'d), never inspecting its shape and never returning `SchemaError` for this field regardless of which tag type is present. Observable: compiles.
+5. **`entity/nbt.rs` — `EntityRecord`.** `to_nbt`: clone `base.unwrap_or_default()` (an empty `owned::NbtCompound`), call `entity.write_nbt_fields`/`living.map(|l| l.write_nbt_fields(...))`/the payload variant's own `write_nbt_fields` against it; when `self.mob` is `Some(mob)`, unconditionally `insert("CanPickUpLoot", owned::NbtTag::Byte(mob.can_pick_up_loot as i8))`/`insert("PersistenceRequired", owned::NbtTag::Byte(mob.persistence_required as i8))` (mirroring vanilla's own unconditional writes, Context); finally `insert("id", owned::NbtTag::String(kind.namespaced_id().into()))`. `from_nbt`: `BaseEntity::read_nbt_fields`, `living: if kind.is_living() { Some(LivingEntity::read_nbt_fields(...)?) } else { None }`, `mob: kind.ai_system().map(|ai_system| MobMarker { ai_system, persistence_required: compound.byte("PersistenceRequired").map(|b| b != 0).unwrap_or(false), can_pick_up_loot: compound.byte("CanPickUpLoot").map(|b| b != 0).unwrap_or(false) })` (the `getBooleanOr(key, false)` default, Context — never a `SchemaError` when either key is absent), the payload variant matching `kind`, and `base: Some(compound.to_owned())`. Observable: `entity_nbt_roundtrip.rs` passes.
+6. **`entity/base.rs`, `entity/living.rs`, `entity/kinds.rs`.** Field lists, attributes, and derives exactly as Deliverables. `EntityKind`'s five `const fn` match arms per Context's own tables (`ai_system`'s own arms: `Item => None`, `Zombie | Cow => Some(AiSystemKind::GoalSelector)`, `Villager => Some(AiSystemKind::Brain)`, per the "Tier-2 entity kind list" table). `BaseEntity::custom_name_text`: `self.custom_name.as_ref().and_then(|tag| tag.string()).map(|s| s.to_str())` (or the equivalent `owned::NbtTag` string accessor) — the one shared, private helper `metadata.rs`'s own `impl From<Option<owned::NbtTag>> for MetadataValue` also calls (Deliverables). `status_flags`'s bit layout (documented, not itself tested by this blueprint's own acceptance suite beyond round-tripping as an opaque `u8`): bit 0 = on fire, bit 4 = invisible... (full vanilla bit table, restated from the research doc's own §3.1 `DATA_SHARED_FLAGS_ID` enumeration: fire=0, sneak=1, sprint=3, swim=4, invisible=5, glowing=6, elytra=7) — computed from `on_ground`/`glowing`/etc. at the point a future blueprint's own encode call site builds a `BaseEntity` for the wire, not stored redundantly; this blueprint's own tests construct `status_flags` directly as a literal `u8`. Observable: compiles; `entity_nbt_roundtrip.rs`'s eight cases pass; `entity_metadata_index_table.rs` passes.
+7. **`entity/metadata.rs`.** `type_id` module: 43 `pub const` literals exactly as Deliverables. `Pose::to_ordinal`/`from_ordinal`: a two-arm match each. `impl From<Option<rc_nbt::owned::NbtTag>> for MetadataValue`: `MetadataValue::OptionalTextComponent(tag.and_then(|t| t.string()).map(|s| s.to_str()))` — the shared, private extraction helper `base.rs`'s own `custom_name_text` also calls (Deliverables). `encode_metadata_entries`: for each `(index, value)`, push `index`, then the value's own `type_id::*` constant VarInt-encoded (this file's own small, private VarInt writer — LEB128, identical algorithm to `rc-protocol`'s own M1-B01 restatement, reimplemented here since this crate cannot depend on `rc-protocol`), then the value's own payload per the Deliverables wire-shape table; finally push `0xFF`. `decode_metadata_entries`: loop reading one `u8` index; if `0xFF`, stop; else read a VarInt type id, dispatch on it to construct the matching `MetadataValue`, `Err(UnknownTypeId)` for any id not in this blueprint's own ten-variant set. Observable: `entity_metadata_wire.rs` and `entity_metadata_index_table.rs` pass.
 8. **`entity/snapshot.rs`.** `serialize_entity_snapshot`: build one `ComponentBlob` per present component (`postcard::to_allocvec(base).unwrap()`, etc. — `postcard::to_allocvec` only fails on a type that cannot be serialized at all, never on valid input for these plain-data structs, so `.expect(...)` with a message citing this is the correct, non-`Result`-propagating choice here), assemble `SnapshotPayload { format_version: ENTITY_SNAPSHOT_FORMAT_VERSION, entity_kind: kind, components }`, `postcard::to_allocvec(&payload).unwrap()`. `deserialize_entity_snapshot`: `postcard::from_bytes::<SnapshotPayload>(bytes).map_err(|e| SnapshotError::Decode(e.to_string()))?`, then check `format_version` before returning `Ok`. Observable: `entity_snapshot.rs` passes.
 9. **`entity/tracking.rs`.** `compute_tracking_delta`: for each `(id, kind, pos)` in `live_entities` (materialized once into a local `Vec`/`HashMap` — `impl IntoIterator` may only be consumed once), compute squared distance to `viewer_pos`, compare against `kind.client_tracking_range_blocks().powi(2)`; classify into `to_spawn`/`still_tracked` per whether `tracked.contains(&id)`; then for every id in `tracked` not present in the just-built live-entity id set, push to `to_despawn`. Observable: `entity_tracking.rs` (the `rc-mechanics` one) passes.
 10. **`rc-scheduler` — `pipeline.rs`, `region.rs`, `registry.rs`, `executor.rs`.** Exactly as Deliverables/Context. Update `crates/scheduler/tests/pipeline_ordering.rs`'s test 1 per Context's own cited, minimal, non-weakening instruction (register one more instrumented system into `DomainGroup::EntityAiSelection`, alongside the pre-existing five; update the asserted log to the new six-stage ascending sequence). Observable: `cargo nextest run -p rc-scheduler` — every pre-existing test not touched by this step still passes; `pipeline_ordering.rs`'s updated test 1 passes with the new six-entry sequence.
@@ -1442,7 +1575,7 @@ Pure, no `bevy_ecs`, no networking — `compute_tracking_delta` directly:
 
 (c) **`rc-mechanics` must never depend on `rc-protocol`, `rc-transport-inproc`, `rc-transport-net`, `rc-auth`, `rc-cluster`, or `rc-proxy` (WS-D3 rule 2, `xtask lint-deps`-enforced).** Every wire-encoding concern this blueprint's own design would otherwise be tempted to put in `rc-mechanics` (VarInt/String primitives, packet structs, the `MetadataValue`-to-bytes translation) is deliberately kept out of that crate and placed in `rusty-clanker-server` instead (`entity_packets.rs`'s own `encode_metadata_value`/`decode_metadata_value`) — restated as a hard boundary, not a style preference. `rc-entity-macros` likewise gains no dependency beyond `syn`/`quote`/`proc-macro2`.
 
-(d) **No Mojang or third-party reimplementation code.** Every wire-format fact this blueprint restates (metadata type-id table, packet field layouts, the fixed-point velocity/position-delta/Angle formulas, the entity NBT field tables) is sourced from `docs/research/mc-26.2/09-entities-ai.md`, a live `minecraft.wiki` fetch performed while deriving this blueprint (ASSET-D18(b)/(f)), and `05-game-mechanics.md`'s own MECH-D29/D30/D31/D32. No decompiled source, no third-party reimplementation's code (Azalea, Pumpkin, or any other project ASSET-D30's firewall covers), was consulted while deriving this blueprint.
+(d) **No Mojang or third-party reimplementation code.** Every wire-format fact this blueprint originally restated (metadata type-id table, packet field layouts, the fixed-point velocity/position-delta/Angle formulas, the entity NBT field tables) was sourced from `docs/research/mc-26.2/09-entities-ai.md`, a live `minecraft.wiki` fetch performed while deriving this blueprint (ASSET-D18(b)/(f)), and `05-game-mechanics.md`'s own MECH-D29/D30/D31/D32; no decompiled source, no third-party reimplementation's code (Azalea, Pumpkin, or any other project ASSET-D30's firewall covers), was consulted while *deriving* this blueprint. The TEST-D57 correction pass (`M4-B01-CLAIMS.md`) and the subsequent per-kind synced-data index correction (Context, "Per-kind synced-data index table") are error corrections, not derivation, and are sourced directly from the ASSET-D18(f) decompiled reference (`net/minecraft/world/entity/...`, a legally obtained local copy that never enters the repository) — the project's own reference-source policy explicitly permits this (top-level project instructions, "Reference-source policy"); every citation naming a decompiled `.java` file:line in this document or in `M4-B01-CLAIMS.md` is that kind of correction, never a restatement of Mojang expression. No third-party reimplementation's code was consulted at any point, including during correction.
 
 (e) **Every moderate-confidence numeric literal named in Context (the full metadata type-id table, all nine packet ids, `Teleport Entity`'s complete field list, the four `EntityKind::client_tracking_range_blocks` values) is provisional pending Implementation step 16's reconciliation** — must not be treated as final without that one-time cross-check, mirroring M1-B05/M2-B07's own identical, already-established caveat discipline.
 
@@ -1464,4 +1597,4 @@ cargo run -p xtask -- lint-deps
 cargo run -p xtask -- test
 ```
 
-Expected: every command exits 0. `cargo nextest run` across the four crates additionally runs: 3 (`derive_expansion.rs`) + 3 (`entity_ids.rs`) + 5 (`entity_nbt_roundtrip.rs`) + 8 (`entity_metadata_wire.rs`) + 3 (`entity_snapshot.rs`) + 6 (`entity_tracking.rs`, the `rc-mechanics` one) + 1 (`play_entity_spawn_track_untrack.rs`) = 29 new test cases, alongside every pre-existing test in all four crates (`rc-scheduler`'s own suite, `pipeline_ordering.rs`'s updated test 1 included, still passing in full). CI (`.github/workflows/ci.yml`, M0-B01) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.
+Expected: every command exits 0. `cargo nextest run` across the four crates additionally runs: 3 (`derive_expansion.rs`) + 3 (`entity_ids.rs`) + 8 (`entity_nbt_roundtrip.rs`) + 8 (`entity_metadata_wire.rs`) + 5 (`entity_metadata_index_table.rs`) + 3 (`entity_snapshot.rs`) + 6 (`entity_tracking.rs`, the `rc-mechanics` one) + 1 (`play_entity_spawn_track_untrack.rs`) = 37 new test cases, alongside every pre-existing test in all four crates (`rc-scheduler`'s own suite, `pipeline_ordering.rs`'s updated test 1 included, still passing in full). CI (`.github/workflows/ci.yml`, M0-B01) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.

@@ -20,7 +20,7 @@ Done when:
 - [ ] `cargo build -p rc-mechanics -p rusty-clanker-server --all-features` succeeds with zero warnings.
 - [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-mechanics -p rusty-clanker-server` (default features) and again under `--all-features`.
 - [ ] The goal-selector priority/interruption matrix tests pass (start-pass ordering, flag-lock eviction, `canContinueToUse` cleanup, the half-tick throttle using a save-stable key).
-- [ ] The Brain activity-selection tests pass (memory-gated activity requirements, `setActiveActivity`'s memory-erase-on-stop behavior, sensor-before-behavior tick ordering).
+- [ ] The Brain tick/activity-selection tests pass (the real four-phase `tick`, the separate `select_activity` entry point's memory-gated schedule candidates, the push-based Panic trigger and its own never-self-reverting asymmetry, `set_active_activity`'s memory-erase-on-stop behavior across every other active activity, sensor-before-behavior tick ordering).
 - [ ] The pathfinding golden-path tests pass: hand-derived node sequences on flat/obstacle/diagonal-corner terrain, plus the qualitative corridor/multi-obstacle cases (M4 roadmap criterion 3's own qualitative standard, restated below).
 - [ ] The navigation-execution step tests pass (`MoveControl`/`LookControl` turn-rate clamping, `JumpControl` trigger conditions, the exact `rc_physics::MovementIntent` values produced for known inputs).
 - [ ] The attribute wire-conformance tests pass byte-for-byte against this blueprint's own hand-derived vectors.
@@ -200,6 +200,12 @@ pub struct Brain {
     memories: std::collections::HashMap<MemoryModuleType, ExpirableValue<Box<dyn std::any::Any + Send + Sync>>>,
     pub active_activities: std::collections::HashSet<Activity>, // core ∪ {current non-core}, or just core
     pub core_activities: std::collections::HashSet<Activity>,   // fixed at construction; {Activity::Core} for Villager
+    /// `BrainProgram::select_activity`'s own throttle bookkeeping — mirrors vanilla's
+    /// own `Brain.lastScheduleUpdate` field (Brain.java:41, `private long
+    /// lastScheduleUpdate = -9999L`), which genuinely lives on `Brain` itself, not on an
+    /// externally-threaded accumulator: `None` until the first successful scan, `Some`
+    /// afterward.
+    last_schedule_update_tick: Option<u64>,
 }
 
 impl Brain {
@@ -266,47 +272,136 @@ pub struct ActivityPackage {
 
 pub struct BrainProgram {
     pub sensors: Vec<Box<dyn Sensor>>,
-    pub packages: Vec<ActivityPackage>, // priority-ordered candidate list for setActiveActivityToFirstValid
-    pub schedule_update_delay_ticks: u32, // 20, vanilla's own SCHEDULE_UPDATE_DELAY (research doc §5)
+    /// Every activity's own registered behaviors — ALL packages this kind's brain
+    /// declares, unfiltered by reachability (vanilla's own `Brain::addActivity` shape,
+    /// research doc §3.6) — the source phases 3/4 of `tick` (below) iterate.
+    pub packages: Vec<ActivityPackage>,
+    /// The ordered candidate list `select_activity` (below) scans — this blueprint's own
+    /// bounded stand-in for vanilla's real environment-attribute/time-of-day schedule
+    /// lookup, which this blueprint's own dependency set has no seam for (Constraints).
+    /// First-valid-wins, identical algorithm to vanilla's own `setActiveActivityToFirstValid`
+    /// (Brain.java:338-345). Deliberately excludes `Activity::Rest` — vanilla's own REST
+    /// carries no `ActivityRequirement` at all (Context §J), so an honest empty gate
+    /// combined with inclusion here would make it always win the scan; leaving it out of
+    /// this list (never a fabricated gate on `Rest` itself) is this blueprint's own
+    /// honest way of keeping it unreachable while no bed/POI system exists — and
+    /// `Activity::Panic`, which is never schedule-selected at all in vanilla, entered
+    /// solely via the push-based Core-package trigger below. `Activity::Work`/`Meet`
+    /// stay included — their own real, non-empty `JobSite`/`MeetingPoint` gates make
+    /// their presence here harmless and faithful even though this blueprint never
+    /// populates either memory (Context §J).
+    pub schedule_candidates: Vec<Activity>,
+    /// This blueprint's own bounded structural stand-in for vanilla's real push-trigger
+    /// `Behavior` (`VillagerPanicTrigger`, a plain `Behavior` sitting in the Core
+    /// package, Context §J) — this blueprint's own `Behavior` trait (above) has no
+    /// mutable `Brain` handle a generic `Behavior::start` could redirect activity
+    /// selection through (`AiContext::memory` is `Option<&Brain>`, read-only, and no
+    /// `Behavior` holds a reference to its own owning `BrainProgram` either), so the
+    /// push check is a direct step `tick` itself performs (below) instead of a
+    /// `dyn Behavior` trait object — a deliberate, bounded architectural simplification
+    /// that preserves the real functional behavior (no `ActivityRequirement` gates
+    /// `Panic`; entry is condition-driven every tick, never scan-selected) without
+    /// matching vanilla's exact object shape. Exit from `Panic` uses no comparable
+    /// per-condition push of its own — it is simply `select_activity`'s (below) own
+    /// general, unconditional per-tick call recovering the schedule-derived activity
+    /// once `Panic` stops being re-entered, this blueprint's own bounded stand-in for
+    /// vanilla's own dedicated `VillagerCalmDown` exit call (Context §J). `Some(
+    /// MemoryModuleType::HurtBy)` for Villager (this blueprint's own bounded
+    /// single-memory trigger, §J); `None` for a kind with no panic-capable brain (every
+    /// other kind at M4 scope, which is not Brain-driven at all).
+    pub panic_trigger_memory: Option<MemoryModuleType>,
+    pub schedule_update_delay_ticks: u32, // 20, vanilla's own SCHEDULE_UPDATE_DELAY (Brain.java:40)
 }
 
 impl BrainProgram {
-    /// One full brain tick (research doc §3.6, restated). Vanilla's own `Brain.tick`
-    /// itself has exactly FOUR phases — memory forgetting, sensors, behavior starting,
-    /// behavior stopping/ticking; activity selection is not one of them there, running
-    /// instead from a separate, externally-invoked, schedule-throttled entry point. This
-    /// blueprint's own `BrainProgram::tick` deliberately bundles activity selection in
-    /// as its own step 3 below anyway — a bounded, explicit simplification kept for one
-    /// call site instead of two, restated honestly rather than claimed as a literal port
-    /// of `Brain.tick`'s own four phases:
+    /// Vanilla's own `Brain.tick` (Brain.java:388-393) has exactly FOUR phases, in this
+    /// order, and nothing else — activity selection is not one of them:
     /// 1. `brain.forget_outdated_memories()`.
     /// 2. Every sensor's `tick(ctx, &mut brain)`, unconditionally, in `sensors`' order.
-    /// 3. Every `schedule_update_delay_ticks` ticks (this blueprint's own throttle
-    ///    counter, `PathNavigation`-adjacent bookkeeping in the caller — Context §K):
-    ///    scan `packages` in declared order and `set_active_activity` to the first whose
-    ///    every `ActivityRequirement` is met by `brain`'s current memory state — doing
-    ///    nothing at all (the previous selection persists) if none match. There is no
-    ///    Idle fallback branch here (vanilla's own `useDefaultActivity` belongs to a
-    ///    different entry point entirely); `Activity::Idle`'s own package instead simply
-    ///    carries no requirements, so it is always eligible once the scan reaches it,
-    ///    which is why every kind's `packages` list ends with it (Context §J).
-    ///    `set_active_activity` clears `brain.active_activities` to
-    ///    `core_activities ∪ {chosen}` and erases every memory the *previous* activity's
-    ///    own `erase_on_stop` list names.
-    /// 4. For every `(priority, behavior)` across every package whose `activity` is in
-    ///    `brain.active_activities`, priority-ascending: if the behavior is `Stopped` and
-    ///    `required_memories` are all met and `check_extra_start_conditions`, call
-    ///    `start(ctx)`.
-    /// 5. For every currently-`Running` behavior across EVERY registered package,
-    ///    regardless of whether that package's own `activity` is still in
-    ///    `brain.active_activities` — one flat pass in priority-ascending order across
-    ///    packages (not priority-irrelevant, and not limited to the active packages: a
-    ///    behavior belonging to an activity `set_active_activity` just deactivated keeps
-    ///    being ticked here until its own `can_still_use` fails or its randomized
-    ///    duration elapses, exactly vanilla's own behavior): if `!can_still_use` or its
-    ///    own randomized `min..max`-tick duration has elapsed, `stop(ctx)`; otherwise
-    ///    `tick(ctx)`.
+    /// 3. `start_each_non_running_behavior` (vanilla's own `startEachNonRunningBehavior`,
+    ///    Brain.java:413-428): for every `(priority, behavior)` across every package
+    ///    whose `activity` is currently in `brain.active_activities`, priority-ascending
+    ///    (vanilla's own backing structure, a `TreeMap<Integer, ...>`, is ascending by
+    ///    construction): if the behavior is `Stopped` and `required_memories` are all
+    ///    met and `check_extra_start_conditions`, call `start(ctx)`.
+    /// 4. `tick_each_running_behavior` (vanilla's own `tickEachRunningBehavior`,
+    ///    Brain.java:430-435, backed by `getRunningBehaviors`, Brain.java:267-282): for
+    ///    every currently-`Running` behavior across EVERY registered package,
+    ///    priority-ascending, regardless of whether that package's own `activity` is
+    ///    still in `brain.active_activities` — a behavior belonging to an activity that
+    ///    is no longer active keeps being ticked here until its own `can_still_use`
+    ///    fails or its randomized duration elapses, exactly vanilla's own behavior: if
+    ///    `!can_still_use` or its own randomized `min..max`-tick duration has elapsed,
+    ///    `stop(ctx)`; otherwise `tick(ctx)`.
+    ///
+    /// Immediately before phase 3, this blueprint's own bounded stand-in for vanilla's
+    /// push-trigger `Behavior` runs (`panic_trigger_memory`, above — not one of
+    /// vanilla's real four phases itself, since in vanilla this same check happens AS
+    /// PART OF phase 3's own `tryStart` call on a normal `Behavior` sitting in Core;
+    /// restated as a distinct step here only because of this blueprint's own
+    /// architectural bound, above): if `panic_trigger_memory` is `Some(memory)`,
+    /// `brain.status(memory) == ValuePresent`, and `Activity::Panic` is not already
+    /// active, call `self.set_active_activity_if_possible(brain, Activity::Panic)`
+    /// (below) — so a freshly-activated Panic package's own behaviors become eligible to
+    /// start within the very same tick, matching vanilla's own within-tick
+    /// responsiveness. This step only ever *enters* `Panic` — it never reverts it; exit
+    /// is `select_activity`'s own job (below), never `tick`'s.
     pub fn tick(&mut self, ctx: &mut AiContext, brain: &mut Brain, tick_count: u64, rng: &mut dyn FnMut() -> u32);
+
+    /// Vanilla's own activity selection runs from entry points entirely outside
+    /// `Brain.tick` — restated precisely, all three of vanilla's own real call sites:
+    /// (a) once, at brain construction/refresh, from `Villager.registerBrainGoals`
+    /// (Villager.java:203-216) calling `Brain.updateActivityFromSchedule` directly; (b)
+    /// periodically, from the `UpdateActivityFromSchedule` behavior — a plain,
+    /// always-startable `Behavior` whose own body just re-invokes
+    /// `updateActivityFromSchedule` (`UpdateActivityFromSchedule.java:10-15`) —
+    /// registered at priority 99 inside the vanilla MEET package specifically, not the
+    /// Idle package (`VillagerGoalPackages.java:157-183`, `getMeetPackage`); and (c)
+    /// once per panic exit, from `VillagerCalmDown`'s own body re-invoking the same
+    /// call (Context §J). MEET is out of this blueprint's own bounded scope (Context
+    /// §J), so this blueprint's own equivalent keeps the same *separateness* from
+    /// vanilla's real four `Brain.tick` phases — `select_activity` itself is never one
+    /// of phases 1-4 above — while substituting this blueprint's own
+    /// `schedule_candidates` scan for vanilla's real environment-attribute lookup,
+    /// self-throttled identically to vanilla's own `updateActivityFromSchedule`
+    /// (Brain.java:328-336) against `brain`'s own `last_schedule_update_tick` field
+    /// (above — vanilla's own throttle state lives on `Brain` itself, not an
+    /// externally-threaded accumulator): a no-op unless `tick_count -
+    /// brain.last_schedule_update_tick.unwrap_or(u64::MIN) >=
+    /// schedule_update_delay_ticks`, in which case `schedule_candidates` is scanned in
+    /// declared order and `set_active_activity` (below) is applied to the first whose
+    /// every `ActivityRequirement` is met — doing nothing at all if none match (vanilla's
+    /// own `setActiveActivityToFirstValid`, no Idle fallback on this path, Brain.java:338-
+    /// 345) — and `brain.last_schedule_update_tick` is written only when the scan
+    /// actually ran. This blueprint's own Stage-6a `brain_tick_system` (Context §K) calls
+    /// this unconditionally, immediately after `tick`, every Stage-6a tick — this
+    /// blueprint's own single, bounded stand-in for BOTH of vanilla's own recurring call
+    /// sites (b) and (c) above (the periodic `UpdateActivityFromSchedule` behavior, and
+    /// `VillagerCalmDown`'s own panic-exit call): since `Activity::Panic` is never a
+    /// `schedule_candidates` member, this one general call is what naturally recovers a
+    /// Villager out of `Panic` once `panic_trigger_memory`'s own condition (`tick`'s own
+    /// pre-phase-3 step, above) stops re-entering it and the throttle above next allows
+    /// a re-sample — `tick` itself never calls `select_activity` and never reverts
+    /// `Panic` on its own; only this separate call can.
+    pub fn select_activity(&self, brain: &mut Brain, tick_count: u64);
+
+    /// The shared building block both `select_activity` and the push-based Panic check
+    /// (`panic_trigger_memory`, above) use — vanilla's own `setActiveActivity`/
+    /// `setActiveActivityIfPossible` pair (Brain.java:298-311), restated:
+    /// `set_active_activity` clears `brain.active_activities` to `core_activities ∪
+    /// {activity}` and erases every memory named in the `erase_on_stop` list of every
+    /// activity that WAS active but is not the new one (vanilla's own
+    /// `eraseMemoriesForOtherActivitesThan` — every other currently-active activity, not
+    /// only a single "previous" one) — a no-op if `activity` is already active.
+    pub fn set_active_activity(&self, brain: &mut Brain, activity: Activity);
+    /// `set_active_activity_if_possible` applies `set_active_activity` when `activity`'s
+    /// own `ActivityRequirement`s (from `packages`) are met by `brain`'s current memory
+    /// state (trivially true for `Activity::Panic`'s own empty requirement set, Context
+    /// §J), else selects `Activity::Idle` instead — this blueprint's own fixed
+    /// equivalent of vanilla's own per-brain `defaultActivity` field, always `Idle` for
+    /// every kind this blueprint's own `BrainProgram` serves, since no kind here ever
+    /// calls the vanilla equivalent of `setDefaultActivity`.
+    pub fn set_active_activity_if_possible(&self, brain: &mut Brain, activity: Activity);
 }
 ```
 
@@ -511,8 +606,14 @@ impl PathNavigation {
 ```rust
 pub const MAX_TURN_DEGREES_PER_TICK: f32 = 90.0; // research doc §5
 
+/// `Jumping` added to vanilla's own `MoveControl.Operation.JUMPING` state, restated:
+/// vanilla's own `MoveControl.tick` (`MoveControl.java`) enters it the tick its own
+/// jump-trigger condition (below, `JumpControl::should_jump`) fires, and leaves it once
+/// the entity is next observed `on_ground` (or, for a fluid-affected entity, in a liquid
+/// — this blueprint's own bounded `on_ground`-only check omits the liquid alternative,
+/// no tier-2 kind at M4 scope swims, flagged).
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum MoveControlOperation { Wait, MoveTo }
+pub enum MoveControlOperation { Wait, MoveTo, Jumping }
 
 /// This blueprint's own moderate-confidence "close enough to stop" threshold —
 /// flagged for reconciliation, same discipline as `Path::advance_if_reached`.
@@ -522,18 +623,31 @@ pub struct MoveControl { pub operation: MoveControlOperation, pub wanted_pos: [f
 impl MoveControl {
     /// If `operation == Wait` or `wanted_pos` is within `MOVE_CONTROL_ARRIVAL_EPSILON_SQ`
     /// (horizontal-only squared distance) of `current_pos`: returns `(forward: 0.0,
-    /// yaw_degrees: current_yaw)` — no rotation change, no forward drive.
-    /// Otherwise: `desired_yaw = atan2(dz, dx).to_degrees() - 90.0` (Minecraft's own yaw
-    /// convention, matching M1-B05's already-established yaw-encoding precedent);
-    /// `new_yaw = rotate_towards(current_yaw, desired_yaw, MAX_TURN_DEGREES_PER_TICK)`;
-    /// `forward = 1.0` (full-committed-forward unit axis — Context, "the produce/consume
-    /// seam," explains why this blueprint never bakes an absolute blocks/tick speed into
-    /// `MovementIntent.forward`, only the `-1.0..=1.0` unit axis `MovementIntent`'s own
-    /// doc comment already specifies; `speed_modifier` itself is carried on `MoveControl`
-    /// for a future Stage-6b consumer to read, not encoded into `forward` — restated
-    /// explicitly since this is the one place this blueprint's own design decision about
-    /// the seam is directly load-bearing).
-    pub fn tick(&self, current_pos: [f64; 3], current_yaw: f32) -> (f64 /* forward */, f32 /* new_yaw */);
+    /// yaw_degrees: current_yaw, jumping: false)` — no rotation change, no forward drive,
+    /// no jump trigger.
+    /// Otherwise (the `MoveTo`/`Jumping` path): `desired_yaw = atan2(dz, dx).to_degrees()
+    /// - 90.0` (Minecraft's own yaw convention, matching M1-B05's already-established
+    /// yaw-encoding precedent); `new_yaw = rotate_towards(current_yaw, desired_yaw,
+    /// MAX_TURN_DEGREES_PER_TICK)`; `forward = 1.0` (full-committed-forward unit axis —
+    /// Context, "the produce/consume seam," explains why this blueprint never bakes an
+    /// absolute blocks/tick speed into `MovementIntent.forward`, only the `-1.0..=1.0`
+    /// unit axis `MovementIntent`'s own doc comment already specifies; `speed_modifier`
+    /// itself is carried on `MoveControl` for a future Stage-6b consumer to read, not
+    /// encoded into `forward`). `jumping` is computed as follows: if `self.operation ==
+    /// Jumping` already, it stays `true` and `self.operation` returns to `Wait` the
+    /// moment `on_ground` is `true` this call (matching vanilla's own `MoveControl.tick`
+    /// JUMPING-branch exit condition, restated); otherwise, `JumpControl::should_jump`
+    /// (below) is evaluated against this call's own `wanted_pos - current_pos` deltas —
+    /// if it returns `true`, `self.operation` becomes `Jumping` and `jumping = true` this
+    /// call; if `false`, `jumping = false` and `self.operation` stays/returns to `MoveTo`.
+    pub fn tick(
+        &mut self,
+        current_pos: [f64; 3],
+        current_yaw: f32,
+        on_ground: bool,
+        step_height: f64,
+        entity_width: f32,
+    ) -> (f64 /* forward */, f32 /* new_yaw */, bool /* jumping */);
 }
 
 /// Straightforward shortest-angle rotation clamped to `max_degrees_per_tick` — normalizes
@@ -557,7 +671,27 @@ impl LookControl {
 }
 ```
 
-**`JumpControl`** — a one-tick trigger, not a continuous state. **Vanilla's own full one-block step-up is resolved by a discrete jump impulse, not continuous ground/step-height contact**: `MoveControl.tick` fires the jump control when the required rise exceeds the mob's own `STEP_HEIGHT` attribute (default 0.6), which a 1.0-block rise always does — continuous step-height contact only resolves rises up to that attribute's own value (slabs, stairs), and the pathfinder's own `jumpSize = 1` (Context §F) deliberately admits Y+1 candidates a mob can only reach by jumping. This blueprint's own `JumpControl` therefore *should* fire whenever `PathNavigation`'s current path waypoint requires the Y+1 step-up placement and the entity is `on_ground` this tick — but wiring that condition through to a real jump requires the physics-integration half of Stage 6b (M4-B02, not read or bound to here) to actually consume a `jumping` flag against its own step-height/collision model, which this blueprint cannot yet confirm the shape of. **Restated as an honest, bounded, explicitly flagged deviation rather than a claim it is unneeded**: `JumpControl::should_jump` returns `false` unconditionally at M4 scope, so `PendingMovementIntent.jumping` is `false` for every tier-2 kind's every navigation tick this blueprint's own algorithm produces — meaning a tier-2 mob's own 1-block step-up is not actually resolved correctly by this blueprint's own output alone; the seam exists, named and ready, for whichever future blueprint wires the real condition through (see design_consequences).
+**`JumpControl`** — a one-tick trigger, not a continuous state, and a real predicate rather than a stub. **Vanilla's own full one-block step-up is resolved by a discrete jump impulse, not continuous ground/step-height contact**: `MoveControl.tick`'s own `MOVE_TO` branch fires the jump control when the vertical rise to the current move target exceeds the mob's own `STEP_HEIGHT` attribute value (default `0.6`, exceeded by any `1.0`-block rise) **and** the horizontal squared distance to that target is smaller than `max(1.0, entity_width)` — vanilla's own literal comparison of a *squared* distance against an *unsquared* width bound, restated exactly as that quirk, not "corrected" to a squared-width form. Continuous step-height contact only resolves rises up to `STEP_HEIGHT`'s own value (slabs, stairs, single carpet-height steps); the pathfinder's own `jumpSize = 1` (Context §F) deliberately admits Y+1 candidates a mob can only reach by jumping, which is exactly the case this condition exists to catch. Vanilla's own *second* jump trigger — escaping a block whose partial collision shape the mob is embedded in, gated to non-door/non-fence blocks — needs a per-block partial `VoxelShape` this blueprint does not model (the identical bound Context §H's own full-cube-only line-of-sight raycast already accepts) and stays out of this blueprint's own bounded scope, flagged.
+
+This blueprint's own `JumpControl::should_jump` implements the real rule above, not a stub:
+
+```rust
+pub struct JumpControl;
+impl JumpControl {
+    /// `rise_to_target > step_height && horizontal_dist_sq < f64::max(1.0, entity_width as f64)`
+    /// — vanilla's own literal `MoveControl.tick` trigger condition, restated exactly,
+    /// including its own unsquared-width comparison. `rise_to_target`/`horizontal_dist_sq`
+    /// are the caller's own `wanted_pos - current_pos` deltas (`MoveControl::tick` computes
+    /// and passes these internally); `step_height` is the entity's own current
+    /// `STEP_HEIGHT` attribute value (§I); `entity_width` is `mob_config::entity_dimensions`'s
+    /// own width (§J).
+    pub fn should_jump(rise_to_target: f64, horizontal_dist_sq: f64, step_height: f64, entity_width: f32) -> bool {
+        rise_to_target > step_height && horizontal_dist_sq < f64::max(1.0, entity_width as f64)
+    }
+}
+```
+
+**The real jump impulse this `jumping` flag is meant to trigger is Stage 6b's own job, not this blueprint's** — restated per the produce/consume seam (Context §A): vanilla's own impulse (`LivingEntity.jumpFromGround`/`getJumpPower`) sets the entity's vertical velocity to `max(current_vertical_velocity, jump_power)` where `jump_power = JUMP_STRENGTH_attr_value * block_jump_factor (honey-block friction, always 1.0, not modeled at M4 scope) + jump_boost_power (a potion-effect amplifier-derived bonus, always 0.0, not modeled at M4 scope)` — i.e. exactly the entity's own `JUMP_STRENGTH` attribute value (`0.42` for every tier-2 kind, §I) at this blueprint's own scope — applied only while actually `on_ground`, and gated by a 10-tick cooldown after each such application (vanilla's own `noJumpDelay`) that resets whenever the `jumping` input goes false. This blueprint's own responsibility ends at producing a correct `jumping` flag for the tick `should_jump`'s condition holds (and for every tick `MoveControlOperation::Jumping` persists until `on_ground`); the impulse magnitude, the `on_ground` gate, and the 10-tick cooldown are Stage 6b's own consumer's job, exactly as it is responsible for interpreting every other `MovementIntent` field — this blueprint names no such consumer, only documents the constants a future one needs.
 
 **Final assembly — the produced `PendingMovementIntent`:**
 
@@ -567,7 +701,7 @@ impl LookControl {
 pub struct PendingMovementIntent(pub rc_physics::MovementIntent);
 ```
 
-One per Stage-6a-ticked entity, overwritten every tick (`strafe: 0.0` always at M4 scope — no tier-2 kind's navigation needs strafing; `forward`/`yaw_degrees` from `MoveControl::tick`; `sprinting: false`, `sneaking: false`, `jumping: false`, `jump_boost_amplifier: 0` — every field this blueprint does not itself compute is left at `MovementIntent::default()`'s own value, explicit, not silently omitted).
+One per Stage-6a-ticked entity, overwritten every tick (`strafe: 0.0` always at M4 scope — no tier-2 kind's navigation needs strafing; `forward`/`yaw_degrees`/`jumping` from `MoveControl::tick`'s own three-value return, §G above — `jumping` is therefore `true`, not always `false`, on any tick `JumpControl::should_jump` fires or `MoveControlOperation::Jumping` is still in progress; `sprinting: false`, `sneaking: false`, `jump_boost_amplifier: 0` — every field this blueprint does not itself compute is left at `MovementIntent::default()`'s own value, explicit, not silently omitted).
 
 ### H. Sensing — nearest-player targeting, line-of-sight, follow range
 
@@ -690,7 +824,7 @@ impl AttributeMap {
 | `MAX_HEALTH` | `20.0 [1,1024]` | `20.0` | `20.0` | `10.0` |
 | `MOVEMENT_SPEED` | `0.7 [0,1024]` | `0.23` | `0.5` | `0.2` |
 | `FOLLOW_RANGE` | `32.0 [0,2048]` | `35.0` | `16.0` | `16.0` |
-| `ATTACK_DAMAGE` | `2.0 [0,2048]` | `3.0` | `0.0`\* (no melee) | `0.0`\* |
+| `ATTACK_DAMAGE` | `2.0 [0,2048]` | `3.0` | absent — no entry | absent — no entry |
 | `ATTACK_KNOCKBACK` | `0.0 [0,5]` | `0.0` | `0.0` | `0.0` |
 | `KNOCKBACK_RESISTANCE` | `0.0 [-2,1]` | `0.0` | `0.0` | `0.0` |
 | `ARMOR` | `0.0 [0,30]` | `0.0` | `0.0` | `0.0` |
@@ -700,7 +834,7 @@ impl AttributeMap {
 
 `FOLLOW_RANGE`'s own registry-level default (`32.0`) is only what a supplier gets when it adds the attribute without naming a value; `Mob.createMobAttributes` overrides that default to `16.0` for every Mob, and neither Villager's nor Cow's own attribute chain re-adds it — so both carry a `16.0` base, not the registry's `32.0` (Zombie's own explicit `35.0` override is unaffected).
 
-`ATTACK_KNOCKBACK`/`KNOCKBACK_RESISTANCE`/`ARMOR`/`ARMOR_TOUGHNESS` exist in every tier-2 kind's `AttributeMap` because vanilla's own `LivingEntity.createLivingAttributes` already adds all four to every Mob. `ATTACK_DAMAGE` does not: in vanilla it is added only by `Monster.createMonsterAttributes` (or a handful of individual animals' own overrides, none of which apply to Villager or Cow) — Villager's and Cow's own real `AttributeSupplier` carries no `ATTACK_DAMAGE` entry at all, and querying it throws rather than yielding a value. The `0.0`\* cells above are this blueprint's own deliberate, bounded deviation from that: `default_attribute_map` constructs `ATTACK_DAMAGE` at `0.0` for every tier-2 kind anyway (never vanilla's registry default of `2.0`), purely so `AttributeMap` stays uniformly complete per-kind rather than partially populated, and applies no combat-relevant modifier logic to it. This is flagged for planning under design_consequences: a future blueprint may instead want `AttributeMap` to model per-kind attribute *absence* (an `Option`/error-returning query, matching vanilla's own `IllegalArgumentException`-on-missing-attribute behavior) rather than this fabricated-default placeholder.
+`ATTACK_KNOCKBACK`/`KNOCKBACK_RESISTANCE`/`ARMOR`/`ARMOR_TOUGHNESS` exist in every tier-2 kind's `AttributeMap` because vanilla's own `LivingEntity.createLivingAttributes` already adds all four to every Mob. `ATTACK_DAMAGE` does not: in vanilla it is added only by `Monster.createMonsterAttributes` (or a handful of individual animals' own overrides, none of which apply to Villager or Cow) — Villager's and Cow's own real `AttributeSupplier` carries no `ATTACK_DAMAGE` entry at all, and querying it throws rather than yielding a value. This blueprint's own `default_attribute_map` mirrors that exactly, per-kind: it inserts an `ATTACK_DAMAGE` entry into the constructed `AttributeMap` only for `Zombie` (`3.0`); Villager's and Cow's own `AttributeMap` gains no `ATTACK_DAMAGE` entry at all. `AttributeMap::get`/`get_mut` already return `Option<&AttributeInstance>`/`Option<&mut AttributeInstance>` (§I's own API, above) — querying `ATTACK_DAMAGE` on a Villager's or Cow's own `AttributeMap` returns `None` through that existing `Option` contract, exactly the vanilla-mirroring absence-not-a-fabricated-default behavior, with no new API variant needed. No system this blueprint defines queries `ATTACK_DAMAGE` at all (Constraints (f) — combat is a future blueprint's job), so this absence is inert at M4 scope, present only so a future combat blueprint finds the per-kind data already correct.
 
 **`mob_config::default_attribute_map(kind: EntityKind) -> AttributeMap`** — builds exactly the table above for the given kind.
 
@@ -754,12 +888,12 @@ Vanilla's own Zombie registers **no** `FloatGoal` and no priority-0 goal at all 
 
 **Villager** (`Brain`) — restated from research doc §3.7's own 7-activity table, bounded to the 3 activities reachable without a POI system (Context §E):
 
-- **Sensors instantiated**: `PlayerSensor` (writes `MemoryModuleType::NearestVisiblePlayer` via `nearest_within_range` + `has_line_of_sight`), `HurtBySensor` (writes `HurtBy`/`HurtByEntity` from the same bounded `hurt_by` seam Zombie/Cow use). Vanilla's own Villager registers NINE sensor types in total, not eight — `NearestLivingEntitySensor`/`VillagerHostilesSensor`/`SecondaryPoiSensor`/`GolemSensor`/`NearestBedSensor`/`VillagerBabiesSensor`/`NearestItemSensor` (the remaining 7, research doc §3.7, corrected) are declared as `Sensor` impls with an empty `tick` body and documented as inactive-at-M4-scope, not omitted from the framework — `NearestLivingEntitySensor` is the one this blueprint's own prior count omitted; vanilla's own `VillagerHostilesSensor`/`VillagerBabiesSensor`/`GolemSensor` each read the nearest-living-entity memories it populates, though all four stay inert at M4 scope here regardless.
-- **`Activity::Core`** (`core_activities`, always active): `SwimBehavior` (float up if submerged — mirrors `FloatGoal`'s own goal-selector-side purpose, ported to a `Behavior`), `LookAtTargetSink` (drives `LookControl` toward `LookTarget` memory when present).
-- **`Activity::Idle`** (this blueprint's own trailing, always-eligible package — Context §E's own corrected `BrainProgram::tick` step 3, not vanilla's separate `useDefaultActivity` mechanism): `WalkToRandomPoiOrStroll` (this blueprint's own reduced stand-in for vanilla's real village-bound stroll, since no POI/village-bounds system exists — a `WaterAvoidingRandomStrollGoal`-equivalent `Behavior`), `InteractWithNearestVillager` — declared, `check_extra_start_conditions` returns `false` (no second villager modeled in this blueprint's own test fixtures; framework-ready, inert at M4 scope).
-- **`Activity::Panic`**: vanilla's own PANIC activity carries **no** memory requirement at all — it is entered by a trigger behavior in `Activity::Core` whenever `HurtBy` or `NearestHostile` becomes present, not by an `ActivityRequirement` on PANIC itself. This blueprint's own package-scanning `BrainProgram::tick` (Context §E, corrected) has no equivalent push-based trigger mechanism, so — as a deliberate, bounded, explicitly flagged simplification kept in place of implementing that mechanism (design_consequences) — this blueprint's own `Activity::Panic` package retains a `HurtBy` memory `ValuePresent` requirement (narrower than vanilla's own trigger, which also reacts to `NearestHostile`). Behaviors: `VillagerCalmDown` (returns to the schedule-derived activity once neither `HurtBy` nor a nearby `HurtByEntity` attacker remains present — vanilla's own real behavior name; this blueprint's prior `CalmDownCheck` name did not exist), and a `MoveControl`-driving flee `Behavior` moving away from the `HurtByEntity` memory's own position (vanilla registers two such flee behaviors, one per memory — `NearestHostile` and `HurtByEntity` — this blueprint's own `FleeFromHostile` name models only the `HurtByEntity` one it has a memory seam for) at the panic package's own speed modifier ×1.5 (**not** `1.5×` `MOVEMENT_SPEED` directly — vanilla multiplies the *package's* speed modifier by 1.5, and `MoveControl` then multiplies that resulting walk-target modifier by `MOVEMENT_SPEED` as usual, netting `0.75×` the attribute for a villager's own `0.5` package modifier).
-- **`Activity::Work`/`Meet`**: declared in `Activity`'s own enum and named in `BrainProgram.packages` with their real vanilla `ActivityRequirement`s (`JobSite`/`MeetingPoint` memory `ValuePresent` respectively) — since this blueprint never populates either memory (no POI system exists), `set_active_activity_to_first_valid` structurally never selects them; declared, not implemented, exactly mirroring M4-B01's own metadata-index-10/11 "reserve the seam" convention.
-- **`Activity::Rest`**: vanilla's own REST activity carries **no** memory requirement at all (unlike Work/Meet, there is no `Home` gate on it). This blueprint's own package-scanning selection mechanism relies on requirement-gating to keep an activity structurally unreachable when its supporting system (here, POI/Home) does not exist yet, so — as the identical deliberate, bounded, explicitly flagged simplification named under `Activity::Panic` above (design_consequences) — this blueprint's own `Activity::Rest` package retains a `Home` memory `ValuePresent` requirement, keeping it declared-but-unreachable at M4 scope rather than matching vanilla's own always-eligible gate.
+- **Sensors instantiated**: `PlayerSensor` (writes `MemoryModuleType::NearestVisiblePlayer` via `nearest_within_range` + `has_line_of_sight`), `HurtBySensor` (writes `HurtByEntity` only, from the same bounded `hurt_by` seam Zombie/Cow use — vanilla's `HurtBy` memory holds the damage source, which this design does not carry; M4-B09 Part C.4 pins the concrete sensor body). Vanilla's own Villager registers NINE sensor types in total, not eight — `NearestLivingEntitySensor`/`VillagerHostilesSensor`/`SecondaryPoiSensor`/`GolemSensor`/`NearestBedSensor`/`VillagerBabiesSensor`/`NearestItemSensor` (the remaining 7, research doc §3.7, corrected) are declared as `Sensor` impls with an empty `tick` body and documented as inactive-at-M4-scope, not omitted from the framework — `NearestLivingEntitySensor` is the one this blueprint's own prior count omitted; vanilla's own `VillagerHostilesSensor`/`VillagerBabiesSensor`/`GolemSensor` each read the nearest-living-entity memories it populates, though all four stay inert at M4 scope here regardless.
+- **`Activity::Core`** (`core_activities`, always active): `SwimBehavior` (float up if submerged — mirrors `FloatGoal`'s own goal-selector-side purpose, ported to a `Behavior`), `LookAtTargetSink` (drives `LookControl` toward `LookTarget` memory when present), `VillagerPanicTrigger` — declared here as a real, always-eligible `Behavior` (empty `required_memories`, matching vanilla's own class of the same purpose) purely for framework completeness/behavior-registration symmetry with vanilla's own Core package shape; the actual push mechanism this blueprint executes is `BrainProgram.panic_trigger_memory` (Context §E), evaluated as `tick`'s own dedicated pre-phase-3 step rather than through this Behavior's own `start`/`tick` body, for the architectural reason Context §E states — this entry's own `start`/`tick`/`stop` bodies are therefore no-ops, never actually driving the transition themselves.
+- **`Activity::Idle`** (this blueprint's own trailing candidate in `schedule_candidates`, Context §E — not vanilla's separate `useDefaultActivity` mechanism): `WalkToRandomPoiOrStroll` (this blueprint's own reduced stand-in for vanilla's real village-bound stroll, since no POI/village-bounds system exists — a `WaterAvoidingRandomStrollGoal`-equivalent `Behavior`), `InteractWithNearestVillager` — declared, `check_extra_start_conditions` returns `false` (no second villager modeled in this blueprint's own test fixtures; framework-ready, inert at M4 scope).
+- **`Activity::Panic`**: matches vanilla's own real mechanism, not a scoped-down gate. `Activity::Panic`'s own `ActivityPackage.requirements` is empty — vanilla's own PANIC activity carries **no** memory requirement at all — and `Activity::Panic` is never a member of `schedule_candidates` (Context §E), so `select_activity`'s own scan can never select it either; entry is exclusively `BrainProgram.panic_trigger_memory`'s own push check (Context §E), set to `Some(MemoryModuleType::HurtBy)` for Villager — this blueprint's own bounded single-memory trigger (vanilla's own real trigger also reacts to a `NearestHostile`-equivalent memory this blueprint does not model; no hostile-sensing seam exists at M4 scope). Exit uses no comparable per-condition mechanism of its own: it is `select_activity`'s own general, unconditional per-tick call (Context §E) that recovers the schedule-derived activity once `Panic` stops being re-entered — this blueprint's own bounded stand-in for vanilla's own dedicated `VillagerCalmDown` exit call, which itself is declared under `Activity::Panic` below purely for naming fidelity with vanilla's own package composition (empty `required_memories`, a no-op `start`/`tick`/`stop` body — it drives nothing itself, Context §E's own architectural bound). Behaviors registered under `Activity::Panic` itself run only while it is active (phases 3/4 of `tick`, unaffected by how it became active): `VillagerCalmDown` (declared-but-inert, per above; vanilla's own real behavior name), and a `MoveControl`-driving flee `Behavior` moving away from the `HurtByEntity` memory's own position (vanilla registers two such flee behaviors, one per memory — `NearestHostile` and `HurtByEntity` — this blueprint's own `FleeFromHostile` name models only the `HurtByEntity` one it has a memory seam for) at the panic package's own speed modifier ×1.5 (**not** `1.5×` `MOVEMENT_SPEED` directly — vanilla multiplies the *package's* speed modifier by 1.5, and `MoveControl` then multiplies that resulting walk-target modifier by `MOVEMENT_SPEED` as usual, netting `0.75×` the attribute for a villager's own `0.5` package modifier).
+- **`Activity::Work`/`Meet`**: declared in `Activity`'s own enum, named in `BrainProgram.packages` with their real vanilla `ActivityRequirement`s (`JobSite`/`MeetingPoint` memory `ValuePresent` respectively), and included in `schedule_candidates` (Context §E) — since this blueprint never populates either memory (no POI system exists), `select_activity`'s own scan includes them but structurally never selects them; declared, not implemented, exactly mirroring M4-B01's own metadata-index-10/11 "reserve the seam" convention.
+- **`Activity::Rest`**: matches vanilla's own real mechanism exactly — `Activity::Rest`'s own `ActivityPackage.requirements` is empty (vanilla's own REST activity carries no memory requirement at all, unlike `Work`/`Meet`, which keep their real gates unchanged from above). `Rest` stays unreachable at M4 scope not through a fabricated gate but simply because `schedule_candidates` (Context §E) never names it — no bed/POI system exists yet to make selecting it meaningful, and vanilla's own real REST-entry trigger (a sleep-seeking behavior reacting to time-of-day/bed proximity) is itself out of this blueprint's own scope, so there is no path — scanned or pushed — that ever reaches it here. `Rest`'s own declared behavior list stays registered and empty of concrete implementations, exactly the `Work`/`Meet` precedent.
 
 ### K. Stage-6a placement — the access-set discipline, concretely
 
@@ -784,7 +918,7 @@ Every system this blueprint registers into `DomainGroup::EntityAiSelection` decl
 - In vanilla's Brain system, `Brain.tickSensors` dispatches every registered `Sensor` each brain tick, but each `Sensor`'s own work is throttled by a per-instance scan-rate countdown (`Sensor.tick` is final and gated by `timeToTick`) -> a sensor's `doTick` runs only once every `scanRate` ticks, the no-arg default being 20, staggered by a randomized start delay; only the outer dispatch loop is unthrottled.
 - A vanilla `Behavior`'s default minimum and maximum duration are both 60 ticks.
 - Vanilla's Activity/Behavior system registry has 26 entries.
-- Vanilla's Brain tick executes exactly FOUR phases, in order -> memory forgetting, sensors, behavior starting, and behavior stopping/ticking; activity selection is not one of them, running instead outside `Brain.tick` from the entity's own AI step and from a schedule-update behavior the brain's own packages register.
+- Vanilla's Brain tick executes exactly FOUR phases, in order -> memory forgetting, sensors, behavior starting, and behavior stopping/ticking; activity selection is not one of them, running instead from entry points entirely outside Brain.tick -> once at brain construction/refresh, and periodically from a schedule-update behavior the Meet package itself registers, not the Idle package.
 - Vanilla's Brain activity-selection method (`setActiveActivityToFirstValid`) scans a caller-supplied activity list in order and switches to the first whose every `ActivityRequirement` is satisfied by the brain's current memory state, but does nothing at all when none match -> there is no Idle fallback on that path; the `useDefaultActivity`/`Activity::Idle` fallback belongs to a different entry point entirely.
 - Vanilla's Brain starts every not-yet-running behavior across all currently-active activity packages, in priority-ascending order, whenever its required memories are met and its extra start conditions pass.
 - Vanilla's Brain stops a currently-running behavior when its `can_still_use` check fails or its own randomized minimum-to-maximum-tick duration has elapsed, and otherwise ticks it -> checked in one flat pass in priority-ascending order across EVERY registered behavior whose status is running, including behaviors of an activity no longer active, not only the currently-active packages.
@@ -1002,7 +1136,7 @@ Public API exactly as specified in Context §F (`Path`).
 
 ### `crates/mechanics/src/ai/navigation.rs`
 
-Public API exactly as specified in Context §G (`PathNavigation`, `MAX_TURN_DEGREES_PER_TICK`, `MoveControlOperation`, `MoveControl`, `MOVE_CONTROL_ARRIVAL_EPSILON_SQ`, `rotate_towards`, `LookControl`, `JumpControl` — a unit struct with one associated fn, `pub fn should_jump(navigation: &PathNavigation, on_ground: bool) -> bool` returning `false` always at M4 scope per Context §G's own honest restatement, retained as a named seam — `PendingMovementIntent`).
+Public API exactly as specified in Context §G (`PathNavigation`, `MAX_TURN_DEGREES_PER_TICK`, `MoveControlOperation` — including its own `Jumping` variant — `MoveControl`, `MOVE_CONTROL_ARRIVAL_EPSILON_SQ`, `rotate_towards`, `LookControl`, `JumpControl` — a unit struct with one associated fn, `pub fn should_jump(rise_to_target: f64, horizontal_dist_sq: f64, step_height: f64, entity_width: f32) -> bool`, implementing vanilla's own real `MoveControl.tick` jump-trigger condition exactly, not a stub — `PendingMovementIntent`).
 
 ### `crates/mechanics/src/ai/sensing.rs`
 
@@ -1022,7 +1156,7 @@ pub fn zombie_goal_selector() -> crate::ai::goal::GoalSelector;
 pub fn zombie_target_selector() -> crate::ai::goal::GoalSelector;
 /// Context §J's own Cow goal-selector table (`target_selector` is `GoalSelector::new()`, empty).
 pub fn cow_goal_selector() -> crate::ai::goal::GoalSelector;
-/// Context §J's own Villager `BrainProgram` (3 active + 3 declared-inert activities, 2 real sensors + 6 inert ones).
+/// Context §J's own Villager `BrainProgram` (3 active + 3 declared-inert activities, 2 real sensors + 7 inert ones).
 pub fn villager_brain_program() -> crate::ai::brain::BrainProgram;
 
 /// Every field a future spawning blueprint needs to attach this blueprint's own AI
@@ -1146,11 +1280,13 @@ pub fn build_update_attributes(entity_id: i32, map: &mut rc_mechanics::ai::attri
 
 ### `crates/mechanics/tests/ai_brain.rs`
 
-1. `activity_selection_picks_first_valid_by_priority_order` — `packages` in order `[Work (JobSite required, absent), Panic (HurtBy required, absent), Idle (no requirement)]`; `BrainProgram::tick` at a schedule-update boundary; assert `brain.active_activities == {Core, Idle}`.
-2. `hurt_by_present_selects_panic_over_idle` — same packages, `brain.set(HurtBy, ..., None)` before ticking; assert `active_activities == {Core, Panic}`.
-3. `activity_switch_erases_the_previous_activitys_own_erase_on_stop_memories` — `Idle` package declares `erase_on_stop: vec![WalkTarget]`; `brain` has `WalkTarget` set while `Idle` is active; force a switch to `Panic` (via `HurtBy` becoming present); assert `brain.status(WalkTarget) == ValueAbsent` after the switch.
-4. `sensors_run_before_behaviors_every_tick_unthrottled` — a sensor that sets `NearestVisiblePlayer` only when called; a `Core`-activity behavior whose `required_memories` names `(NearestVisiblePlayer, ValuePresent)`; a single `BrainProgram::tick` call (even off the 20-tick schedule-update boundary) results in that behavior successfully starting — proving sensors are unthrottled while activity *selection* is throttled (test 5).
-5. `schedule_update_only_re_samples_every_20_ticks` — call `tick` once per tick for 25 ticks with a package list whose valid choice changes at tick 10; assert `active_activities` does not reflect the change until the next 20-tick boundary at or after tick 10.
+1. `select_activity_picks_first_valid_schedule_candidate_by_declared_order` — `schedule_candidates = [Work (JobSite required, absent), Idle (no requirement)]`; a fresh `Brain` (`last_schedule_update_tick == None`); `BrainProgram::select_activity` called once; assert `brain.active_activities == {Core, Idle}` and `brain`'s own throttle field is now `Some`.
+2. `hurt_by_present_triggers_the_core_package_panic_push_and_activates_panic` — `panic_trigger_memory == Some(HurtBy)`, `Activity::Panic` not yet active; `brain.set(HurtBy, ..., None)`; a single `BrainProgram::tick` call (not `select_activity` — the push check is `tick`'s own pre-phase-3 step, Context §E) results in `active_activities == {Core, Panic}` — proving entry is condition-driven every tick, never gated by inclusion in `schedule_candidates` (which does not name `Panic` at all).
+3. `activity_switch_erases_the_previous_activitys_own_erase_on_stop_memories` — `Idle` package declares `erase_on_stop: vec![WalkTarget]`; `brain` has `WalkTarget` set while `Idle` is active; force a switch to `Panic` via the push mechanism (test 2's own path); assert `brain.status(WalkTarget) == ValueAbsent` after the switch — `set_active_activity`'s own memory-erase, exercised through the push path, not `select_activity`.
+4. `sensors_run_before_behaviors_every_tick_unthrottled` — a sensor that sets `NearestVisiblePlayer` only when called; a `Core`-activity behavior whose `required_memories` names `(NearestVisiblePlayer, ValuePresent)`; a single `BrainProgram::tick` call results in that behavior successfully starting — proving sensors are unthrottled, unaffected by `select_activity` living outside `tick` entirely now.
+5. `select_activity_only_re_samples_every_20_ticks` — call `select_activity` once per tick for 25 ticks against the same `Brain` (its own `last_schedule_update_tick` field persisting call-to-call) with a `schedule_candidates` list whose valid choice changes at tick 10; assert `active_activities` does not reflect the change until the next 20-tick boundary at or after tick 10.
+6. `panic_push_activates_immediately_but_never_self_reverts` — `panic_trigger_memory == Some(HurtBy)`; tick once with `HurtBy` present (`active_activities` becomes `{Core, Panic}`, test 2's own path); erase `HurtBy` and `tick` again with no other call; assert `active_activities` is still `{Core, Panic}` — the push check only ever activates Panic, it never itself reverts it (vanilla's own asymmetry: only an explicit `VillagerCalmDown`-style exit, test 7, leaves Panic).
+7. `select_activity_recovers_from_panic_once_its_own_throttle_allows` — continuing from test 6's own state (`HurtBy` absent, `active_activities == {Core, Panic}`, `last_schedule_update_tick` still `None`); call `BrainProgram::select_activity` directly (simulating `brain_tick_system`'s own general, unconditional post-`tick` call, Context §E — never `tick` itself, which test 6 already proved never reverts `Panic` on its own) with `tick_count >= schedule_update_delay_ticks` so the throttle is satisfied; assert `active_activities` becomes `{Core, Idle}` (`schedule_candidates`'s own first-valid pick, `Panic` never being a member of it) — proving `Panic` is exited by this one general call, not a `Panic`-specific mechanism, and proving the throttle genuinely gates it (a repeat of this same call at a `tick_count` still inside the throttle window, asserted first, leaves `active_activities` unchanged).
 
 ### `crates/mechanics/tests/ai_pathfinding.rs`
 
@@ -1167,14 +1303,16 @@ pub fn build_update_attributes(entity_id: i32, map: &mut rc_mechanics::ai::attri
 
 ### `crates/mechanics/tests/ai_navigation.rs`
 
-1. `move_control_wait_produces_zero_forward` — `MoveControl { operation: Wait, .. }`; `tick` returns `(forward: 0.0, yaw unchanged)`.
-2. `move_control_arrival_epsilon_switches_to_zero_forward` — `wanted_pos` within `MOVE_CONTROL_ARRIVAL_EPSILON_SQ` of `current_pos`; same zero-forward result even with `operation: MoveTo`.
-3. `move_control_moving_produces_full_forward_and_turns_toward_target` — `wanted_pos` due east of `current_pos`, `current_yaw` facing north; assert `forward == 1.0` and `new_yaw` moved toward the correct target yaw by at most `MAX_TURN_DEGREES_PER_TICK`, in the correct rotational direction (not overshooting past the target).
+1. `move_control_wait_produces_zero_forward` — `MoveControl { operation: Wait, .. }`; `tick` (flat `step_height`/`entity_width`, `on_ground: true`) returns `(forward: 0.0, yaw unchanged, jumping: false)`.
+2. `move_control_arrival_epsilon_switches_to_zero_forward` — `wanted_pos` within `MOVE_CONTROL_ARRIVAL_EPSILON_SQ` of `current_pos`; same zero-forward, zero-jumping result even with `operation: MoveTo`.
+3. `move_control_moving_produces_full_forward_and_turns_toward_target` — `wanted_pos` due east of `current_pos`, same `Y`, `current_yaw` facing north; assert `forward == 1.0`, `jumping == false` (no vertical rise), and `new_yaw` moved toward the correct target yaw by at most `MAX_TURN_DEGREES_PER_TICK`, in the correct rotational direction (not overshooting past the target).
 4. `rotate_towards_clamps_at_max_turn_and_never_overshoots` — target 200° away in the short direction; assert the result moves exactly `MAX_TURN_DEGREES_PER_TICK` toward it (a large single-tick gap is clamped, not fully closed).
 5. `rotate_towards_reaches_target_exactly_when_within_range` — target 10° away (`< MAX_TURN_DEGREES_PER_TICK`); assert the result equals the target exactly, no overshoot past it.
-6. `pending_movement_intent_default_fields_at_m4_scope` — `navigation_and_movement_intent_system`'s own pure-core equivalent call for a moving entity; assert `strafe == 0.0`, `sprinting == false`, `sneaking == false`, `jumping == false`, `jump_boost_amplifier == 0` (Context §G's own explicit restatement, tested).
+6. `pending_movement_intent_default_fields_at_m4_scope` — `navigation_and_movement_intent_system`'s own pure-core equivalent call for a moving entity on flat ground (no step-up); assert `strafe == 0.0`, `sprinting == false`, `sneaking == false`, `jumping == false`, `jump_boost_amplifier == 0` (Context §G's own explicit restatement of every field this blueprint does not itself compute, tested; `jumping`'s own real trigger logic is tests 9–10 below, not this one).
 7. `path_navigation_recompute_is_throttled_to_every_20_ticks` — call `PathNavigation::tick` 25 times with a `goal_pos` present throughout on a trivial always-succeeds fixture; assert the search actually ran (non-`None` return) on tick 1 and again only at tick 21, never in between.
 8. `path_navigation_stuck_detection_clears_the_path` — an entity whose `entity_pos` never changes across 100 ticks despite a non-trivial `movement_speed_attr`; assert `is_stuck == true` and `current_path == None` after the 100th tick's check.
+9. `jump_control_fires_when_rise_exceeds_step_height_and_clears_on_ground` — `wanted_pos` one block higher than `current_pos` (horizontally close, within `max(1.0, entity_width)`), `step_height = 0.6` (`STEP_HEIGHT`'s own default, §I); a first `MoveControl::tick` call (`on_ground: true`) returns `jumping == true` and leaves `self.operation == Jumping`; a second call on the same `MoveControl` with `on_ground: true` again (simulating the entity having landed) returns `self.operation` back to `Wait`/`MoveTo`, `jumping == false` absent a fresh trigger — proving `JumpControl::should_jump`'s real condition fires and the one-tick pulse correctly clears, not the `false`-always stub.
+10. `jump_control_does_not_fire_for_a_rise_within_step_height_or_too_far_horizontally` — two sub-cases on the same fixture: (a) `wanted_pos` `0.5` blocks higher than `current_pos` (below the `0.6` `step_height`), horizontally close — `jumping == false`, `operation` stays `MoveTo`; (b) `wanted_pos` `1.0` block higher but horizontally beyond `max(1.0, entity_width)` — `jumping == false` — proving both halves of `JumpControl::should_jump`'s conjunction are independently load-bearing, not just the rise check alone.
 
 ### `crates/mechanics/tests/ai_sensing.rs`
 
@@ -1191,10 +1329,11 @@ pub fn build_update_attributes(entity_id: i32, map: &mut rc_mechanics::ai::attri
 3. `add_multiplied_total_modifiers_compound_sequentially` — post-stage-2 result `20.0`, two `AddMultipliedTotal` modifiers `0.1`/`0.1`; `value() == 20.0 * 1.1 * 1.1 == 24.2`.
 4. `value_is_clamped_to_min_max` — base + modifiers push the raw result above `max`; `value() == max` exactly.
 5. `add_modifier_with_an_existing_id_replaces_not_duplicates` — add a modifier `id="a"` amount `1.0`, then `id="a"` amount `2.0`; assert only one `AddValue` contribution (`2.0`, not `3.0`) is present.
-6. `default_attribute_map_matches_the_per_kind_table` — for each of `Zombie`/`Villager`/`Cow`, assert every attribute in Context §I's own table round-trips through `default_attribute_map` at its documented value.
+6. `default_attribute_map_matches_the_per_kind_table` — for each of `Zombie`/`Villager`/`Cow`, assert every attribute Context §I's own table documents as present round-trips through `default_attribute_map` at its documented value.
 7. `encode_attribute_entries_byte_for_byte` — a two-attribute, one-modifier-each `AttributeMap`; hand-derived expected byte sequence (count `VarInt(2)`, then each entry's own `attribute_id`/`base_value`(8 BE bytes)/`modifier_count`/modifier fields in the exact field order of Context §I's table); assert exact byte equality.
 8. `decode_attribute_entries_is_the_exact_inverse_of_encode` — round-trip the same fixture through `decode_attribute_entries`; assert every field equals the original.
 9. `decode_attribute_entries_rejects_truncated_input` — the encoded bytes from test 7 with the last byte removed; `Err(AttributeWireError::UnexpectedEof)`, never a panic.
+10. `default_attribute_map_has_no_attack_damage_entry_for_villager_or_cow` — `default_attribute_map(Villager).get(ATTACK_DAMAGE)` and `default_attribute_map(Cow).get(ATTACK_DAMAGE)` both return `None`; `default_attribute_map(Zombie).get(ATTACK_DAMAGE)` returns `Some` with `value() == 3.0` — proving absence is real (no entry constructed at all), not a `0.0`-valued placeholder entry.
 
 ### `crates/mechanics/tests/ai_stage_registration.rs` (`#[cfg(feature = "server-systems")]`, mirrors M0-B05's `registration_validation.rs`)
 
@@ -1214,10 +1353,10 @@ pub fn build_update_attributes(entity_id: i32, map: &mut rc_mechanics::ai::attri
 1. **`rc-mechanics/Cargo.toml`, `lib.rs`, `ai/mod.rs`.** Add the `bevy_ecs` optional dependency and feature-list edit; add `pub mod ai;`. Observable: `cargo build -p rc-mechanics --all-features` resolves dependencies; every `ai/*.rs` file still `todo!()`-stubbed.
 2. **`ai/attributes.rs`.** `AttributeInstance::value()`'s 4-step formula exactly as Context §I. `encode_attribute_entries`/`decode_attribute_entries`: this file's own small, private VarInt/`f64`-big-endian/length-prefixed-UTF8-string writer, reimplemented locally (identical algorithm to M4-B01's own `metadata.rs` restatement, never importing `rc-protocol`). Observable: `ai_attributes.rs` tests 1–9 pass.
 3. **`ai/goal.rs`.** `GoalSelector::tick`'s four-pass algorithm exactly as Context §D; `should_full_tick` exactly as specified. Observable: `ai_goal_selector.rs` tests 1–7 pass.
-4. **`ai/brain.rs`.** `Brain::forget_outdated_memories`/`set`/`get`/`erase`/`status`; `BrainProgram::tick`'s five-step algorithm exactly as Context §E. Observable: `ai_brain.rs` tests 1–5 pass.
+4. **`ai/brain.rs`.** `Brain::forget_outdated_memories`/`set`/`get`/`erase`/`status`; `BrainProgram::tick`'s real four-phase algorithm plus its own pre-phase-3 `panic_trigger_memory` push check, and the separate `select_activity`/`set_active_activity`/`set_active_activity_if_possible` entry points, exactly as Context §E. Observable: `ai_brain.rs` tests 1–7 pass.
 5. **`ai/pathfinding/node.rs`.** `tier1_path_type_table()`'s hand-populated rows (Context §F's own block list, looked up via `rc_registries::generated_v776`'s default-state constants, M0-B07); `WalkNodeEvaluator::get_neighbors` exactly as Context §F (4 cardinal, then 4 diagonal-with-validity-check, then the 3-way vertical placement search per candidate). Observable: compiles; exercised indirectly by step 6's tests.
 6. **`ai/pathfinding/astar.rs`, `path.rs`.** `find_path`'s classic A* loop (open-set `BinaryHeap` over a `NodeCost(f64)` `Ord`-via-`total_cmp` wrapper, `Reverse`-wrapped for min-heap), `FUDGING`-scaled heuristic, `max_visited_nodes` budget, best-effort fallback via a continuously-tracked best-`h` node; `Path::from_nodes`/`advance_if_reached`/`current_target`/`is_done`. Observable: `ai_pathfinding.rs` tests 1–7 pass.
-7. **`ai/navigation.rs`.** `rotate_towards` (shortest-angle, normalized-then-clamped); `MoveControl::tick`, `LookControl::tick` exactly as Context §G; `PathNavigation::tick`'s recompute-throttle + stuck-detection algorithm exactly as Context §G; `JumpControl::should_jump` returns `false` unconditionally (Context §G's own honest M4-scope restatement). Observable: `ai_navigation.rs` tests 1–8 pass.
+7. **`ai/navigation.rs`.** `rotate_towards` (shortest-angle, normalized-then-clamped); `MoveControl::tick`, `LookControl::tick` exactly as Context §G, including `MoveControl::tick`'s own `on_ground`/`step_height`/`entity_width`-driven `jumping` computation and its `Jumping`-operation transition/exit; `PathNavigation::tick`'s recompute-throttle + stuck-detection algorithm exactly as Context §G; `JumpControl::should_jump`'s real trigger condition exactly as Context §G, not a stub. Observable: `ai_navigation.rs` tests 1–10 pass.
 8. **`ai/sensing.rs`.** `tier1_opacity_table()`'s hand-populated rows (reuses `PathTypeTable`'s own small block list — opaque iff not `Open`/`Water`/`Fire`/door-open/etc.); `raycast_line_of_sight`'s DDA voxel-step loop; `Sensing::has_line_of_sight`'s cache-then-raycast logic; `nearest_within_range`. Observable: `ai_sensing.rs` tests 1–5 pass.
 9. **`ai/mob_config.rs`.** `default_attribute_map`/`entity_dimensions` exactly as Context §I/§J's tables; `zombie_goal_selector`/`zombie_target_selector`/`cow_goal_selector`/`villager_brain_program` exactly as Context §J's own goal/sensor/activity tables, including every explicitly-`can_use()==false`-stubbed goal and every declared-inert sensor/activity, unchanged in structure from Context. `ai_loadout_for` (feature-gated) assembles `MobAiLoadout` per kind. Observable: `ai_attributes.rs` test 6 passes; every concrete `Goal`/`Behavior`/`Sensor` struct this file defines compiles against `goal.rs`/`brain.rs`'s own trait definitions.
 10. **`ai/systems.rs`** (feature-gated). The four `Component` wrapper types; `AiTickCounter` resource; the four systems (thin adapters calling straight into the pure core from steps 2–9, per-entity, via their own `Query` iteration); `register_ai_systems` (four `RcExecutorBuilder::register_system(DomainGroup::EntityAiSelection, ..., structural_writes: vec![])` calls, in the fixed order Context §K/Deliverables names). Observable: `ai_stage_registration.rs` tests 1–4 pass.
@@ -1257,4 +1396,4 @@ cargo run -p xtask -- lint-deps
 cargo run -p xtask -- test
 ```
 
-Expected: every command exits 0. `cargo nextest run --all-features` additionally runs: 7 (`ai_goal_selector.rs`) + 5 (`ai_brain.rs`) + 7 (`ai_pathfinding.rs`) + 8 (`ai_navigation.rs`) + 5 (`ai_sensing.rs`) + 9 (`ai_attributes.rs`) + 4 (`ai_stage_registration.rs`) + 3 (`attribute_packets.rs`, the `crates/server` one) = 48 new test cases, alongside every pre-existing test in both crates (M4-B01's own `rc-scheduler`/`rc-mechanics`/`rusty-clanker-server` suites, unmodified, still passing in full). CI (`.github/workflows/ci.yml`) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.
+Expected: every command exits 0. `cargo nextest run --all-features` additionally runs: 7 (`ai_goal_selector.rs`) + 7 (`ai_brain.rs`) + 7 (`ai_pathfinding.rs`) + 10 (`ai_navigation.rs`) + 5 (`ai_sensing.rs`) + 10 (`ai_attributes.rs`) + 4 (`ai_stage_registration.rs`) + 3 (`attribute_packets.rs`, the `crates/server` one) = 53 new test cases, alongside every pre-existing test in both crates (M4-B01's own `rc-scheduler`/`rc-mechanics`/`rusty-clanker-server` suites, unmodified, still passing in full). CI (`.github/workflows/ci.yml`) green on both `ubuntu-24.04` and `windows-2025` legs is the authoritative done-signal (TEST-D50) — a local pass alone does not close this blueprint.

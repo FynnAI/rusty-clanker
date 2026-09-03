@@ -668,6 +668,16 @@ Entries name the milestone that surfaced them and the code they concern.
   placeholder world adopts the vanilla flat preset's layer layout exactly
   (proposal: yes — every harness that compares geometry benefits).
 
+- **M4 entry prerequisite: `rc-chunk-storage`'s `LightSection` lags WORLD-D8.**
+  `crates/chunk-storage/src/light.rs` still carries the two-state
+  `LightSection { sky: Option<Box<[u8; 2048]>>, block: Option<Box<[u8; 2048]>> }`
+  from M2-B01, while WORLD-D8 (amended 2026-09-03) and the corrected M4-B07
+  build on `LightNibbles { Uninitialized, Filled(u8), Data(..) }` so vanilla's
+  structural empty-mask semantics reproduce bit-identically. A small M2-B01
+  field-report changeset (test-authoring for the light tests, implementation
+  for `light.rs` and its chunk-packet mask use) must land before M4-B07's
+  implementation starts; M4-B07's Context §1 names the gap.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real

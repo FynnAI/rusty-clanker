@@ -55,7 +55,13 @@ No attribute system exists anywhere in the merged codebase before this blueprint
 3. For every `AddMultipliedTotal` modifier, multiply `result` by `(1 + amount)` — these **do** compound with each other since they apply sequentially to the running total.
 4. Clamp to `[min, max]`.
 
-Modifier application order for step 2/3 is hash-table slot order within each operation bucket, not registration or insertion order: vanilla stores each operation's modifiers in an open-addressing hash map keyed by the modifier's own identifier and iterates that map's value view — only the attribute instance's separate by-id and permanent-modifier lookups are insertion-ordered, and neither participates in the value calculation. For `AddMultipliedTotal`, `result *= (1 + amount)` is mathematically commutative across modifiers in exact arithmetic; only IEEE-754 double rounding makes iteration order observable, not the running-total structure itself — the same rounding-only sensitivity holds for `AddMultipliedBase`'s plain summation. `AttributeInstance` lazily caches its computed value, invalidated on any base/modifier mutation — this blueprint's own `compute_value` is a pure, uncached function; a caller wanting caching wraps it, this blueprint does not build a dirty-flag cache (out of scope, not load-bearing for correctness).
+Vanilla's own modifier application order for step 2/3 is hash-table slot order within each operation bucket, not registration or insertion order: vanilla stores each operation's modifiers in an open-addressing hash map keyed by the modifier's own identifier and iterates that map's value view — only the attribute instance's separate by-id and permanent-modifier lookups are insertion-ordered, and neither participates in the value calculation.
+
+**This project's own bounded exception, stated explicitly, not silently substituted.** This blueprint's own `AttributeInstance::compute_value` (Deliverables) iterates `self.modifiers` — a plain `Vec`, not a hash map — in `Vec` insertion (push) order, for every operation bucket, rather than reproducing vanilla's own hash-slot order. This is a deliberate, bounded, cited deviation, not an oversight, and it holds only under one precise condition: **it holds exactly as long as no computation in M4 ever combines two modifiers of the same `ModifierOperation` (two `AddValue` modifiers, two `AddMultipliedBase` modifiers, or two `AddMultipliedTotal` modifiers) on the same attribute.** Iteration order is observable at all only when two same-operation modifiers on one attribute exist together and could disagree with vanilla's real hash-slot order; with at most one modifier per `(AttributeKind, ModifierOperation)` pair — which is what every one of this blueprint's own production call sites produces, since `default_attributes_for` attaches no modifiers at all (Context table above; every per-kind value is a bare `AttributeInstance::constant`) — `Vec` order and vanilla's hash-slot order can never diverge, so the exception costs nothing observable today. For `AddMultipliedTotal`, `result *= (1 + amount)` is mathematically commutative across modifiers in exact arithmetic; only IEEE-754 double rounding makes iteration order observable, not the running-total structure itself — the same rounding-only sensitivity holds for `AddMultipliedBase`'s plain summation — so even a future same-operation collision this exception has not yet been asked to handle would only ever be a last-bit float divergence from vanilla, never a structural one.
+
+The precondition is enforced, not merely asserted in prose: `AttributeMap::add_modifier` (Deliverables) carries a debug-assertion-style runtime check that, before appending a new modifier to an attribute's own `Vec`, scans that attribute's existing modifiers for one already sharing the new modifier's `ModifierOperation`, and panics immediately — naming the attribute and the operation — if it finds one. A second same-operation modifier landing on one attribute is exactly the situation this exception depends on never occurring in M4, so this check is the single enforcement point that keeps the exception's precondition from ever being silently violated without the project noticing.
+
+`AttributeInstance` lazily caches its computed value in vanilla, invalidated on any base/modifier mutation — this blueprint's own `compute_value` is a pure, uncached function; a caller wanting caching wraps it, this blueprint does not build a dirty-flag cache (out of scope, not load-bearing for correctness).
 
 **Attribute registry and defaults**, restated verbatim from `19-combat-damage.md` §4 (high confidence — every row below is that document's own constants table) plus this blueprint's own per-mob-type overrides (moderate confidence, well-established but unverified against a real `--reports` dump — flagged for reconciliation, Implementation steps):
 
@@ -712,12 +718,19 @@ pub struct AttributeInstance {
     pub base: f64,
     pub min: f64,
     pub max: f64,
+    /// Iterated in `Vec` insertion (push) order per operation bucket, not vanilla's own
+    /// hash-table slot order — Context's own "Attribute system" section states the exact
+    /// bounded condition (at most one modifier per operation per attribute) this deviation
+    /// holds under, and the runtime check (`AttributeMap::add_modifier`, below) that guards
+    /// it.
     pub modifiers: Vec<AttributeModifier>,
 }
 
 impl AttributeInstance {
     pub fn constant(value: f64, min: f64, max: f64) -> Self;
-    /// Exact vanilla 3-stage calc (Context) + clamp. Pure, no caching.
+    /// Exact vanilla 3-stage calc (Context) + clamp, folding `self.modifiers` in `Vec`
+    /// insertion order per operation bucket (Context's own cited, bounded ordering
+    /// exception) rather than vanilla's own hash-table slot order. Pure, no caching.
     pub fn compute_value(&self) -> f64;
 }
 
@@ -729,6 +742,14 @@ impl AttributeMap {
     /// Debug/test-only mutator (mirrors the project's own `debug_*` precedent) — replaces
     /// `kind`'s own `base` in place, keeping `min`/`max`/`modifiers` unchanged.
     pub fn set_base(&mut self, kind: AttributeKind, value: f64);
+    /// Appends `modifier` to `kind`'s own modifier `Vec` (Context's own bounded
+    /// `Vec`-insertion-order exception). Enforces that exception's precondition with a
+    /// debug-assertion-style runtime check: before appending, scans `kind`'s existing
+    /// modifiers for one already sharing `modifier.operation`, and panics immediately,
+    /// naming `kind` and the operation, if it finds one — two same-operation modifiers on
+    /// one attribute is exactly the case where `Vec` insertion order could disagree with
+    /// vanilla's real hash-slot order, so this call is the single point that keeps the
+    /// exception from being silently violated.
     pub fn add_modifier(&mut self, kind: AttributeKind, modifier: AttributeModifier);
 }
 
@@ -1111,7 +1132,7 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 ## Implementation steps
 
 1. **`crates/mechanics/src/entity/living.rs`.** Add the four new fields per Deliverables, in declaration order at the end of the struct (does not disturb the existing `#[net_metadata(...)]` ascending-index compile check — none of the four carry that attribute). Observable: `cargo build -p rc-mechanics` succeeds; M4-B01's own `zombie_round_trips`-style NBT test (unaffected, since the new fields default via `EntityNbtFields` rule 2 when absent from a loaded compound) still passes unmodified.
-2. **`crates/mechanics/src/combat/attributes.rs`.** `AttributeInstance::compute_value` implements the exact 3-stage calc (Context) via three sequential folds over `self.modifiers` filtered by `operation`, then `.clamp(self.min, self.max)`. `default_attributes_for` is one `match` per `EntityKind`, each arm building an `AttributeMap` via ten `AttributeInstance::constant(...)` calls per the Context table (Item's arm returns an empty map). Observable: `combat_damage_pipeline.rs` compiles against this file.
+2. **`crates/mechanics/src/combat/attributes.rs`.** `AttributeInstance::compute_value` implements the exact 3-stage calc (Context) via three sequential folds over `self.modifiers` filtered by `operation`, then `.clamp(self.min, self.max)` — the three folds iterate `self.modifiers` in `Vec` insertion order, Context's own cited, bounded ordering exception, not vanilla's own hash-table slot order. `AttributeMap::add_modifier` implements the exception's own debug-assertion-style precondition check (Deliverables), panicking if a second modifier of the same `ModifierOperation` is ever added to the same attribute. `default_attributes_for` is one `match` per `EntityKind`, each arm building an `AttributeMap` via ten `AttributeInstance::constant(...)` calls per the Context table (Item's arm returns an empty map) — every arm attaches zero modifiers, so the exception's precondition holds trivially for every production call site this blueprint ships. Observable: `combat_damage_pipeline.rs` compiles against this file.
 3. **`crates/mechanics/src/combat/damage.rs`.** `DamageTypeKind::{exhaustion,scaling,bypasses_armor,no_knockback}` are four `match` statements per the Context table. `armor_effective_damage`/`epf_reduction`/the five `*_epf` functions/`difficulty_scale_incoming` are direct, mechanical translations of Context's own pseudocode — no algorithmic freedom. `apply_damage_pipeline` composes them in Context's exact order, including the creative short-circuit, the invulnerability gate (mutating `target.invulnerable_time`/`last_hurt` in place), and the absorption asymmetry (an `if target.is_player` branch selecting between the two documented sub-algorithms). Observable: `combat_damage_pipeline.rs`'s seven cases pass.
 4. **`crates/mechanics/src/combat/melee.rs`.** Direct translation of Context's own pseudocode for every function; `assemble_player_melee_damage` composes `attack_cooldown_charge_scale`/`can_critical_attack`/the three enchant-bonus functions/the sweep-gate boolean expression in Context's exact order (charge scale computed once, reused for both the `magic_boost` scale and the `base_damage_scale_factor` call). Observable: `combat_melee_assembly.rs`'s six cases pass.
 5. **`crates/mechanics/src/combat/knockback.rs`.** `apply_knockback_impulse` is a direct translation of Context's own pseudocode, including the unconditional `power *= (1-resistance)` before the `power <= 0` early return (test 3's own asserted behavior), the degenerate-direction `rng.next_double()` fallback (a `while` loop re-drawing in groups of 4 calls until the sample clears `KNOCKBACK_DEGENERATE_THRESHOLD`, test 4), and the `on_ground`-branched Y formula. Observable: `combat_knockback.rs`'s five cases pass.

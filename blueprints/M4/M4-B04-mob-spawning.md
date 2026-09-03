@@ -31,7 +31,7 @@ Done when:
 
 ### Scope boundary — what this blueprint does and does not implement
 
-Per `11-roadmap-milestones.md`'s own M4 boundary ("tier-2 mob set per 05, do not implement every mob") and M4-B01's own already-fixed tier-2 roster (Item — no `MobCategory`, never naturally spawned; Zombie — `MobCategory::Monster`; Villager — *(none — `MISC` in real vanilla, never naturally spawned)*; Cow — `MobCategory::Creature`), this blueprint's natural spawn cycle populates exactly **two** species: **Zombie** (`Monster` category) and **Cow** (`Creature` category). **Villager is deliberately excluded from natural per-tick spawning** — in real vanilla, villagers are never a `NaturalSpawner` biome-list entry at all (they arrive via structure generation — the village jigsaw villagers pieces, plus the igloo basement — breeding, and zombie-villager curing, all out of M4's scope: worldgen is M5, breeding and curing are not named by M4's roadmap text) — so villagers appear in this engine only however a future blueprint chooses to place them (`/summon`-equivalent, breeding, curing), never through this blueprint's cycle. This is a bounded, cited scope decision, not an oversight.
+Per `11-roadmap-milestones.md`'s own M4 boundary ("tier-2 mob set per 05, do not implement every mob") and M4-B01's own already-fixed tier-2 roster (Item — `MobCategory::Misc`, vanilla registers the item entity type as `MISC` too, never naturally spawned; Zombie — `MobCategory::Monster`; Villager — `MobCategory::Misc` (real vanilla's own classification — `MISC` is a real category, not the absence of one; it is simply never a member of `MobCategory::ALL`, so it is structurally excluded from natural spawning, "`MobCategory` (MECH-D34)" below); Cow — `MobCategory::Creature`), this blueprint's natural spawn cycle populates exactly **two** species: **Zombie** (`Monster` category) and **Cow** (`Creature` category). **Villager is deliberately excluded from natural per-tick spawning** — in real vanilla, villagers are never a `NaturalSpawner` biome-list entry at all (they arrive via structure generation — the village jigsaw villagers pieces, plus the igloo basement — breeding, and zombie-villager curing, all out of M4's scope: worldgen is M5, breeding and curing are not named by M4's roadmap text) — so villagers appear in this engine only however a future blueprint chooses to place them (`/summon`-equivalent, breeding, curing), never through this blueprint's cycle. This is a bounded, cited scope decision, not an oversight.
 
 The dual-cap **algorithm** (category table, global/local formulas, message-substrate census) is implemented generically over all seven capped categories, since MECH-D34/D35 fix that algorithm for all seven regardless of which categories currently have any spawn-list content — but only `Monster` and `Creature` ever have a non-empty biome spawn list at M4's scope, so `Ambient`/`Axolotls`/`UndergroundWaterCreature`/`WaterCreature`/`WaterAmbient` are correctly-accounted-for but permanently empty until a future blueprint's biome/mob-list work populates them.
 
@@ -73,15 +73,15 @@ Fixed constants, sourced from MECH-D34 (authoritative planning-doc values, not r
 
 `no_despawn_distance` is **32 blocks for every category** (a category-independent constant, not a per-variant field — `docs/research/mc-26.2/23-spawning-math.md` §4: "hardcoded getter; the per-instance field of the same name is dead/unused"). Declaration index fixes both `MobCategory::ALL`'s array order and the `[u32; 7]` census-array index every wire type below uses — this exact order (`Monster, Creature, Ambient, Axolotls, UndergroundWaterCreature, WaterCreature, WaterAmbient`) is vanilla's own `MobCategory` enum declaration order, restated here as the binding convention since `RegionMessage::MobCensusReport`'s `[u32; 7]` payload (below) carries no field names and must agree with every reader on index meaning.
 
-`MISC` (uncapped, `-1`, never naturally spawned) is **not** a `MobCategory` variant in this blueprint's own enum — it never enters `spawningCategories` in vanilla either (`docs/research/mc-26.2/23-spawning-math.md` §3.2 step 5: "`MISC` excluded"), so omitting it entirely (rather than modeling an eighth, permanently-inert variant) is a strictly equivalent, simpler restatement.
+`Misc` (uncapped, `-1`) **is** an eighth `MobCategory` variant in this blueprint's own enum — modeled explicitly because a shipped tier-2 kind (`Villager`) is `MISC` in real vanilla, and `mob_category_for_kind` must be able to express "has a real category, just never naturally spawned" — the item entity type is registered as `MISC` as well, so every shipped kind has a real category and the query is total. `Misc`'s own vanilla-sourced constants (uncapped max `-1`, friendly, persistent, despawn distance 128 blocks — `MobCategory.java:14`, `MISC("misc", "MI", -1, true, true, 128)`) are recorded on the variant for completeness but are never read by any capped-category code path. `Misc` is never a member of `MobCategory::ALL` — the seven-element array above remains exactly MECH-D34's seven capped categories, unchanged — because `MISC` never enters `spawningCategories` in vanilla either (`docs/research/mc-26.2/23-spawning-math.md` §3.2 step 5: "`MISC` excluded"). Excluding `Misc` from `ALL` (rather than filtering it out of a per-tick iteration) is a strictly equivalent, simpler restatement of the identical vanilla behavior — it also means natural spawning skips every `Misc`-category kind automatically, with no separate exclusion check needed anywhere in `run_spawn_cycle`.
 
 `EntityKind::mob_category`, restated from M4-B01's own already-fixed tier-2 table (Context there, "Tier-2 entity kind list" — this blueprint does **not** modify `crates/mechanics/src/entity/kinds.rs`; the mapping lives in this blueprint's own `category.rs` as a free function, since `MobCategory` itself is a type this blueprint introduces and M4-B01 predates it):
 
 | `EntityKind` | `MobCategory` |
 |---|---|
-| `Item` | *(none — never naturally spawned)* |
+| `Item` | *(none — M4-B01's own already-fixed mapping, never naturally spawned)* |
 | `Zombie` | `Monster` |
-| `Villager` | *(none — `MISC` in real vanilla, uncapped and excluded from `SPAWNING_CATEGORIES`; never reached by this blueprint's own cycle — Scope boundary above)* |
+| `Villager` | `Misc` (real vanilla's own classification — uncapped and excluded from `SPAWNING_CATEGORIES`; `Misc` is never a member of `MobCategory::ALL`, so `Villager` is structurally never reached by this blueprint's own cycle — Scope boundary above) |
 | `Cow` | `Creature` |
 
 ### Mob-cap formula (MECH-D34), restated field-precise
@@ -162,20 +162,18 @@ Reconciliation note: the real per-species tag/hazard/signal-source checks this s
 `docs/research/mc-26.2/23-spawning-math.md` §3.9, overworld (`monster_spawn_block_light_limit = 0`, `monster_spawn_light_test = UniformInt(0, 7)`):
 
 ```
-fn is_dark_enough_to_spawn(rng, sky_light: u8, block_light: u8) -> bool:
+fn is_dark_enough_to_spawn(rng, sky_light: u8, block_light: u8, sky_darken: i32) -> bool:
     if sky_light as i32 > rng.next_int_bounded(32) { return false }   // 1 RNG call, always paid
     if block_light > 0 { return false }                              // 0 RNG calls (blockLightLimit = 0 in the overworld)
-    let brightness = max(sky_light, block_light) as i32               // vanilla's real term is max(block_light, sky_light - sky_darken);
-                                                                        // sky_darken is the level's own day/night darkening, which this
-                                                                        // project does not model yet (no day/night cycle at M4 scope) and
-                                                                        // is therefore 0 here, reducing to exactly this formula. Vanilla's
-                                                                        // thunder branch substitutes a fixed sky_darken of 10 in place of
-                                                                        // that darkening — not a wider sampling radius — likewise unmodeled
-                                                                        // since no weather system exists yet at M4 scope
+    let brightness = max(block_light as i32, sky_light as i32 - sky_darken)   // vanilla's real term, unabridged
     brightness <= rng.next_int_bounded(8)                              // 1 RNG call — UniformInt(0,7) sample
 ```
 
-Total RNG cost: **1 call** if the sky-light term fails; **2 calls** otherwise (whether the final roll passes or fails). Applies to `Monster`-category spawns only.
+`max(block_light, sky_light - sky_darken)` is vanilla's own real, permanent brightness term (`Monster.java`'s `isDarkEnoughToSpawn`, via `LevelReader.getRawBrightness`/`LevelLightEngine`'s `max(blockLight, skyLight - skyDampen)`) — `sky_darken` is an explicit, named input to this function, not a baked-in constant, so a future blueprint that adds a day/night cycle wires the level's own real darkening value straight through without touching this formula.
+
+Separately, and only as a **current-scope fact, not part of the formula above**: every call site in this blueprint passes `sky_darken = 0` today, because no day/night cycle exists yet in this project (M4 scope) — the level's own daylight-derived darkening is definitionally zero until one does. `sky_darken` will be sourced from the world's own daylight state once a future blueprint adds a day/night cycle; until then, `SpawnWorldAccess::sky_darken` (Deliverables, `cycle.rs`) is the single call site that fixes it at `0`, so that future change touches exactly one function body. Vanilla's own thunder branch substitutes a fixed `sky_darken` of `10` in place of the level's current darkening (still sampled at the single block position, not a wider radius) — likewise unmodeled today since no weather system exists yet at M4 scope, and likewise a future value the same `sky_darken` input will carry, not a separate mechanism.
+
+Total RNG cost: **1 call** if the sky-light term fails; **2 calls** otherwise (whether the final roll passes or fails) — independent of `sky_darken`'s value. Applies to `Monster`-category spawns only.
 
 ### Creature (animal) light rule — moderate confidence, no RNG
 
@@ -267,7 +265,7 @@ fn individuality_bonus(rng) -> f64:
 
 `individuality_bonus`'s 3-call cost (2 `next_double()` for the triangle sample, 1 `next_float()` for the left-handed roll) matches `docs/research/mc-26.2/23-spawning-math.md` §3.11 exactly; its return value is computed and then discarded by `build_and_spawn` (Scope boundary — no `Attribute` component exists yet to store it in).
 
-`is_spawn_position_legal(world, rng, category, pos)` = `is_on_ground_legal(world, pos) && (category == Monster).then(|| is_dark_enough_to_spawn(rng, world.sky_light(pos), world.block_light(pos))).unwrap_or_else(|| max(world.sky_light(pos), world.block_light(pos)) >= 9)` — i.e. the darkness gate for `Monster`, the light≥9 rule for `Creature`, restated as a single dispatch point since this blueprint ships only these two categories with real content.
+`is_spawn_position_legal(world, rng, category, pos)` = `is_on_ground_legal(world, pos) && (category == Monster).then(|| is_dark_enough_to_spawn(rng, world.sky_light(pos), world.block_light(pos), world.sky_darken())).unwrap_or_else(|| max(world.sky_light(pos), world.block_light(pos)) >= 9)` — i.e. the darkness gate for `Monster` (fed `world.sky_darken()`, `SpawnWorldAccess`'s own current-scope-`0` source, above), the light≥9 rule for `Creature` (never takes `sky_darken` — vanilla's own `Animal.checkAnimalSpawnRules` always samples with a hardcoded `skyDarkening` of `0`, independent of the level's real value, so this rule is correct as written regardless of scope), restated as a single dispatch point since this blueprint ships only these two categories with real content.
 
 `build_and_spawn` is the one point where the pure algorithm and the `SpawnWorldAccess` boundary meet — it constructs, entirely in pure Rust (no allocator, no `World`), `BaseEntity{pos: [pos.x as f64 + 0.5, pos.y as f64, pos.z as f64 + 0.5], velocity: [0.0;3], rotation: [yaw as f32, 0.0], fall_distance: 0.0, fire_ticks: -1, on_ground: false, invulnerable: false, portal_cooldown: 0, uuid: EntityUuid::new_random(), custom_name: None, custom_name_visible: false, silent: false, no_gravity: false, glowing: false, ticks_frozen: 0, has_visual_fire: false, status_flags: 0, pose: Pose::Standing}` plus `LivingEntity{hand_states: 0, health: default_max_health(kind), arrow_count: 0, stinger_count: 0, sleeping_bed_pos: None}` plus the kind's own unit `EntityPayload` (`ZombieBundle`/`CowBundle`, both fieldless) plus `MobMarker{ai_system: AiSystemKind::GoalSelector, persistence_required: false, can_pick_up_loot: false}` (both tier-2 kinds use the legacy GoalSelector system per M4-B01's own table; `can_pick_up_loot` conservatively `false` — the real per-species roll for vanilla zombies, `0.55 * difficulty.getSpecialMultiplier()` (0 percent on Normal in a fresh, briefly-inhabited world; the full 55 percent is reached only at effective difficulty 4.0 or above), is deferred, no pickup system consumes it yet, MECH-D51) — then calls `world.spawn_mob(kind, base, living, payload, marker, category)`, `SpawnWorldAccess`'s one mutating method. **Allocating the entity's real `RcEntityId`/network entity id and inserting `MobCategoryTag`/`DespawnTimer` is the production adapter's own job**, inside its `spawn_mob` implementation (`ecs.rs`, `SharedEntityIdAllocator`/`RegionNetworkIdAllocator`), exactly mirroring however M4-B01's own tracking-relevant identity components are already attached at a real `Commands::spawn` call site — the pure layer never touches an allocator. `default_max_health`: Zombie `20.0`, Cow `10.0` (moderate confidence, long-stable vanilla values, flagged for reconciliation against a real data-generator dump).
 
@@ -294,7 +292,14 @@ fn check_despawn(mob, nearest_player_dist_sqr: Option<f64>, category, remove_whe
     DespawnDecision::Keep
 ```
 
-`remove_when_far_away` is vanilla's own per-species distance-despawn-eligibility predicate, defaulting `true` and overridden `false` for every Animal — this blueprint's two shipped kinds resolve it as `true` for `Monster` (Zombie) and `false` for `Creature` (Cow, this blueprint's only shipped `Creature`-category kind, and an `Animal` in vanilla), so Cow is never despawned by either the instant-distance or the random-roll branch, matching vanilla exactly (a future `Creature`-category kind that is not an `Animal` in vanilla would need its own, non-category-derived override).
+`remove_when_far_away` is vanilla's own per-species distance-despawn-eligibility predicate (`Mob.removeWhenFarAway`), defaulting `true` (`Mob.java:680-682`) and overridden `false` for every `Animal` (`Animal.java:127-130`, no further override on `Cow`'s own class chain) — a class-hierarchy override in vanilla, flattened here to a per-`EntityKind` resolution since this blueprint ships a fixed, closed kind set. `remove_when_far_away_for_kind` (Deliverables, `despawn.rs`) is this blueprint's own resolver function, restated per shipped kind:
+
+| `EntityKind` | `MobCategory` | `remove_when_far_away` |
+|---|---|---|
+| `Zombie` | `Monster` | `true` |
+| `Cow` | `Creature` | `false` |
+
+`Item` and `Villager` are never naturally spawned by this blueprint (Scope boundary) and therefore never receive a `MobCategoryTag`/`DespawnTimer` — `check_despawn` is never invoked for either, so no predicate entry is needed for them. `Cow` resolving to `false` means it is never despawned by either the instant-distance or the random-roll branch, matching vanilla exactly — this is deliberately resolved **per kind**, not derived from `Creature`-category membership alone, because a future `Creature`-category kind that is not an `Animal` in vanilla would need its own, independent entry in this same table rather than inheriting `Cow`'s value.
 
 `no_action_ticks` increments by 1 every tick this function is called for a `Keep`-decided mob whose distance did not reset it (i.e. every Stage-6b tick a mob survives outside 32 blocks of the nearest player) — this blueprint's own `DespawnTimer.no_action_ticks` component field, mutated in place, mirroring vanilla's own `noActionTime` counter which increments unconditionally on every AI step regardless of goal-selector throttling. The random-roll check consumes exactly one `next_int_bounded(800)` call **only** when `no_action_ticks > 600`; it is not evaluated at all otherwise (zero RNG cost) — this blueprint's own despawn roll reuses the region's own `SpawnCycleRandom` stream for this Stage-6b roll too, a deliberate, bounded divergence from vanilla's own stream identity: vanilla's despawn roll draws from the mob's own per-entity `RandomSource`, not `Level.random`, but that per-entity stream is itself seeded from the same wall-clock-derived `RandomSupport.generateUniqueSeed()` source as `Level.random`, so despawn is likewise not a vanilla-bit-exact-reproducible quantity either way.
 
@@ -442,7 +447,7 @@ mod tables;
 pub use category::{MobCategory, mob_category_for_kind};
 pub use census::{GlobalMobCensus, KnownRegionIds, LocalCapCounts, MobCategoryCounts, RegionCensusState, global_cap};
 pub use cycle::{SpawnCycleRandom, SpawnWorldAccess, SpawnedMob, run_spawn_cycle, spawn_category_for_chunk};
-pub use despawn::{DespawnDecision, DespawnTimer, check_despawn};
+pub use despawn::{DespawnDecision, DespawnTimer, check_despawn, remove_when_far_away_for_kind};
 pub use ecs::{
     MobCategoryTag, RegionNetworkIdAllocator, SharedEntityIdAllocator, bootstrap_spawn_resources,
     register_mob_despawn, register_mob_spawn_cycle,
@@ -467,9 +472,17 @@ pub enum MobCategory {
     UndergroundWaterCreature,
     WaterCreature,
     WaterAmbient,
+    /// Uncapped (`-1`), never a member of `ALL` (Context, "`MobCategory` (MECH-D34)") —
+    /// real vanilla's own `MISC`, excluded from `SPAWNING_CATEGORIES`. Modeled as a real
+    /// variant, not folded into `mob_category_for_kind`'s `None` case, because `Villager`
+    /// (this blueprint's only shipped `Misc`-category kind) has a real category in
+    /// vanilla — it is just never naturally spawned, a different fact from `Item`'s true
+    /// categorylessness.
+    Misc,
 }
 
 impl MobCategory {
+    /// The seven capped categories only (MECH-D34) — `Misc` is never a member (Context).
     pub const ALL: [MobCategory; 7] = [
         MobCategory::Monster, MobCategory::Creature, MobCategory::Ambient,
         MobCategory::Axolotls, MobCategory::UndergroundWaterCreature,
@@ -477,7 +490,14 @@ impl MobCategory {
     ];
 
     /// 0-based, matching `ALL`'s declaration order and the census array convention.
+    /// Defined for the seven capped categories only — panics via `unreachable!()` if
+    /// called with `Misc`, a call this blueprint's own code never makes (`Misc` is never
+    /// a member of `ALL`, never returned by `spawn_list`/census/despawn code, and no
+    /// entity ever carries `MobCategoryTag(Misc)`, since `Villager` is never naturally
+    /// spawned, Scope boundary).
     pub const fn index(self) -> usize;
+    /// Panics via `unreachable!()` if called with `Misc` (see `index`'s doc comment —
+    /// identical never-called guarantee applies to every accessor below).
     pub const fn max_instances_per_chunk(self) -> u32;
     pub const fn is_friendly(self) -> bool;
     pub const fn is_persistent(self) -> bool;
@@ -489,9 +509,14 @@ impl MobCategory {
 }
 
 /// M4-B01's own already-fixed tier-2 kind→category table, restated (Context). `None`
-/// for `Item` and `Villager` (neither naturally spawned — `Villager` is `MISC` in real
-/// vanilla, uncapped and excluded from vanilla's own `SPAWNING_CATEGORIES`) and — at
-/// this blueprint's own scope — every kind with no non-empty spawn list yet.
+/// only for `Item` (M4-B01's own fixed mapping — genuinely has no `MobCategory`, never
+/// naturally spawned). Every other tier-2 kind has a real `MobCategory`: `Zombie =>
+/// Some(Monster)`, `Cow => Some(Creature)`, and `Villager => Some(Misc)` — real
+/// vanilla's own classification (`MISC` is a category, not the absence of one). `Misc`
+/// is never a member of `MobCategory::ALL`, so natural spawning skips every
+/// `Misc`-category kind exactly as vanilla excludes `MISC` from its own
+/// `SPAWNING_CATEGORIES`, with no separate exclusion check needed anywhere this
+/// function's result is consumed.
 pub const fn mob_category_for_kind(kind: EntityKind) -> Option<MobCategory>;
 ```
 
@@ -620,8 +645,11 @@ use crate::spawn::cycle::SpawnWorldAccess;
 pub fn is_on_ground_legal(world: &dyn SpawnWorldAccess, pos: BlockPos) -> bool;
 pub fn is_valid_empty_spawn_block(world: &dyn SpawnWorldAccess, pos: BlockPos) -> bool;
 
-/// Context: "Monster darkness gate". `sky_light`/`block_light` are `0..=15`.
-pub fn is_dark_enough_to_spawn(rng: &mut RcRandom, sky_light: u8, block_light: u8) -> bool;
+/// Context: "Monster darkness gate". `sky_light`/`block_light` are `0..=15`. `sky_darken`
+/// is vanilla's real, explicit formula input (`max(block_light, sky_light - sky_darken)`)
+/// — callers pass `world.sky_darken()` (`SpawnWorldAccess`, `cycle.rs`), which returns
+/// the fixed current-scope value `0` until a future day/night cycle exists (Context).
+pub fn is_dark_enough_to_spawn(rng: &mut RcRandom, sky_light: u8, block_light: u8, sky_darken: i32) -> bool;
 
 /// Context: "Creature (animal) light rule" — zero RNG cost, moderate confidence.
 pub fn is_animal_light_ok(sky_light: u8, block_light: u8) -> bool;
@@ -662,6 +690,14 @@ pub trait SpawnWorldAccess {
     fn has_fluid(&self, pos: BlockPos) -> bool;
     fn sky_light(&self, pos: BlockPos) -> u8;
     fn block_light(&self, pos: BlockPos) -> u8;
+    /// The level's own day/night sky-light darkening (Context, "Monster darkness gate"
+    /// — vanilla's real `skyDarken`/`skyDampen`, fed to `is_dark_enough_to_spawn` as its
+    /// explicit `sky_darken` input). Every implementation at this blueprint's own current
+    /// scope returns `0` — no day/night cycle exists yet in this project — a fixed,
+    /// current-scope fact, not part of the formula itself; a future day/night-cycle
+    /// blueprint changes exactly this one method body to source the real value, no other
+    /// call site.
+    fn sky_darken(&self) -> i32;
     /// Every currently-loaded chunk with at least one player within 128 blocks of the
     /// chunk's own center — vanilla's own exact, definitive spawn-eligibility predicate
     /// (`ChunkMap.playerIsCloseEnoughForSpawning`'s Euclidean squared-distance test, not
@@ -708,12 +744,23 @@ pub fn spawn_category_for_chunk(
 ### `crates/mechanics/src/spawn/despawn.rs`
 
 ```rust
+use crate::entity::EntityKind;
 use crate::random::RcRandom;
 use crate::spawn::category::MobCategory;
 
 /// Per-mob despawn state (Context: "Despawn rules"). `bevy_ecs::Component`.
 #[derive(bevy_ecs::prelude::Component, Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DespawnTimer { pub no_action_ticks: u32 }
+
+/// Vanilla's own per-species `Mob.removeWhenFarAway` predicate (Context, "Despawn rules"
+/// predicate table), resolved per `EntityKind` rather than per `MobCategory` — vanilla's
+/// own override lives on the class hierarchy (`Animal` overrides it for every animal
+/// species), which this blueprint flattens to a per-kind table since it ships a fixed,
+/// closed kind set; a future `Creature`-category kind that is not an `Animal` in vanilla
+/// gets its own entry here, never inherited from `Cow`'s. `Zombie => true`, `Cow =>
+/// false`. Never called for `Item`/`Villager` — neither is naturally spawned by this
+/// blueprint, so neither ever carries a `DespawnTimer`/`MobCategoryTag`.
+pub const fn remove_when_far_away_for_kind(kind: EntityKind) -> bool;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DespawnDecision { Keep, Despawn }
@@ -828,7 +875,8 @@ No packet code, no NBT code, and no change to M4-B01's tracking system are neede
 1. `mob_category_constants_match_mech_d34` — table-driven, all seven categories' `max_instances_per_chunk`/`is_friendly`/`is_persistent`/`despawn_distance_blocks` against Context's own table.
 2. `no_despawn_distance_is_32_for_every_category`.
 3. `global_cap_magic_number_is_289`.
-4. `mob_category_for_kind_matches_tier2_table` — `Item => None`, `Zombie => Some(Monster)`, `Villager => None`, `Cow => Some(Creature)`.
+4. `mob_category_for_kind_matches_tier2_table` — `Item => Some(Misc)`, `Zombie => Some(Monster)`, `Villager => Some(Misc)`, `Cow => Some(Creature)`; the function returns `None` for no shipped kind (the `Option` stays only for kinds a later milestone adds before classifying them).
+5. `misc_is_excluded_from_mob_category_all` — `MobCategory::ALL` has exactly 7 elements and does not contain `Misc` — pins that natural spawning structurally skips every `Misc`-category kind (`Villager`) with no separate exclusion check, matching vanilla's own `SPAWNING_CATEGORIES` filter.
 
 ### `crates/mechanics/tests/spawn_census.rs`
 
@@ -850,9 +898,10 @@ No packet code, no NBT code, and no change to M4-B01's tracking system are neede
 ### `crates/mechanics/tests/spawn_placement.rs`
 
 1. `on_ground_legal_when_solid_below_and_open_above` / `illegal_when_pos_itself_is_solid` / `illegal_when_block_above_is_solid` / `illegal_when_support_block_is_not_full_opaque` — a small in-memory test-double `SpawnWorldAccess` (three or four fixed columns).
-2. `darkness_gate_costs_one_call_when_sky_term_fails` / `costs_two_calls_when_sky_term_passes` — assert via post-call `RcRandom` state comparison against a manually-replayed reference sequence.
-3. `darkness_gate_is_deterministic_for_fixed_seed_and_inputs`.
-4. `animal_light_rule_boundary_at_9` — `8 => false`, `9 => true`, zero RNG calls in both cases.
+2. `darkness_gate_costs_one_call_when_sky_term_fails` / `costs_two_calls_when_sky_term_passes` — `sky_darken = 0` (this blueprint's own current-scope value, Context) — assert via post-call `RcRandom` state comparison against a manually-replayed reference sequence.
+3. `darkness_gate_is_deterministic_for_fixed_seed_and_inputs` — `sky_darken = 0`.
+4. `darkness_gate_formula_subtracts_sky_darken_from_sky_light` — a fixed seed whose sky-light-term roll is pre-verified to pass, then two calls differing only in `sky_darken` (e.g. `sky_light = 10, block_light = 0, sky_darken = 0` vs. the same inputs with `sky_darken = 5`) compared against a manually-computed `max(block_light, sky_light - sky_darken)` reference and a fixed final-roll draw — pins that the brightness term is the real vanilla formula (`max(block_light, sky_light - sky_darken)`), not the current-scope-`0` simplification `max(sky_light, block_light)`.
+5. `animal_light_rule_boundary_at_9` — `8 => false`, `9 => true`, zero RNG calls in both cases (`is_animal_light_ok` takes no `sky_darken` input — Context, "Creature (animal) light rule" — vanilla's own `Animal.checkAnimalSpawnRules` always samples with a hardcoded `skyDarkening` of `0`, independent of the level's real value).
 
 ### `crates/mechanics/tests/spawn_cycle.rs`
 
@@ -875,6 +924,8 @@ Uses a synthetic test-double `SpawnWorldAccess` with a taller, more spawn-friend
 5. `persistence_required_always_keeps_and_resets_timer` — `persistence_required = true`, arbitrary distance/timer — `Keep`, `timer.no_action_ticks` reset to `0`.
 6. `within_32_blocks_resets_inactivity_timer` — `dist_sqr < 32^2` — `Keep`, timer reset to `0` regardless of its prior value.
 7. `remove_when_far_away_false_prevents_all_despawn` — `remove_when_far_away = false`, both the instant-distance condition and the random-roll condition (timer, roll, distance) independently satisfied — `Keep` in both cases; the instant-distance case consumes zero RNG calls, the random-roll case still consumes exactly one (the roll is evaluated before the conjunct short-circuits).
+8. `remove_when_far_away_for_kind_matches_shipped_table` — `EntityKind::Zombie => true`, `EntityKind::Cow => false` (Context, "Despawn rules" predicate table).
+9. `cow_never_despawns_by_distance` — `check_despawn` fed `remove_when_far_away_for_kind(EntityKind::Cow)` directly (resolves to `false`), exercised against both the instant-distance scenario (`dist_sqr` just over `128^2`) and the random-roll-eligible scenario (`no_action_ticks = 601`, `dist_sqr` between `32^2` and `128^2`) — `Keep` in both, pinning that Cow, this blueprint's only shipped `Creature`-category kind, is never despawned by distance in this engine, matching vanilla's `Animal` override exactly.
 
 ### `crates/server/tests/mob_spawn_cycle_integration.rs`
 
@@ -884,13 +935,13 @@ Uses a synthetic test-double `SpawnWorldAccess` with a taller, more spawn-friend
 
 1. **`rc-messaging`**: add `MobCensusReport` + the new `RegionMessage` variant, re-export. Observable: `cargo build -p rc-messaging`; `mob_census_report_roundtrips_through_serde` and `region_message_size_bound_still_holds` pass.
 2. **`rc-scheduler`**: `messaging_bridge.rs`'s `MobCensusInbox`, the two `executor.rs` edits, the `lib.rs` re-export. Observable: `mob_census_inbox_bridges_inbound_reports_at_stage1` passes; every pre-existing `rc-scheduler` test still passes unchanged.
-3. **`rc-mechanics`: `spawn/category.rs`**. Implement the table + `mob_category_for_kind`. Observable: `spawn_category.rs`'s four tests pass.
+3. **`rc-mechanics`: `spawn/category.rs`**. Implement the table + `mob_category_for_kind` (including the `Misc` variant and its `Villager => Some(Misc)` mapping). Observable: `spawn_category.rs`'s five tests pass.
 4. **`rc-mechanics`: `spawn/tables.rs`**. Implement the fixed spawn list, `pick_weighted` (cumulative-weight linear scan, one `next_int_bounded(total_weight)` draw when non-empty), `default_max_health`. Observable: `spawn_tables.rs`'s four tests pass.
 5. **`rc-mechanics`: `spawn/placement.rs`**. Implement `is_on_ground_legal`/`is_valid_empty_spawn_block`/`is_dark_enough_to_spawn`/`is_animal_light_ok` exactly per Context's pseudocode. Observable: `spawn_placement.rs`'s tests pass.
 6. **`rc-mechanics`: `spawn/census.rs`**. Implement `MobCategoryCounts`/`LocalCapCounts`/`RegionCensusState`/`GlobalMobCensus`/`global_cap`. Observable: `spawn_census.rs`'s seven tests pass.
-7. **`rc-mechanics`: `spawn/despawn.rs`**. Implement `check_despawn` exactly per Context's pseudocode. Observable: `spawn_despawn.rs`'s seven tests pass.
+7. **`rc-mechanics`: `spawn/despawn.rs`**. Implement `check_despawn` and `remove_when_far_away_for_kind` exactly per Context's pseudocode and predicate table. Observable: `spawn_despawn.rs`'s nine tests pass.
 8. **`rc-mechanics`: `spawn/cycle.rs`**. Implement `SpawnCycleRandom`, `SpawnWorldAccess` (trait only — no impl here), `run_spawn_cycle`, `spawn_category_for_chunk` exactly per Context's pseudocode (anchor roll, redstone-conductor gate, 3-group-try loop, weighted species pick, group-size reroll, placement legality dispatch, yaw roll, individuality-bonus burn, cluster-size cap). Observable: `spawn_cycle.rs`'s seven tests pass, using this step's own small in-crate test-double `SpawnWorldAccess` (test-only, not exported).
-9. **`rc-mechanics`: `spawn/ecs.rs`**. Implement `MobCategoryTag`, `SharedEntityIdAllocator`, `RegionNetworkIdAllocator`, the real `SpawnWorldAccess` adapter over a production `World` (`Query`-based, mirroring M3-B01's own `stage4::ecs` adapter shape), `system_mob_spawn_cycle` (drains `MobCensusInbox` into `GlobalMobCensus`, builds `RegionCensusState`, calls `run_spawn_cycle`, emits `MobCensusReport`s every 20 ticks per `KnownRegionIds`), `system_mob_despawn` (iterates live tagged mobs, calls `check_despawn` with each mob's own `remove_when_far_away` term — `true` for `Monster`, `false` for `Creature` — issues `Commands::despawn`), `register_mob_spawn_cycle`/`register_mob_despawn`/`bootstrap_spawn_resources`.
+9. **`rc-mechanics`: `spawn/ecs.rs`**. Implement `MobCategoryTag`, `SharedEntityIdAllocator`, `RegionNetworkIdAllocator`, the real `SpawnWorldAccess` adapter over a production `World` (`Query`-based, mirroring M3-B01's own `stage4::ecs` adapter shape — `sky_darken()` returns the fixed current-scope value `0`, Context), `system_mob_spawn_cycle` (drains `MobCensusInbox` into `GlobalMobCensus`, builds `RegionCensusState`, calls `run_spawn_cycle`, emits `MobCensusReport`s every 20 ticks per `KnownRegionIds`), `system_mob_despawn` (iterates live tagged mobs, calls `check_despawn` with each mob's own `remove_when_far_away_for_kind(kind)` term — `true` for `Zombie`, `false` for `Cow` — issues `Commands::despawn`), `register_mob_spawn_cycle`/`register_mob_despawn`/`bootstrap_spawn_resources`.
 10. **`crates/mechanics/src/lib.rs`**: add `pub mod spawn;`.
 11. **`rusty-clanker-server`**: the three composition-root wiring points (Deliverables). Observable: `mob_spawn_cycle_integration.rs`'s test passes.
 12. Full-workspace pass: `cargo nextest run -p rc-messaging -p rc-scheduler -p rc-mechanics -p rusty-clanker-server`; `cargo run -p xtask -- fmt-check`; `cargo run -p xtask -- lint`; `cargo run -p xtask -- lint-deps`.
