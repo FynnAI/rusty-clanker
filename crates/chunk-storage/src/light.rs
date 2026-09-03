@@ -4,12 +4,27 @@ use bevy_ecs::prelude::Component;
 /// section, one above the highest).
 pub const LIGHT_SECTION_COUNT: usize = crate::column::SECTION_COUNT + 2;
 
-/// One 16³ light section's nibble-packed sky/block arrays. `None` = vanilla's own
-/// "not yet initialized" shortcut (WORLD-D8).
+/// One light channel's nibble-packed state for one 16³ section (WORLD-D8, amended).
+/// Three states, matching vanilla's own `DataLayer` structural distinctions exactly:
+/// `Uninitialized` is vanilla's own "not yet initialized" shortcut -- no `DataLayer`
+/// object at all for this section/channel; `Filled(v)` is vanilla's own
+/// allocated-but-implicit-value layer whose backing array was never materialized
+/// (`v == 0` is exactly vanilla's own structural "empty" case -- a chunk-packet light
+/// mask consumer dispatches on this variant alone, never a scan of the 4096 nibbles);
+/// `Data` is a fully materialized, heterogeneous per-nibble array.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LightNibbles {
+    #[default]
+    Uninitialized,
+    Filled(u8),
+    Data(Box<[u8; 2048]>),
+}
+
+/// One 16³ light section's nibble-packed sky/block state (WORLD-D8, amended).
 #[derive(Clone, Debug, Default)]
 pub struct LightSection {
-    pub sky: Option<Box<[u8; 2048]>>,
-    pub block: Option<Box<[u8; 2048]>>,
+    pub sky: LightNibbles,
+    pub block: LightNibbles,
 }
 
 /// Stored light data only (WORLD-D8) — no BFS propagator, no cross-chunk seeding

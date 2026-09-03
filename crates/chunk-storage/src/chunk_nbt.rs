@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use crate::{
     BiomeColumn, BiomeId, BlockEntityRecord, BlockStateColumn, BlockStateId, ChunkGenStatus,
     ChunkKeyTag, ChunkPersistenceState, ChunkStatus, HeightmapKind, HeightmapSet, LightColumn,
-    LightSection, PaletteThresholds, PalettedContainer,
+    LightNibbles, LightSection, PaletteThresholds, PalettedContainer,
 };
 use rc_core::{ChunkKey, DimensionId};
 use rc_nbt::{Mutf8Str, Mutf8String, borrow, owned};
@@ -291,7 +291,7 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
         let mut out = Vec::with_capacity(crate::SECTION_COUNT + 2);
 
         let below = light.section(0);
-        if below.sky.is_some() || below.block.is_some() {
+        if below.sky != LightNibbles::Uninitialized || below.block != LightNibbles::Uninitialized {
             let mut fields: Vec<(Mutf8String, owned::NbtTag)> =
                 vec![("Y".into(), owned::NbtTag::Byte((MIN_SECTION_Y - 1) as i8))];
             fields.extend(light_field_pairs(below));
@@ -372,7 +372,7 @@ impl<'a, N: BlockStateNames, B: BiomeNames> ChunkNbtCodec<'a, N, B> {
         }
 
         let above = light.section(crate::LIGHT_SECTION_COUNT - 1);
-        if above.sky.is_some() || above.block.is_some() {
+        if above.sky != LightNibbles::Uninitialized || above.block != LightNibbles::Uninitialized {
             let mut fields: Vec<(Mutf8String, owned::NbtTag)> = vec![(
                 "Y".into(),
                 owned::NbtTag::Byte((MIN_SECTION_Y + crate::SECTION_COUNT as i32) as i8),
@@ -684,21 +684,32 @@ fn read_extra(tag: &borrow::NbtCompound<'_, '_>) -> Vec<(Mutf8String, owned::Nbt
     extra
 }
 
+/// Materializes a `LightNibbles` value into a full on-disk 2048-byte array, or `None`
+/// if untracked (`Uninitialized`) -- WORLD-D8's own three-state convention applied to
+/// this crate's on-disk writer: `Filled(v)` is packed into a uniform array on demand
+/// (no backing array existed on the in-memory side until this write needed one --
+/// mirrors vanilla's own `getData()` lazy materialization), `Data` is written as-is.
+/// This is a variant-only dispatch, never a scan of `Data`'s own nibble content (M2
+/// field-report ledger entry: nothing in this crate's own write path currently
+/// produces a `Filled` section -- this arm exists so a future producer's data is
+/// never silently dropped on save).
+fn materialized_nibbles(nibbles: &LightNibbles) -> Option<Vec<u8>> {
+    match nibbles {
+        LightNibbles::Uninitialized => None,
+        LightNibbles::Filled(v) => Some(vec![(v << 4) | v; 2048]),
+        LightNibbles::Data(arr) => Some(arr.to_vec()),
+    }
+}
+
 /// `BlockLight`/`SkyLight` field pairs for one section, in that fixed order -- shared by
 /// every real and padding section entry `build_sections` writes.
 fn light_field_pairs(section: &LightSection) -> Vec<(Mutf8String, owned::NbtTag)> {
     let mut fields = Vec::new();
-    if let Some(block_light) = &section.block {
-        fields.push((
-            "BlockLight".into(),
-            owned::NbtTag::ByteArray(block_light.to_vec()),
-        ));
+    if let Some(block_light) = materialized_nibbles(&section.block) {
+        fields.push(("BlockLight".into(), owned::NbtTag::ByteArray(block_light)));
     }
-    if let Some(sky_light) = &section.sky {
-        fields.push((
-            "SkyLight".into(),
-            owned::NbtTag::ByteArray(sky_light.to_vec()),
-        ));
+    if let Some(sky_light) = materialized_nibbles(&section.sky) {
+        fields.push(("SkyLight".into(), owned::NbtTag::ByteArray(sky_light)));
     }
     fields
 }
@@ -711,13 +722,13 @@ fn read_light_only(
         let array: [u8; 2048] = block_light
             .try_into()
             .map_err(|_| ChunkNbtError::WrongFieldType("BlockLight"))?;
-        out.block = Some(Box::new(array));
+        out.block = LightNibbles::Data(Box::new(array));
     }
     if let Some(sky_light) = section.byte_array("SkyLight") {
         let array: [u8; 2048] = sky_light
             .try_into()
             .map_err(|_| ChunkNbtError::WrongFieldType("SkyLight"))?;
-        out.sky = Some(Box::new(array));
+        out.sky = LightNibbles::Data(Box::new(array));
     }
     Ok(())
 }

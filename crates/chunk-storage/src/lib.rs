@@ -45,7 +45,7 @@ pub use column::{
 };
 pub use heightmap::{BlockOpacity, HeightmapKind, HeightmapSet};
 pub use level_dat::LevelDat;
-pub use light::{LIGHT_SECTION_COUNT, LightColumn, LightSection};
+pub use light::{LIGHT_SECTION_COUNT, LightColumn, LightNibbles, LightSection};
 pub use palette::{Palette, PalettedContainer};
 pub use persistence::ChunkPersistenceState;
 pub use player::{
