@@ -1520,6 +1520,165 @@ Entries name the milestone that surfaced them and the code they concern.
   move under `xtask codegen`'s own datagen pipeline (mirroring how block
   states and registries are already generated) once a second consumer of
   packet-name data appears in a non-azalea-linked crate.
+- **M4-B01 (entity infrastructure) — nine items surfaced while implementing the
+  blueprint largely as specified; none change the shipped wire format's own
+  correctness, all are bounded and cited in the implementation commit body.**
+
+  1. **`SpawnEntity` cannot use `#[derive(RcPacket)]` as the blueprint's own
+     Deliverables show, for its bare `uuid: u128` field.** Implementing a
+     foreign trait (`rc_protocol::WireWrite`/`WireRead`) for a foreign
+     primitive type (`u128`) from the downstream `rusty-clanker-server` crate
+     violates Rust's own orphan-impl rule (E0117) regardless of which crate's
+     file the impl is written in — and the blueprint's own Constraint (f)
+     explicitly requires the impl stay out of `rc-protocol` (the one crate
+     where it *would* be legal, since `WireWrite` is defined there). Resolved
+     by hand-implementing `RcPacket` for `SpawnEntity` directly — mirroring
+     `SetEntityData`'s own already-established "hand-rolled when the derive
+     genuinely cannot express it" precedent, extended to cover this
+     orphan-rule limitation too — with private free functions
+     (`write_u128_be`/`read_u128_be`) for the raw-`u128` field. Every field,
+     wire order, and byte layout is unchanged from Deliverables; only the
+     derive-vs-hand-written mechanism differs. Needs a decision on whether a
+     future protocol blueprint should instead add a real `WireWrite`/`WireRead
+     for u128` impl inside `rc-protocol` itself, making the derive usable
+     again for any future packet with a bare-`u128` field.
+
+  2. **The `Stage`/`DomainGroup` breaking-change blast radius is wider than
+     the blueprint's own Context names.** Removing `DomainGroup::AiPhysics`/
+     `Stage::EntityAiPhysics` breaks not just `pipeline_ordering.rs`'s test 1
+     (the only file Context and Constraint (a) name) but five more
+     already-merged `rc-scheduler` test files that also construct
+     `DomainGroup::AiPhysics` values: `determinism.rs`,
+     `registration_validation.rs`, `soak_8_regions_20tps.rs`,
+     `stage5_stage7_registration.rs` (also needed its own `DomainGroup::ALL`
+     member-count/index assertions updated from 7 to 8), and `sync_points.rs`.
+     Resolved by mechanically renaming every `AiPhysics`/`EntityAiPhysics`
+     occurrence in all six files to `EntityPhysicsIntegration`/
+     `EntityPhysicsIntegration` (the semantic successor group — "ordinary
+     conflict-graph-batched, deferred dispatch," never `EntityAiSelection`,
+     which is read-only and would silently discard the `Commands`-based
+     systems several of these tests exercise), placed in the test-authoring
+     changeset — legal because `xtask::path_guard::check_paths` only inspects
+     `Implementation`-typed commits, never `TestAuthoring`/`Governance` ones,
+     so this fell within the same "changeset boundary" Constraint (a) already
+     licenses for `pipeline_ordering.rs`, once read against the actual gate's
+     mechanics rather than Context's own narrower prose.
+
+  3. **`rc_registries::generated_v776::registries::RegistryEntryId` (the
+     `xtask codegen` output) does not derive `serde::Serialize`/`Deserialize`
+     at all.** The blueprint's own Deliverables put a blanket
+     `#[derive(serde::Serialize, serde::Deserialize)]` on `VillagerData` and
+     `ItemStackRecord`, both of which carry a `RegistryEntryId` field directly
+     — this does not compile against the actual generated file (which derives
+     only `Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash`).
+     Resolved with a `#[serde(with = "...")]` bridge module
+     (`registry_entry_id_serde`, delegating to the wrapped `u32`) rather than
+     hand-editing the generated file or its `xtask` codegen template (both
+     out of an implementation changeset's own legitimate scope regardless).
+     Needs a decision on whether `xtask codegen`'s own registry-table
+     template should derive `serde::Serialize`/`Deserialize` at the source,
+     which would let a future blueprint drop this bridge module.
+
+  4. **`simdnbt` 0.10.0's own `serde` feature implements `Serialize` for
+     `owned::NbtCompound`/`NbtTag` but no `Deserialize` at all for either
+     type.** The blueprint's Deliverables put `#[derive(serde::Serialize,
+     serde::Deserialize)]` on `BaseEntity` (carrying `custom_name:
+     Option<owned::NbtTag>`) and `ItemStackRecord`/`ItemBundle` (carrying
+     `components: Option<owned::NbtCompound>`) — again, does not compile as
+     specified. Resolved with two more `#[serde(with = "...")]` bridge
+     modules (`nbt_tag_serde`/`nbt_compound_serde`, `crates/mechanics/src/
+     entity/nbt.rs`) that round-trip through this crate's own byte-level NBT
+     writer/reader (`rc_nbt::write_owned`/`read_owned`) instead of serde's
+     native (de)serialization — needed for `EntitySnapshot`'s own `postcard`
+     round trip (`snapshot.rs`) to actually compile and work end to end.
+
+  5. **The wire-shape table's own `OptionalTextComponent` prose is
+     internally ambiguous between a bare, unnamed `TAG_String` and M1-B05's
+     real `NbtTextComponent` shape.** Read literally ("the plain string as
+     network NBT's `TAG_String` payload") it describes a bare tag with no
+     name field at all; but the same sentence also says "this blueprint
+     reuses M1-B05's own hand-rolled minimal NBT writer shape for exactly
+     this," and that real, already-client-verified type
+     (`rc_protocol::wire::NbtTextComponent`) is a `{"text": "..."}`-shaped
+     **compound** (`TAG_Compound -> TAG_String "text" -> TAG_End`), not a
+     bare string. Resolved in favor of the named, real, already-verified
+     type: `rusty-clanker-server::entity_packets::encode_metadata_value`
+     reuses `NbtTextComponent` directly, and `rc-mechanics`'s own independent
+     reimplementation (`entity::metadata::encode_network_nbt_text`/
+     `decode_network_nbt_text`, which cannot depend on `rc-protocol`, WS-D3
+     rule 2) was corrected to reproduce the identical compound-wrapped shape
+     byte-for-byte, so the two independent implementations stay
+     interchangeable rather than silently diverging on a field no acceptance
+     test's own known-answer vector happens to pin (only the `None` case is
+     hand-derived-byte-tested).
+
+  6. **`ItemStackRecord`'s own derive list in Deliverables names `Eq`, which
+     does not compile.** `components: Option<rc_nbt::owned::NbtCompound>`
+     cannot derive `Eq` — `simdnbt` 0.10.0's own `owned::NbtCompound`/`NbtTag`
+     derive only `PartialEq` (a compound can transitively hold an `f32`/
+     `f64` leaf). Dropped `Eq` from `ItemStackRecord`'s derive list; every
+     other named derive is unchanged.
+
+  7. **`AiSystemKind`/`MobMarker` were omitted from `entity/mod.rs`'s own
+     literal `pub use kinds::{...}` re-export list**, despite `nbt.rs`'s own
+     `EntityRecord.mob: Option<super::MobMarker>` field and the Acceptance
+     tests' own prose (`entity_nbt_roundtrip.rs`'s test cases construct bare
+     `MobMarker { .. }`/`AiSystemKind::GoalSelector`) both assuming
+     crate-root-level reachability. Added both to the re-export list — a
+     bounded completion, not a new type or a design change.
+
+  8. **No real `RcEntityId -> network_entity_id` directory exists yet (ARCH-D24's
+     directory is explicitly out of this blueprint's own scope), but
+     `SpawnEntity.entity_id`/`RemoveEntities.entity_ids` need a wire-visible
+     `i32` regardless, and `apply_tracking_delta_for_player`'s own Deliverables
+     signature carries only `RcEntityId` — no network id anywhere in its
+     `live_entities` iterator item type.** Resolved with an explicitly-named,
+     bounded stand-in (`stand_in_network_id`, `entity_tracking.rs`: the low
+     32 bits of the `RcEntityId`'s own `u64` value) — safe and collision-free
+     for this milestone's own small, sequential debug-spawn seam, but not a
+     real allocator. Needs a decision on which future blueprint owns the real
+     directory and whether `apply_tracking_delta_for_player`'s own signature
+     should gain a network-id lookup parameter at that point (its current
+     shape was deliberately left generic enough to accept one without a
+     breaking change, per the blueprint's own Implementation step 13 text).
+
+  9. **No seam existed to position two real player connections apart from
+     each other for `play_entity_spawn_track_untrack.rs`'s own "one near, one
+     far" observer scenario.** Every fresh join lands at the identical
+     `SPAWN_POSITION` (`connection.rs`), and a real client-claimed movement
+     packet large enough to relocate a player hundreds of blocks away is
+     rejected by `evaluate_movement`'s own `SPEED_CHECK_THRESHOLD`. Added one
+     small new test/debug method, `HardcodedWorld::debug_teleport_player`
+     (`world.rs`) — a server-authoritative position overwrite bypassing the
+     speed check entirely, mirroring the already-established
+     `debug_set_block_state`/`debug_set_survival` "test/diagnostic only,
+     bypasses production rules" precedent exactly. Not named in the
+     blueprint's own Deliverables; a small, cited, test-only addition needed
+     to make the acceptance test constructible at all.
+
+  Also noted, not acted on: `12-workspace-structure.md`'s own `[workspace.
+  dependencies]` table says `uuid` is pinned at `1.24.0`; the actual
+  `Cargo.toml` at the time of this implementation pins `1.25.0` (features
+  unchanged, `["v4"]`) — a version-drift discrepancy between the planning
+  document's own restated pin and the real workspace, not something this
+  blueprint's own scope corrects.
+
+  **Changeset-packaging note (not a decision item, recorded for completeness):**
+  this blueprint's own Acceptance tests section describes the test-authoring
+  changeset as including every new `src/*.rs` file "with every function body
+  replaced with `todo!()`." The actual changeset instead places the
+  acceptance tests and the six scheduler test-file renames alone in the
+  test-authoring commit, with zero `todo!()`-stubbed src skeletons — every
+  src-side file (the `rc-entity-macros` derive implementation, the whole
+  `rc-mechanics` `entity` module, the `rc-scheduler` pipeline/executor edits,
+  and every new/changed `rusty-clanker-server` file) lands in one
+  implementation commit instead. This still satisfies every mechanically-
+  checked property (tests committed first; the test-authoring commit's own
+  new content does not compile until the implementation commit lands, since
+  none of the types/functions it references exist yet; the implementation
+  commit never touches a protected test path) but is a real, deliberate
+  simplification of the blueprint's own more literal two-pass packaging
+  description, made under this implementation wave's own time budget.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
