@@ -15,8 +15,8 @@ use rc_mechanics::block_entity::hopper::{HopperBehavior, HopperStateIds, registe
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::SignalSourceRegistry;
 use rc_mechanics::{
-    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine,
-    RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 
 use support::{FakeWorld, TestSignalSource};
@@ -38,6 +38,7 @@ struct Scratch {
     events: BlockEventQueue,
     outbound: Vec<(rc_messaging::Address, rc_messaging::RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
+    light_dirty: LightDirtyQueue,
     ownership: RegionOwnership,
 }
 
@@ -49,6 +50,7 @@ impl Scratch {
             events: BlockEventQueue::new(),
             outbound: Vec::new(),
             changed: Vec::new(),
+            light_dirty: LightDirtyQueue::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -63,6 +65,7 @@ impl Scratch {
             changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick: 0,
+            light_dirty: &mut self.light_dirty,
         }
     }
 }

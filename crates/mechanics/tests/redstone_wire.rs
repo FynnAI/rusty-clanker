@@ -11,8 +11,8 @@ use rc_mechanics::direction::{Direction, NEIGHBOR_CHANGED_ORDER};
 use rc_mechanics::redstone::wire::WireConnections;
 use rc_mechanics::redstone::{RedstoneSignalSource, SignalSourceRegistry, WireBehavior};
 use rc_mechanics::{
-    BlockBehavior, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine, PendingUpdate,
-    RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehavior, BlockEventQueue, BlockWorldAccess, LightDirtyQueue, NeighborUpdateEngine,
+    PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 
@@ -80,6 +80,7 @@ struct Harness {
     events: BlockEventQueue,
     outbound: Vec<(Address, RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
+    light_dirty: LightDirtyQueue,
     ownership: RegionOwnership,
 }
 
@@ -94,6 +95,7 @@ impl Harness {
             events: BlockEventQueue::new(),
             outbound: Vec::new(),
             changed: Vec::new(),
+            light_dirty: LightDirtyQueue::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -108,6 +110,7 @@ impl Harness {
             changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick: 0,
+            light_dirty: &mut self.light_dirty,
         }
     }
 }
@@ -139,6 +142,7 @@ fn wire_signal_falloff_along_a_straight_line_composition_case() {
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -152,6 +156,7 @@ fn wire_signal_falloff_along_a_straight_line_composition_case() {
                 events,
                 outbound,
                 changed,
+                light_dirty,
                 ownership,
                 current_tick: 0,
             };
@@ -216,6 +221,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -229,6 +235,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
                 events,
                 outbound,
                 changed,
+                light_dirty,
                 ownership,
                 current_tick: 0,
             };

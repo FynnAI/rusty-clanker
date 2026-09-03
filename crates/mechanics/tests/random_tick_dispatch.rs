@@ -11,8 +11,8 @@ use rc_mechanics::behavior::RandomTickContext;
 use rc_mechanics::random_tick::{WorldSeed, random_tick_chunk};
 use rc_mechanics::stage5::run_random_tick_phase;
 use rc_mechanics::{
-    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine,
-    RegionOwnership, ScheduledTickQueue,
+    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
 };
 use rc_messaging::{Address, RegionId, RegionMessage};
 
@@ -57,6 +57,7 @@ fn harness() -> (
     BlockEventQueue,
     Vec<(Address, RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
+    LightDirtyQueue,
     RegionOwnership,
 ) {
     (
@@ -65,6 +66,7 @@ fn harness() -> (
         BlockEventQueue::new(),
         Vec::new(),
         Vec::new(),
+        LightDirtyQueue::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -108,7 +110,15 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
     );
 
     let seed = WorldSeed(55);
-    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
 
     run_random_tick_phase(
         &mut world,
@@ -122,6 +132,7 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         &ownership,
     );
 
@@ -142,7 +153,15 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
 
     let registry = BlockBehaviorRegistry::new(); // only NoOpBehavior, nothing registered
     let seed = WorldSeed(77);
-    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
 
     run_random_tick_phase(
         &mut world,
@@ -156,6 +175,7 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         &ownership,
     );
 
@@ -182,7 +202,15 @@ fn multiple_chunks_are_visited_in_ascending_order() {
     );
 
     let seed = WorldSeed(88);
-    let (mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) = harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
 
     // Pre-sorted by the caller, per this function's own doc comment.
     run_random_tick_phase(
@@ -197,6 +225,7 @@ fn multiple_chunks_are_visited_in_ascending_order() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         &ownership,
     );
 

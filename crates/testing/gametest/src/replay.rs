@@ -29,8 +29,8 @@ use rc_mechanics::redstone::{
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEntityKind, BlockEntityWorldAccess, BlockEventQueue,
     BlockWorldAccess, BorderHalo, ChestBlockEntity, DefaultMaxStackSize, FuelTable,
-    FurnaceBlockEntity, FurnaceLitStateResolver, HopperBlockEntity, NeighborUpdateEngine,
-    PendingUpdate, RegionOwnership, ScheduledTickQueue, SmeltingRecipeTable,
+    FurnaceBlockEntity, FurnaceLitStateResolver, HopperBlockEntity, LightDirtyQueue,
+    NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, SmeltingRecipeTable,
     Tier1ContainerSignalSource, TierOneContainer, UpdateContext,
 };
 use rc_mechanics::{stage4, stage7};
@@ -222,6 +222,11 @@ pub fn replay_contraption(
     // it back, matching this changeset's own "the replay harness/corpus stay byte-identical"
     // requirement (the recorded `RedstoneTrace` output never reflects `changed` at all).
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
+    // M4-B07: the enqueue seam into Stage 8's light recompute -- this replay harness
+    // only supplies it (every construction site below), it never drains or reads it
+    // back (no light engine runs in this replay path at M4's own scope), matching
+    // `changed`'s own identical "harness stays byte-identical" treatment above.
+    let mut light_dirty = LightDirtyQueue::new();
 
     // M3 fix-agent brief ("bring the three container fixtures into the replay"): the Stage-7
     // block-entity world this replay now drives alongside Stage 4, plus the minimal fixed tables
@@ -247,6 +252,7 @@ pub fn replay_contraption(
             &mut events,
             &mut outbound,
             &mut changed,
+            &mut light_dirty,
             &ownership,
             0,
             behaviors,
@@ -285,6 +291,7 @@ pub fn replay_contraption(
                 &mut events,
                 &mut outbound,
                 &mut changed,
+                &mut light_dirty,
                 &ownership,
                 t - 1,
                 behaviors,
@@ -305,6 +312,7 @@ pub fn replay_contraption(
             behaviors,
             &mut outbound,
             &mut changed,
+            &mut light_dirty,
             t,
         );
         stage4::run_block_event_subphase(
@@ -316,6 +324,7 @@ pub fn replay_contraption(
             behaviors,
             &mut outbound,
             &mut changed,
+            &mut light_dirty,
             t,
         );
 
@@ -356,6 +365,7 @@ pub fn replay_contraption(
                 changed: &mut changed,
                 ownership: &ownership,
                 current_tick: t,
+                light_dirty: &mut light_dirty,
             };
             notify_neighbor_changed_only(&mut ctx, pos);
         }
@@ -369,6 +379,7 @@ pub fn replay_contraption(
                 changed: &mut changed,
                 ownership: &ownership,
                 current_tick: t,
+                light_dirty: &mut light_dirty,
             };
             dispatch_one(&mut ctx, behaviors, item);
         });
@@ -838,6 +849,7 @@ fn place_and_settle(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -854,6 +866,7 @@ fn place_and_settle(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         ctx.set_block(pos, state);
         // M3 field-report fix (Task 2): every `place_and_settle` call is a real placement (both
@@ -877,6 +890,7 @@ fn place_and_settle(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         dispatch_one(&mut ctx, behaviors, item);
     });

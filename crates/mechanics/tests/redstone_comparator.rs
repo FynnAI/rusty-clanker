@@ -14,8 +14,8 @@ use rc_mechanics::redstone::{
     SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
 };
 use rc_mechanics::{
-    BlockBehavior, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine, PendingUpdate,
-    RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehavior, BlockEventQueue, BlockWorldAccess, LightDirtyQueue, NeighborUpdateEngine,
+    PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 
@@ -42,6 +42,7 @@ struct Harness {
     events: BlockEventQueue,
     outbound: Vec<(Address, RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
+    light_dirty: LightDirtyQueue,
     ownership: RegionOwnership,
 }
 
@@ -56,6 +57,7 @@ impl Harness {
             events: BlockEventQueue::new(),
             outbound: Vec::new(),
             changed: Vec::new(),
+            light_dirty: LightDirtyQueue::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -70,6 +72,7 @@ impl Harness {
             changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick,
+            light_dirty: &mut self.light_dirty,
         }
     }
 }

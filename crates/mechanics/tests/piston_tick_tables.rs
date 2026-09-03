@@ -14,7 +14,8 @@ use rc_mechanics::redstone::piston::{TRIGGER_CONTRACT, TRIGGER_DROP};
 use rc_mechanics::redstone::{PistonBehavior, RedstoneSignalSource, SignalSourceRegistry};
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
-    BorderHalo, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, UpdateContext, stage4,
+    BorderHalo, LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
+    UpdateContext, stage4,
 };
 use rc_messaging::{Address, RegionMessage};
 
@@ -103,6 +104,7 @@ struct Harness {
     halo: BorderHalo,
     outbound: Vec<(Address, RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
+    light_dirty: LightDirtyQueue,
     ownership: RegionOwnership,
     behaviors: BlockBehaviorRegistry,
 }
@@ -119,6 +121,7 @@ impl Harness {
             halo: BorderHalo::new(),
             outbound: Vec::new(),
             changed: Vec::new(),
+            light_dirty: LightDirtyQueue::new(),
             ownership: RegionOwnership::always_local(local),
             behaviors,
         }
@@ -134,6 +137,7 @@ impl Harness {
             changed: &mut self.changed,
             ownership: &self.ownership,
             current_tick,
+            light_dirty: &mut self.light_dirty,
         }
     }
 
@@ -147,6 +151,7 @@ impl Harness {
             &self.behaviors,
             &mut self.outbound,
             &mut self.changed,
+            &mut self.light_dirty,
             current_tick,
         );
     }
@@ -163,6 +168,7 @@ impl Harness {
             &self.behaviors,
             &mut self.outbound,
             &mut self.changed,
+            &mut self.light_dirty,
             current_tick,
         );
     }

@@ -57,6 +57,10 @@ fn structural_write_conflicting_with_declared_mutable_access_is_rejected() {
             assert_eq!(system, system_id);
             assert_eq!(component, a_id);
         }
+        // M4-B07: this builder never calls `with_lighting_driver`, so this variant is
+        // structurally unreachable here -- added only for match exhaustiveness against
+        // `ExecutorBuildError`'s new variant.
+        Err(other) => panic!("expected AmbiguousMutationAuthority, got {other:?}"),
     }
 }
 

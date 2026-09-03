@@ -10,8 +10,8 @@ use rc_mechanics::direction::{Direction, NEIGHBOR_CHANGED_ORDER, SHAPE_UPDATE_OR
 use rc_mechanics::stage4::{run_block_event_subphase, run_scheduled_phase};
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
-    BorderHalo, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority,
-    UpdateContext,
+    BorderHalo, LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
+    TickPriority, UpdateContext,
 };
 use rc_messaging::{Address, RegionId, RegionMessage};
 
@@ -73,6 +73,7 @@ fn harness() -> (
     BorderHalo,
     Vec<(Address, RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
+    LightDirtyQueue,
     RegionOwnership,
 ) {
     (
@@ -82,6 +83,7 @@ fn harness() -> (
         BorderHalo::new(),
         Vec::new(),
         Vec::new(),
+        LightDirtyQueue::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -148,8 +150,16 @@ fn set_block_fans_out_both_signals_locally() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
 
     run_scheduled_phase(
@@ -163,6 +173,7 @@ fn set_block_fans_out_both_signals_locally() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 
@@ -245,8 +256,16 @@ fn scheduled_phase_settles_neighbor_updates_between_each_due_tick() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     // pos_a scheduled first, at a strictly higher priority than pos_b -- both due at tick 5.
     scheduled.schedule_block_tick(pos_a, 5, TickPriority::High, 0);
     scheduled.schedule_block_tick(pos_b, 5, TickPriority::Normal, 0);
@@ -262,6 +281,7 @@ fn scheduled_phase_settles_neighbor_updates_between_each_due_tick() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         5,
     );
 
@@ -305,8 +325,16 @@ fn block_before_fluid_ordering() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     // A naive combined-priority merge would drain fluid first (ExtremelyHigh < ExtremelyLow).
     scheduled.schedule_fluid_tick(fluid_pos, 0, TickPriority::ExtremelyHigh, 0);
     scheduled.schedule_block_tick(block_pos, 0, TickPriority::ExtremelyLow, 0);
@@ -322,6 +350,7 @@ fn block_before_fluid_ordering() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 
@@ -369,8 +398,16 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     scheduled.schedule_block_tick(pos, 0, TickPriority::Normal, 0);
 
     run_scheduled_phase(
@@ -384,6 +421,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
     assert!(
@@ -400,6 +438,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
     assert!(
@@ -417,6 +456,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         1,
     );
     assert_eq!(
@@ -466,8 +506,16 @@ fn block_event_emitted_during_subphase_fires_within_the_same_call() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, _halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        _halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     events.emit(BlockEvent {
         pos,
         event_id: 1,
@@ -484,6 +532,7 @@ fn block_event_emitted_during_subphase_fires_within_the_same_call() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
     assert_eq!(
@@ -569,8 +618,16 @@ fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, _halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        _halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     events.emit(BlockEvent {
         pos: piston1_pos,
         event_id: 7,
@@ -587,6 +644,7 @@ fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 
@@ -659,8 +717,16 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         }),
     );
 
-    let (mut engine, mut scheduled, mut events, mut halo, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut halo,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     // Simulates steady-state, mid-driver-loop conditions (`BlockEventQueue::active`'s own doc
     // comment): a freshly constructed queue starts `active` so bare `emit`+`pop_next` unit tests
     // keep working unmodified, but every *real* tick loop has already called `run_block_event_
@@ -676,6 +742,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
     assert!(log.lock().unwrap().is_empty());
@@ -692,6 +759,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         1,
     );
 
@@ -715,6 +783,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         1,
     );
     assert_eq!(
@@ -734,6 +803,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         2,
     );
     assert_eq!(

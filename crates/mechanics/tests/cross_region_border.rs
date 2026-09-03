@@ -11,7 +11,8 @@ use rc_mechanics::stage4::ecs::{ChunkIndex, bootstrap_default_stage4_resources, 
 use rc_mechanics::stage4::run_scheduled_phase;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo,
-    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority, UpdateContext,
+    LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority,
+    UpdateContext,
 };
 use rc_messaging::{
     Address, BorderUpdateEvent, BorderUpdateKind, Message, RegionId, RegionMessage, Transport,
@@ -130,6 +131,7 @@ fn border_event_targets_the_owning_region_not_local() {
     let mut halo = BorderHalo::new();
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
+    let mut light_dirty = LightDirtyQueue::new();
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
 
     run_scheduled_phase(
@@ -143,6 +145,7 @@ fn border_event_targets_the_owning_region_not_local() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 
@@ -221,6 +224,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
     let mut halo = BorderHalo::new();
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
+    let mut light_dirty = LightDirtyQueue::new();
 
     run_scheduled_phase(
         &mut world,
@@ -233,6 +237,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 

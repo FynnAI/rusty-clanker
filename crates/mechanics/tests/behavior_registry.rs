@@ -7,8 +7,8 @@ use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::direction::Direction;
 use rc_mechanics::{
-    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, NeighborUpdateEngine,
-    RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 use rc_messaging::{Address, RegionId};
 
@@ -58,6 +58,7 @@ fn harness() -> (
     BlockEventQueue,
     Vec<(Address, rc_messaging::RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
+    LightDirtyQueue,
     RegionOwnership,
 ) {
     (
@@ -69,6 +70,7 @@ fn harness() -> (
         BlockEventQueue::new(),
         Vec::new(),
         Vec::new(),
+        LightDirtyQueue::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -78,8 +80,16 @@ fn unregistered_state_resolves_to_noop() {
     let registry = BlockBehaviorRegistry::new();
     let target = BlockPos::new(0, 0, 0);
 
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut world,
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
     world.blocks.insert(target, BlockStateId(999));
 
     let behavior = registry.resolve(BlockStateId(999));
@@ -91,6 +101,7 @@ fn unregistered_state_resolves_to_noop() {
             events: &mut events,
             outbound: &mut outbound,
             changed: &mut changed,
+            light_dirty: &mut light_dirty,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -113,8 +124,16 @@ fn register_range_dispatches_correctly() {
     );
 
     let target = BlockPos::new(0, 0, 0);
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut world,
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
 
     // In-range: dispatch reaches the logging behavior.
     {
@@ -126,6 +145,7 @@ fn register_range_dispatches_correctly() {
             events: &mut events,
             outbound: &mut outbound,
             changed: &mut changed,
+            light_dirty: &mut light_dirty,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -143,6 +163,7 @@ fn register_range_dispatches_correctly() {
             events: &mut events,
             outbound: &mut outbound,
             changed: &mut changed,
+            light_dirty: &mut light_dirty,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -178,8 +199,16 @@ fn register_one_is_a_width_one_range() {
     registry.register_one(BlockStateId(5), logging as Arc<dyn BlockBehavior>);
 
     let target = BlockPos::new(0, 0, 0);
-    let (mut world, mut engine, mut scheduled, mut events, mut outbound, mut changed, ownership) =
-        harness();
+    let (
+        mut world,
+        mut engine,
+        mut scheduled,
+        mut events,
+        mut outbound,
+        mut changed,
+        mut light_dirty,
+        ownership,
+    ) = harness();
 
     for state in [BlockStateId(4), BlockStateId(6)] {
         let behavior = registry.resolve(state);
@@ -190,6 +219,7 @@ fn register_one_is_a_width_one_range() {
             events: &mut events,
             outbound: &mut outbound,
             changed: &mut changed,
+            light_dirty: &mut light_dirty,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -205,6 +235,7 @@ fn register_one_is_a_width_one_range() {
         events: &mut events,
         outbound: &mut outbound,
         changed: &mut changed,
+        light_dirty: &mut light_dirty,
         ownership: &ownership,
         current_tick: 0,
     };
