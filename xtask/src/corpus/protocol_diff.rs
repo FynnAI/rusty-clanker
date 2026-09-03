@@ -44,6 +44,21 @@
 //! (`capture-oracle`/`capture-ours`) rather than a panic — the two capture jobs run
 //! independently and either one can fail on its own budget before the diff job ever
 //! runs, and this job is `if: always()` specifically so it still reports that.
+//!
+//! Governance fix (M3.5-B03, TEST-D48/TEST-D50): a real run measured `RESULT=OK`
+//! plus a readable `.postcard` file on a side that had actually captured 0 of 51
+//! redstone-corpus contraptions (`docs/findings-for-planning.md`'s own "stance-
+//! walk timeout" finding) — `run`'s own `capture-oracle`/`capture-ours` cases now
+//! `Pass` only when `evaluate_completeness` (fed `expected_totals`'s own resolved
+//! counts, primarily `protocol_diff_runner`'s own `begin` line) reports every
+//! expected session step and every expected contraption `done` and the
+//! `finished` line's own `failed=<n>` was `0`; otherwise `Fail`, with
+//! `capture_fail_detail`'s own `"captured K of M contraptions and S of T session
+//! steps (F failed): <last failure line>"` detail. The oracle cache
+//! (`write_oracle_cache`) is seeded only on that same `Pass`, so a cached capture
+//! is never itself an incomplete one. `target/verify/protocol-diff-timings.json`
+//! carries the same `expected_steps`/`expected_contraptions`/`failed` numbers per
+//! side.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -220,6 +235,13 @@ pub struct ProgressSummary {
     /// From the `finished` line's own `total_ms=<ms>` field, when present (i.e. the
     /// side actually completed — never set on a timed-out or hard-failed run).
     pub total_ms: Option<u64>,
+    /// From the `finished` line's own `failed=<n>` field (M3.5-B03 governance
+    /// fix, `protocol_diff_runner`'s own module doc comment has the full
+    /// "missing contraptions still reported pass" citation) — how many
+    /// redstone-corpus contraptions `redstone_wire_capture::run_redstone_wire_
+    /// capture` itself reported as failed. `None` exactly when `total_ms` is
+    /// `None` too (the side never reached its own `finished` line at all).
+    pub failed: Option<u64>,
 }
 
 /// The stable, parseable prefix `protocol_diff_runner`'s own three progress-line
@@ -271,6 +293,9 @@ pub fn parse_progress_lines(stderr: &str) -> ProgressSummary {
                 for tok in tokens.iter().skip(2) {
                     if let Some(ms) = tok.strip_prefix("total_ms=").and_then(|v| v.parse().ok()) {
                         summary.total_ms = Some(ms);
+                    } else if let Some(f) = tok.strip_prefix("failed=").and_then(|v| v.parse().ok())
+                    {
+                        summary.failed = Some(f);
                     }
                 }
             }
@@ -278,6 +303,146 @@ pub fn parse_progress_lines(stderr: &str) -> ProgressSummary {
         }
     }
     summary
+}
+
+/// This file's own restatement of `rc_paritybot::protocol_session::SESSION_STEPS.
+/// len()` — this crate never links `rc_paritybot`/`azalea`
+/// (`protocol_diff_runner`'s own module doc comment has the full "must never
+/// link azalea" citation), so this is a plain, hand-kept integer instead of an
+/// import. Every scripted-session step's own real action always runs and always
+/// prints its own `done` line regardless of `--only` (`protocol_session::push_
+/// step`'s own doc comment: `only` filters only what ends up in the *saved*
+/// capture, never whether the step runs), so this fallback is correct regardless
+/// of `--only`'s own value. A future change to `SESSION_STEPS` silently drifting
+/// from this constant is a known risk (recorded in `docs/findings-for-planning.md`,
+/// M3.5-B03) that would only ever weaken the rare "the child's own `begin` line
+/// was never captured at all" fallback below, never the common case (which
+/// always reads the real count straight from that `begin` line).
+const EXPECTED_SESSION_STEPS_FALLBACK: u64 = 32;
+
+/// Real fallback source of truth for "how many contraptions this run should have
+/// attempted" when the child's own `begin` line was never captured at all (a
+/// crash before any progress line printed) — a live count of the same committed
+/// `.ron` corpus directory `protocol_diff_runner::corpus_dir` resolves, counted
+/// directly (`std::fs::read_dir`) rather than imported, for the same "never link
+/// azalea" reason `EXPECTED_SESSION_STEPS_FALLBACK` cites.
+fn corpus_contraption_count(repo_root: &Path) -> u64 {
+    let dir = repo_root.join("crates/testing/gametest/corpus/redstone");
+    std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "ron"))
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
+/// Resolves "how much was this run actually supposed to capture" — primarily the
+/// `begin` line's own `steps=`/`contraptions=` counts (already correct for
+/// `--only`: `protocol_diff_runner::planned_contraption_count`'s own doc comment).
+/// Falls back to `EXPECTED_SESSION_STEPS_FALLBACK`/`corpus_contraption_count`
+/// only when the child crashed before ever printing its own `begin` line —
+/// `only` then makes the contraption fallback `1` (assuming `--only` named a
+/// contraption id; the rare case where it instead names a session step id makes
+/// this fallback's own contraption count too high by one, never too low, so it
+/// can only ever make an incomplete run *harder* to mistake for complete, never
+/// the reverse) or the full corpus size when `--only` was not given at all.
+pub fn expected_totals(summary: &ProgressSummary, only: bool, repo_root: &Path) -> (u64, u64) {
+    let steps = summary
+        .steps_total
+        .unwrap_or(EXPECTED_SESSION_STEPS_FALLBACK);
+    let contraptions = summary.contraptions_total.unwrap_or_else(|| {
+        if only {
+            1
+        } else {
+            corpus_contraption_count(repo_root)
+        }
+    });
+    (steps, contraptions)
+}
+
+/// One side's own capture-completeness verdict (M3.5-B03 governance fix,
+/// TEST-D48/TEST-D50: "never report success while having verified only part of
+/// what it claims") — `steps_done`/`contraptions_done` are counted straight out
+/// of `ProgressSummary::completed` by `evaluate_completeness`, split on the `id`
+/// prefix every session-step id carries (`"session/"`, `protocol_session::
+/// SESSION_STEPS`) versus every contraption id (`"redstone/<category>/<slug>"`,
+/// `rc_gametest::spec::ContraptionSpec::id`'s own doc comment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureCompleteness {
+    pub steps_done: u64,
+    pub steps_expected: u64,
+    pub contraptions_done: u64,
+    pub contraptions_expected: u64,
+    pub failed: u64,
+}
+
+impl CaptureCompleteness {
+    /// `Pass` only when every expected session step and every expected
+    /// contraption printed its own `done` line (`>=`, never `==`: an extra,
+    /// duplicated `done` line must never turn an otherwise-complete run into a
+    /// reported failure) and not a single contraption failed.
+    pub fn is_complete(&self) -> bool {
+        self.steps_done >= self.steps_expected
+            && self.contraptions_done >= self.contraptions_expected
+            && self.failed == 0
+    }
+
+    /// The base `"captured K of M contraptions and S of T session steps (F
+    /// failed)"` wording (task's own exact format) — `capture_fail_detail` below
+    /// appends the trailing `": <last failure line>"` clause.
+    pub fn detail(&self) -> String {
+        format!(
+            "captured {} of {} contraptions and {} of {} session steps ({} failed)",
+            self.contraptions_done,
+            self.contraptions_expected,
+            self.steps_done,
+            self.steps_expected,
+            self.failed
+        )
+    }
+}
+
+/// Pure fold of one side's own `ProgressSummary` plus its own expected totals
+/// (`expected_totals`) into a `CaptureCompleteness` verdict — never touches
+/// `stderr` directly (`capture_fail_detail` below is the one place that does).
+pub fn evaluate_completeness(
+    summary: &ProgressSummary,
+    steps_expected: u64,
+    contraptions_expected: u64,
+) -> CaptureCompleteness {
+    let steps_done = summary
+        .completed
+        .iter()
+        .filter(|entry| entry.id.starts_with("session/"))
+        .count() as u64;
+    let contraptions_done = summary.completed.len() as u64 - steps_done;
+    CaptureCompleteness {
+        steps_done,
+        steps_expected,
+        contraptions_done,
+        contraptions_expected,
+        failed: summary.failed.unwrap_or(0),
+    }
+}
+
+/// `completeness.detail()` plus `": <line>"` naming the *last* stderr line
+/// containing `"failed"` (whichever real failure — a session-step warning, a
+/// contraption failure, a reconnect failure — happened most recently), omitted
+/// entirely when no such line exists (mirrors `timeout_detail`'s own "last:"
+/// clause, simply omitted rather than fabricated, when nothing is there to name).
+pub fn capture_fail_detail(completeness: &CaptureCompleteness, stderr: &str) -> String {
+    let mut message = completeness.detail();
+    if let Some(last) = stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|line| line.contains("failed"))
+    {
+        message.push_str(": ");
+        message.push_str(last);
+    }
+    message
 }
 
 /// Builds the timeout case-detail wording every side's own subprocess timeout uses
@@ -465,6 +630,16 @@ struct TimingsSide {
     total_ms: Option<u64>,
     timed_out: bool,
     deadline_secs: u64,
+    /// M3.5-B03 governance fix (`CaptureCompleteness`'s own doc comment) —
+    /// `expected_totals`'s own resolved `(steps, contraptions)`, `None` only when
+    /// `timings_side` was never even called for this side (`Timings::default`'s
+    /// own "this side never ran" reading, `TimingsSide`'s own doc comment above).
+    expected_steps: Option<u64>,
+    expected_contraptions: Option<u64>,
+    /// `ProgressSummary::failed`, restated here so the timings JSON carries the
+    /// same number `capture-<side>`'s own completeness gate used, without a
+    /// reader needing to re-parse stderr itself.
+    failed: Option<u64>,
 }
 
 /// `target/verify/protocol-diff-timings.json`'s own top-level shape (Deliverable 3).
@@ -474,13 +649,21 @@ struct Timings {
     ours: TimingsSide,
 }
 
-fn timings_side(run: &RunnerRun, deadline: Duration) -> TimingsSide {
-    let summary = parse_progress_lines(&run.stderr);
+fn timings_side(
+    run: &RunnerRun,
+    deadline: Duration,
+    summary: &ProgressSummary,
+    steps_expected: u64,
+    contraptions_expected: u64,
+) -> TimingsSide {
     TimingsSide {
-        completed: summary.completed,
+        completed: summary.completed.clone(),
         total_ms: summary.total_ms,
         timed_out: run.timed_out,
         deadline_secs: deadline.as_secs(),
+        expected_steps: Some(steps_expected),
+        expected_contraptions: Some(contraptions_expected),
+        failed: Some(summary.failed.unwrap_or(0)),
     }
 }
 
@@ -628,18 +811,41 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
             let deadline = capture_deadline_override
                 .unwrap_or(Duration::from_secs(900) + Duration::from_secs(30) * 80);
             let run = run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline);
-            timings.oracle = timings_side(&run, deadline);
+            let summary = parse_progress_lines(&run.stderr);
+            let (steps_expected, contraptions_expected) =
+                expected_totals(&summary, args.only.is_some(), &repo_root);
+            timings.oracle = timings_side(
+                &run,
+                deadline,
+                &summary,
+                steps_expected,
+                contraptions_expected,
+            );
             match run.outcome {
                 RunnerOutcome::Ok => match read_capture(&out_path) {
                     Ok(capture) => {
-                        result.push("capture-oracle", Status::Pass, None);
-                        if args.only.is_none()
-                            && let Err(err) =
-                                write_oracle_cache(&repo_root, &source_jar_sha1, &out_path)
-                        {
-                            eprintln!("protocol-diff: failed to persist oracle cache: {err}");
+                        // M3.5-B03 governance fix (TEST-D48/TEST-D50): `RESULT=OK`
+                        // plus a readable postcard file is not by itself proof
+                        // every expected step/contraption was actually captured —
+                        // `capture-oracle` (and the oracle cache this run may seed
+                        // for every later `--only`-less run) must never `Pass` on
+                        // a partial capture.
+                        let completeness =
+                            evaluate_completeness(&summary, steps_expected, contraptions_expected);
+                        if completeness.is_complete() {
+                            result.push("capture-oracle", Status::Pass, None);
+                            if args.only.is_none()
+                                && let Err(err) =
+                                    write_oracle_cache(&repo_root, &source_jar_sha1, &out_path)
+                            {
+                                eprintln!("protocol-diff: failed to persist oracle cache: {err}");
+                            }
+                            oracle_capture = Some(capture);
+                        } else {
+                            let message = capture_fail_detail(&completeness, &run.stderr);
+                            eprintln!("protocol-diff: oracle capture incomplete: {message}");
+                            result.push("capture-oracle", Status::Fail, Some(message));
                         }
-                        oracle_capture = Some(capture);
                     }
                     Err(err) => {
                         let message = format!("failed to read {}: {err}", out_path.display());
@@ -686,12 +892,31 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
         let deadline = capture_deadline_override
             .unwrap_or(Duration::from_secs(600) + Duration::from_secs(30) * 80);
         let run = run_protocol_diff_runner_subprocess(&repo_root, &runner_args, deadline);
-        timings.ours = timings_side(&run, deadline);
+        let summary = parse_progress_lines(&run.stderr);
+        let (steps_expected, contraptions_expected) =
+            expected_totals(&summary, args.only.is_some(), &repo_root);
+        timings.ours = timings_side(
+            &run,
+            deadline,
+            &summary,
+            steps_expected,
+            contraptions_expected,
+        );
         match run.outcome {
             RunnerOutcome::Ok => match read_capture(&out_path) {
                 Ok(capture) => {
-                    result.push("capture-ours", Status::Pass, None);
-                    ours_capture = Some(capture);
+                    // M3.5-B03 governance fix — same completeness gate as the
+                    // oracle side above (TEST-D48/TEST-D50).
+                    let completeness =
+                        evaluate_completeness(&summary, steps_expected, contraptions_expected);
+                    if completeness.is_complete() {
+                        result.push("capture-ours", Status::Pass, None);
+                        ours_capture = Some(capture);
+                    } else {
+                        let message = capture_fail_detail(&completeness, &run.stderr);
+                        eprintln!("protocol-diff: ours capture incomplete: {message}");
+                        result.push("capture-ours", Status::Fail, Some(message));
+                    }
                 }
                 Err(err) => {
                     let message = format!("failed to read {}: {err}", out_path.display());
