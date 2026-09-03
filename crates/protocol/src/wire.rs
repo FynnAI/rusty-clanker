@@ -277,20 +277,33 @@ impl WireRead for JsonTextComponent {
     }
 }
 
-/// A plain-text chat/text-component field encoded as network NBT (`{"text": "..."}`'s NBT
-/// equivalent: an unnamed root `TAG_Compound` holding one `TAG_String` field named `text`),
-/// per protocol 776's real wire shape for text components from the **Configuration phase
-/// onward** (the Configuration-phase `Disconnect` reason today) — the Login phase instead
-/// speaks JSON (`JsonTextComponent`, above). M1 integration fix, discovered by driving a
-/// real client (azalea) against `rusty-clanker-server`: a raw `WireWrite`-`String`
-/// (VarInt-length-prefixed UTF-8) reason is what M1-B04 originally shipped for the
-/// Configuration disconnect, but a real client's NBT decoder chokes on it (a short
-/// JSON reason's own VarInt length byte gets misread as an invalid raw NBT tag id). No real
-/// `rc-nbt` integration exists yet (`configuration.rs`'s own `#[rc(nbt)]` deferral, M1-B04)
-/// — this is a minimal, purpose-built stand-in for exactly this one field shape, not a
-/// general NBT codec; a later blueprint wiring real `rc-nbt` support should replace it.
-/// Every text this type actually carries in this codebase today is plain ASCII, so a raw
-/// UTF-8 byte count (rather than Java's "modified UTF-8" scheme, which only differs for
+/// A plain-text chat/text-component field encoded as network NBT, per protocol 776's real
+/// wire shape for text components from the **Configuration phase onward** (the
+/// Configuration-phase `Disconnect` reason today) — the Login phase instead speaks JSON
+/// (`JsonTextComponent`, above). M1 integration fix, discovered by driving a real client
+/// (azalea) against `rusty-clanker-server`: a raw `WireWrite`-`String` (VarInt-length-
+/// prefixed UTF-8) reason is what M1-B04 originally shipped for the Configuration
+/// disconnect, but a real client's NBT decoder chokes on it (a short JSON reason's own
+/// VarInt length byte gets misread as an invalid raw NBT tag id). No real `rc-nbt`
+/// integration exists yet (`configuration.rs`'s own `#[rc(nbt)]` deferral, M1-B04) — this
+/// is a minimal, purpose-built stand-in for exactly this one field shape, not a general NBT
+/// codec; a later blueprint wiring real `rc-nbt` support should replace it.
+///
+/// **Collapse rule** (M1 field-report follow-up, `docs/findings-for-planning.md` section B
+/// "Text components on the wire collapse to a bare string"): vanilla's own component codec
+/// (`ComponentSerialization`, the `tryCollapseToString` step of its NBT-encode path, ASSET-
+/// D18(f) reference) writes a component carrying no style, no siblings, and no
+/// translate/keybind/score/selector/nbt content as a bare, unnamed `TAG_String` holding the
+/// text directly — the `{"text": "..."}` `TAG_Compound` wrapper (`TAG_Compound(0x0A) ->
+/// TAG_String(0x08) "text" -> <u16-len, UTF-8 bytes> -> TAG_End(0x00)`) is written only for
+/// a richer component. `NbtTextComponent` has no representation for style or siblings —
+/// every value it carries is plain text — so `write_wire` always takes the collapsed,
+/// bare-`TAG_String` path; `read_wire` accepts either shape a peer might send (a real
+/// client never emits the compound form for plain text, but a hand-built or pre-fix payload
+/// may still carry it, and vanilla's own compound-shaped rich components — for a plain-text-
+/// only reader — reduce to the same `text`-field extraction the pre-fix decoder already
+/// used). Every text this type actually carries in this codebase today is plain ASCII, so a
+/// raw UTF-8 byte count (rather than Java's "modified UTF-8" scheme, which only differs for
 /// astral-plane characters and embedded NULs) is exact for every real call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NbtTextComponent(pub String);
@@ -301,56 +314,72 @@ const NBT_TAG_COMPOUND: u8 = 0x0A;
 
 impl WireWrite for NbtTextComponent {
     fn write_wire(&self, buf: &mut BytesMut) {
-        buf.put_u8(NBT_TAG_COMPOUND);
+        // Collapsed form: an unnamed root TAG_String holding the text directly, no name
+        // field (network NBT) and no surrounding compound — see this type's own doc
+        // comment ("Collapse rule").
         buf.put_u8(NBT_TAG_STRING);
-        let key = b"text";
-        buf.put_u16(key.len() as u16);
-        buf.put_slice(key);
         let value = self.0.as_bytes();
         buf.put_u16(value.len() as u16);
         buf.put_slice(value);
-        buf.put_u8(NBT_TAG_END);
     }
 }
 impl WireRead for NbtTextComponent {
     fn read_wire(buf: &mut Bytes) -> Result<Self, PacketDecodeError> {
         need(buf, 1)?;
         let root_tag = buf.get_u8();
-        if root_tag != NBT_TAG_COMPOUND {
-            return Err(PacketDecodeError::MalformedNbtTextComponent(format!(
-                "expected root TAG_Compound (0x0A), got {root_tag:#04x}"
-            )));
+        match root_tag {
+            NBT_TAG_STRING => {
+                need(buf, 2)?;
+                let value_len = buf.get_u16() as usize;
+                need(buf, value_len)?;
+                let value = buf.copy_to_bytes(value_len);
+                let text = String::from_utf8(value.to_vec()).map_err(|_| {
+                    PacketDecodeError::MalformedNbtTextComponent(
+                        "value not valid UTF-8".to_string(),
+                    )
+                })?;
+                Ok(NbtTextComponent(text))
+            }
+            NBT_TAG_COMPOUND => {
+                let mut text: Option<String> = None;
+                loop {
+                    need(buf, 1)?;
+                    let tag = buf.get_u8();
+                    if tag == NBT_TAG_END {
+                        break;
+                    }
+                    need(buf, 2)?;
+                    let key_len = buf.get_u16() as usize;
+                    need(buf, key_len)?;
+                    let key = buf.copy_to_bytes(key_len);
+                    if tag != NBT_TAG_STRING {
+                        return Err(PacketDecodeError::MalformedNbtTextComponent(format!(
+                            "unsupported field tag {tag:#04x} for key {key:?}"
+                        )));
+                    }
+                    need(buf, 2)?;
+                    let value_len = buf.get_u16() as usize;
+                    need(buf, value_len)?;
+                    let value = buf.copy_to_bytes(value_len);
+                    let value = String::from_utf8(value.to_vec()).map_err(|_| {
+                        PacketDecodeError::MalformedNbtTextComponent(
+                            "value not valid UTF-8".to_string(),
+                        )
+                    })?;
+                    if key.as_ref() == b"text" {
+                        text = Some(value);
+                    }
+                }
+                text.map(NbtTextComponent).ok_or_else(|| {
+                    PacketDecodeError::MalformedNbtTextComponent(
+                        "missing \"text\" field".to_string(),
+                    )
+                })
+            }
+            other => Err(PacketDecodeError::MalformedNbtTextComponent(format!(
+                "expected root TAG_String (0x08) or TAG_Compound (0x0A), got {other:#04x}"
+            ))),
         }
-        let mut text: Option<String> = None;
-        loop {
-            need(buf, 1)?;
-            let tag = buf.get_u8();
-            if tag == NBT_TAG_END {
-                break;
-            }
-            need(buf, 2)?;
-            let key_len = buf.get_u16() as usize;
-            need(buf, key_len)?;
-            let key = buf.copy_to_bytes(key_len);
-            if tag != NBT_TAG_STRING {
-                return Err(PacketDecodeError::MalformedNbtTextComponent(format!(
-                    "unsupported field tag {tag:#04x} for key {key:?}"
-                )));
-            }
-            need(buf, 2)?;
-            let value_len = buf.get_u16() as usize;
-            need(buf, value_len)?;
-            let value = buf.copy_to_bytes(value_len);
-            let value = String::from_utf8(value.to_vec()).map_err(|_| {
-                PacketDecodeError::MalformedNbtTextComponent("value not valid UTF-8".to_string())
-            })?;
-            if key.as_ref() == b"text" {
-                text = Some(value);
-            }
-        }
-        text.map(NbtTextComponent).ok_or_else(|| {
-            PacketDecodeError::MalformedNbtTextComponent("missing \"text\" field".to_string())
-        })
     }
 }
 
