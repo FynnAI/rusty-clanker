@@ -19,6 +19,7 @@ use rc_scheduler::{
 use crate::behavior::BlockBehaviorRegistry;
 use crate::block_event::BlockEventQueue;
 use crate::border::RegionOwnership;
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::random_tick::WorldSeed;
 use crate::scheduled_tick::ScheduledTickQueue;
@@ -109,7 +110,8 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                   mut region_outbox: ResMut<RegionMessageOutbox>,
                   chunk_index: Res<ChunkIndex>,
                   query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
-                  mut tick_changed: ResMut<TickChangedPositions>| {
+                  mut tick_changed: ResMut<TickChangedPositions>,
+                  mut light_dirty: ResMut<LightDirtyQueue>| {
                 let mut chunks: Vec<(i32, i32)> =
                     chunk_index.0.keys().map(|k| (k.x, k.z)).collect();
                 chunks.sort_unstable();
@@ -134,6 +136,7 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                     &behaviors,
                     &mut outbound,
                     &mut changed,
+                    &mut light_dirty,
                     &ownership,
                 );
 

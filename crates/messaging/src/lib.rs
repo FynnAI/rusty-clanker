@@ -13,5 +13,7 @@ mod transport;
 pub use address::{Address, RegionId};
 pub use bus::{RegionMessageBus, RegionMessageState};
 pub use envelope::Message;
-pub use region_message::{BorderUpdateEvent, BorderUpdateKind, EntitySnapshot, RegionMessage};
+pub use region_message::{
+    BorderUpdateEvent, BorderUpdateKind, EntitySnapshot, LightBorderUpdate, RegionMessage,
+};
 pub use transport::{Transport, TransportError};

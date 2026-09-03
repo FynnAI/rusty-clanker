@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::block_event::{BlockEvent, BlockEventQueue};
 use crate::border::{self, RegionOwnership};
 use crate::direction::Direction;
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::random::RcRandom;
 use crate::scheduled_tick::{ScheduledTickQueue, TickPriority};
@@ -41,6 +42,13 @@ pub struct UpdateContext<'a> {
     pub changed: &'a mut Vec<(BlockPos, BlockStateId)>,
     pub ownership: &'a RegionOwnership,
     pub current_tick: u64,
+    /// M4-B07 field-report note (blueprint's own Prerequisites row cites a stale
+    /// "pre-this-blueprint 7-field shape" -- the M3 field-report `changed` field
+    /// above already existed by the time this blueprint landed, making this the
+    /// 9th field, not the 8th; recorded in `docs/findings-for-planning.md`): the
+    /// enqueue seam into Stage 8's light recompute. `set_block` records every
+    /// genuine state change here; nothing else in this crate writes to it.
+    pub light_dirty: &'a mut LightDirtyQueue,
 }
 
 impl<'a> UpdateContext<'a> {
@@ -53,7 +61,12 @@ impl<'a> UpdateContext<'a> {
     /// actually changed (a no-op write still fans out — matches vanilla's own unconditional
     /// `updateNeighborsAt` behavior after any `setBlock` call with `UPDATE_NEIGHBORS` set).
     pub fn set_block(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        let old_state = self.world.get_block(pos);
         let changed = self.write_block_state(pos, new_state);
+        if old_state != Some(new_state) {
+            self.light_dirty
+                .mark(pos, old_state.unwrap_or(new_state), new_state);
+        }
         border::fan_out_from_changed_block(self, pos, new_state);
         changed
     }

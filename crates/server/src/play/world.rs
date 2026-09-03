@@ -1945,6 +1945,10 @@ impl HardcodedWorld {
                     .world
                     .remove_resource::<rc_mechanics::BlockBehaviorRegistry>()
                     .expect("bootstrap_default_stage4_resources always inserts this");
+                let mut light_dirty = region
+                    .world
+                    .remove_resource::<rc_mechanics::LightDirtyQueue>()
+                    .expect("bootstrap_default_stage4_resources always inserts this");
                 // M2 stays inside M1-B05's single `HARDCODED_REGION_ID` (Context, still true
                 // at M3's own scope -- ARCH-D24's own real directory remains a later
                 // blueprint's job) -- every chunk key is trivially local by construction.
@@ -2080,6 +2084,7 @@ impl HardcodedWorld {
                                     &mut events,
                                     &mut mining_outbound,
                                     &mut direct_changed,
+                                    &mut light_dirty,
                                     &mining_ownership,
                                     &behaviors,
                                     current_tick,
@@ -2141,6 +2146,7 @@ impl HardcodedWorld {
                                         &mut events,
                                         &mut mining_outbound,
                                         &mut direct_changed,
+                                        &mut light_dirty,
                                         &mining_ownership,
                                         &behaviors,
                                         current_tick,
@@ -2206,6 +2212,7 @@ impl HardcodedWorld {
                                         &mut events,
                                         &mut mining_outbound,
                                         &mut direct_changed,
+                                        &mut light_dirty,
                                         &mining_ownership,
                                         &behaviors,
                                         current_tick,
@@ -2288,6 +2295,7 @@ impl HardcodedWorld {
                                 &mut events,
                                 &mut mining_outbound,
                                 &mut direct_changed,
+                                &mut light_dirty,
                                 &mining_ownership,
                                 &behaviors,
                                 current_tick,
@@ -2455,6 +2463,7 @@ impl HardcodedWorld {
                                 &mut events,
                                 &mut mining_outbound,
                                 &mut direct_changed,
+                                &mut light_dirty,
                                 &mining_ownership,
                                 &behaviors,
                                 current_tick,
@@ -2494,6 +2503,7 @@ impl HardcodedWorld {
                 region.world.insert_resource(scheduled);
                 region.world.insert_resource(events);
                 region.world.insert_resource(behaviors);
+                region.world.insert_resource(light_dirty);
                 // M3-B03 (Context, "Wiring M3-B01's Stage-4 substrate"): keeps `stage4::
                 // ecs::ChunkIndex` (a *different* resource type from `block_action::
                 // ChunkIndex`, despite the identical name -- distinct crates) current too,
@@ -3739,6 +3749,7 @@ mod direct_block_world_bounds {
         let mut events = rc_mechanics::BlockEventQueue::new();
         let mut outbound = Vec::new();
         let mut changed = Vec::new();
+        let mut light_dirty = rc_mechanics::LightDirtyQueue::new();
         let behaviors = rc_mechanics::BlockBehaviorRegistry::new();
         let mut direct = DirectBlockWorld {
             world: &mut ecs_world,
@@ -3758,6 +3769,7 @@ mod direct_block_world_bounds {
             &mut events,
             &mut outbound,
             &mut changed,
+            &mut light_dirty,
             &ownership,
             &behaviors,
             0,

@@ -47,8 +47,8 @@ use rc_chunk_storage::{BlockStateId as StorageBlockStateId, RegistryId};
 use rc_core::BlockPos;
 use rc_mechanics::redstone::{SignalSourceRegistry, best_neighbor_signal};
 use rc_mechanics::{
-    BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, Direction, NeighborUpdateEngine,
-    PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, Direction, LightDirtyQueue,
+    NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 use rc_physics::Vec3;
@@ -1679,6 +1679,7 @@ pub fn settle_neighbor_updates(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -1693,6 +1694,7 @@ pub fn settle_neighbor_updates(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         match item {
             PendingUpdate::NeighborChanged { pos, from } => {
@@ -1736,6 +1738,7 @@ pub fn finalize_break(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -1771,6 +1774,7 @@ pub fn finalize_break(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         ctx.set_block(pos, to_storage_id(AIR.0));
     }
@@ -1781,6 +1785,7 @@ pub fn finalize_break(
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
         behaviors,
         current_tick,
@@ -1846,6 +1851,16 @@ pub fn apply_placement(
     player_boxes: &[rc_physics::Aabb],
     sneaking: bool,
 ) -> PlaceOutcome {
+    // M4-B07: `apply_placement`'s own public signature is frozen (doc comment above --
+    // `crates/server/tests/mining_placement_obstruction.rs`/`mining_generated_registry_
+    // equivalence.rs` call it directly, and implementation changesets never touch
+    // `tests/`), so `light_dirty` cannot be threaded in as a new parameter here the way
+    // every other caller of `apply_placement_with_redstone` supplies its own real,
+    // region-shared `LightDirtyQueue` -- a fresh, throwaway one is constructed and
+    // discarded instead, mirroring `crates/testing/gametest/src/replay.rs`'s own
+    // identical "harness mechanically supplies it, never drains or reads it back"
+    // treatment (no light engine runs behind this call path at M4's own scope either).
+    let mut light_dirty = LightDirtyQueue::new();
     apply_placement_with_redstone(
         ctx_world,
         engine,
@@ -1853,6 +1868,7 @@ pub fn apply_placement(
         events,
         outbound,
         changed,
+        &mut light_dirty,
         ownership,
         behaviors,
         current_tick,
@@ -1882,6 +1898,7 @@ pub fn apply_placement_with_redstone(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -2040,6 +2057,7 @@ pub fn apply_placement_with_redstone(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         let state = to_storage_id(raw_state);
         ctx.set_block(target, state);
@@ -2139,6 +2157,7 @@ pub fn apply_placement_with_redstone(
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
         behaviors,
         current_tick,

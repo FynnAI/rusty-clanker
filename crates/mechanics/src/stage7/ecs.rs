@@ -25,6 +25,7 @@ use crate::block_entity::{BlockEntityHeader, BlockEntityKind, BlockEntityWorldAc
 use crate::block_event::BlockEventQueue;
 use crate::border::RegionOwnership;
 use crate::container::{DefaultMaxStackSize, MaxStackSizeResource, TierOneContainer};
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::scheduled_tick::ScheduledTickQueue;
 use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld, TickChangedPositions};
@@ -242,6 +243,7 @@ fn system_container_signal_notify(
     // handle that), so the binding itself stays immutable.
     container_signals: ResMut<ContainerSignalsResource>,
     mut tick_changed: ResMut<TickChangedPositions>,
+    mut light_dirty: ResMut<LightDirtyQueue>,
 ) {
     let mut world = EcsBlockWorld::new(query, &chunk_index, &ownership);
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
@@ -256,6 +258,7 @@ fn system_container_signal_notify(
         &behaviors,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         current_tick.0,
         container_signals.0.as_ref(),
     );

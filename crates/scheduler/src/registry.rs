@@ -11,11 +11,18 @@ use crate::access::ComponentAccessSummary;
 use crate::conflict_graph::compute_waves;
 use crate::executor::{CompiledGroup, CompiledSystem, RcExecutor};
 use crate::pipeline::DomainGroup;
+use crate::pool::RcWorkerPool;
 
 /// Constructs one fresh, `.initialize`-ready system instance. Called once per
 /// region at `RcExecutor::spawn_region` time (Context: "`ComponentId` consistency
 /// across regions" — never shared across regions).
 pub type SystemFactory = Box<dyn Fn() -> Box<dyn System<In = (), Out = ()>> + Send + Sync>;
+
+/// M4-B07: Stage 8's own registration point (Context §8). Exactly one may be
+/// registered per `RcExecutorBuilder` — Stage 8 hosts a single light engine at M4; a
+/// second registration attempt is a build-time error
+/// (`ExecutorBuildError::DuplicateLightingDriver`).
+pub type LightingStageDriver = fn(&mut bevy_ecs::world::World, &RcWorkerPool);
 
 /// Identifies one registered system by its group and declaration index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +35,10 @@ pub struct SystemId {
 pub struct RcExecutorBuilder {
     bootstrap: fn(&mut bevy_ecs::world::World),
     groups: [Vec<Registration>; 8],
+    /// M4-B07: accumulates every `with_lighting_driver` call ("accumulate, validate
+    /// later" — mirrors `register_system`'s own shape); `build()` rejects a builder
+    /// whose length exceeds 1.
+    lighting_driver: Vec<LightingStageDriver>,
 }
 
 struct Registration {
@@ -53,7 +64,17 @@ impl RcExecutorBuilder {
                 Vec::new(),
                 Vec::new(),
             ],
+            lighting_driver: Vec::new(),
         }
+    }
+
+    /// M4-B07: registers Stage 8's chunk-parallel driver (Context §8). Calling this
+    /// a second time on the same builder is **not** rejected at this call site
+    /// (mirrors `register_system`'s own "accumulate, validate later" shape) —
+    /// `build()` rejects a builder whose `lighting_driver` was set more than once
+    /// with `ExecutorBuildError::DuplicateLightingDriver`.
+    pub fn with_lighting_driver(&mut self, driver: LightingStageDriver) {
+        self.lighting_driver.push(driver);
     }
 
     /// Registers one system into `group`. `order_tag` is assigned automatically as
@@ -83,6 +104,10 @@ impl RcExecutorBuilder {
     /// Returns `Err` on the first structural-write violation found (deterministic
     /// order: groups in `DomainGroup::ALL` order, then ascending `order_tag`).
     pub fn build(self) -> Result<crate::executor::RcExecutor, ExecutorBuildError> {
+        if self.lighting_driver.len() > 1 {
+            return Err(ExecutorBuildError::DuplicateLightingDriver);
+        }
+
         let mut prototype = World::new();
         (self.bootstrap)(&mut prototype);
 
@@ -144,7 +169,8 @@ impl RcExecutorBuilder {
             .try_into()
             .unwrap_or_else(|_| unreachable!("exactly 8 domain groups by construction"));
 
-        Ok(RcExecutor::new(self.bootstrap, groups))
+        let lighting_driver = self.lighting_driver.into_iter().next();
+        Ok(RcExecutor::new(self.bootstrap, groups, lighting_driver))
     }
 }
 
@@ -157,4 +183,9 @@ pub enum ExecutorBuildError {
         system: SystemId,
         component: ComponentId,
     },
+    /// M4-B07: Stage 8 hosts exactly one light engine.
+    #[error(
+        "with_lighting_driver was called more than once on the same RcExecutorBuilder — Stage 8 hosts exactly one light engine"
+    )]
+    DuplicateLightingDriver,
 }

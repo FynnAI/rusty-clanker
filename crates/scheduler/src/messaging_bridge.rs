@@ -6,7 +6,9 @@
 //! Stage-10 steps (`executor.rs`).
 
 use bevy_ecs::prelude::Resource;
-use rc_messaging::{Address, BorderUpdateEvent, RegionMessage, RegionMessageBus};
+use rc_messaging::{
+    Address, BorderUpdateEvent, LightBorderUpdate, RegionMessage, RegionMessageBus,
+};
 
 /// This tick's inbound `BorderUpdateEvent` payloads, drained from `dyn Transport` at
 /// `RcExecutor::tick_region`'s Stage-1 step (Context: "Cross-region border updates").
@@ -15,6 +17,17 @@ use rc_messaging::{Address, BorderUpdateEvent, RegionMessage, RegionMessageBus};
 /// `RegionState.message_state.inbox()`, untouched by this type.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct BorderUpdateInbox(pub Vec<BorderUpdateEvent>);
+
+/// M4-B07: this tick's inbound `LightBorderUpdate` payloads, drained at Stage 1
+/// exactly as `BorderUpdateInbox` above already establishes for `BorderUpdateEvent`
+/// — a second, independent inbox rather than folding light traffic into
+/// `BorderUpdateInbox` itself, since the two payload types serve different Stage-8-
+/// vs-Stage-4 consumers and WORLD-D10 explicitly frames `LightBorderUpdate` as its
+/// own `RegionMessage` variant with its own consumption point (Stage 8's round-0
+/// seeding, not Stage 4's first sub-step). Auto-inserted (empty) by
+/// `RcExecutor::spawn_region`; overwritten (replace, not append) every tick.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct LightBorderInbox(pub Vec<LightBorderUpdate>);
 
 /// The in-`World`-reachable half of `RegionMessageBus` (Context: resolves M0-B02/M0-B05's
 /// explicitly-deferred "how does a running system send a `RegionMessage`" question). Any

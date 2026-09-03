@@ -14,6 +14,7 @@ use rc_messaging::{Address, RegionMessage};
 use crate::behavior::{BlockBehaviorRegistry, RandomTickContext, UpdateContext};
 use crate::block_event::BlockEventQueue;
 use crate::border::RegionOwnership;
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 use crate::random::RcRandom;
 use crate::random_tick::{WorldSeed, draw_random_tick_positions};
@@ -42,6 +43,7 @@ pub fn run_random_tick_phase(
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
 ) {
     for &(chunk_x, chunk_z) in chunks {
@@ -75,6 +77,7 @@ pub fn run_random_tick_phase(
                 changed,
                 ownership,
                 current_tick: tick_counter,
+                light_dirty,
             };
             let mut ctx = RandomTickContext {
                 base,
@@ -92,6 +95,7 @@ pub fn run_random_tick_phase(
                     changed,
                     ownership,
                     current_tick: tick_counter,
+                    light_dirty,
                 };
                 dispatch_pending_update(&mut item_ctx, behaviors, item);
             });

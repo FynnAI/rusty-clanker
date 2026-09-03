@@ -13,16 +13,18 @@ use rc_messaging::{Address, BorderUpdateEvent, RegionMessage};
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEventQueue;
 use crate::border::{BorderHalo, RegionOwnership, apply_inbound_border_event};
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 use crate::scheduled_tick::ScheduledTickQueue;
 use crate::world_access::BlockWorldAccess;
 
-/// Bundles the seven `&mut`/`&` pieces `UpdateContext` needs into one value, freshly, at
+/// Bundles the eight `&mut`/`&` pieces `UpdateContext` needs into one value, freshly, at
 /// every call site (Context: "the bundled-references pattern"). Each caller below passes its
 /// own already-`&mut`-typed local parameters, which Rust implicitly reborrows at this
 /// function-call boundary — so calling this repeatedly (once per loop iteration, or once per
 /// `NeighborUpdateEngine::drain` handler invocation) never moves anything out from under the
-/// caller.
+/// caller. M4-B07: `light_dirty` is the newest of these, the enqueue seam into Stage 8's own
+/// light recompute (`UpdateContext::set_block`'s extended body).
 #[allow(clippy::too_many_arguments)]
 fn make_ctx<'a>(
     world: &'a mut dyn BlockWorldAccess,
@@ -31,6 +33,7 @@ fn make_ctx<'a>(
     events: &'a mut BlockEventQueue,
     outbound: &'a mut Vec<(Address, RegionMessage)>,
     changed: &'a mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &'a mut LightDirtyQueue,
     ownership: &'a RegionOwnership,
     current_tick: u64,
 ) -> UpdateContext<'a> {
@@ -43,6 +46,7 @@ fn make_ctx<'a>(
         changed,
         ownership,
         current_tick,
+        light_dirty,
     }
 }
 
@@ -63,6 +67,7 @@ pub(crate) fn drain_engine(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -75,6 +80,7 @@ pub(crate) fn drain_engine(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
         );
@@ -137,6 +143,7 @@ fn dispatch_scheduled_tick(
     events: &mut BlockEventQueue,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -153,6 +160,7 @@ fn dispatch_scheduled_tick(
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
         current_tick,
     );
@@ -183,6 +191,7 @@ pub fn run_scheduled_phase(
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     current_tick: u64,
 ) {
     events.begin_scheduled_phase_dispatch();
@@ -194,6 +203,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
         );
@@ -205,6 +215,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,
@@ -220,6 +231,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,
@@ -232,6 +244,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,
@@ -247,6 +260,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,
@@ -259,6 +273,7 @@ pub fn run_scheduled_phase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,
@@ -304,6 +319,7 @@ pub fn run_block_event_subphase(
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     current_tick: u64,
 ) {
     events.begin_pass();
@@ -332,6 +348,7 @@ pub fn run_block_event_subphase(
                 events,
                 outbound,
                 changed,
+                light_dirty,
                 ownership,
                 current_tick,
             );
@@ -344,6 +361,7 @@ pub fn run_block_event_subphase(
             events,
             outbound,
             changed,
+            light_dirty,
             ownership,
             current_tick,
             behaviors,

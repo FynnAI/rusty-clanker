@@ -17,6 +17,7 @@ use rc_scheduler::{
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEventQueue;
 use crate::border::{BorderHalo, RegionOwnership};
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::scheduled_tick::ScheduledTickQueue;
 use crate::world_access::BlockWorldAccess;
@@ -179,6 +180,7 @@ fn system_scheduled_phase(
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
     mut tick_changed: ResMut<TickChangedPositions>,
+    mut light_dirty: ResMut<LightDirtyQueue>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -199,6 +201,7 @@ fn system_scheduled_phase(
         &behaviors,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         current_tick.0,
     );
 
@@ -220,6 +223,7 @@ fn system_block_event_subphase(
     chunk_index: Res<ChunkIndex>,
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
     mut tick_changed: ResMut<TickChangedPositions>,
+    mut light_dirty: ResMut<LightDirtyQueue>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -238,6 +242,7 @@ fn system_block_event_subphase(
         &behaviors,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         current_tick.0,
     );
 
@@ -303,4 +308,8 @@ pub fn bootstrap_default_stage4_resources(world: &mut World) {
     world.insert_resource(BlockBehaviorRegistry::new());
     world.insert_resource(BorderHalo::default());
     world.insert_resource(TickChangedPositions::default());
+    // M4-B07: `LightDirtyQueue` -- `UpdateContext::set_block`'s own enqueue seam into
+    // Stage 8's light recompute needs this resource present before Stage 4 first
+    // runs, exactly like every other resource this function inserts.
+    world.insert_resource(LightDirtyQueue::default());
 }

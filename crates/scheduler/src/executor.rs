@@ -7,11 +7,13 @@ use bevy_ecs::system::System;
 use bevy_ecs::world::World;
 
 use crate::access::ComponentAccessSummary;
-use crate::messaging_bridge::{BorderUpdateInbox, CurrentTick, RegionMessageOutbox};
+use crate::messaging_bridge::{
+    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox,
+};
 use crate::pipeline::DomainGroup;
 use crate::pool::RcWorkerPool;
 use crate::region::RegionState;
-use crate::registry::SystemFactory;
+use crate::registry::{LightingStageDriver, SystemFactory};
 use rc_messaging::{RegionId, RegionMessage, Transport};
 
 pub(crate) struct CompiledSystem {
@@ -63,6 +65,9 @@ const DISPATCH_ORDER: [DomainGroup; 8] = [
 pub struct RcExecutor {
     bootstrap: fn(&mut bevy_ecs::world::World),
     groups: [CompiledGroup; 8],
+    /// M4-B07: Stage 8's own additive dispatch path (Context §8) — `None` unless a
+    /// caller registered one via `RcExecutorBuilder::with_lighting_driver`.
+    lighting_driver: Option<LightingStageDriver>,
 }
 
 /// Minimal per-tick result. Extended by later blueprints as needed (e.g. per-stage
@@ -75,8 +80,16 @@ pub struct TickReport {
 impl RcExecutor {
     /// Crate-private constructor -- `RcExecutorBuilder::build` (`registry.rs`) is
     /// the only caller; the conflict graph is computed there, once.
-    pub(crate) fn new(bootstrap: fn(&mut World), groups: [CompiledGroup; 8]) -> Self {
-        Self { bootstrap, groups }
+    pub(crate) fn new(
+        bootstrap: fn(&mut World),
+        groups: [CompiledGroup; 8],
+        lighting_driver: Option<LightingStageDriver>,
+    ) -> Self {
+        Self {
+            bootstrap,
+            groups,
+            lighting_driver,
+        }
     }
 
     /// Creates a fresh region: a new `World` (bootstrapped identically to the
@@ -134,6 +147,8 @@ impl RcExecutor {
         world.insert_resource(BorderUpdateInbox::default());
         world.insert_resource(RegionMessageOutbox::default());
         world.insert_resource(CurrentTick::default());
+        // M4-B07: mirrors the three resources above exactly (Context §8).
+        world.insert_resource(LightBorderInbox::default());
 
         RegionState {
             id,
@@ -175,6 +190,15 @@ impl RcExecutor {
             .iter()
             .filter_map(|m| match m {
                 RegionMessage::BorderUpdateEvent(ev) => Some(*ev),
+                _ => None,
+            })
+            .collect();
+        // M4-B07: the same already-drained `inbound` batch, no second drain call
+        // (Context §8).
+        region.world.resource_mut::<LightBorderInbox>().0 = inbound
+            .iter()
+            .filter_map(|m| match m {
+                RegionMessage::LightBorderUpdate(ev) => Some((**ev).clone()),
                 _ => None,
             })
             .collect();
@@ -221,6 +245,23 @@ impl RcExecutor {
                     // the identical documented limitation Constraint (f) already
                     // accepts for Stage 12.
                     run_group_waves(compiled, instances, world, pool);
+                }
+                DomainGroup::Lighting => {
+                    // Stage 8: conflict-graph-batched, deferred until Stage 10 --
+                    // identical to the catch-all arm below, plus (M4-B07) this
+                    // group's own additive dispatch path: `RcExecutorBuilder::
+                    // with_lighting_driver`'s registered chunk-parallel BSP round
+                    // driver, run after the ordinary wave dispatch so a future,
+                    // unrelated `DomainGroup::Lighting`-registered system (none
+                    // exists at M4) still executes normally first (Context §8).
+                    run_group_waves(compiled, instances, world, pool);
+                    let stage = group.stage() as u8;
+                    for order_tag in 0..instances.len() {
+                        deferred_targets.push((stage, order_tag as u32, group.index(), order_tag));
+                    }
+                    if let Some(driver) = self.lighting_driver {
+                        driver(world, pool);
+                    }
                 }
                 _ => {
                     // Stages 7, 8, 9, 10: conflict-graph-batched, deferred until

@@ -12,6 +12,7 @@ pub mod direction;
 pub mod entity;
 pub mod fluid;
 pub mod item_stack;
+pub mod light;
 pub mod neighbor_update;
 pub mod random;
 pub mod random_tick;
@@ -49,6 +50,14 @@ pub use fluid::{
     FluidBehavior, FluidBlockRanges, FluidKind, FluidState, FluidTables, register_fluids,
 };
 pub use item_stack::{item_stack_from_nbt, item_stack_to_nbt};
+#[cfg(feature = "server-systems")]
+pub use light::stage8_ecs::lighting_stage_driver;
+pub use light::{
+    ChannelState, DirectionSet, LightDirtyEntry, LightDirtyQueue, LightPropagatorState,
+    LightProperties, LightPropertiesRegistry, LightTickReport, QueueEntry, SkyLightSourceColumn,
+    UpdateLightPayload, apply_inbound_light_border_update, build_light_border_update,
+    build_update_light_payload, direction_index, is_sky_edge_occluded, shape_occludes,
+};
 pub use neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 pub use random::{RcRandom, chunk_random_seed};
 pub use random_tick::{

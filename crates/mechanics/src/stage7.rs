@@ -42,6 +42,7 @@ use crate::block_entity::{BlockEntityKind, BlockEntityWorldAccess};
 use crate::block_event::BlockEventQueue;
 use crate::border::RegionOwnership;
 use crate::container::ItemMaxStackSize;
+use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::redstone::notify_neighbor_changed_only;
 use crate::scheduled_tick::ScheduledTickQueue;
@@ -165,6 +166,7 @@ pub fn run_container_signal_notify(
     behaviors: &BlockBehaviorRegistry,
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
     current_tick: u64,
     container_signals: &Tier1ContainerSignalSource,
 ) {
@@ -178,6 +180,7 @@ pub fn run_container_signal_notify(
             changed,
             ownership,
             current_tick,
+            light_dirty,
         };
         notify_neighbor_changed_only(&mut ctx, pos);
     }
@@ -188,6 +191,7 @@ pub fn run_container_signal_notify(
         events,
         outbound,
         changed,
+        light_dirty,
         ownership,
         current_tick,
         behaviors,
