@@ -24,7 +24,7 @@ pub struct SuperflatFiller {
 }
 
 impl SuperflatFiller {
-    /// Context's exact layer table (bedrock@-64, dirt -63..=-61, grass@-60, air
+    /// Context's exact layer table (bedrock@-64, dirt -63..=-62, grass@-61, air
     /// elsewhere), identical for every chunk regardless of `(x, z)` -- a genuinely flat
     /// world, `M1-B05`'s own already-merged content re-expressed against `M2-B01`'s real
     /// component API. `M5` replaces every call site of this function with real worldgen
@@ -42,8 +42,8 @@ impl SuperflatFiller {
         for world_y in crate::WORLD_MIN_Y..crate::WORLD_MIN_Y + crate::WORLD_HEIGHT {
             let block = match world_y {
                 -64 => Some(self.bedrock),
-                -63..=-61 => Some(self.dirt),
-                -60 => Some(self.grass),
+                -63..=-62 => Some(self.dirt),
+                -61 => Some(self.grass),
                 _ => None,
             };
             let Some(block) = block else {
@@ -57,8 +57,8 @@ impl SuperflatFiller {
         }
 
         let biomes = BiomeColumn::new(self.biome, self.biome_thresholds);
-        // First air Y is one above the topmost real block (the grass layer at y == -60).
-        let heightmaps = HeightmapSet::new_uniform(-59);
+        // First air Y is one above the topmost real block (the grass layer at y == -61).
+        let heightmaps = HeightmapSet::new_uniform(-60);
         let light = LightColumn::new_uninitialized();
         let status = ChunkStatus(ChunkGenStatus::Full);
 

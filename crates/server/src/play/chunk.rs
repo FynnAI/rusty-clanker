@@ -257,8 +257,8 @@ pub fn build_placeholder_chunk_data() -> Vec<u8> {
         let world_y = WORLD_MIN_Y + local_y;
         let block = match world_y {
             -64 => blocks::BEDROCK.0,
-            -63..=-61 => blocks::DIRT.0,
-            -60 => blocks::GRASS_BLOCK.0,
+            -63..=-62 => blocks::DIRT.0,
+            -61 => blocks::GRASS_BLOCK.0,
             _ => blocks::AIR.0,
         };
         for z in 0..16usize {

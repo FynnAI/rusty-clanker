@@ -34,7 +34,7 @@ pub struct PlayerProfile {
     pub username: String,
 }
 
-pub const SPAWN_POSITION: BlockPos = BlockPos::new(0, -59, 0);
+pub const SPAWN_POSITION: BlockPos = BlockPos::new(0, -60, 0);
 
 /// How often the keep-alive driver is polled while idling in the inbound-dispatch loop.
 /// `KeepAliveDriver::on_tick` itself gates on `KEEPALIVE_INTERVAL`, so any poll cadence

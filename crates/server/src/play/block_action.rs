@@ -161,15 +161,15 @@ pub fn seed_chunk_column(
     for x in 0u8..16 {
         for z in 0u8..16 {
             blocks.set(x, -64, z, to_storage_id(BEDROCK.0));
-            for y in -63..=-61i32 {
+            for y in -63..=-62i32 {
                 blocks.set(x, y, z, to_storage_id(DIRT.0));
             }
-            blocks.set(x, -60, z, to_storage_id(GRASS_BLOCK.0));
+            blocks.set(x, -61, z, to_storage_id(GRASS_BLOCK.0));
         }
     }
     let biomes = BiomeColumn::new(to_storage_biome_id(PLACEHOLDER_BIOME_ID), biome_thresholds);
     let light = LightColumn::new_uninitialized();
-    let heightmaps = HeightmapSet::new_uniform(-59);
+    let heightmaps = HeightmapSet::new_uniform(-60);
     let block_entities = BlockEntityIndex::new();
     let status = ChunkStatus(ChunkGenStatus::Full);
     let persistence = ChunkPersistenceState::new();
