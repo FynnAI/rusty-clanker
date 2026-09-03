@@ -279,8 +279,8 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let mut data = Bytes::from(first.data.clone());
         let block_count = data.get_i16();
         assert_eq!(
-            block_count, 1280,
-            "1 bedrock + 3 dirt + 1 grass, x256 columns"
+            block_count, 1024,
+            "1 bedrock + 2 dirt + 1 grass, x256 columns"
         );
         let fluid_count = data.get_i16();
         assert_eq!(fluid_count, 0);
