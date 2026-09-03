@@ -14,7 +14,10 @@ use rusty_clanker_server::play::{UpdateAttributes, build_update_attributes};
 #[test]
 fn update_attributes_encode_matches_hand_derived_bytes() {
     let mut map = rc_mechanics::ai::AttributeMap::default();
-    map.insert(attribute::MAX_HEALTH, AttributeInstance::new(20.0, 1.0, 1024.0));
+    map.insert(
+        attribute::MAX_HEALTH,
+        AttributeInstance::new(20.0, 1.0, 1024.0),
+    );
 
     let packet = build_update_attributes(7, &mut map);
     let mut buf = BytesMut::new();
@@ -50,8 +53,9 @@ fn update_attributes_round_trips_through_decode_body() {
     let decoded = UpdateAttributes::decode_body(&mut bytes).expect("decodes");
 
     assert_eq!(decoded.entity_id, 11);
-    let entries = rc_mechanics::ai::attributes::decode_attribute_entries(&decoded.attribute_entries)
-        .expect("attribute_entries decode");
+    let entries =
+        rc_mechanics::ai::attributes::decode_attribute_entries(&decoded.attribute_entries)
+            .expect("attribute_entries decode");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].attribute, attribute::MOVEMENT_SPEED);
     assert_eq!(entries[0].base_value, 0.5);
@@ -68,8 +72,9 @@ fn build_update_attributes_reads_a_live_attribute_map() {
 
     let mut bytes: Bytes = buf.freeze();
     let decoded = UpdateAttributes::decode_body(&mut bytes).expect("decodes");
-    let entries = rc_mechanics::ai::attributes::decode_attribute_entries(&decoded.attribute_entries)
-        .expect("attribute_entries decode");
+    let entries =
+        rc_mechanics::ai::attributes::decode_attribute_entries(&decoded.attribute_entries)
+            .expect("attribute_entries decode");
 
     let find = |id: rc_registries::generated_v776::registries::RegistryEntryId| {
         entries
