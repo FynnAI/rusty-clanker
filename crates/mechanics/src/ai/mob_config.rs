@@ -85,8 +85,7 @@ fn pseudo_random_gate(tick_count: u64, entity_id: RcEntityId, denom: u64) -> boo
     (tick_count
         .wrapping_mul(2654435761)
         .wrapping_add(entity_id.0))
-        % denom
-        == 0
+    .is_multiple_of(denom)
 }
 
 /// A goal whose `can_use` is a fixed constant — covers every "declared for
@@ -261,10 +260,10 @@ impl Behavior for LookAtTargetSink {
     }
     fn start(&mut self, _ctx: &mut AiContext) {}
     fn tick(&mut self, ctx: &mut AiContext) {
-        if let Some(brain) = ctx.memory {
-            if let Some(&target) = brain.get::<[f64; 3]>(MemoryModuleType::LookTarget) {
-                *ctx.look_target = Some(target);
-            }
+        if let Some(brain) = ctx.memory
+            && let Some(&target) = brain.get::<[f64; 3]>(MemoryModuleType::LookTarget)
+        {
+            *ctx.look_target = Some(target);
         }
     }
     fn stop(&mut self, _ctx: &mut AiContext) {}

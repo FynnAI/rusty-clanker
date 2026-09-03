@@ -124,10 +124,10 @@ impl GoalSelector {
 
         // 2. Drop stale flag locks.
         for slot in self.locked_flags.iter_mut() {
-            if let Some(owner) = *slot {
-                if !self.entries[owner].running {
-                    *slot = None;
-                }
+            if let Some(owner) = *slot
+                && !self.entries[owner].running
+            {
+                *slot = None;
             }
         }
 
@@ -213,5 +213,5 @@ impl Default for GoalSelector {
 /// `(tick_count + entity_id.0) % 2 == 0` — the save-stable half-tick throttle key
 /// (Context §D).
 pub fn should_full_tick(tick_count: u64, entity_id: RcEntityId) -> bool {
-    (tick_count.wrapping_add(entity_id.0)) % 2 == 0
+    (tick_count.wrapping_add(entity_id.0)).is_multiple_of(2)
 }

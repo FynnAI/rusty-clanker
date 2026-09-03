@@ -230,12 +230,11 @@ impl BrainProgram {
 
         // Pre-phase-3 push-based Panic trigger (Context §E) — never itself one of
         // vanilla's real four phases; only ever *enters* Panic, never reverts it.
-        if let Some(memory) = self.panic_trigger_memory {
-            if brain.status(memory) == MemoryStatus::ValuePresent
-                && !brain.active_activities.contains(&Activity::Panic)
-            {
-                self.set_active_activity_if_possible(brain, Activity::Panic);
-            }
+        if let Some(memory) = self.panic_trigger_memory
+            && brain.status(memory) == MemoryStatus::ValuePresent
+            && !brain.active_activities.contains(&Activity::Panic)
+        {
+            self.set_active_activity_if_possible(brain, Activity::Panic);
         }
 
         // 3. Start each non-running behavior across every currently-active package,
