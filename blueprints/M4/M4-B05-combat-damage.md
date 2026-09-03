@@ -5,13 +5,13 @@
 | ID | M4-B05 |
 | Milestone | M4 — Mechanics Tier 2: Entities, AI, Combat, Items |
 | Prerequisites | M4-B01 (`rc-mechanics::entity`: `BaseEntity`/`LivingEntity`/`EntityKind`/`EntityPayload`/`ZombieBundle`/`CowBundle`/`VillagerBundle`/`ItemBundle`, `EntityUuid`/`NetworkEntityIdAllocator`, the metadata wire helpers `encode_metadata_entries`/`decode_metadata_entries`/`MetadataValue`, the `Spawn Entity`/`Set Entity Data`/`Remove Entities`/`Set Entity Velocity`/`Teleport Entity` packets in `crates/server/src/play/entity_packets.rs`, the `EntityAiSelection`(Stage 6, read-only)/`EntityPhysicsIntegration`(Stage 7) `DomainGroup`/`Stage` split, the tracking system `compute_tracking_delta` — all reused unmodified; restated below only where this blueprint's own systems consume them). M3-B01 (`rc-mechanics::random::RcRandom`, bit-exact LCG, reused unmodified for the one rare RNG call this blueprint needs). M3-B02 (`rc-physics`: `Vec3`/`Aabb`, `mth_sin`/`mth_cos`, `PLAYER_EYE_HEIGHT`; `rusty-clanker-server::play::movement`: `PlayerMotion`, `eye_position`, `GameModeState` — reused, with one cited additive field added to `PlayerMotion`, Context). M3-B03 (`rc_physics::raycast::{cast_ray, RayHit}`, `rusty-clanker-server::play::mining`: `HeldItemStub`, reused unmodified as the item this blueprint's enchantment-level stub reads from). M2-B07/M3-B03 (the manual, non-`DomainGroup` "Stage-3-equivalent" tick-loop-step pattern, restated and reused for this blueprint's own packet-apply step). |
-| Implements | MECH-D40/D43–D46 (knockback, 1.9+ attack cooldown, damage order of operations, armor formula, status-effect placement — restated with exact constants); MECH-D51 (item-entity despawn/merge — reused unmodified from M4-B01, referenced only for the loot-drop seam); MECH-D62/D63 (reach/interaction-range validation and the `sequence`-adjacent per-action contract, extended to entity targets); MECH-D4 (Stage-3 placement for the `Interact` packet); MECH-D32 (Stage 6a read-only AI selection / Stage 6b action integration, exercised for the first time with real content — the mob-melee-attack seam); MECH-D64/D65 (a minimal, real `GlobalDifficulty` resource, first exercised here); ARCH-D8/D12/D15 (system registration into `EntityPhysicsIntegration`, the first real Stage-6b content); NET-D3 (five new hand-written packet types: `Interact`, `Set Health`, `Update Attributes`, `Damage Event`, `Entity Event`, plus reuse of M4-B01's `Set Entity Velocity`/`Set Entity Data`). MECH-D18's border-halo widening is explicitly **not** implemented (Context, "Explosions — out of scope"). |
+| Implements | MECH-D40/D43–D46 (knockback, 1.9+ attack cooldown, damage order of operations, armor formula, status-effect placement — restated with exact constants); MECH-D51 (item-entity despawn/merge — reused unmodified from M4-B01, referenced only for the loot-drop seam); MECH-D62/D63 (reach/interaction-range validation and the `sequence`-adjacent per-action contract, extended to entity targets); MECH-D4 (Stage-3 placement for the `Attack`/`Interact` packets); MECH-D32 (Stage 6a read-only AI selection / Stage 6b action integration, exercised for the first time with real content — the mob-melee-attack seam); MECH-D64/D65 (a minimal, real `GlobalDifficulty` resource, first exercised here); ARCH-D8/D12/D15 (system registration into `EntityPhysicsIntegration`, the first real Stage-6b content); NET-D3 (six new hand-written packet types: `Attack`, `Interact`, `Set Health`, `Update Attributes`, `Damage Event`, `Entity Event`, plus reuse of M4-B01's `Set Entity Velocity`/`Set Entity Data`). MECH-D18's border-halo widening is explicitly **not** implemented (Context, "Explosions — out of scope"). |
 | Crates touched | `rc-mechanics` (`crates/mechanics/src/combat/`, new module; `crates/mechanics/src/entity/{living.rs, ids.rs}`, modified) — extends M4-B01's own first-real-content precedent; `rc-physics` (`crates/physics/src/motion.rs`, modified — one cited additive field/branch); `rusty-clanker-server` (`crates/server/src/play/{combat_packets.rs, combat.rs}`, new; `crates/server/src/play/{movement.rs, mining.rs, world.rs, connection.rs, mod.rs}`, modified). |
 | Estimated scope | L (exceeds the ~800-line guideline, flagged explicitly per `blueprints/M3/M3-B06-random-ticks-block-entities.md`'s own precedent for a coherent, non-splittable task: the melee damage order of operations, the attack-cooldown/critical/sweep model, the two-impulse knockback model, fall damage, attributes, death/loot, and food/exhaustion are one interlocking damage pipeline — splitting any one piece into its own blueprint would leave it consuming a not-yet-specified upstream stage of the same formula chain). |
 
 ## Goal & Done definition
 
-Give the engine a complete, vanilla-parity melee combat and damage pipeline exercising real content in Stage 3 (player-caused) and Stage 6b (simulation-caused) for the first time: the full damage order-of-operations (invulnerability top-up window, armor/toughness, enchantment-protection factor, absorption hearts), the 1.9+ attack-cooldown charge curve with critical hits and sweep attacks, the two-impulse knockback model, fall damage for network-connected players, a minimal real attribute system (`AttributeMap`, the vanilla 3-stage `ADD_VALUE → ADD_MULTIPLIED_BASE → ADD_MULTIPLIED_TOTAL` calculation) backing every attribute the formulas above read, a bounded player-health stand-in (players are not yet migrated onto M4-B01's composition model — Context explains why and how a future migration reconciles this), death detection and a loot-drop seam a future items/loot blueprint fulfills, a bounded seam for mob-melee-attack timing a future AI blueprint fulfills, a minimal real food/exhaustion/natural-regeneration system, a minimal real `GlobalDifficulty` resource, and the five new packets (plus reuse of M4-B01's `Set Entity Velocity`/`Set Entity Data`) this all requires. This blueprint spawns real `Zombie`/`Cow`/`Villager` mobs into `HardcodedWorld`'s live tick loop for the first time (a debug/test-only entry point, Context) — the first real production exerciser of M4-B01's `NetworkEntityIdAllocator`/entity-persistence/tracking machinery beyond its own unit tests.
+Give the engine a complete, vanilla-parity melee combat and damage pipeline exercising real content in Stage 3 (player-caused) and Stage 6b (simulation-caused) for the first time: the full damage order-of-operations (invulnerability top-up window, armor/toughness, enchantment-protection factor, absorption hearts), the 1.9+ attack-cooldown charge curve with critical hits and sweep attacks, the two-impulse knockback model, fall damage for network-connected players, a minimal real attribute system (`AttributeMap`, the vanilla 3-stage `ADD_VALUE → ADD_MULTIPLIED_BASE → ADD_MULTIPLIED_TOTAL` calculation) backing every attribute the formulas above read, a bounded player-health stand-in (players are not yet migrated onto M4-B01's composition model — Context explains why and how a future migration reconciles this), death detection and a loot-drop seam a future items/loot blueprint fulfills, a bounded seam for mob-melee-attack timing a future AI blueprint fulfills, a minimal real food/exhaustion/natural-regeneration system, a minimal real `GlobalDifficulty` resource, and the six new packets (plus reuse of M4-B01's `Set Entity Velocity`/`Set Entity Data`) this all requires. This blueprint spawns real `Zombie`/`Cow`/`Villager` mobs into `HardcodedWorld`'s live tick loop for the first time (a debug/test-only entry point, Context) — the first real production exerciser of M4-B01's `NetworkEntityIdAllocator`/entity-persistence/tracking machinery beyond its own unit tests.
 
 Done when:
 
@@ -22,7 +22,7 @@ Done when:
 - [ ] Every knockback velocity golden vector (both impulses, in order) matches to `1e-9`.
 - [ ] The invulnerability-window sequence tests (top-up vs. fresh-hit branches, the `> 10` not `> 0` boundary) pass.
 - [ ] The death/drop integration test passes: a mob reduced to 0 health despawns, drops its configured loot via the seam trait, and is removed from every viewer's `tracked_entities`.
-- [ ] Packet conformance + validation-rejection tests (`Interact` decode/encode round trip, `OutOfReach`/occluded-target rejection, out-of-angle rejection) pass.
+- [ ] Packet conformance + validation-rejection tests (`Attack`/`Interact` decode/encode round trip, `OutOfReach`/occluded-target rejection, out-of-angle rejection) pass.
 - [ ] `cargo run -p xtask -- lint-deps`, `fmt-check`, `lint` all exit 0 — no new dependency edges beyond `rc-mechanics`→`rc-physics` (already present since M4-B01) and ordinary intra-crate additions.
 - [ ] `cargo test --doc -p rc-mechanics -p rc-physics -p rusty-clanker-server` exits 0.
 - [ ] CI tier: Tier 1 (`fmt-check`, `lint`, `lint-deps`, `test`) green on both `ubuntu-24.04` and `windows-2025` (TEST-D34/D37), on a clean checkout (TEST-D50).
@@ -43,7 +43,7 @@ Done when:
 
 ### Tick-pipeline placement (MECH-D2/D4/D32, restated concretely)
 
-Player-caused combat (the `Interact` packet, Stage 3 per MECH-D4's own explicit naming of "Combat" under Stage 3) is applied via a **manual, non-`DomainGroup` tick-loop step**, identical in kind to M2-B07's block-action step, M3-B02/B03's movement/mining steps, and M4-B01's own entity-tracking step — Stage 3 (`NetworkInboundApply`) accepts no `DomainGroup` registration in this project as of M4-B01 (M0-B05's own table), and every prior blueprint that needed Stage-3-equivalent behavior used this same hand-rolled pattern rather than inventing a first real Stage-3 `DomainGroup`. This blueprint's own combat packet-apply step is inserted into `HardcodedWorld`'s tick loop **after** M4-B01's entity-tracking step and **before** `executor.tick_region(...)`, mirroring the exact insertion-point convention every prior manual step already establishes.
+Player-caused combat (the `Attack`/`Interact` packets, Stage 3 per MECH-D4's own explicit naming of "Combat" under Stage 3) is applied via a **manual, non-`DomainGroup` tick-loop step**, identical in kind to M2-B07's block-action step, M3-B02/B03's movement/mining steps, and M4-B01's own entity-tracking step — Stage 3 (`NetworkInboundApply`) accepts no `DomainGroup` registration in this project as of M4-B01 (M0-B05's own table), and every prior blueprint that needed Stage-3-equivalent behavior used this same hand-rolled pattern rather than inventing a first real Stage-3 `DomainGroup`. This blueprint's own combat packet-apply step is inserted into `HardcodedWorld`'s tick loop **after** M4-B01's entity-tracking step and **before** `executor.tick_region(...)`, mirroring the exact insertion-point convention every prior manual step already establishes.
 
 Mob melee attacks and fall damage are simulation-driven, not packet-driven, and are real Stage-6b (`DomainGroup::EntityPhysicsIntegration`) content — the first ever registered into that group, per MECH-D32's own text ("[Stage 6a] producing a chosen-action command consumed by Stage 6b's movement/action integration"). This blueprint registers exactly one system into `EntityPhysicsIntegration` (Context, "Mob melee attacks — the AI seam"); it does **not** register anything into `EntityAiSelection` (Stage 6a) — deciding *when* a mob wants to attack is AI/goal-selector content this blueprint does not own (below).
 
@@ -55,7 +55,7 @@ No attribute system exists anywhere in the merged codebase before this blueprint
 3. For every `AddMultipliedTotal` modifier, multiply `result` by `(1 + amount)` — these **do** compound with each other since they apply sequentially to the running total.
 4. Clamp to `[min, max]`.
 
-Modifier application order for step 2/3 is registration order within each operation bucket (vanilla iterates the bucket in insertion order; ties within one operation type do not commute for `AddMultipliedTotal`, since each factor is applied to the already-updated running total — restated exactly, not "probably order-independent"). `AttributeInstance` lazily caches its computed value, invalidated on any base/modifier mutation — this blueprint's own `compute_value` is a pure, uncached function; a caller wanting caching wraps it, this blueprint does not build a dirty-flag cache (out of scope, not load-bearing for correctness).
+Modifier application order for step 2/3 is hash-table slot order within each operation bucket, not registration or insertion order: vanilla stores each operation's modifiers in an open-addressing hash map keyed by the modifier's own identifier and iterates that map's value view — only the attribute instance's separate by-id and permanent-modifier lookups are insertion-ordered, and neither participates in the value calculation. For `AddMultipliedTotal`, `result *= (1 + amount)` is mathematically commutative across modifiers in exact arithmetic; only IEEE-754 double rounding makes iteration order observable, not the running-total structure itself — the same rounding-only sensitivity holds for `AddMultipliedBase`'s plain summation. `AttributeInstance` lazily caches its computed value, invalidated on any base/modifier mutation — this blueprint's own `compute_value` is a pure, uncached function; a caller wanting caching wraps it, this blueprint does not build a dirty-flag cache (out of scope, not load-bearing for correctness).
 
 **Attribute registry and defaults**, restated verbatim from `19-combat-damage.md` §4 (high confidence — every row below is that document's own constants table) plus this blueprint's own per-mob-type overrides (moderate confidence, well-established but unverified against a real `--reports` dump — flagged for reconciliation, Implementation steps):
 
@@ -64,7 +64,7 @@ Modifier application order for step 2/3 is registration order within each operat
 | `AttackDamage` | 2.0 | `[0.0, 2048.0]` | 3.0 | *(unused)* | *(unused)* |
 | `AttackKnockback` | 0.0 | `[0.0, 5.0]` | 0.0 | — | — |
 | `AttackSpeed` | 4.0 | `[0.0, 1024.0]` | *(unused — §3.13, mobs have no cooldown curve)* | — | — |
-| `Armor` | 0.0 | `[0.0, 30.0]` | 0.0 | 0.0 | 0.0 |
+| `Armor` | 0.0 | `[0.0, 30.0]` | 2.0 | 0.0 | 0.0 |
 | `ArmorToughness` | 0.0 | `[0.0, 20.0]` | 0.0 | 0.0 | 0.0 |
 | `KnockbackResistance` | 0.0 | `[-2.0, 1.0]` | 0.0 | 0.0 | 0.0 |
 | `MaxHealth` | 20.0 | `[1.0, 1024.0]` (moderate confidence on bounds) | 20.0 | 10.0 (moderate confidence) | 20.0 (moderate confidence) |
@@ -104,12 +104,12 @@ MECH-D52's data-driven `damage_type` registry (51 vanilla entries) does not exis
 pub enum DamageTypeKind { PlayerAttack, MobAttack, Fall, Starve }
 ```
 
-| `DamageTypeKind` | `exhaustion` | `scaling` | `bypasses_armor` |
-|---|---|---|---|
-| `PlayerAttack` | 0.1 | `WhenCausedByLivingNonPlayer` | false |
-| `MobAttack` | 0.1 | `WhenCausedByLivingNonPlayer` | false |
-| `Fall` | 0.0 | `WhenCausedByLivingNonPlayer` | true |
-| `Starve` | 0.0 | `WhenCausedByLivingNonPlayer` | true |
+| `DamageTypeKind` | `exhaustion` | `scaling` | `bypasses_armor` | `no_knockback` |
+|---|---|---|---|---|
+| `PlayerAttack` | 0.1 | `WhenCausedByLivingNonPlayer` | false | false |
+| `MobAttack` | 0.1 | `WhenCausedByLivingNonPlayer` | false | false |
+| `Fall` | 0.0 | `WhenCausedByLivingNonPlayer` | true | true |
+| `Starve` | 0.0 | `WhenCausedByLivingNonPlayer` | true | true |
 
 A future blueprint extending this enum for a new damage-causing mechanic (fire, drowning, potions, explosions) adds a variant and a matching table row here, at that mechanic's own point of implementation — this blueprint's own `apply_damage_pipeline` (below) is written generically over `DamageTypeKind`, not hardcoded to these four beyond their table rows.
 
@@ -170,7 +170,7 @@ Per hit, in this exact order (steps this blueprint excludes are listed and skipp
      ```
    Both paths clamp `absorption` to `>= 0.0` after subtraction (never negative).
 
-Fired unconditionally after any successful hit (`tookFullDamage` per §3.1): **knockback impulse #1** (Context, "Knockback") if the source has a fixed position and the damage type is not degenerate; hurt/death packets (Context, "Packets").
+Fired on the fresh-hit branch of the invulnerability gate only (`tookFullDamage` per §3.1 — never on the top-up-delta branch, even when that branch deals damage): **knockback impulse #1** (Context, "Knockback") if the damage type is not `no_knockback`-tagged; hurt/death packets (Context, "Packets").
 
 ### Attack-cooldown charge curve (§3.9a, exact — players only)
 
@@ -179,7 +179,7 @@ attack_strength_delay(ticks) = 1.0 / attack_speed_attribute * 20.0        # defa
 charge_scale(ticker, offset) = clamp((ticker + offset) / attack_strength_delay, 0.0, 1.0)
 base_damage_scale_factor()   = 0.2 + charge_scale(ticker, 0.5)^2 * 0.8
 ```
-`attack_strength_ticker` (this blueprint's own field on `PlayerCombatState`... **correction**: per the Player Health section above, `PlayerCombatState` does not declare it — restated here as this blueprint's own concrete resolution: `attack_strength_ticker: u32` lives on the new `CombatRuntimeState` component, below, attached to both players and mobs (mobs never advance or read it — §3.13 has no cooldown curve) so the two entity shapes share one runtime-timer component instead of two near-duplicate ones) increments by 1 every player tick and resets to 0 on `on_attack()` (fired at the start of every successful `Interact{Attack}` dispatch, Context "Packets," regardless of whether the swing dealt damage).
+`attack_strength_ticker` (this blueprint's own field on `PlayerCombatState`... **correction**: per the Player Health section above, `PlayerCombatState` does not declare it — restated here as this blueprint's own concrete resolution: `attack_strength_ticker: u32` lives on the new `CombatRuntimeState` component, below, attached to both players and mobs (mobs never advance or read it — §3.13 has no cooldown curve) so the two entity shapes share one runtime-timer component instead of two near-duplicate ones) increments by 1 every player tick and resets to 0 on `on_attack()` (fired at the start of every successful `Attack` packet dispatch, Context "Packets," regardless of whether the swing dealt damage).
 
 ### Player melee assembly (§3.9, exact order)
 
@@ -191,13 +191,13 @@ base_damage *= base_damage_scale_factor()                                  # cha
 full_strength    = charge_scale > 0.9                                       # exact threshold, §3.9b
 knockback_attack = is_sprinting && full_strength                            # +0.5 knockback, KNOCKBACK sound
                                                                               # Mace bonus excluded — no Mace
-critical = full_strength && can_critical_attack(fall_distance, on_ground, in_water, on_climbable)
+critical = full_strength && can_critical_attack(fall_distance, on_ground, in_water, on_climbable, target_is_living)
 if critical: base_damage *= 1.5
 total_damage = base_damage + magic_boost
 sweep = full_strength && !critical && !knockback_attack && on_ground
         && horizontal_speed_sq < (movement_speed * 2.5)^2 && main_hand_is_sword
 ```
-`can_critical_attack`: `fall_distance > 0.0 && !on_ground && !on_climbable && !in_water && !is_sprinting` (mobility-restriction/passenger checks excluded — no such state exists yet). Deterministic, no RNG (§3.9b, exact). `enchanted_damage(base, enchants)`: `base + sharpness_bonus(enchants.sharpness) + (target_is_undead ? smite_bonus(enchants.smite) : 0.0) + (target_is_arthropod ? bane_bonus(enchants.bane_of_arthropods) : 0.0)`.
+`can_critical_attack`: `fall_distance > 0.0 && !on_ground && !on_climbable && !in_water && target_is_living && !is_sprinting` (mobility-restriction/passenger checks excluded — no such state exists yet; `target_is_living` is the attacked entity being a `LivingEntity` — an attack against a non-living target, e.g. M4-B01's `Item` kind, can never crit). Deterministic, no RNG (§3.9b, exact). `enchanted_damage(base, enchants)`: `base + sharpness_bonus(enchants.sharpness) + (target_is_undead ? smite_bonus(enchants.smite) : 0.0) + (target_is_arthropod ? bane_bonus(enchants.bane_of_arthropods) : 0.0)`.
 
 **Enchant-bonus formulas** (§4, high confidence, all `linear(base, per_level_above_first)` evaluated as `base + per_level * (level - 1)` for `level >= 1`, else `0.0`):
 
@@ -211,7 +211,8 @@ sweep = full_strength && !critical && !knockback_attack && on_ground
 ```
 sweep_ratio = sweeping_edge_level > 0 ? sweeping_edge_level / (sweeping_edge_level + 1) as f32 : 0.0   # SWEEPING_DAMAGE_RATIO
 sweep_base  = 1.0 + sweep_ratio * base_damage                                    # base_damage = post-charge, post-crit
-for each LivingEntity within attacker_aabb.inflate(1.0, 0.25, 1.0), distance_sq < 9.0, excluding self and primary target:
+for each LivingEntity within primary_target_aabb.inflate(1.0, 0.25, 1.0), distance_sq (attacker-to-nearby) < 9.0,
+        excluding self, primary target, entities allied to the attacker, and marker ArmorStands:
     per_target = enchanted_damage(sweep_base, enchants) * charge_scale           # re-invokes enchant formula independently per target
     if apply_damage_pipeline(nearby, PlayerAttack_source, per_target).dealt:
         apply_knockback_impulse_2(nearby, 0.4, (sin(attacker_yaw), -cos(attacker_yaw)))   # attacker-yaw-directed, flat 0.4, no enchant term
@@ -243,7 +244,7 @@ This blueprint's own acceptance tests attach `PendingMeleeAttack` directly (bypa
 
 ### Knockback — the two-impulse model (§3.10, exact)
 
-**Impulse #1** (`deal_default_knockback`, fired unconditionally by `apply_damage_pipeline` after any hit that dealt nonzero damage and whose source carries a fixed position): direction = `(source_pos.x - victim_pos.x, source_pos.z - victim_pos.z)` normalized in the XZ plane; magnitude flat `0.4`. `Fall`/`Starve` damage sources carry no fixed position (self-inflicted) — impulse #1 is therefore a structural no-op for them, matching vanilla's own `no_knockback` tagging for those types without needing to hand-model the tag.
+**Impulse #1** (`deal_default_knockback`, fired by `apply_damage_pipeline` on the fresh-hit branch of the invulnerability gate whenever the damage source's `DamageTypeKind::no_knockback()` is `false` — Context, "Damage pipeline" step 3; never fired on the invulnerability top-up branch even when that branch deals damage, and it does fire on a fresh hit whose damage is reduced to zero by armor): direction = `(source_pos.x - victim_pos.x, source_pos.z - victim_pos.z)` normalized in the XZ plane — i.e. from the victim toward the source; magnitude flat `0.4`. `Fall`/`Starve` are `no_knockback = true` in the table above, modeled explicitly as a per-`DamageTypeKind` flag rather than inferred from an absent source position — impulse #1 never fires for them, and their `source_position` is simply never consulted.
 
 **Impulse #2** (attacker-directed, fired strictly *after* impulse #1 has already mutated velocity — Context above shows both call sites): direction = `(sin(attacker_yaw_rad), -cos(attacker_yaw_rad))`; magnitude = `get_knockback(attacker, target) + (knockback_attack ? 0.5 : 0.0)` (player path) or `get_knockback(attacker, target)` (mob path, `knockback_attack` always `false`).
 
@@ -257,9 +258,13 @@ knockback_enchant_bonus(level) = level > 0 ? 1.0 + 1.0 * (level - 1) : 0.0     #
 power *= (1.0 - target.AttributeMap[KnockbackResistance])
 if power <= 0.0: return velocity unchanged
 (xd, zd) = dir_xz
-if xd*xd + zd*zd < 1e-5:                                    # degenerate direction — rare
+while xd*xd + zd*zd < KNOCKBACK_DEGENERATE_THRESHOLD:        # degenerate direction — rare, re-drawn until the sample clears the threshold
     xd = (ambient_rng.next_double() - ambient_rng.next_double()) * 0.01
     zd = (ambient_rng.next_double() - ambient_rng.next_double()) * 0.01
+# KNOCKBACK_DEGENERATE_THRESHOLD = f64::from(1.0e-5_f32) = 9.999999747378752e-6, NOT the double
+# literal 1e-5 — the reference compares against the float 1.0E-5F widened to double, so the
+# threshold must be derived via an f32->f64 cast, never transcribed as a decimal literal.
+# RNG consumption is therefore 4 draws per loop iteration and unbounded, not a fixed 4.
 (dx, dz) = normalize(xd, zd) * power
 new_vx = old_vx / 2.0 - dx
 new_vz = old_vz / 2.0 - dz
@@ -273,7 +278,7 @@ new_vy = on_ground ? min(0.4, old_vy / 2.0 + power) : old_vy
 fall_power  = fall_distance + 1e-6 - AttributeMap[SafeFallDistance]
 fall_damage = floor(fall_power * damage_modifier * AttributeMap[FallDamageMultiplier])   # int result; damage_modifier fixed 1.0 (Context)
 ```
-Per-block landing modifiers (Bed halves distance, Hay Bale ×0.2, Slime Block ×0.0 unless sneaking, Powder Snow full immunity) are **not** implemented — `damage_modifier` is always vanilla's own default `1.0`, deferred to a future block-behavior blueprint that extends `BlockBehavior` with an `on_fall` hook (M3-B01's registry, not touched here). Fall damage is skipped entirely (not computed) if `fall_damage <= 0` or the falling player's `GameModeState.instabuild` is `true` (creative — Context, "Damage invulnerability gate," below); the resulting `fall_damage` (if positive) re-enters `apply_damage_pipeline` as ordinary `Fall`-typed damage (armor-bypassing, EPF/Feather-Falling-subject, per the pipeline table above).
+Per-block landing modifiers (Bed halves the fall distance itself before the default modifier applies; Hay Bale sets `damage_modifier = 0.2` while passing the fall distance through unscaled, so `SafeFallDistance` still subtracts from the full distance first; Slime Block sets `damage_modifier = 0.0` in both the bouncing and the sneaking branches — sneaking, `isSuppressingBounce`, instead skips the fall-damage call entirely, suppressing the bounce rather than restoring fall damage; Powder Snow full immunity) are **not** implemented — `damage_modifier` is always vanilla's own default `1.0`, deferred to a future block-behavior blueprint that extends `BlockBehavior` with an `on_fall` hook (M3-B01's registry, not touched here). Fall damage is skipped entirely (not computed) if `fall_damage <= 0` or the falling player's `GameModeState.instabuild` is `true` (creative — Context, "Damage invulnerability gate," below); the resulting `fall_damage` (if positive) re-enters `apply_damage_pipeline` as ordinary `Fall`-typed damage (armor-bypassing, EPF/Feather-Falling-subject, per the pipeline table above).
 
 **Cited additive modification to M3-B02's `crates/server/src/play/movement.rs`.** M3-B02's own `evaluate_movement` resets `player.motion.fall_distance = 0.0` the instant `on_ground` becomes true (both its client-reported-`on_ground` branch and its server-replayed-fallback branch), and its own Context explicitly flags fall damage as "M4" — but a reset-before-my-own-later-manual-step reads it would leave nothing to consume. This blueprint adds one field to `PlayerMotion` and one capture line at each of the two existing reset sites (both already-cited call sites, no new branch structure):
 ```rust
@@ -298,7 +303,7 @@ Applied to *incoming player damage only*, strictly before the Context "Damage pi
 ```
 Peaceful: damage = 0.0
 Easy:     damage = min(damage / 2.0 + 1.0, damage)
-Hard:     damage = damage * 1.5
+Hard:     damage = damage * 3.0 / 2.0   # multiply then divide, NOT a single `damage * 1.5` (differ only above f32::MAX/3, where this form overflows to infinity and a single x1.5 stays finite)
 Normal:   unchanged
 ```
 If the scaled result is exactly `0.0`, the whole hit short-circuits (`DamageOutcome::NoOp`, no invulnerability consumption) exactly as §3.8 specifies. `GlobalDifficulty` is test/debug-settable (`HardcodedWorld::debug_set_difficulty`, mirroring every prior `debug_*` precedent) — no `/difficulty` command exists yet (MECH-D70's Tier-1 command list is a future blueprint's scope).
@@ -307,7 +312,7 @@ If the scaled result is exactly `0.0`, the whole hit short-circuits (`DamageOutc
 
 Health reaching `<= 0.0` inside `apply_damage_pipeline`'s absorption step (Context, "Damage pipeline" step 7) sets `is_dead = true` on the target (`LivingEntity.is_dead` for mobs, `PlayerCombatState.is_dead` for players) and returns `DamageOutcome::Died` instead of `Dealt`. `is_dead` gates every other system this blueprint registers (Stage-6b mob-attack, the manual combat packet-apply step) from acting on that entity again — a dead entity neither attacks nor is attacked further this tick or any later one.
 
-**Mob death**: this blueprint's own Stage-6b system, on observing a newly-`is_dead` mob, (a) broadcasts `Entity Event{event_id: 3}` (death animation, Context "Packets") to every tracking viewer, (b) rolls loot via the seam below, spawning the resulting item entities (M4-B01's own `ItemBundle`/tracking/spawn machinery, reused unmodified) at the mob's death position with a small vanilla-documented randomized velocity spread (`vx, vy, vz = rng.next_double()*0.2 - 0.1, rng.next_double()*0.2, rng.next_double()*0.2 - 0.1` — moderate confidence on the exact spread constants, restated from long-stable community knowledge, flagged for reconciliation), and (c) despawns the mob entity (removes it from the ECS `World`, `EntityIndex`, `NetworkEntityIndex`, and every viewer's `tracked_entities` via a synthetic `Remove Entities` broadcast, reusing M4-B01's own despawn-packet shape unmodified).
+**Mob death**: this blueprint's own Stage-6b system, on observing a newly-`is_dead` mob, (a) broadcasts `Entity Event{event_id: 3}` (death animation, Context "Packets") to every tracking viewer, (b) rolls loot via the seam below, spawning the resulting item entities (M4-B01's own `ItemBundle`/tracking/spawn machinery, reused unmodified) at the mob's death position with a small vanilla-documented randomized velocity spread (`vx, vy, vz = rng.next_double()*0.2 - 0.1, 0.2, rng.next_double()*0.2 - 0.1` — `vy` is the constant `0.2`, not a random draw, so each item spawn consumes exactly two `next_double()` calls, x then z; moderate confidence on the exact spread constants, restated from long-stable community knowledge, flagged for reconciliation), and (c) despawns the mob entity (removes it from the ECS `World`, `EntityIndex`, `NetworkEntityIndex`, and every viewer's `tracked_entities` via a synthetic `Remove Entities` broadcast, reusing M4-B01's own despawn-packet shape unmodified).
 
 **Player death**: broadcasts `Player Combat Kill` (Context "Packets") and `Set Health{health: 0.0, ...}` to the dying player, and sets `is_dead = true` on `PlayerCombatState` — the player entity is **not** removed from the world (unlike a mob) and no further combat/movement/interaction packet from that connection is processed while `is_dead` (this blueprint's own combat step and M3-B02/B03's own movement/mining steps each gain one `if player_combat_state.is_dead { continue; }` guard at the top of their per-player loop — a minimal, additive, cited change to each). **Explicitly out of scope**: the actual respawn packet round-trip, keepInventory-gated inventory drop, and bed/anchor spawn-point resolution (MECH-D59) — a future player-lifecycle blueprint clears `is_dead` and completes the cycle; this blueprint leaves a dead player connected, visibly dead, indefinitely, which is an accepted, documented interim gap, not a silent one.
 
@@ -405,12 +410,13 @@ Restated from a live fetch of `minecraft.wiki/w/Java_Edition_protocol/Packets` p
 
 | Packet | Bound | ID | Fields (wire order) |
 |---|---|---|---|
-| `Interact` | server | `0x1A` | `entity_id: i32 #[rc(varint)]`, `interaction_type: i32 #[rc(varint)]` (0=Interact, 1=Attack, 2=InteractAt), `[if interaction_type == 2: target_x: f32, target_y: f32, target_z: f32]`, `[if interaction_type == 0 or 2: hand: i32 #[rc(varint)]]` (0=main, 1=off), `sneaking: bool` — **hand-implemented `RcPacket`** (not `#[derive(RcPacket)]`), mirroring M4-B01's own `Set Entity Data` precedent, since the derive's attribute grammar has no "field present only for interaction_type N" conditional shape. This blueprint decodes and validates the full packet (every `interaction_type`) but only **acts** on `Attack` (type 1) — `Interact`/`InteractAt` (right-click, trading/feeding/mounting) are silently no-op accepted, explicitly out of scope (no items/villager-trade/vehicle mechanic exists) |
+| `Attack` | server | `0x01` | `entity_id: i32 #[rc(varint)]` — a single-field record, ordinary `#[derive(RcPacket)]` shape (no conditional fields, no custom codec). This blueprint decodes, reach/angle-validates, and dispatches every `Attack` through the melee pipeline (Context, "Player melee assembly") |
+| `Interact` | server | `0x1A` | `entity_id: i32 #[rc(varint)]`, `hand: i32 #[rc(varint)]` (0=main, 1=off), `location: LpVec3` (a quantized, variable-length position codec this blueprint introduces: a single `0x00` byte for a near-zero vector, else a fixed 6-byte payload of three 15-bit quantized components plus a 2-bit scale and continuation flag, followed by one trailing VarInt scale field when the continuation flag is set — moderate confidence on the exact bit layout, flagged for reconciliation against a real packet capture), `using_secondary_action: bool` — a flat, unconditional four-field layout with **no discriminator and no conditional field groups**. **Hand-implemented `RcPacket`** (not `#[derive(RcPacket)]`) only because `location`'s `LpVec3` codec is bespoke, not because of any conditional shape — mirroring M4-B01's own `Set Entity Data` precedent for a different reason. This blueprint decodes and validates the packet but never acts on it: right-click interaction (trading/feeding/mounting) has no modeled mechanic in this blueprint's own scope, so `Interact` is always a silent no-op accept; only round-trip codec correctness is asserted, never the decoded `location` value |
 | `Set Health` | client | `0x68` | `health: f32`, `food: i32 #[rc(varint)]`, `saturation: f32` |
 | `Update Attributes` | client | `0x83` | `entity_id: i32 #[rc(varint)]`, then a raw, `VarInt`-count-prefixed sequence of `{attribute_id: i32 #[rc(varint)] (this project's own numeric registry-id convention, matching every other post-M4-B01 registry reference — not an `Identifier` string), base_value: f64, modifier_count: i32 #[rc(varint)] (always `0` — this blueprint never sends a live `AttributeModifier` over the wire, Context "Attribute system" scopes modifiers to server-internal use only at M4)}` — **hand-implemented `RcPacket`**, mirroring `Set Entity Data`, since the nested variable-count struct array is the same "derive shape doesn't fit" case |
 | `Damage Event` | client | `0x19` | `entity_id: i32 #[rc(varint)]`, `source_type_id: i32 #[rc(varint)]` (this blueprint's own `DamageTypeKind` ordinal, Context table), `source_cause_id: i32 #[rc(varint)]` (network entity id + 1, `0` = none), `source_direct_id: i32 #[rc(varint)]` (network entity id + 1, `0` = none — always equal to `source_cause_id` for this blueprint's own melee-only sources, since no indirect-damage mechanic like a thrown potion exists), `has_source_position: bool`, `[if true: source_x: f64, source_y: f64, source_z: f64]` (this blueprint always sends `false`/omits — fall/starve have no attacker position and melee already carries `source_cause_id`, redundant for this blueprint's own scope; the field exists in the wire shape for a future mechanic that needs it, e.g. a future explosion blueprint) |
-| `Entity Event` | client | `0x22` | `entity_id: i32` (plain `Int`, **not** VarInt — a genuine, cited asymmetry with every other entity-id field in this blueprint's own packets, restated exactly per the live fetch, mirroring M4-B01's own precedent of flagging real per-packet field-encoding asymmetries rather than "normalizing" them away), `event_id: u8` — this blueprint constructs only `2` (generic hurt/hurt-animation) and `3` (death animation), moderate confidence on both ordinals, well-established and long-stable |
-| `Player Combat Kill` | client | `0x44` | `player_id: i32 #[rc(varint)]`, `message: String #[rc(prefixed_string)]` (a plain string payload standing in for a real text-component `TextComponent` encoding, which does not exist anywhere in this project yet — M4-B01's own `OptionalTextComponent` metadata variant carries the identical, already-accepted "plain string, not real JSON-text-component" simplification; reused here rather than inventing a second one) — this blueprint always sends a fixed, hand-authored message (`"<killed>"`-shaped placeholder text, Implementation steps gives the exact literal), real death-message composition (attacker name, weapon name) is a future blueprint's scope |
+| `Entity Event` | client | `0x22` | `entity_id: i32` (plain `Int`, **not** VarInt — a genuine, cited asymmetry with every other entity-id field in this blueprint's own packets, restated exactly per the live fetch, mirroring M4-B01's own precedent of flagging real per-packet field-encoding asymmetries rather than "normalizing" them away), `event_id: u8` — this blueprint constructs only `3` (death animation); `event_id 2` is vanilla's `KINETIC_HIT` (a weapon-hit-sound cue this blueprint's own scope never triggers, no `KineticWeapon`-shaped item component exists), not a generic hurt animation — hurt/hit feedback for a live target is carried entirely by the `Damage Event` packet (`0x19`) this blueprint already sends, moderate confidence on the death ordinal, well-established and long-stable |
+| `Player Combat Kill` | client | `0x44` | `player_id: i32 #[rc(varint)]`, `message: String #[rc(prefixed_string)]` (a plain, length-prefixed string payload — a deliberate, real-client-visible wire-shape divergence from vanilla, which encodes this field as an NBT-backed chat `Component` (`ComponentSerialization.TRUSTED_STREAM_CODEC`), not a length-prefixed string; this blueprint's own stand-in exists because no real text-component `TextComponent` encoding exists anywhere in this project yet — M4-B01's own `OptionalTextComponent` metadata variant carries the identical, already-accepted "plain string, not real JSON-text-component" simplification; reused here rather than inventing a second one) — this blueprint always sends a fixed, hand-authored message (`"<killed>"`-shaped placeholder text, Implementation steps gives the exact literal), real death-message composition (attacker name, weapon name) is a future blueprint's scope |
 
 `Set Entity Velocity` (M4-B01, reused unmodified) broadcasts every knockback-impulse result to every tracking viewer (both impulses collapsed into one packet per hit — only the *final* post-both-impulses velocity is ever sent, matching vanilla's own single velocity-update-packet-per-hit behavior even though the *server-side* math applies two separate impulses). `Set Entity Data` (M4-B01, reused unmodified) broadcasts a health-metadata-index (index 9, per M4-B01's own table) update to every viewer other than the entity's own owning player (who receives `Set Health` instead, for players) whenever health changes.
 
@@ -442,7 +448,7 @@ pub fn raycast_entity_reach(
     target_kind: EntityKind,
 ) -> bool;
 ```
-**Reach-check call site**: `origin = eye_position(motion.position)` (M3-B02, reused), `direction` from the attacker's own `(yaw, pitch)` via the shared look-vector formula. A miss (`raycast_entity_reach` returns `false`) rejects the `Interact{Attack}` as `OutOfReach` — ack-only (no `Interact` packet carries a `sequence` field to acknowledge in the first place, unlike block actions; the client silently receives no combat-effect packets at all on rejection, which is itself the vanilla-matching "nothing happened" signal).
+**Reach-check call site**: `origin = eye_position(motion.position)` (M3-B02, reused), `direction` from the attacker's own `(yaw, pitch)` via the shared look-vector formula. A miss (`raycast_entity_reach` returns `false`) rejects the `Attack` as `OutOfReach` — ack-only (no `Attack` packet carries a `sequence` field to acknowledge in the first place, unlike block actions; the client silently receives no combat-effect packets at all on rejection, which is itself the vanilla-matching "nothing happened" signal).
 
 ### Mob spawning — a debug-only entry point, first real production wiring of M4-B01's allocator
 
@@ -463,7 +469,7 @@ impl HardcodedWorld {
     /// composition rule) but is never a combat target in this blueprint's own tests. Returns
     /// both identities — `RcEntityId` for internal/loot-seam use, and the allocated network
     /// entity id for test call sites that need to address the spawned mob over the wire
-    /// (`Interact`'s own target field, `debug_deal_damage`/`debug_override_attribute`'s own
+    /// (`Attack`'s own target field, `debug_deal_damage`/`debug_override_attribute`'s own
     /// `network_entity_id` argument) — so no acceptance test needs to guess or hard-code an
     /// allocation-order-dependent network id.
     pub fn debug_spawn_mob(&mut self, kind: EntityKind, pos: [f64; 3]) -> (rc_core::RcEntityId, i32);
@@ -512,12 +518,12 @@ Two new, small resources this entry point (and every combat system) depends on:
 /// by this blueprint (Context, "Player health" — no composition-model migration).
 pub struct EntityIndex(std::collections::HashMap<rc_core::RcEntityId, bevy_ecs::entity::Entity>);
 
-/// `i32` network entity id -> `bevy_ecs::Entity`, resolving an `Interact` packet's target
+/// `i32` network entity id -> `bevy_ecs::Entity`, resolving an `Attack` packet's target
 /// field (Context, "Packets") or a `debug_*` accessor's own id argument straight to the ECS
 /// entity to mutate — **not** to `RcEntityId`, deliberately: a player has no `RcEntityId`
 /// (Context, "Player health"), so keying this index by the identifier both players and mobs
 /// already share (their now-unified network entity id, above) is what lets one index and
-/// one resolution path serve both `Interact{Attack}`'s target (which may be a player or a
+/// one resolution path serve both `Attack`'s target (which may be a player or a
 /// mob) without a second, parallel lookup. Maintained at player-join (insert), mob spawn
 /// (insert, `debug_spawn_mob`), and mob despawn (remove) — never removed for a player (a
 /// dead player stays resolvable, Context "Death — Player death").
@@ -530,11 +536,11 @@ pub struct NetworkEntityIndex(std::collections::HashMap<i32, bevy_ecs::entity::E
 - AttributeInstance's value calculation stage 2: result = base; for every AddMultipliedBase modifier, add base * amount to result; multiple AddMultipliedBase modifiers are additive against each other, against the original base, not the running result.
 - AttributeInstance's value calculation stage 3: for every AddMultipliedTotal modifier, multiply result by (1 + amount) sequentially, so multiple AddMultipliedTotal modifiers compound with each other since each applies to the already-updated running total.
 - AttributeInstance's value calculation stage 4: clamp the result to [min, max].
-- Modifier application order within the AddMultipliedBase/AddMultipliedTotal buckets is registration/insertion order; ties within one operation type do not commute for AddMultipliedTotal since each factor applies to the already-updated running total.
+- Modifier application order within the AddMultipliedBase/AddMultipliedTotal buckets is hash-table slot order keyed by each modifier's own identifier, not registration or insertion order; AddMultipliedTotal's result *= (1 + amount) is mathematically commutative across modifiers, so only IEEE-754 double rounding, not the running-total structure, makes iteration order observable.
 - AttackDamage attribute default is 2.0, range [0.0, 2048.0]; the Zombie override is 3.0.
 - AttackKnockback attribute default is 0.0, range [0.0, 5.0]; the Zombie override is also 0.0.
 - AttackSpeed attribute default is 4.0, range [0.0, 1024.0]; unused by mobs, which have no attack-cooldown charge curve.
-- Armor attribute default is 0.0, range [0.0, 30.0], identical across Zombie, Cow, and Villager.
+- Armor attribute default is 0.0, range [0.0, 30.0]; Zombie's own override is 2.0, Cow and Villager keep the 0.0 default.
 - ArmorToughness attribute default is 0.0, range [0.0, 20.0], identical across Zombie, Cow, and Villager.
 - KnockbackResistance attribute default is 0.0, range [-2.0, 1.0], identical across Zombie, Cow, and Villager.
 - MaxHealth attribute default is 20.0, range [1.0, 1024.0]; Zombie 20.0, Cow 10.0, Villager 20.0.
@@ -562,12 +568,12 @@ pub struct NetworkEntityIndex(std::collections::HashMap<i32, bevy_ecs::entity::E
 - attack_strength_delay(ticks) = 1.0 / attack_speed_attribute * 20.0, which for the default AttackSpeed of 4.0 yields 5 ticks.
 - charge_scale(ticker, offset) = clamp((ticker + offset) / attack_strength_delay, 0.0, 1.0).
 - base_damage_scale_factor() = 0.2 + charge_scale(ticker, 0.5)^2 * 0.8.
-- attack_strength_ticker increments by 1 every player tick and resets to 0 whenever on_attack() fires, which happens at the start of every successful Interact{Attack} dispatch regardless of whether the swing dealt damage.
+- attack_strength_ticker increments by 1 every player tick and resets to 0 whenever on_attack() fires, which happens at the start of every successful Attack packet dispatch regardless of whether the swing dealt damage.
 - Player melee damage assembly order: base_damage = AttributeMap[AttackDamage]; charge_scale = charge_scale(ticker, 0.5); magic_boost = charge_scale * (enchanted_damage(base_damage, enchants) - base_damage), computed against the UNSCALED base_damage; base_damage is then multiplied by base_damage_scale_factor(), the charge curve is applied after magic_boost is computed; total_damage = base_damage + magic_boost.
 - full_strength = charge_scale > 0.9, the exact threshold.
 - knockback_attack = is_sprinting && full_strength, which adds +0.5 knockback and triggers the KNOCKBACK sound.
 - critical = full_strength && can_critical_attack(...); if critical, base_damage is multiplied by 1.5.
-- can_critical_attack = fall_distance > 0.0 && !on_ground && !on_climbable && !in_water && !is_sprinting; this check is deterministic and consumes no RNG.
+- can_critical_attack = fall_distance > 0.0 && !on_ground && !on_climbable && !in_water && target_is_living && !is_sprinting; this check is deterministic and consumes no RNG.
 - sweep = full_strength && !critical && !knockback_attack && on_ground && horizontal_speed_sq < (movement_speed * 2.5)^2 && main_hand_is_sword.
 - enchanted_damage(base, enchants) = base + sharpness_bonus(sharpness_level) + smite_bonus(smite_level) if target is undead else 0.0, + bane_bonus(bane_of_arthropods_level) if target is arthropod else 0.0.
 - Sharpness's enchant-bonus formula is linear as base + per_level*(level-1) for level >= 1 else 0.0, with base 1.0 and per-level 0.5.
@@ -575,38 +581,38 @@ pub struct NetworkEntityIndex(std::collections::HashMap<i32, bevy_ecs::entity::E
 - Bane of Arthropods's enchant-bonus formula is linear as base + per_level*(level-1) for level >= 1 else 0.0, with base 2.5 and per-level 2.5.
 - sweep_ratio = sweeping_edge_level / (sweeping_edge_level + 1) if sweeping_edge_level > 0, else 0.0.
 - sweep_base = 1.0 + sweep_ratio * base_damage, where base_damage is the post-charge, post-critical value.
-- A sweep attack hits every LivingEntity within the attacker's AABB inflated by (1.0, 0.25, 1.0) whose squared distance is < 9.0, excluding the attacker itself and the primary target.
+- A sweep attack hits every LivingEntity within the primary target's own AABB inflated by (1.0, 0.25, 1.0) whose attacker-to-candidate squared distance is < 9.0, excluding the attacker itself, the primary target, entities allied to the attacker, and marker ArmorStands.
 - Each sweep-hit nearby target takes enchanted_damage(sweep_base, enchants) * charge_scale.
 - On a successful sweep hit, the nearby target receives a knockback impulse directed by the attacker's yaw with a flat magnitude of 0.4 and no enchant term.
 - Mob melee damage = AttributeMap[AttackDamage] + enchant_bonus(target); this is fully deterministic with no critical hits, no sweep, no charge curve, and no RNG.
 - On a mob attack that deals damage, the target receives a knockback impulse with magnitude get_knockback(attacker, target), directed by the attacker's yaw.
-- Knockback impulse #1 fires unconditionally after any hit that dealt nonzero damage whose source has a fixed position; its direction is the normalized XZ-plane vector from the source's position to the victim's position, and its magnitude is a flat 0.4.
-- Fall and Starve damage sources carry no fixed position, self-inflicted, so knockback impulse #1 is a structural no-op for them.
+- Knockback impulse #1 fires on the fresh-hit branch of the invulnerability gate only (never the top-up branch, even when it deals damage) whenever the damage type is not no_knockback-tagged; its direction is the normalized XZ-plane vector from the victim's position to the source's position, and its magnitude is a flat 0.4.
+- Fall and Starve are both members of the no_knockback set, modeled explicitly as a per-DamageTypeKind flag, so knockback impulse #1 never fires for them; their self-inflicted, positionless source is incidental, not the mechanism.
 - Knockback impulse #2 fires strictly after impulse #1 has already mutated velocity; its direction is (sin(attacker_yaw_rad), -cos(attacker_yaw_rad)); its magnitude is get_knockback(attacker, target) + 0.5 if knockback_attack is true, else get_knockback(attacker, target), for players, mobs never have knockback_attack true.
 - get_knockback(attacker, target) = (attacker.AttributeMap[AttackKnockback] + knockback_enchant_bonus(level)) / 2.0.
 - knockback_enchant_bonus(level) = 1.0 + 1.0*(level-1) if level > 0, else 0.0.
 - In the knockback-impulse-application algorithm, power *= (1.0 - target.AttributeMap[KnockbackResistance]) is applied first, and if the resulting power <= 0.0, velocity is returned unchanged before any halving is applied.
-- In the knockback-impulse-application algorithm, if the direction vector's squared XZ magnitude is < 1e-5, degenerate, a fallback direction is drawn as xd = (rng.next_double() - rng.next_double()) * 0.01 and zd = (rng.next_double() - rng.next_double()) * 0.01.
+- In the knockback-impulse-application algorithm, while the direction vector's squared XZ magnitude is below the double-widened float threshold 9.999999747378752e-6 (not the literal 1e-5), a fallback direction is re-drawn as xd = (rng.next_double() - rng.next_double()) * 0.01 and zd = (rng.next_double() - rng.next_double()) * 0.01, consuming 4 RNG draws per iteration, unbounded, until the sample clears the threshold.
 - In the knockback-impulse-application algorithm, the normalized direction scaled by power gives (dx, dz), and new_vx = old_vx/2.0 - dx; new_vz = old_vz/2.0 - dz; new_vy = min(0.4, old_vy/2.0 + power) if on_ground, else old_vy unchanged.
 - The knockback impulse function is called exactly twice per hit with two different (power, direction) inputs and its results are never merged into a single call, reproducing vanilla's own velocity-halving-per-call behavior.
 - fall_power = fall_distance + 1e-6 - AttributeMap[SafeFallDistance].
 - fall_damage = floor(fall_power * damage_modifier * AttributeMap[FallDamageMultiplier]), an integer result, with damage_modifier fixed at vanilla's own default of 1.0.
 - Fall damage is skipped entirely, not computed or applied at all, when the resulting fall_damage is <= 0, rather than being applied as a zero-value hit.
 - In vanilla, landing on a Bed halves fall distance.
-- In vanilla, landing on a Hay Bale multiplies fall distance by 0.2.
-- In vanilla, landing on a Slime Block multiplies fall distance by 0.0 unless the player is sneaking.
+- In vanilla, landing on a Hay Bale sets the fall-damage modifier to 0.2 while passing the fall distance through unscaled, so SafeFallDistance still subtracts from the full distance before the 0.2 multiplies.
+- In vanilla, landing on a Slime Block sets the fall-damage modifier to 0.0 in both branches; sneaking (isSuppressingBounce) instead skips the fall-damage call entirely, suppressing the bounce rather than restoring fall damage.
 - In vanilla, landing in Powder Snow grants full fall-damage immunity.
 - When the target is a player whose GameModeState.instabuild is true, the damage pipeline returns Invulnerable immediately, with no invulnerability-window consumption, no animation, and no packets sent, matching vanilla's own abilities.invulnerable short-circuit.
 - Difficulty scaling is applied to incoming player damage only, strictly before any of the pipeline's item-blocking/freeze/helmet-multiplier logic, and only for damage types whose scaling is WhenCausedByLivingNonPlayer when the attacker is a non-player living entity, or Always unconditionally.
 - Peaceful difficulty sets incoming player damage to 0.0.
 - Easy difficulty sets incoming player damage to min(damage/2.0 + 1.0, damage).
-- Hard difficulty sets incoming player damage to damage*1.5.
+- Hard difficulty sets incoming player damage to (damage * 3.0) / 2.0 — a multiply followed by a divide, not a single multiply by 1.5; the two forms agree everywhere except above f32::MAX/3, where the multiply-then-divide form overflows to infinity while a single ×1.5 stays finite.
 - Normal difficulty leaves incoming player damage unchanged.
 - If difficulty scaling reduces the damage to exactly 0.0, the whole hit short-circuits with no invulnerability-window consumption.
 - Vanilla's own default world difficulty is Normal.
 - On mob death, vanilla broadcasts an Entity Event with event_id 3, death animation, to every viewer tracking that mob.
 - Health reaching <= 0.0 marks the target as dead and the pipeline outcome is Died rather than Dealt.
-- A dying mob's dropped item entities receive a randomized velocity spread of vx = rng.next_double()*0.2 - 0.1, vy = rng.next_double()*0.2, vz = rng.next_double()*0.2 - 0.1.
+- A dying mob's dropped item entities receive vx = rng.next_double()*0.2 - 0.1, vy = the constant 0.2 (not a random draw), vz = rng.next_double()*0.2 - 0.1, consuming exactly two next_double() calls per item, x then z.
 - Vanilla villagers drop no items on death.
 - A vanilla zombie drops 0 to 2 rotten flesh on death, a uniform random count.
 - A vanilla cow drops 1 to 3 beef and, independently, 0 to 2 leather on death.
@@ -626,12 +632,12 @@ pub struct NetworkEntityIndex(std::collections::HashMap<i32, bevy_ecs::entity::E
 - Slow, food-driven, natural regeneration: if food_level >= 18 and the entity is hurt, and the fast-regen branch did not fire, a regen timer increments each tick and at 80 ticks heals 1.0 health, capped at max_health, adds 6.0 exhaustion, and resets the timer.
 - Starvation: if food_level <= 0, and neither regen branch fired, a regen timer increments each tick and at 80 ticks applies 1.0 Starve damage if health > 10.0, or difficulty is Hard, or health > 1.0 and difficulty is Normal; the timer then resets regardless.
 - is_hurt(health, max_health) is defined as health < max_health && health > 0.0.
-- The Interact packet is server-bound with packet ID 0x1A and fields, in wire order: entity_id (VarInt), interaction_type (VarInt: 0=Interact, 1=Attack, 2=InteractAt), then target_x/target_y/target_z (each f32) only if interaction_type==2, then hand (VarInt: 0=main hand, 1=off hand) only if interaction_type==0 or 2, then sneaking (bool).
+- The Interact packet's payload has no interaction_type discriminator: Attack is its own server-bound packet, ID 0x01, a single entity_id (VarInt) field; Interact is server-bound ID 0x1A with fields, in wire order, entity_id (VarInt), hand (VarInt: 0=main hand, 1=off hand), location (LpVec3), using_secondary_action (bool) — a flat, unconditional four-field layout with no conditional field groups.
 - The Set Health packet is client-bound with packet ID 0x68 and fields, in wire order: health (f32), food (VarInt), saturation (f32).
 - The Update Attributes packet is client-bound with packet ID 0x83 and fields, in wire order: entity_id (VarInt), then a VarInt-count-prefixed sequence of entries each shaped attribute_id (VarInt), base_value (f64), modifier_count (VarInt).
 - The Damage Event packet is client-bound with packet ID 0x19 and fields, in wire order: entity_id (VarInt), source_type_id (VarInt), source_cause_id (VarInt, network entity id + 1, 0 = none), source_direct_id (VarInt, network entity id + 1, 0 = none), has_source_position (bool), then source_x/source_y/source_z (each f64) only if has_source_position is true.
-- The Entity Event packet is client-bound with packet ID 0x22 and fields, in wire order: entity_id as a plain Int, not a VarInt, unlike every other entity-id field in this packet set, then event_id (u8); event_id 2 is the generic hurt/hurt-animation event and event_id 3 is the death-animation event.
-- The Player Combat Kill packet is client-bound with packet ID 0x44 and fields, in wire order: player_id (VarInt), message, a length-prefixed string.
+- The Entity Event packet is client-bound with packet ID 0x22 and fields, in wire order: entity_id as a plain Int, not a VarInt, unlike every other entity-id field in this packet set, then event_id (u8); event_id 2 is KINETIC_HIT, a weapon-hit-sound cue this blueprint never constructs, and event_id 3 is the death-animation event, the only value this blueprint ever sends.
+- The Player Combat Kill packet is client-bound with packet ID 0x44 and fields, in wire order: player_id (VarInt), then message. Vanilla encodes message as an NBT-backed chat Component, not a length-prefixed string; this blueprint deliberately sends a plain length-prefixed string as a documented stand-in, a real, client-visible wire-shape divergence from vanilla, not a parity bug to fix.
 - After a hit applies both knockback impulses, only the single final post-both-impulses velocity is broadcast via one Set Entity Velocity packet, matching vanilla's own single velocity-update-packet-per-hit behavior even though the server-side math applies two separate impulses.
 - Health is broadcast via the entity metadata field at index 9, Set Entity Data, to viewers other than the entity's own owning player, who instead receive Set Health directly.
 
@@ -747,13 +753,18 @@ impl DamageTypeKind {
     pub fn exhaustion(self) -> f32;
     pub fn scaling(self) -> DamageScaling;
     pub fn bypasses_armor(self) -> bool;
+    /// Context's own table, verbatim — gates knockback impulse #1 (Context, "Knockback").
+    pub fn no_knockback(self) -> bool;
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DamageSource {
     pub kind: DamageTypeKind,
     pub causing_entity: Option<rc_core::RcEntityId>,
-    /// XZ-plane position, if the source has one (Context, "Knockback" impulse #1's own gate).
+    /// XZ-plane position, used to compute impulse #1's direction on hits whose
+    /// `DamageTypeKind::no_knockback()` is `false` (Context, "Knockback") — impulse #1's
+    /// firing gate is that flag, not the presence of this field. `None` for `Fall`/`Starve`
+    /// (self-inflicted, `no_knockback = true`, so this field is never consulted for them).
     pub source_position: Option<[f64; 2]>,
     pub causing_entity_is_living_non_player: bool,
 }
@@ -859,7 +870,7 @@ pub struct CombatRuntimeState {
 pub fn attack_cooldown_charge_scale(ticker: u32, attack_speed: f64, offset: f32) -> f32;
 
 /// §3.9b, exact (Context) — deterministic, no RNG.
-pub fn can_critical_attack(fall_distance: f64, on_ground: bool, in_water: bool, on_climbable: bool, is_sprinting: bool) -> bool;
+pub fn can_critical_attack(fall_distance: f64, on_ground: bool, in_water: bool, on_climbable: bool, target_is_living: bool, is_sprinting: bool) -> bool;
 
 pub fn sharpness_bonus(level: u8) -> f32;   // 1.0 base, 0.5/level
 pub fn smite_bonus(level: u8) -> f32;       // 2.5 base, 2.5/level
@@ -886,6 +897,7 @@ pub fn assemble_player_melee_damage(
     on_ground: bool,
     in_water: bool,
     on_climbable: bool,
+    target_is_living: bool,
     is_sprinting: bool,
     horizontal_speed_sq: f64,
     is_undead: bool,
@@ -989,7 +1001,7 @@ pub landed_fall_distance: Option<f64>,
 
 ### `crates/server/src/play/combat_packets.rs` (new)
 
-Five packet structs per the Context "Packets" table (`Interact`, `SetHealth`, `UpdateAttributes`, `DamageEvent`, `EntityEvent`, `PlayerCombatKill`), `#[derive(RcPacket)]` for `SetHealth`/`EntityEvent`/`PlayerCombatKill` (fixed shape, no conditional fields), hand-implemented `RcPacket` for `Interact`/`UpdateAttributes` per Context. Exact field types/order as the Context table.
+Packet structs per the Context "Packets" table (`Attack`, `Interact`, `SetHealth`, `UpdateAttributes`, `DamageEvent`, `EntityEvent`, `PlayerCombatKill`), `#[derive(RcPacket)]` for `Attack`/`SetHealth`/`EntityEvent`/`PlayerCombatKill` (fixed shape, no conditional fields, no custom codecs), hand-implemented `RcPacket` for `Interact` (its bespoke `LpVec3` `location` codec) and `UpdateAttributes` (its nested variable-count list) per Context — neither packet has a conditional field shape. Exact field types/order as the Context table.
 
 ### `crates/server/src/play/combat.rs` (new)
 
@@ -1004,7 +1016,7 @@ pub fn resolve_enchant_levels(item: &crate::play::mining::HeldItemStub) -> Encha
 pub fn entity_reach_check(motion: &crate::play::movement::PlayerMotion, target_pos: [f64; 3], target_kind: rc_mechanics::entity::EntityKind) -> bool;
 
 /// The manual Stage-3-equivalent combat step (Context, "Tick-pipeline placement"): drains
-/// queued `Interact{Attack}` actions (stable-sorted by ascending `network_entity_id`,
+/// queued `Attack` actions (stable-sorted by ascending `network_entity_id`,
 /// MECH-D4's own determinism rule, unchanged convention), resolves the target via
 /// `NetworkEntityIndex`, reach/angle-validates, dispatches to
 /// `assemble_player_melee_damage` + `apply_damage_pipeline` + both knockback impulses,
@@ -1030,7 +1042,7 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 - `movement.rs`: `PlayerMotion` gains `landed_fall_distance: Option<f64>` (Context); its two existing reset-on-landing sites each gain the one capture line (Context, exact).
 - `mining.rs`/`movement.rs`'s own per-player packet-loop entry points each gain one `if player_combat_state.is_dead { continue; }` guard (Context, "Death — Player death").
 - `world.rs`: `HardcodedWorld` gains `EntityIndex`, `NetworkEntityIndex`, `AmbientCombatRandom`, `GlobalDifficulty` (all `Default`-initialized at construction except `AmbientCombatRandom`'s fixed seed, Context), `debug_spawn_mob`, `debug_set_difficulty`; the join-drain step additionally inserts `PlayerCombatState::default()`-equivalent (health = `MaxHealth` default `20.0`, everything else zeroed) and `FoodStats::new_at_join()` and `CombatRuntimeState::default()` onto the newly-spawned player entity, alongside every prior blueprint's own already-established insertions. Tick loop gains `apply_combat_step` (Context, insertion point) and `register_mob_combat_system`'s own one-time builder registration (composition-root wiring, alongside every other `register_stageN`-style call this project's own composition root already makes).
-- `connection.rs`: dispatch table gains one new inbound-packet-id match arm (`Interact`, routed to a per-connection queue mirroring `queue_block_action`/`queue_movement_packet`'s own established shape exactly).
+- `connection.rs`: dispatch table gains two new inbound-packet-id match arms — `Attack`, routed to a per-connection queue mirroring `queue_block_action`/`queue_movement_packet`'s own established shape exactly, and `Interact`, decoded and silently discarded per Context's own out-of-scope framing.
 - `mod.rs`: `pub mod combat; pub mod combat_packets;`.
 
 ## Acceptance tests (write these FIRST — own changeset)
@@ -1050,7 +1062,7 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 ### `crates/mechanics/tests/combat_melee_assembly.rs`
 
 1. `attack_cooldown_charge_curve_golden_vectors` — `attack_speed=4.0` (`delay=5.0` ticks): `attack_cooldown_charge_scale(ticker, 4.0, 0.5)` for `ticker in [0,1,2,3,4,5,10]`, asserting exact `clamp((t+0.5)/5.0, 0, 1)` values (`0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.0`) to `1e-9`, and `base_damage_scale_factor = 0.2 + charge^2*0.8` derived from each (`0.208, 0.272, 0.4, 0.592, 0.848, 1.0, 1.0`) to `1e-6`.
-2. `critical_hit_requires_all_four_conditions` — four sub-cases, each flipping exactly one of `fall_distance>0`/`!on_ground`/`!in_water`/`!is_sprinting` to false while the other three hold true — assert `can_critical_attack` is `false` for each, and `true` when all four hold.
+2. `critical_hit_requires_all_five_conditions` — five sub-cases, each flipping exactly one of `fall_distance>0`/`!on_ground`/`!in_water`/`target_is_living`/`!is_sprinting` to false while the other four hold true — assert `can_critical_attack` is `false` for each, and `true` when all five hold.
 3. `sharpness_smite_bane_golden_table` — `sharpness_bonus(0..=5)` against hand-computed `[0.0, 1.0, 1.5, 2.0, 2.5, 3.0]`; `smite_bonus`/`bane_bonus(0..=3)` against `[0.0, 2.5, 5.0, 7.5]` each.
 4. `sweeping_edge_ratio_golden_table` — `sweeping_edge_ratio(0..=3)` against `[0.0, 0.5, 0.6666667, 0.75]`, tolerance `1e-6`.
 5. `player_melee_full_assembly_undead_target_with_smite` — full-charge (`ticker=5`), `AttributeMap[AttackDamage]=7.0` (a diamond-sword-equivalent base), `is_undead=true`, `enchants.smite=2`, on-ground/not-sprinting/not-critical-eligible (`fall_distance=0.0`) — hand-derive `magic_boost = 1.0 * (7.0 + smite_bonus(2) - 7.0) = 5.0` (Smite II = `2.5+2.5=5.0`), `base_damage = 7.0 * 1.0 = 7.0` (full charge), no crit, `total_damage = 12.0` — assert `assemble_player_melee_damage`'s `total_damage == 12.0` (tolerance `1e-5`), `is_critical == false`.
@@ -1061,7 +1073,7 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 1. `zero_power_impulse_is_a_true_no_op_not_a_silent_halving` — starting `velocity=Vec3::ZERO`, `on_ground=true`, `knockback_resistance=0.0`: impulse #1 (`power=0.4`, `dir_xz=(1.0,0.0)`, source-relative) — assert `velocity.x == -0.4` after impulse #1 (dir normalized `(1,0)`, `new_vx = 0/2 - 1*0.4 = -0.4`). Then impulse #2 with `power=get_knockback(0.0,0)=0.0` (bare attributes, zero enchant, no sprint bonus) — Context's own algorithm's `power <= 0.0: return velocity unchanged` line fires *before* the `old/2.0` halving term is ever evaluated, so the resulting velocity after impulse #2 must equal impulse #1's own result **exactly unchanged** (`x == -0.4` still, not `-0.2`) — this is the regression test for a reimplementation that moves the early return after the halving lines, which would silently halve velocity on every zero-power hit (a flat-`ATTACK_KNOCKBACK`/no-enchant swing, i.e. every unenchanted weapon).
 2. `two_impulse_sequence_with_nonzero_second_impulse_is_not_equivalent_to_one_merged_call` — impulse #1 `power=0.4, dir_xz=(1.0,0.0)` then impulse #2 `power=0.5, dir_xz=(0.0,1.0)` (perpendicular, simulating attacker-yaw != source-direction): hand-derive `v1 = (-0.4, 0, 0)`; impulse #2: `new_vx = -0.4/2 - 0 = -0.2`, `new_vz = 0/2 - 1*0.5 = -0.5` — assert final `velocity == Vec3::new(-0.2, ?, -0.5)` (Y per the `on_ground` branch, `min(0.4, 0/2+0.5)=0.4`) — and explicitly assert this **differs** from a single hypothetical merged-impulse calculation (`(1.0,0.0)*0.4 + (0.0,1.0)*0.5` applied once), proving the two-call halving is load-bearing, not simplifiable.
 3. `knockback_resistance_scales_power_before_the_early_return` — `knockback_resistance=1.0` (full resistance), any nonzero input `power` — assert velocity unchanged (power becomes `<= 0` after the `*(1.0 - resistance)` scale, early-return path).
-4. `degenerate_direction_uses_rng_fallback_deterministically` — `dir_xz=(0.0,0.0)` (exactly degenerate), `rng = RcRandom::new(42)` — assert the function consumes exactly 2 `next_double()` calls (checked by comparing the rng's own state/next output against a second `RcRandom::new(42)` instance advanced by exactly 2 calls externally) and produces a non-`NaN`, finite result.
+4. `degenerate_direction_uses_rng_fallback_deterministically` — `dir_xz=(0.0,0.0)` (exactly degenerate), `rng = RcRandom::new(42)` — assert the function consumes a nonzero multiple of 4 `next_double()` calls (the while loop keeps re-drawing until the sample clears `KNOCKBACK_DEGENERATE_THRESHOLD`, so the exact count depends on the RNG stream; checked by running the identical while-loop redraw against a second, independently-advanced `RcRandom::new(42)` instance and asserting both the resulting call count and final `(xd, zd)` match) and produces a non-`NaN`, finite result.
 5. `get_knockback_formula` — `get_knockback(0.0, 0) == 0.0`; `get_knockback(0.0, 2) == 1.5` (`(0 + (1.0+1.0*(2-1)))/2.0 = 2.0/2.0`).
 
 ### `crates/mechanics/tests/combat_fall_food.rs`
@@ -1079,20 +1091,20 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 
 ### `crates/server/tests/play_combat_melee_flow.rs`
 
-1. `player_attacks_zombie_full_pipeline_packet_sequence` — `HardcodedWorld::new()`, connection `A` (spawns, joins, network entity id `A_net_id` read from its own already-established join-flow response, M1-B05 precedent), `(_, zombie_net_id) = world.debug_spawn_mob(EntityKind::Zombie, [3.0, -60.0, 0.0])` — within `A`'s own spawn eye's reach and look direction (`A`'s fixed test yaw/pitch set via a preceding `SetPlayerRotation` packet, M3-B02 precedent, aimed directly at the zombie). `A` sends `Interact{entity_id: zombie_net_id, interaction_type: 1 (Attack), sneaking: false}`. `A` reads, in order: `Damage Event{entity_id: zombie_net_id, source_type_id: <PlayerAttack's own ordinal>, ...}`, `Set Entity Velocity{entity_id: zombie_net_id, ...}` (nonzero, the flat `0.4` impulse #1's own resulting velocity, since bare attack-knockback/enchant are both `0`), `Set Entity Data{entity_id: zombie_net_id, ...}` (health metadata index 9, reduced from `20.0` by the full-charge unarmed `AttackDamage=2.0` default). `world.debug_query_entity(zombie_net_id).unwrap().health == 18.0`.
-2. `attack_out_of_reach_produces_no_packets` — `A` and `(_, zombie_net_id) = world.debug_spawn_mob(..)` at a position `10.0` blocks away (beyond `ENTITY_INTERACTION_RANGE=3.0`) — `A` sends `Interact{entity_id: zombie_net_id, interaction_type: 1, sneaking: false}` — `A` reads **nothing** within a bounded timeout; `world.debug_query_entity(zombie_net_id).unwrap().health` unchanged.
+1. `player_attacks_zombie_full_pipeline_packet_sequence` — `HardcodedWorld::new()`, connection `A` (spawns, joins, network entity id `A_net_id` read from its own already-established join-flow response, M1-B05 precedent), `(_, zombie_net_id) = world.debug_spawn_mob(EntityKind::Zombie, [3.0, -60.0, 0.0])` — within `A`'s own spawn eye's reach and look direction (`A`'s fixed test yaw/pitch set via a preceding `SetPlayerRotation` packet, M3-B02 precedent, aimed directly at the zombie). `A` sends `Attack{entity_id: zombie_net_id}`. `A` reads, in order: `Damage Event{entity_id: zombie_net_id, source_type_id: <PlayerAttack's own ordinal>, ...}`, `Set Entity Velocity{entity_id: zombie_net_id, ...}` (nonzero, the flat `0.4` impulse #1's own resulting velocity, since bare attack-knockback/enchant are both `0`), `Set Entity Data{entity_id: zombie_net_id, ...}` (health metadata index 9, reduced from `20.0` by the full-charge unarmed `AttackDamage=2.0` default). `world.debug_query_entity(zombie_net_id).unwrap().health == 18.08` (Zombie's own `Armor=2.0` absorbs part of the hit: `toughness=2.0`, `real_armor=clamp(2-2.0/2.0, 0.4, 20)=1.0`, `armor_fraction=0.04`, `damage=2.0*0.96=1.92`, `health=20.0-1.92`).
+2. `attack_out_of_reach_produces_no_packets` — `A` and `(_, zombie_net_id) = world.debug_spawn_mob(..)` at a position `10.0` blocks away (beyond `ENTITY_INTERACTION_RANGE=3.0`) — `A` sends `Attack{entity_id: zombie_net_id}` — `A` reads **nothing** within a bounded timeout; `world.debug_query_entity(zombie_net_id).unwrap().health` unchanged.
 3. `attack_occluded_target_is_rejected` — `(_, zombie_net_id)` spawned within Euclidean range but behind a solid block from `A`'s own look direction (mirroring M3-B03's own `raycast_reach_rejects_an_occluded_target` test shape, applied to an entity target) — `A` reads nothing; health unchanged.
-4. `attack_non_attack_interaction_types_are_silent_no_ops` — `A` sends `Interact{entity_id: zombie_net_id, interaction_type: 0 (Interact), hand: 0, sneaking: false}` (`zombie_net_id` from a freshly spawned, in-range, unoccluded zombie) — `A` reads nothing; zombie health unchanged (Context, "Packets" — out-of-scope interaction types are accepted, not rejected, and produce zero effect).
-5. `repeated_attacks_within_ten_ticks_apply_only_the_delta` — `A` attacks the same fresh zombie (`health=20.0`, `zombie_net_id`) twice within the same simulated 10-tick window (`invulnerable_time` still `>10` after hit 1) with the second attack's own effective damage reduced via `world.debug_override_attribute(A_net_id, AttributeKind::AttackDamage, <a smaller value>)` between the two `Interact` sends — the second `Damage Event`/`Set Entity Data` pair reflects only the delta, matching `combat_damage_pipeline.rs`'s own unit-level assertion end-to-end through real packets.
+4. `interact_packet_is_a_silent_no_op` — `A` sends `Interact{entity_id: zombie_net_id, hand: 0, location: <arbitrary in-range point>, using_secondary_action: false}` (`zombie_net_id` from a freshly spawned, in-range, unoccluded zombie) — `A` reads nothing; zombie health unchanged (Context, "Packets" — `Interact` is accepted, not rejected, and produces zero effect).
+5. `repeated_attacks_within_ten_ticks_apply_only_the_delta` — `A` attacks the same fresh zombie (`health=20.0`, `zombie_net_id`) twice within the same simulated 10-tick window (`invulnerable_time` still `>10` after hit 1) with the second attack's own effective damage reduced via `world.debug_override_attribute(A_net_id, AttributeKind::AttackDamage, <a smaller value>)` between the two `Attack` sends — the second `Damage Event`/`Set Entity Data` pair reflects only the delta, matching `combat_damage_pipeline.rs`'s own unit-level assertion end-to-end through real packets.
 
 ### `crates/server/tests/play_combat_death.rs`
 
 1. `zombie_death_drops_loot_and_despawns` — `(_, zombie_net_id) = world.debug_spawn_mob(EntityKind::Zombie, ..)`, `world.debug_override_attribute(zombie_net_id, AttributeKind::MaxHealth, 2.0)` then `world.debug_deal_damage(zombie_net_id, 2.0)` (killing it in one call, exercising the same `apply_damage_pipeline` death branch a real hit would) — `A` (an observing connection, already tracking the zombie) reads `Damage Event`, then `Entity Event{entity_id: zombie_net_id, event_id: 3}`, then one or more `Spawn Entity` packets for the dropped rotten-flesh item entity/entities (asserted `entity_type == EntityKind::Item.registry_id().0 as i32`, mirroring M4-B01's own identical assertion style), then `Remove Entities{entity_ids: [zombie_net_id]}`, in that order. A second observer connection `B` (also already tracking the zombie) reads the identical sequence. Post-test: `world.debug_query_entity(zombie_net_id)` returns `None` (fully despawned, `EntityIndex`/`NetworkEntityIndex` both no longer resolve it).
-2. `player_death_sends_combat_kill_and_marks_dead_without_despawn` — connection `A` (`A_net_id` from its own join flow), `world.debug_deal_damage(A_net_id, 25.0)` — `A` reads `Set Health{health: 0.0, ...}` then `Player Combat Kill{player_id: A_net_id, ..}`. A subsequent `Interact{Attack}` sent by `A` (targeting anything) produces **no** further combat packets (the `is_dead` guard) — `A`'s own connection remains open (not disconnected), matching Context's explicit "left connected, visibly dead, indefinitely" scope statement. `world.debug_query_entity(A_net_id)` still returns `Some(..)` with `is_dead == true` (a player is never removed from `NetworkEntityIndex` on death, Context).
+2. `player_death_sends_combat_kill_and_marks_dead_without_despawn` — connection `A` (`A_net_id` from its own join flow), `world.debug_deal_damage(A_net_id, 25.0)` — `A` reads `Set Health{health: 0.0, ...}` then `Player Combat Kill{player_id: A_net_id, ..}`. A subsequent `Attack` packet sent by `A` (targeting anything) produces **no** further combat packets (the `is_dead` guard) — `A`'s own connection remains open (not disconnected), matching Context's explicit "left connected, visibly dead, indefinitely" scope statement. `world.debug_query_entity(A_net_id)` still returns `Some(..)` with `is_dead == true` (a player is never removed from `NetworkEntityIndex` on death, Context).
 
 ### `crates/server/tests/play_combat_packets.rs`
 
-1. `interact_packet_round_trips_every_interaction_type` — three sub-cases (`type=0` with `hand`, `type=1` bare, `type=2` with `target_x/y/z`+`hand`) each encode then decode to an identical struct, proving the hand-implemented `WireRead`/`WireWrite` correctly branches on `interaction_type`.
+1. `attack_and_interact_packets_round_trip` — `Attack{entity_id}` encodes then decodes to an identical struct (a single VarInt, ordinary derive); `Interact{entity_id, hand, location, using_secondary_action}` encodes then decodes to an identical struct across a representative set of `location` values (near-zero, an ordinary vector, and one requiring the trailing scale VarInt), proving the flat, unconditional four-field layout round-trips and the hand-implemented `LpVec3` codec handles all three encodings.
 2. `update_attributes_encodes_empty_modifier_arrays` — `UpdateAttributes{entity_id: 5, attributes: vec![(AttributeKind::Armor.registry_ordinal(), 12.0)]}` encodes to exactly the expected byte sequence (entity_id VarInt, count-prefix `1`, attribute_id VarInt, `f64` base_value, modifier_count VarInt `0`) — hand-computed byte vector asserted exactly.
 3. `set_health_and_damage_event_are_derive_generated_and_symmetric` — ordinary round-trip encode/decode for both.
 
@@ -1100,12 +1112,12 @@ pub fn register_mob_combat_system(builder: &mut rc_scheduler::RcExecutorBuilder)
 
 1. **`crates/mechanics/src/entity/living.rs`.** Add the four new fields per Deliverables, in declaration order at the end of the struct (does not disturb the existing `#[net_metadata(...)]` ascending-index compile check — none of the four carry that attribute). Observable: `cargo build -p rc-mechanics` succeeds; M4-B01's own `zombie_round_trips`-style NBT test (unaffected, since the new fields default via `EntityNbtFields` rule 2 when absent from a loaded compound) still passes unmodified.
 2. **`crates/mechanics/src/combat/attributes.rs`.** `AttributeInstance::compute_value` implements the exact 3-stage calc (Context) via three sequential folds over `self.modifiers` filtered by `operation`, then `.clamp(self.min, self.max)`. `default_attributes_for` is one `match` per `EntityKind`, each arm building an `AttributeMap` via ten `AttributeInstance::constant(...)` calls per the Context table (Item's arm returns an empty map). Observable: `combat_damage_pipeline.rs` compiles against this file.
-3. **`crates/mechanics/src/combat/damage.rs`.** `DamageTypeKind::{exhaustion,scaling,bypasses_armor}` are three `match` statements per the Context table. `armor_effective_damage`/`epf_reduction`/the five `*_epf` functions/`difficulty_scale_incoming` are direct, mechanical translations of Context's own pseudocode — no algorithmic freedom. `apply_damage_pipeline` composes them in Context's exact order, including the creative short-circuit, the invulnerability gate (mutating `target.invulnerable_time`/`last_hurt` in place), and the absorption asymmetry (an `if target.is_player` branch selecting between the two documented sub-algorithms). Observable: `combat_damage_pipeline.rs`'s seven cases pass.
+3. **`crates/mechanics/src/combat/damage.rs`.** `DamageTypeKind::{exhaustion,scaling,bypasses_armor,no_knockback}` are four `match` statements per the Context table. `armor_effective_damage`/`epf_reduction`/the five `*_epf` functions/`difficulty_scale_incoming` are direct, mechanical translations of Context's own pseudocode — no algorithmic freedom. `apply_damage_pipeline` composes them in Context's exact order, including the creative short-circuit, the invulnerability gate (mutating `target.invulnerable_time`/`last_hurt` in place), and the absorption asymmetry (an `if target.is_player` branch selecting between the two documented sub-algorithms). Observable: `combat_damage_pipeline.rs`'s seven cases pass.
 4. **`crates/mechanics/src/combat/melee.rs`.** Direct translation of Context's own pseudocode for every function; `assemble_player_melee_damage` composes `attack_cooldown_charge_scale`/`can_critical_attack`/the three enchant-bonus functions/the sweep-gate boolean expression in Context's exact order (charge scale computed once, reused for both the `magic_boost` scale and the `base_damage_scale_factor` call). Observable: `combat_melee_assembly.rs`'s six cases pass.
-5. **`crates/mechanics/src/combat/knockback.rs`.** `apply_knockback_impulse` is a direct translation of Context's own pseudocode, including the unconditional `power *= (1-resistance)` before the `power <= 0` early return (test 3's own asserted behavior), the degenerate-direction `rng.next_double()` fallback (exactly 2 calls per triggering call, test 4), and the `on_ground`-branched Y formula. Observable: `combat_knockback.rs`'s five cases pass.
+5. **`crates/mechanics/src/combat/knockback.rs`.** `apply_knockback_impulse` is a direct translation of Context's own pseudocode, including the unconditional `power *= (1-resistance)` before the `power <= 0` early return (test 3's own asserted behavior), the degenerate-direction `rng.next_double()` fallback (a `while` loop re-drawing in groups of 4 calls until the sample clears `KNOCKBACK_DEGENERATE_THRESHOLD`, test 4), and the `on_ground`-branched Y formula. Observable: `combat_knockback.rs`'s five cases pass.
 6. **`crates/mechanics/src/combat/fall.rs`, `death.rs`, `food.rs`.** Direct translations of their own Context pseudocode; `FixedTierTwoLoot`'s per-kind item-id constants are hand-typed placeholders (reconciled against a real `xtask codegen` run per its own doc comment, one line each, mirroring M4-B01's own `ITEM`/`ZOMBIE`/`VILLAGER`/`COW` constant-transcription convention exactly). Observable: `combat_fall_food.rs`/`combat_death_loot.rs` pass.
 7. **`crates/physics/src/motion.rs`.** Add `landed_fall_distance: Option<f64>` to `LivingMotionState`'s struct literal and the one capture line into `step_living_entity_tick`'s existing body, per Deliverables' exact insertion point. Observable: `cargo build -p rc-physics` succeeds; M3-B02's own three golden-vector tests still pass unmodified (they construct `LivingMotionState` positionally/by-name at call sites this blueprint does not touch, or via a `..Default::default()`-shaped literal if M3-B02's own tests already use one — either way the new field defaults to `None` and is never asserted on by M3-B02's own test file).
-8. **`crates/server/src/play/combat_packets.rs`.** The five packet structs per Deliverables/Context table; `Interact`/`UpdateAttributes`'s hand-implemented `WireRead`/`WireWrite` branch on `interaction_type`/iterate the attribute list respectively, mirroring M4-B01's own `Set Entity Data` hand-roll precedent structurally. Observable: `play_combat_packets.rs`'s three cases pass.
+8. **`crates/server/src/play/combat_packets.rs`.** The packet structs per Deliverables/Context table; `Interact`'s hand-implemented `WireRead`/`WireWrite` codes its bespoke `LpVec3` `location` field, `UpdateAttributes`'s iterates the attribute list, mirroring M4-B01's own `Set Entity Data` hand-roll precedent structurally; `Attack`'s single-VarInt shape derives normally. Observable: `play_combat_packets.rs`'s three cases pass.
 9. **`crates/server/src/play/movement.rs`.** Add `landed_fall_distance` to `PlayerMotion` and the two capture-site edits per Deliverables (exact, cited, additive). Observable: compiles; M3-B02's own movement tests unaffected (same reasoning as step 7).
 10. **`crates/server/src/play/combat.rs`.** `resolve_enchant_levels` returns `EnchantLevels::default()` unconditionally (one line, doc-commented per Context). `entity_reach_check`/`raycast_entity_reach` (this file or `rc-mechanics`, per Deliverables' own placement — `raycast_entity_reach` lives in `rc-mechanics::combat` since it needs no `rusty-clanker-server`-only type, `entity_reach_check` is the thin `PlayerMotion`-binding wrapper here) implement the slab-method ray/AABB test per Context's own algorithm description. `apply_combat_step`/`register_mob_combat_system` wire every prior step's functions together per Context's own exact call order, sending packets per the Context "Packets" section's own broadcast rules (mirroring M2-B07/M3-B03's own `respond_to_action`-shaped broadcast-then-ack pattern). Observable: `play_combat_melee_flow.rs`/`play_combat_death.rs` pass once wired into `world.rs`/`connection.rs` (step 11).
 11. **`crates/server/src/play/{world.rs, connection.rs, mining.rs, mod.rs}`.** Per Deliverables' own exact description: new resources/fields, `debug_spawn_mob`/`debug_set_difficulty`/`debug_deal_damage` diagnostic methods, join-drain insertions, the `is_dead` guards on the movement/mining packet loops, the two new tick-loop steps (`apply_combat_step` inserted after M4-B01's own entity-tracking step; `register_mob_combat_system`'s builder registration performed once, alongside every other composition-root `register_*` call), the `Interact` packet's connection-dispatch match arm. Observable: every `crates/server/tests/play_combat_*.rs` file passes; the full `rusty-clanker-server` test suite (every prior blueprint's own tests, unmodified) remains green.

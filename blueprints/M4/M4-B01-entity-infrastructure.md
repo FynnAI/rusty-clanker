@@ -84,7 +84,7 @@ Given a struct with named fields, each optionally carrying `#[net_metadata(index
 
 `rc_core::RcEntityId`/`RcEntityIdAllocator` (M0-B02) are reused **unmodified** — every spawned entity (mob, item, and, once a future blueprint migrates it, player) gets one `RcEntityId` from the server-lifetime allocator, stable across ARCH-D10 transfers, distinct from the ephemeral `bevy_ecs::Entity`.
 
-**`EntityUuid`** (new, `rc-mechanics`) is a `Copy` newtype over `u128`, mirroring M1-B05's own established "hand-rolled newtype over a primitive at an internal seam" convention (`PlayerProfile.uuid: u128`, that blueprint's own cited precedent) rather than depending on the external `uuid` crate's own `Uuid` type inside every entity component. Construction, `EntityUuid::new_random() -> Self`, is implemented via `uuid::Uuid::new_v4().as_u128()` — `uuid` (already workspace-pinned at `1.24.0` with its `v4` feature, added by M1-B04's CROSS-D12 for exactly this purpose) is a new, single-line `rc-mechanics` dependency this blueprint adds, used **only** inside `EntityUuid::new_random`'s own body; no other file in this blueprint's Deliverables touches the `uuid` crate directly. **Vanilla parity note:** vanilla itself assigns a freshly-spawned entity's UUID via `java.util.UUID.randomUUID()`, which is `SecureRandom`-backed, **not** `java.util.Random`-backed — unlike every value MECH-D5 requires from `RcRandom` (loot, enchanting, per-chunk random ticks), an entity's own UUID is never a vanilla-observable *deterministic* value in the first place, so `EntityUuid::new_random`'s use of `uuid::Uuid::new_v4()` (itself OS-CSPRNG-backed) introduces no parity gap MECH-D5 governs.
+**`EntityUuid`** (new, `rc-mechanics`) is a `Copy` newtype over `u128`, mirroring M1-B05's own established "hand-rolled newtype over a primitive at an internal seam" convention (`PlayerProfile.uuid: u128`, that blueprint's own cited precedent) rather than depending on the external `uuid` crate's own `Uuid` type inside every entity component. Construction, `EntityUuid::new_random() -> Self`, is implemented via `uuid::Uuid::new_v4().as_u128()` — `uuid` (already workspace-pinned at `1.24.0` with its `v4` feature, added by M1-B04's CROSS-D12 for exactly this purpose) is a new, single-line `rc-mechanics` dependency this blueprint adds, used **only** inside `EntityUuid::new_random`'s own body; no other file in this blueprint's Deliverables touches the `uuid` crate directly. **Vanilla parity note:** vanilla actually assigns a freshly-spawned entity's UUID via `Mth.createInsecureUUID(this.random)`, where `this.random` is a per-entity `RandomSource.create()` stream — a `java.util.Random`-family LCG (seeded from a JVM-uniqueness counter XORed with the current time), explicitly **not** `SecureRandom`-backed, and **not** `java.util.UUID.randomUUID()`. The premise this note actually needs still holds, restated correctly: unlike every value MECH-D5 requires from `RcRandom` (loot, enchanting, per-chunk random ticks), an entity's own UUID is drawn from that per-entity, non-world-seeded `RandomSource` stream, never from the world-seeded `RcRandom` sequence MECH-D5 governs — so `EntityUuid::new_random`'s use of `uuid::Uuid::new_v4()` (OS-CSPRNG-backed) introduces no parity gap MECH-D5 governs, for this corrected reason rather than the original (and wrong) "vanilla is SecureRandom-backed too" one.
 
 **Network entity id.** M1-B05's own `HardcodedWorld::alloc_network_entity_id() -> i32` ("a network-entity-id counter, independent of `rc_core::RcEntityIdAllocator`... a raw 32-bit counter, distinct from the internal 64-bit `RcEntityId`") already exists, scoped to `PlayerMarker`'s own use. This blueprint formalizes the identical allocator as a standalone, reusable type — `NetworkEntityIdAllocator` (new, `rc-mechanics`, `entity::ids`) — with the same guarantees `rc_core::RcEntityIdAllocator` already documents (lock-free, `&self`-thread-safe, strictly monotonic, first `alloc()` returns `1`). Every tier-2 entity kind this blueprint spawns (Context, "Tier-2 entity kind list") allocates its network id from **one shared, per-region instance** of this allocator, so a mob's and a player's network entity ids are drawn from the same numeric space and never collide — this blueprint does **not** migrate `HardcodedWorld`'s own existing `alloc_network_entity_id` method to call through this new type (that composition-root wiring is left to whichever future M4 blueprint first spawns a real mob into `HardcodedWorld`'s live tick loop, per this blueprint's own "substrate now, behavior later" scope) — but this blueprint's own `entity::ids::NetworkEntityIdAllocator` is the type that future wiring must use, specified completely here so that blueprint needs no further design work on this point.
 
@@ -101,14 +101,14 @@ Restated from MECH-D30 (corrected, Context above) plus a live fetch of `minecraf
 | `Pos` | `List<Double>`, 3 elements | `pos: [f64; 3]` | Corrected addition (above); `[x, y, z]`, world-absolute (18-float-determinism.md's own `f64`-for-position rule, restated by M3-B02, applies identically here) |
 | `Motion` | `List<Double>`, 3 elements | `velocity: [f64; 3]` | `[dx, dy, dz]`, blocks/tick |
 | `Rotation` | `List<Float>`, 2 elements | `rotation: [f32; 2]` | `[yaw, pitch]`, degrees |
-| `FallDistance` | `Float` | `fall_distance: f32` | moderate confidence — verify exact NBT type against a live capture; long-stable as `Float` in every version this project has cross-referenced |
-| `Fire` | `Short` | `fire_ticks: i16` | remaining fire-tick count; `-1` = not on fire and not yet eligible to be set alight this tick (vanilla's own "unlit" sentinel, moderate confidence — verify) |
+| `fall_distance` | `Double` | `fall_distance: f64` | snake_case key, widened from a legacy `Float`/`FallDistance` pair by vanilla's own `EntityFallDistanceFloatToDoubleFix` datafixer; this project models only the current, post-datafix shape |
+| `Fire` | `Short` | `fire_ticks: i16` | remaining fire-tick count; values greater than `0` mean burning, `0` and negative mean not burning — there is no `-1` "unlit" sentinel. A negative value counts down the ticks that must still elapse in fire before ignition; vanilla sets it to the negated fire-immune-tick count whenever the entity is not burning (`0` for most entities, `-20` for a player) |
 | `Air` | `Short` | `air_ticks: i16` | remaining breath, `TOTAL_AIR_SUPPLY = 300` default (research doc §5) |
 | `OnGround` | `Boolean` | `on_ground: bool` | read by Stage 6b physics once a future blueprint wires it |
 | `Invulnerable` | `Boolean` | `invulnerable: bool` | |
 | `PortalCooldown` | `Int` | `portal_cooldown: i32` | |
 | `UUID` | `IntArray`, 4 elements | `uuid: EntityUuid` | vanilla stores a UUID as four big-endian `i32` chunks of the 128-bit value (most-significant chunk first), **not** a string — this blueprint's `ToNbtField`/`FromNbtField` impl for `EntityUuid` (Deliverables, `nbt.rs`) performs exactly that packing/unpacking |
-| `CustomName` | `String`, optional | `custom_name: Option<String>` | stored as the raw JSON text-component string, opaque (this blueprint never parses or constructs rich text — MECH's own text-component work is out of scope here); field entirely omitted from the compound when `None` |
+| `CustomName` | `String` or `Compound`, optional | `custom_name: Option<String>` | encoded via vanilla's component codec over native NBT, not a JSON string: a component that collapses to plain text (no siblings, no style) encodes as a bare NBT string holding the literal text; a richer component encodes as a compound instead. This blueprint's `custom_name: Option<String>` round-trips only the plain-text case — a bounded, documented deviation (mirroring `ItemStackRecord.item_id`'s own `Int`-not-`String` exception): a loaded record whose `CustomName` is a compound fails this field's own decode, and MECH's own rich-text-component work stays out of scope here; field entirely omitted from the compound when `None` |
 | `CustomNameVisible` | `Boolean` | `custom_name_visible: bool` | |
 | `Silent` | `Boolean` | `silent: bool` | |
 | `NoGravity` | `Boolean` | `no_gravity: bool` | |
@@ -128,7 +128,7 @@ Restated from MECH-D30 (corrected, Context above) plus a live fetch of `minecraf
 | `HurtTime` | `Short` | *(not modeled)* | deferred — no combat/damage system exists yet to populate it meaningfully; patch-preserved |
 | `DeathTime` | `Short` | *(not modeled)* | deferred, same reasoning |
 
-Every other `LivingEntity`-rung field this blueprint's fetched metadata table (below) names (arrow count, stinger count, sleeping bed position, potion-particle state) is a **metadata-only** field in vanilla — it has no independent NBT key of its own at the `LivingEntity` rung (potion effects, which *do* persist to NBT as `ActiveEffects`, are entirely out of this milestone's scope, MECH-D46, M4-scope-adjacent but not named in `11-roadmap-milestones.md`'s own M4 text) — so `living.rs`'s `LivingEntity` struct carries `hand_states: u8`/`arrow_count: i32`/`stinger_count: i32`/`sleeping_bed_pos: Option<rc_core::BlockPos>` as **metadata-only** fields (`#[net_metadata(...)]` present, `#[nbt(...)]` absent), each defaulted via `Default::default()` on load (per `EntityNbtFields`'s own rule 2 above) rather than round-tripped through NBT.
+Of this blueprint's fetched metadata table (below), arrow count and stinger count are genuinely **metadata-only** in vanilla — neither has an independent NBT key at all. Sleeping bed position is **not** metadata-only: vanilla gives it its own NBT key, `sleeping_pos`, stored via a `BlockPos` codec, alongside its `LivingEntity`-rung metadata index. Potion-effect particle/ambience metadata (indices 10/11, reserved by this blueprint, Context below) is derived from potion effects, which *do* persist to NBT under the key `active_effects` (lower snake_case, not `ActiveEffects`) — entirely out of this milestone's scope, MECH-D46, M4-scope-adjacent but not named in `11-roadmap-milestones.md`'s own M4 text. So `living.rs`'s `LivingEntity` struct carries `hand_states: u8`/`arrow_count: i32`/`stinger_count: i32` as **metadata-only** fields (`#[net_metadata(...)]` present, `#[nbt(...)]` absent), each defaulted via `Default::default()` on load (per `EntityNbtFields`'s own rule 2 above); `sleeping_bed_pos: Option<rc_core::BlockPos>` carries **both** `#[nbt(name = "sleeping_pos")]` and `#[net_metadata(...)]` — round-tripped through NBT like `health`, not defaulted.
 
 ### Item-kind and combat-adjacent NBT — item entity, villager
 
@@ -200,12 +200,12 @@ Restated from the same live fetch as the type-ID table above (same moderate-conf
 | 6 | pose | `Pose` | `Standing` |
 | 7 | freeze (ticks-frozen) | `VarInt` | `0` |
 | 8 | hand states (active/hand/riptide bits) | `Byte` | `0` |
-| 9 | health | `Float` | type-specific `MAX_HEALTH` default (research doc §5: `20.0` unless a concrete type overrides it) |
+| 9 | health | `Float` | `1.0F` — the synched-data default the wire diff is taken against, not a type-specific `MAX_HEALTH` and not `20.0`; `MAX_HEALTH` is an attribute applied via `setHealth` at construction, a separate mechanism from this metadata default. In practice index 9 is non-default (and therefore sent) for essentially every mob, since almost no vanilla type's `MAX_HEALTH` default is `1.0` |
 | 12 | arrow count | `VarInt` | `0` |
 | 13 | bee-stinger count | `VarInt` | `0` |
 | 14 | sleeping bed position | `OptionalPosition` | `None` |
 
-Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by this blueprint (no status-effect system exists, MECH-D46 out of scope) — reserved, unused, matching this project's own "reserve the seam, do not fabricate content for it" convention. `Mob`'s own rung (per the live fetch's own silence on any `Mob`-level synced field beyond what `LivingEntity` already defines) contributes **zero** additional base indices; per-kind indices for `Villager`'s `VillagerData` and `Item`'s `Slot` therefore both start at index **15** (Item's own rung is `Entity`-direct, not `LivingEntity`, so `Item`'s `Slot` occupies index 8 — the first free slot after `Entity`'s own 0–7 — restated explicitly in `kinds.rs`'s own doc comments to avoid the easy mistake of reusing `LivingEntity`'s 8–14 range for a non-`LivingEntity` kind).
+Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by this blueprint (no status-effect system exists, MECH-D46 out of scope) — reserved, unused, matching this project's own "reserve the seam, do not fabricate content for it" convention. `Mob`'s own rung contributes **one** additional synced index beyond what `LivingEntity` defines: a shared Mob-flags byte (`DATA_MOB_FLAGS_ID`, covering `NoAI`/`LeftHanded`/`Aggressive`), landing at index **15** because `LivingEntity` ends at 14. This blueprint does not model that byte at all — none of `NoAI`/`LeftHanded`/`Aggressive` exists at this milestone's scope — so index 15 is reserved and unused, the identical "reserve the seam" treatment indices 10/11 already get. Per-kind indices for a `Mob`-rung kind therefore start at index **16**, not 15: `Villager`'s own `VillagerData` occupies index 16 in this blueprint's own scheme. **Bounded, documented exception:** vanilla's real wire index for `Villager`'s own `VillagerData` is higher still (its full class chain interposes further synced fields this blueprint's two-rung `Base`/`Living` composition model does not represent as their own rungs) — index 16 is this blueprint's own internal choice, not proven vanilla-wire-exact, flagged here rather than silently assumed correct (`findings-for-planning.md`). `Item`'s own `Slot` is unaffected by any of this — it stays at index 8, since `Item` is `Entity`-direct, bypassing `LivingEntity` and `Mob` entirely (restated explicitly in `kinds.rs`'s own doc comments to avoid the easy mistake of reusing `LivingEntity`'s 8–14 range for a non-`LivingEntity` kind).
 
 ### Tier-2 entity kind list — this blueprint's own justified selection
 
@@ -215,8 +215,8 @@ Indices 10/11 (potion-effect particles/ambient flag) are **not** constructed by 
 |---|---|---|---|---|
 | Item entity | `minecraft:item` | — (not a `Mob`) | — (never naturally spawned) | Named explicitly in the M4 roadmap ("item entities and pickup," MECH-D51) |
 | Zombie | `minecraft:zombie` | GoalSelector (legacy) | `MONSTER` | The GoalSelector-side AI exerciser; satisfies M4's own acceptance criterion 3 ("mob AI pathfinding... engages in combat") with the single most iconic, simplest hostile mob |
-| Villager | `minecraft:villager` | Brain | `CREATURE` | The Brain-side AI exerciser — MECH-D31's own binding text requires **both** AI systems be reproducible, not just one; research doc §3.7 independently names Villager "the fullest showcase of the brain system," making it the natural single Brain-side representative |
-| Cow | `minecraft:cow` | GoalSelector (legacy) | `CREATURE` | A second `CREATURE`-category, non-combat, purely-pathfinding mob — gives mob-spawning's own per-category cap accounting (MECH-D34, a future M4 blueprint) a second category to exercise beyond `MONSTER`, at zero additional AI-system surface (it reuses the same GoalSelector machinery Zombie already exercises) |
+| Villager | `minecraft:villager` | Brain | `MISC` | The Brain-side AI exerciser — MECH-D31's own binding text requires **both** AI systems be reproducible, not just one; research doc §3.7 independently names Villager "the fullest showcase of the brain system," making it the natural single Brain-side representative. `MISC` (not `CREATURE`) also means vanilla excludes Villager from natural spawning entirely — irrelevant to this blueprint's own zero-spawning scope, but restated here so a future spawning blueprint does not inherit a wrong category |
+| Cow | `minecraft:cow` | GoalSelector (legacy) | `CREATURE` | The one `CREATURE`-category, non-combat, purely-pathfinding mob in this tier-2 set (Villager, corrected above, is actually `MISC`, not a second `CREATURE` kind) — gives mob-spawning's own per-category cap accounting (MECH-D34, a future M4 blueprint) a `CREATURE`-category kind to exercise beyond `MONSTER`, at zero additional AI-system surface (it reuses the same GoalSelector machinery Zombie already exercises) |
 
 No other vanilla entity type is named or given a bundle by this blueprint. A future M4 blueprint that needs a fifth kind (a projectile, for instance — `11-roadmap-milestones.md`'s own M4 Scope text names neither ranged combat nor projectiles explicitly, so this blueprint treats them as out of M4's own current scope, not silently dropped) adds its own bundle following this blueprint's own `base.rs`/`living.rs`/`kinds.rs` pattern, without needing any change to `EntityNbtFields`/`EntityMetadataFields`, the metadata wire code, the tracking system, or the persistence container — every one of those is written generic over "any `EntityKind`," never hardcoded to exactly these four.
 
@@ -226,21 +226,21 @@ Restated from a live fetch of `minecraft.wiki/w/Java_Edition_protocol/Packets` p
 
 | Packet | Bound | ID | Fields (wire order) |
 |---|---|---|---|
-| `Spawn Entity` | client | `0x01` | `entity_id: i32 #[rc(varint)]`, `uuid: u128` (16 raw bytes, big-endian — this blueprint's own `WireWrite`/`WireRead` impl for a bare `u128`, since `rc-protocol`'s own default-mapping table has no entry for it), `entity_type: i32 #[rc(varint)]` (the `EntityTypeId`'s raw registry id), `x: f64, y: f64, z: f64`, `pitch: u8, yaw: u8` (Angle, in that order — vanilla's own field order for this one packet is pitch-before-yaw, the reverse of every other entity-rotation packet below; restated exactly, not "corrected" to match the others), `head_yaw: u8` (Angle; meaningful only for `LivingEntity`-rung kinds, sent as `0` for `Item`), `data: i32 #[rc(varint)]` (kind-specific spawn payload — `0` for every tier-2 kind this blueprint ships; vanilla uses this field for e.g. a thrown potion's effect id, out of scope here), `velocity_x: i16, velocity_y: i16, velocity_z: i16` (fixed-point, `round(v * 8000)`, clamped to `i16`'s range — the identical encoding `Set Entity Velocity` below uses) |
+| `Spawn Entity` | client | `0x01` | `entity_id: i32 #[rc(varint)]`, `uuid: u128` (16 raw bytes, big-endian — this blueprint's own `WireWrite`/`WireRead` impl for a bare `u128`, since `rc-protocol`'s own default-mapping table has no entry for it), `entity_type: i32 #[rc(varint)]` (the `EntityTypeId`'s raw registry id), `x: f64, y: f64, z: f64`, `movement: LpVec3` (the shared quantized-vector encoding below — sits **between** `z` and the rotation bytes, not at the end, and is **not** three `i16` fixed-point fields), `pitch: u8, yaw: u8` (Angle, in that order — vanilla's own field order for this one packet is pitch-before-yaw, the reverse of every other entity-rotation packet below; restated exactly, not "corrected" to match the others), `head_yaw: u8` (Angle; meaningful only for `LivingEntity`-rung kinds, sent as `0` for `Item`), `data: i32 #[rc(varint)]` (kind-specific spawn payload — `0` for every tier-2 kind this blueprint ships; vanilla's own real users are a thrown/dropped projectile's owner entity id, a falling block's block-state id, an item frame's/painting's facing-direction data value, and a Warden's emerging-pose flag — never a potion effect id — all out of scope here since no tier-2 kind this blueprint ships is any of those) — **`data` is the last field on the wire**, after `head_yaw`, not before `movement` |
 | `Set Entity Data` | client | `0x63` | `entity_id: i32 #[rc(varint)]`, then the raw, unprefixed metadata-entry sequence (Context: "Entity metadata protocol") terminated by `0xFF` — **hand-implemented `RcPacket`**, not `#[derive(RcPacket)]`, since the metadata tail has no outer length prefix and therefore does not fit `#[derive(RcPacket)]`'s `#[rc(prefixed_array = "VarInt")]` shape (M1-B01's own mapping table has no "raw, self-terminating, unprefixed tail" case) — mirroring M1-B05's own precedent of hand-rolling a writer when the derive genuinely cannot express a real wire shape yet, rather than inventing a new `#[rc(...)]` attribute inside a crate (`rc-protocol-macros`) this blueprint does not touch |
-| `Update Entity Position` | client | `0x35` | `entity_id: i32 #[rc(varint)]`, `delta_x: i16, delta_y: i16, delta_z: i16` (fixed-point delta, `round((new - old) * 4096)`, valid only for a per-axis delta within `±8` blocks — a larger single-tick displacement must use `Teleport Entity` instead, this blueprint's tracking/movement-broadcast logic enforces this, Constraints), `on_ground: bool` |
+| `Update Entity Position` | client | `0x35` | `entity_id: i32 #[rc(varint)]`, `delta_x: i16, delta_y: i16, delta_z: i16` (fixed-point delta, `round(new * 4096) - round(old * 4096)` — each endpoint quantized to a whole number **first**, the two whole numbers subtracted **after**; this differs from `round((new - old) * 4096)` by one unit at rounding boundaries, using Java's round-half-up-toward-positive-infinity semantics for `round`, not Rust's round-half-away-from-zero — valid only for a per-axis delta within `±8` blocks — a larger single-tick displacement must use `Teleport Entity` instead, this blueprint's tracking/movement-broadcast logic enforces this, Constraints), `on_ground: bool` |
 | `Update Entity Position and Rotation` | client | `0x36` | `entity_id: i32 #[rc(varint)]`, `delta_x: i16, delta_y: i16, delta_z: i16`, `yaw: u8, pitch: u8` (Angle), `on_ground: bool` |
 | `Update Entity Rotation` | client | `0x38` | `entity_id: i32 #[rc(varint)]`, `yaw: u8, pitch: u8` (Angle), `on_ground: bool` |
 | `Teleport Entity` (`entity_position_sync`) | client | `0x23` | `entity_id: i32 #[rc(varint)]`, `x: f64, y: f64, z: f64`, `velocity_x: f64, velocity_y: f64, velocity_z: f64`, `yaw: f32, pitch: f32` (full `Float` degrees here, **not** the 1-byte Angle encoding the delta-family packets above use — a real, cited asymmetry, not a copy/paste error, mirroring M2-B07's own identically-flagged `Player Action`/`Use Item On` `face`-field asymmetry), `on_ground: bool` — this blueprint's own moderate-confidence caveat is strongest for this one packet (the live fetch could not retrieve its field table directly; this shape is this blueprint's own best-effort restatement from established, long-cross-referenced protocol history, flagged for the same one-line reconciliation as every numeric id above) |
 | `Set Head Rotation` | client | `0x53` | `entity_id: i32 #[rc(varint)]`, `head_yaw: u8` (Angle) |
-| `Set Entity Velocity` | client | `0x65` | `entity_id: i32 #[rc(varint)]`, `velocity_x: i16, velocity_y: i16, velocity_z: i16` (fixed-point, `round(v * 8000)`, clamped `[-32768, 32767]`) |
+| `Set Entity Velocity` | client | `0x65` | `entity_id: i32 #[rc(varint)]`, `velocity: LpVec3` (the identical shared quantized-vector encoding `Spawn Entity`'s own `movement` field uses below — **not** three `i16` fixed-point fields) |
 | `Remove Entities` | client | `0x4D` | `entity_ids: Vec<rc_protocol::VarInt> #[rc(prefixed_array = "VarInt")]` (**not** `Vec<i32>` — each entity id is individually `VarInt`-encoded, so the field's element type must itself be `rc_protocol::VarInt`, whose own `WireWrite` impl already produces that encoding; a bare `Vec<i32>` under `#[rc(prefixed_array = "VarInt")]` would wrongly encode each element as a plain 4-byte `Int`, per `i32`'s own default mapping) |
 
-`pack_position`/`unpack_position` (M1-B05), the `Angle` convention (`u8`, `round(degrees / 360.0 * 256.0) as u8` — restated once here since every packet above uses it), and the velocity fixed-point formula (`round(v * 8000.0).clamp(-32768.0, 32767.0) as i16`, vanilla's own `Entity.getVelocityUpdatePacket`/`Mth.clamp`-derived constant) are this blueprint's own three shared encode/decode helper functions, `crates/server/src/play/entity_packets.rs`'s own private module scope.
+`pack_position`/`unpack_position` (M1-B05), the `Angle` convention (`u8`, `floor(degrees * 256.0 / 360.0) as u8` — a true floor, i.e. round-toward-negative-infinity, **not** round-to-nearest, and the multiply-by-256 happens before the divide-by-360, in `f32` precision; the inverse is `(rot as i32 * 360) as f32 / 256.0` — restated once here since every packet above uses it), and `LpVec3` — the shared, variable-length quantized vector encoding `Spawn Entity`'s own `movement` field and `Set Entity Velocity`'s `velocity` field both use, replacing what an earlier draft of this blueprint described as a `round(v * 8000)`-style `i16` triple (no such encoding exists in vanilla; there is no per-axis fixed-point velocity field at all) — are this blueprint's own shared encode/decode helpers, `crates/server/src/play/entity_packets.rs`'s own private module scope. `LpVec3`'s own algorithm, in this blueprint's own words: each of the three `f64` components is sanitized (`NaN` becomes `0.0`, otherwise clamped to `±1.7179869183e10`); `chessboard = max(|x|, |y|, |z|)` over the sanitized components; if `chessboard < 3.051944088384301e-5` the encoding is a single zero byte, nothing further (a near-zero vector); otherwise `scale = ceil(chessboard)` as an integer, each axis is normalized (`component / scale`) and mapped from `[-1, 1]` onto `[0, 32766]` via `round((normalized * 0.5 + 0.5) * 32766)`, then packed as a 15-bit field at bit offsets 3 (X), 18 (Y), 33 (Z) of a 48-bit buffer whose low 2 bits hold `scale & 0b11` and whose bit 2 (a continuation flag) is set whenever `scale` does not fit those two bits; the buffer's low byte, next byte, then remaining 32 bits as a big-endian `u32` are written (6 bytes total), followed by a trailing `VarInt` carrying `scale >> 2` only when the continuation flag was set. Decoding is the exact inverse, and — the one asymmetry worth naming — the unpacked-field-to-normalized-value step clamps the 15-bit field to `32766` rather than `32767` before rescaling.
 
 ### Tracking/interest integration — replacing M2-B07's blanket broadcast
 
-M2-B07 gave `PlayerMarker` a `connection: ConnectionHandle` field and broadcast every block change to **every** currently-connected player, explicitly because "M1-B05 built no real per-player chunk-interest system" and, at that milestone's own fixed-3×3-chunk-world scope, every connected player was trivially interested in everything the world could ever contain. That premise no longer holds once entities with independent positions exist: `EntityType.clientTrackingRange`/`updateInterval` (research doc §3.2, §5: `clientTrackingRange` defaults to **5 chunks**, `updateInterval` defaults to **3 ticks**) are real, per-vanilla-type values this blueprint restates and enforces per kind (`ClientTrackingRange` constants, `kinds.rs`: `Item = 6` chunks, `Zombie`/`Villager`/`Cow` = `8` chunks — vanilla's own per-type overrides of the `5`-chunk default for a passive/hostile living mob, moderate confidence, flagged for reconciliation against a real `entity_type`'s own `--reports` dump, which this project's registries codegen does not currently surface per-type tracking-range data for at all — a gap this blueprint's own hand-typed constants paper over until a future blueprint extends `xtask codegen` to emit it, if that granularity is ever needed beyond this blueprint's own four hand-picked values).
+M2-B07 gave `PlayerMarker` a `connection: ConnectionHandle` field and broadcast every block change to **every** currently-connected player, explicitly because "M1-B05 built no real per-player chunk-interest system" and, at that milestone's own fixed-3×3-chunk-world scope, every connected player was trivially interested in everything the world could ever contain. That premise no longer holds once entities with independent positions exist: `EntityType.clientTrackingRange`/`updateInterval` (research doc §3.2, §5: `clientTrackingRange` defaults to **5 chunks**, `updateInterval` defaults to **3 ticks**) are real, per-vanilla-type values this blueprint restates and enforces per kind (`ClientTrackingRange` constants, `kinds.rs`: `Item = 6` chunks, `Zombie = 8` chunks, `Villager`/`Cow` = `10` chunks — vanilla's own per-type overrides of the `5`-chunk default for a passive/hostile living mob, moderate confidence, flagged for reconciliation against a real `entity_type`'s own `--reports` dump, which this project's registries codegen does not currently surface per-type tracking-range data for at all — a gap this blueprint's own hand-typed constants paper over until a future blueprint extends `xtask codegen` to emit it, if that granularity is ever needed beyond this blueprint's own four hand-picked values).
 
 **The tracking core** (`rc-mechanics::entity::tracking`, pure, `bevy_ecs`-free, mirroring M3-B01's `BlockWorldAccess`/M3-B06's `BlockEntityWorldAccess` "ECS-agnostic core, adapter at the production call site" pattern): given, for one player, its `viewer_pos: [f64; 3]` and its current `tracked: &HashSet<RcEntityId>`, and, for the region's own currently-live entity set, an iterator of `(RcEntityId, EntityKind, pos: [f64; 3])`, `compute_tracking_delta` (Deliverables) returns three sets — `to_spawn: Vec<RcEntityId>` (in range, not yet tracked), `to_despawn: Vec<RcEntityId>` (tracked, now out of range **or** no longer present in the region's own live set at all — the second case is what makes this the same mechanism a future entity-despawn/death system reuses without a second design), and `still_tracked: Vec<RcEntityId>` (in range, already tracked — candidates for a periodic `updateInterval`-gated `Set Entity Data` re-send, not implemented by this blueprint since no entity mutates any metadata-affecting field yet; the seam is exposed, unused). "In range" is a **squared**-distance comparison against `entity_kind.client_tracking_range_blocks().powi(2)` (chunks × 16, squared once, avoiding a `sqrt` call on the hot per-pair path — the identical micro-optimization vanilla's own `nearestPlayerDistanceSqr`-style checks already use, restated here as a deliberate, cheap choice, not a parity concern since tracking range is a pure server-authoritative visibility decision with no vanilla-observable bit-exactness requirement).
 
@@ -296,14 +296,14 @@ M0-B05's own `Stage` enum already carries a single `EntityAiPhysics = 6` discrim
 - The NBT key Pos is a List<Double> of 3 elements [x, y, z], world-absolute position.
 - The NBT key Motion is a List<Double> of 3 elements [dx, dy, dz], measured in blocks/tick.
 - The NBT key Rotation is a List<Float> of 2 elements [yaw, pitch], in degrees.
-- The NBT key FallDistance is of type Float (moderate confidence; long-stable as Float in every version cross-referenced).
-- The NBT key Fire is a Short holding the remaining fire-tick count, where -1 means not on fire and not yet eligible to be set alight this tick (moderate confidence).
+- The NBT key fall_distance (snake_case, not FallDistance) is of type Double, not Float, widened from the legacy Float FallDistance pair by vanilla's own EntityFallDistanceFloatToDoubleFix datafixer.
+- The NBT key Fire is a Short holding the remaining fire-tick count: values greater than 0 mean burning, 0 and negative mean not burning, and there is no -1 unlit sentinel; a negative value counts down the ticks that must still elapse in fire before ignition.
 - The NBT key Air is a Short holding remaining breath, with a default TOTAL_AIR_SUPPLY of 300.
 - The NBT key OnGround is a Boolean.
 - The NBT key Invulnerable is a Boolean.
 - The NBT key PortalCooldown is an Int.
 - The NBT key UUID is stored as an IntArray of 4 elements: vanilla packs a UUID as four big-endian i32 chunks of the 128-bit value, most-significant chunk first, not as a string.
-- The NBT key CustomName is an optional String stored as the raw JSON text-component string.
+- The NBT key CustomName is an optional String or Compound encoded via vanilla's component codec over native NBT, not stored as a raw JSON text-component string.
 - The NBT key CustomNameVisible is a Boolean.
 - The NBT key Silent is a Boolean.
 - The NBT key NoGravity is a Boolean.
@@ -315,8 +315,8 @@ M0-B05's own `Stage` enum already carries a single `EntityAiPhysics = 6` discrim
 - LivingEntity's Health NBT field is a Float.
 - LivingEntity's HurtTime NBT field is a Short.
 - LivingEntity's DeathTime NBT field is a Short.
-- Arrow count, stinger count, sleeping bed position, and potion-particle state are metadata-only fields in vanilla at the LivingEntity rung -> they have no independent NBT key of their own.
-- Potion effects persist to NBT under the ActiveEffects key in vanilla.
+- Arrow count and stinger count are metadata-only fields at the LivingEntity rung with no NBT key of their own; sleeping bed position is not metadata-only, since vanilla gives it its own NBT key, sleeping_pos, alongside its metadata index.
+- Potion effects persist to NBT under the active_effects key (lower snake_case), not ActiveEffects, in vanilla.
 - Vanilla's item entity NBT key Item is a Compound whose id field is a namespaced string such as "minecraft:diamond".
 - The item entity's PickupDelay NBT field is a Short.
 - The item entity's Age NBT field is a Short implementing MECH-D51's 6000-tick despawn timer.
@@ -386,43 +386,43 @@ M0-B05's own `Stage` enum already carries a single `EntityAiPhysics = 6` discrim
 - The base+LivingEntity metadata index table assigns index 6 to pose, kind Pose, default Standing (moderate confidence, from a live wiki fetch).
 - The base+LivingEntity metadata index table assigns index 7 to freeze/ticks-frozen, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
 - The base+LivingEntity metadata index table assigns index 8 to hand states (active-hand/riptide bits), kind Byte, default 0 (moderate confidence, from a live wiki fetch).
-- The base+LivingEntity metadata index table assigns index 9 to health, kind Float, default type-specific MAX_HEALTH (20.0 unless overridden) (moderate confidence, from a live wiki fetch).
+- The base+LivingEntity metadata index table assigns index 9 to health, kind Float, default 1.0F (the synched-data default the wire diff is taken against) -- not a type-specific MAX_HEALTH and not 20.0.
 - The base+LivingEntity metadata index table assigns index 12 to arrow count, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
 - The base+LivingEntity metadata index table assigns index 13 to bee-stinger count, kind VarInt, default 0 (moderate confidence, from a live wiki fetch).
 - The base+LivingEntity metadata index table assigns index 14 to sleeping bed position, kind OptionalPosition, default None (moderate confidence, from a live wiki fetch).
 - Indices 10 and 11 in the entity metadata index table are reserved for potion-effect particles and the ambient flag.
 - Vanilla's shared entity-flags metadata byte (DATA_SHARED_FLAGS_ID, index 0 above) assigns bit 0 to on-fire, bit 1 to sneaking, bit 3 to sprinting, bit 4 to swimming, bit 5 to invisible, bit 6 to glowing, and bit 7 to elytra-flying.
-- Vanilla's Mob rung contributes zero additional synced metadata indices beyond what LivingEntity already defines.
-- In vanilla, a Mob's PersistenceRequired and CanPickUpLoot fields are internal-only bookkeeping, neither independently persisted to NBT nor synced via entity metadata.
+- Vanilla's Mob rung contributes one additional synced metadata index beyond what LivingEntity already defines: DATA_MOB_FLAGS_ID, a Byte, landing at index 15.
+- In vanilla, a Mob's PersistenceRequired and CanPickUpLoot fields are independently persisted to NBT as unconditional Booleans; only the claim's "not synced via entity metadata" half holds.
 - Item entity's Slot metadata occupies index 8, since Item is Entity-direct rather than LivingEntity-rung and index 8 is the first free slot after Entity's own indices 0-7.
 - EntityType.clientTrackingRange defaults to 5 chunks in vanilla.
 - EntityType.updateInterval defaults to 3 ticks in vanilla.
 - Vanilla's zombie entity type overrides the tracking-range default to 8 chunks (moderate confidence).
-- Vanilla's villager entity type overrides the tracking-range default to 8 chunks (moderate confidence).
-- Vanilla's cow entity type overrides the tracking-range default to 8 chunks (moderate confidence).
+- Vanilla's villager entity type overrides the tracking-range default to 10 chunks, not 8 (moderate confidence).
+- Vanilla's cow entity type overrides the tracking-range default to 10 chunks, not 8 (moderate confidence).
 - Vanilla's item entity type overrides the tracking-range default to 6 chunks (moderate confidence).
 - Vanilla's item entity (minecraft:item) is not a Mob.
 - Vanilla's item entity (minecraft:item) is never naturally spawned.
 - Vanilla's own client-tracking system re-discovers an entity that re-enters a player's tracking range as a fresh spawn, with no memory that it was previously tracked and despawned.
 - Vanilla's zombie (minecraft:zombie) uses the legacy GoalSelector AI system and belongs to the MONSTER mob category.
-- Vanilla's villager (minecraft:villager) uses the Brain AI system and belongs to the CREATURE mob category.
+- Vanilla's villager (minecraft:villager) uses the Brain AI system and belongs to the MISC mob category, not CREATURE.
 - Vanilla's cow (minecraft:cow) uses the legacy GoalSelector AI system and belongs to the CREATURE mob category.
-- At protocol 776 the Spawn Entity packet is client-bound with packet ID 0x01 and fields, in wire order: entity_id (VarInt), uuid (16 raw bytes, big-endian), entity_type (VarInt), x/y/z (f64), pitch then yaw (each a 1-byte Angle, pitch before yaw), head_yaw (1-byte Angle), data (VarInt), velocity_x/velocity_y/velocity_z (i16 fixed-point).
+- At protocol 776 the Spawn Entity packet is client-bound with packet ID 0x01 and fields, in wire order: entity_id (VarInt), uuid (16 raw bytes, big-endian), entity_type (VarInt), x/y/z (f64), movement (the shared LpVec3-quantized vector, not three i16 fixed-point fields), pitch then yaw (each a 1-byte Angle, pitch before yaw), head_yaw (1-byte Angle), data (VarInt) -- data is the last field on the wire, not before movement.
 - Vanilla's Spawn Entity packet orders pitch before yaw, the reverse of every other entity-rotation packet.
-- Vanilla uses the Spawn Entity packet's data field for a kind-specific spawn payload, e.g. a thrown potion's effect id.
+- Vanilla uses the Spawn Entity packet's data field for a kind-specific spawn payload; its real users are a projectile's or fishing hook's owner entity id, a falling block's block-state id, an item frame's or painting's facing-direction data value, and a Warden's emerging-pose flag -- never a thrown potion's effect id.
 - At protocol 776 the Set Entity Data packet is client-bound with packet ID 0x63.
-- At protocol 776 the Update Entity Position packet is client-bound with packet ID 0x35, carrying entity_id (VarInt), a per-axis fixed-point position delta as i16 (round((new - old) * 4096)) valid only for a per-axis delta within +/-8 blocks, and on_ground (bool).
+- At protocol 776 the Update Entity Position packet is client-bound with packet ID 0x35, carrying entity_id (VarInt), a per-axis fixed-point position delta as i16 computed as round(new * 4096) - round(old * 4096) (each endpoint quantized first, then subtracted -- not round((new - old) * 4096)), valid only for a per-axis delta within +/-8 blocks, and on_ground (bool).
 - At protocol 776 the Update Entity Position and Rotation packet is client-bound with packet ID 0x36, carrying entity_id, the same i16 position delta, yaw/pitch as 1-byte Angles, and on_ground.
 - At protocol 776 the Update Entity Rotation packet is client-bound with packet ID 0x38, carrying entity_id, yaw/pitch as 1-byte Angles, and on_ground.
 - At protocol 776 the Teleport Entity (entity_position_sync) packet is client-bound with packet ID 0x23, carrying entity_id, x/y/z (f64), velocity_x/y/z (f64), yaw/pitch as full 4-byte Float degrees (not the 1-byte Angle encoding), and on_ground.
 - At protocol 776 the Set Head Rotation packet is client-bound with packet ID 0x53, carrying entity_id and head_yaw as a 1-byte Angle.
-- At protocol 776 the Set Entity Velocity packet is client-bound with packet ID 0x65, carrying entity_id and velocity_x/y/z as i16 fixed-point values.
+- At protocol 776 the Set Entity Velocity packet is client-bound with packet ID 0x65, carrying entity_id and velocity as the shared LpVec3-quantized vector, not velocity_x/y/z as i16 fixed-point values.
 - At protocol 776 the Remove Entities packet is client-bound with packet ID 0x4D, carrying a list of entity ids where each id is individually VarInt-encoded (not a single length-prefixed array of plain i32).
-- Vanilla's Angle wire encoding is a single byte computed as round(degrees / 360.0 * 256.0).
-- Vanilla's entity-velocity wire encoding is round(v * 8000.0), clamped to [-32768, 32767], stored as i16 (derived from Entity.getVelocityUpdatePacket / Mth.clamp).
+- Vanilla's Angle wire encoding is a single byte computed as floor(degrees * 256.0 / 360.0), not round(degrees / 360.0 * 256.0) -- a true floor, not round-to-nearest.
+- Vanilla's entity-velocity wire encoding is the shared LpVec3 quantized-vector format, not round(v * 8000.0) clamped to [-32768, 32767] stored as i16; no Entity.getVelocityUpdatePacket or Mth.clamp-based encoding exists at 26.2.
 - WORLD-D29 fixes the entities/ region-file schema as entities/r.<X>.<Z>.mca with root compound { DataVersion: Int, Position: [x, z] as a 2-element IntArray, Entities: List<Compound> }, one compound per entity in vanilla's own generic { id: String, ...entity fields } shape.
 - This engine's entity persistence uses DataVersion stamp 4903 (WORLD-D16).
-- Vanilla assigns a freshly-spawned entity's UUID via java.util.UUID.randomUUID(), which is SecureRandom-backed, not java.util.Random-backed.
+- Vanilla assigns a freshly-spawned entity's UUID via Mth.createInsecureUUID(this.random), a per-entity java.util.Random-family RandomSource.create() stream, not java.util.UUID.randomUUID() and not SecureRandom-backed.
 - Vanilla re-assigns a fresh network entity id and internal object identity to an entity on every load; only UUID is load-stable across a save/load cycle.
 
 ## Deliverables
@@ -666,8 +666,8 @@ pub struct BaseEntity {
     pub velocity: [f64; 3],
     #[nbt(name = "Rotation")]
     pub rotation: [f32; 2],
-    #[nbt(name = "FallDistance")]
-    pub fall_distance: f32,
+    #[nbt(name = "fall_distance")]
+    pub fall_distance: f64,
     #[nbt(name = "Fire")]
     pub fire_ticks: i16,
     /// Metadata-only (index 0, the shared status-flags byte) — computed from
@@ -715,13 +715,13 @@ pub struct BaseEntity {
 ### `crates/mechanics/src/entity/living.rs`
 
 ```rust
-/// `LivingEntity`'s own rung (MECH-D29): adds health (NBT + metadata) and four
-/// metadata-only fields no independent `LivingEntity`-rung NBT key exists for at this
-/// milestone's scope (Context, "`LivingEntity` NBT field set"). Exactly one field,
-/// `health`, carries `#[nbt(...)]` — `hand_states`/`arrow_count`/`stinger_count`/
-/// `sleeping_bed_pos` are metadata-only (no `#[nbt(...)]` attribute at all), each
-/// defaulted via `Default::default()` on `read_nbt_fields` per `EntityNbtFields`
-/// rule 2.
+/// `LivingEntity`'s own rung (MECH-D29): adds health and sleeping bed position (both
+/// NBT + metadata) and two genuinely metadata-only fields with no independent
+/// `LivingEntity`-rung NBT key at all (Context, "`LivingEntity` NBT field set").
+/// Exactly two fields, `health` and `sleeping_bed_pos`, carry `#[nbt(...)]` —
+/// `hand_states`/`arrow_count`/`stinger_count` are metadata-only (no `#[nbt(...)]`
+/// attribute at all), each defaulted via `Default::default()` on `read_nbt_fields` per
+/// `EntityNbtFields` rule 2.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize,
     rc_entity_macros::EntityNbtFields, rc_entity_macros::EntityMetadataFields)]
 pub struct LivingEntity {
@@ -734,6 +734,7 @@ pub struct LivingEntity {
     pub arrow_count: i32,
     #[net_metadata(index = 13, kind = "VarInt")]
     pub stinger_count: i32,
+    #[nbt(name = "sleeping_pos")]
     #[net_metadata(index = 14, kind = "OptionalPosition")]
     pub sleeping_bed_pos: Option<rc_core::BlockPos>,
 }
@@ -777,11 +778,19 @@ impl EntityKind {
 pub enum AiSystemKind { GoalSelector, Brain }
 
 /// `Mob`'s own rung (MECH-D29 diagram: `PersistenceRequired`, `CanPickUpLoot`) plus
-/// the `AiSystemKind` marker. Carries no `#[nbt(...)]`/`#[net_metadata(...)]` fields —
-/// none of `Mob`'s own rung is independently persisted or synced in vanilla (both
-/// booleans are internal-only bookkeeping); this struct exists purely as an ECS
-/// component future AI/persistence blueprints attach and query, not as an
-/// `EntityNbtFields`/`EntityMetadataFields` implementer.
+/// the `AiSystemKind` marker. In vanilla, `PersistenceRequired`/`CanPickUpLoot` are
+/// **not** internal-only bookkeeping — both are independently persisted to NBT as
+/// unconditional Booleans (real tag names, restated for a future persistence pass:
+/// `PersistenceRequired`, `CanPickUpLoot`). Neither is synced via entity metadata,
+/// which is the only half of the original scope note that holds. This blueprint's own
+/// `MobMarker` does not yet round-trip those two booleans through `EntityRecord` (no
+/// `#[nbt(...)]`/`#[net_metadata(...)]` attribute here, and `EntityRecord`'s own
+/// `to_nbt`/`from_nbt` never call into `MobMarker` at all) — a scope gap this
+/// correction surfaces rather than closes; wiring it in is left to a future
+/// persistence-focused blueprint, since it also needs a chosen default for
+/// `AiSystemKind` before `MobMarker` could itself derive `EntityNbtFields`. This
+/// struct exists purely as an ECS component future AI/persistence blueprints attach
+/// and query, not as an `EntityNbtFields`/`EntityMetadataFields` implementer.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MobMarker {
     pub ai_system: AiSystemKind,
@@ -819,7 +828,7 @@ pub struct ZombieBundle;
     rc_entity_macros::EntityNbtFields, rc_entity_macros::EntityMetadataFields)]
 pub struct VillagerBundle {
     #[nbt(name = "VillagerData")]
-    #[net_metadata(index = 15, kind = "VillagerData")]
+    #[net_metadata(index = 16, kind = "VillagerData")]
     pub villager_data: crate::entity::metadata::VillagerData,
 }
 
@@ -1134,9 +1143,9 @@ mod entity_persistence;
 mod entity_tracking;
 
 pub use entity_packets::{
-    RemoveEntities, SetEntityData, SetEntityVelocity, SetHeadRotation, SpawnEntity,
+    LpVec3, RemoveEntities, SetEntityData, SetEntityVelocity, SetHeadRotation, SpawnEntity,
     TeleportEntity, UpdateEntityPosition, UpdateEntityPositionAndRotation,
-    UpdateEntityRotation, encode_angle, encode_velocity_fixed_point,
+    UpdateEntityRotation, encode_angle,
 };
 pub use entity_persistence::{read_entities_chunk, write_entities_chunk};
 pub use entity_tracking::apply_tracking_delta_for_player;
@@ -1154,13 +1163,21 @@ pub struct SpawnEntity {
     pub uuid: u128,
     #[rc(varint)] pub entity_type: i32,
     pub x: f64, pub y: f64, pub z: f64,
+    pub movement: LpVec3,
     pub pitch: u8, pub yaw: u8, pub head_yaw: u8,
     #[rc(varint)] pub data: i32,
-    pub velocity_x: i16, pub velocity_y: i16, pub velocity_z: i16,
 }
 // WireWrite/WireRead for bare u128 (16 raw bytes, big-endian) is a new impl this file
 // (or `entity_packets.rs`'s own small `wire_u128` submodule) adds — `rc-protocol`'s
 // own default mapping table has no entry for it (M1-B01's table).
+
+/// The shared quantized-vector encoding `SpawnEntity`'s own `movement` field and
+/// `SetEntityVelocity`'s own `velocity` field both use (Context's own restated
+/// algorithm). `WireWrite`/`WireRead` for `LpVec3` is a new impl this file adds, for
+/// the identical reason the bare `u128` impl above exists — `rc-protocol`'s own
+/// default mapping table has no entry for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LpVec3 { pub x: f64, pub y: f64, pub z: f64 }
 
 /// Hand-implemented `RcPacket` (Context explains why the derive cannot express this
 /// packet's unprefixed metadata tail).
@@ -1218,11 +1235,11 @@ pub struct TeleportEntity {
 #[packet(state = "play", bound = "client", id = 0x53)]
 pub struct SetHeadRotation { #[rc(varint)] pub entity_id: i32, pub head_yaw: u8 }
 
-#[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
 #[packet(state = "play", bound = "client", id = 0x65)]
 pub struct SetEntityVelocity {
     #[rc(varint)] pub entity_id: i32,
-    pub velocity_x: i16, pub velocity_y: i16, pub velocity_z: i16,
+    pub velocity: LpVec3,
 }
 
 #[derive(RcPacket, Debug, Clone, PartialEq, Eq)]
@@ -1231,14 +1248,20 @@ pub struct RemoveEntities {
     #[rc(prefixed_array = "VarInt")] pub entity_ids: Vec<VarInt>,
 }
 
-/// `round(degrees / 360.0 * 256.0) as u8` (Context's shared Angle convention).
+/// `floor(degrees * 256.0 / 360.0) as u8`, `f32` precision throughout, multiply before
+/// divide (Context's shared Angle convention — a true floor, not round-to-nearest).
 pub fn encode_angle(degrees: f32) -> u8;
-/// `round(v * 8000.0).clamp(-32768.0, 32767.0) as i16` (Context's shared velocity
-/// fixed-point convention, `Set Entity Velocity`/`Spawn Entity`'s own velocity fields).
-pub fn encode_velocity_fixed_point(v: f64) -> i16;
-/// `round((new - old) * 4096.0) as i16` — the delta-family packets' own position
-/// encoding. Caller's responsibility to fall back to `TeleportEntity` when any axis's
-/// unclamped delta would not fit `i16` (Constraints).
+/// `LpVec3::write`/`LpVec3::read` (Context's own restated algorithm) are `LpVec3`'s
+/// own `WireWrite`/`WireRead` impl, above — the shared quantized-vector encoding both
+/// `SpawnEntity.movement` and `SetEntityVelocity.velocity` use; there is no standalone
+/// `encode_velocity_fixed_point`-style function, since both call sites go through
+/// `LpVec3`'s own trait impl instead.
+/// `round(new * 4096.0) - round(old * 4096.0)`, each endpoint quantized to a whole
+/// number first, cast to `i16` after subtracting — **not** `round((new - old) * 4096.0)`
+/// — using Java's round-half-up-toward-positive-infinity `round`, not Rust's
+/// round-half-away-from-zero. The delta-family packets' own position encoding.
+/// Caller's responsibility to fall back to `TeleportEntity` when any axis's unclamped
+/// delta would not fit `i16` (Constraints).
 pub fn encode_position_delta(old: f64, new: f64) -> i16;
 
 /// Bridges `rc_mechanics::entity::metadata::MetadataValue` into this crate's own
@@ -1380,7 +1403,7 @@ Pure, no `bevy_ecs`, no networking — `compute_tracking_delta` directly:
 3. `tracked_entity_leaving_range_is_despawned` — `tracked = {id}`, that same `id` now at `[500.0,0.0,0.0]` in `live_entities` (far outside range). Assert `to_despawn == [id]`.
 4. `tracked_entity_no_longer_present_is_despawned` — `tracked = {id}`, `live_entities` is empty (the entity was removed from the region entirely, not merely moved out of range). Assert `to_despawn == [id]` — the same code path as case 3, per Context.
 5. `entity_remaining_in_range_is_still_tracked_not_respawned` — `tracked = {id}`, that `id` present in `live_entities` at an in-range position. Assert `still_tracked == [id]`, `to_spawn`/`to_despawn` both empty.
-6. `range_boundary_is_inclusive_at_exactly_the_configured_distance` — a `Cow` (`8`-chunk = 128-block range) placed at exactly `[128.0, 0.0, 0.0]` from the viewer; assert `to_spawn == [that id]` (the comparison is `distance_sq <= range_blocks.powi(2)`, not strictly less-than).
+6. `range_boundary_is_inclusive_at_exactly_the_configured_distance` — a `Cow` (`10`-chunk = 160-block range) placed at exactly `[160.0, 0.0, 0.0]` from the viewer; assert `to_spawn == [that id]` (the comparison is `distance_sq <= range_blocks.powi(2)`, not strictly less-than).
 
 ### `crates/server/tests/play_entity_spawn_track_untrack.rs`
 
@@ -1396,14 +1419,14 @@ Pure, no `bevy_ecs`, no networking — `compute_tracking_delta` directly:
 1. **`rc-entity-macros`.** Add the three dependency lines. Implement `derive_entity_nbt_fields`/`derive_entity_metadata_fields` per Context's own two "exact expansion algorithm" subsections, using `syn::DeriveInput`/`Data::Struct`/`Fields::Named` (mirroring `rc-protocol-macros`' own already-merged parsing shape, M1-B01) to walk fields and their `#[nbt(...)]`/`#[net_metadata(...)]` attributes. Observable: `crates/entity-macros/tests/derive_expansion.rs` passes.
 2. **`rc-mechanics` — `Cargo.toml`, `lib.rs`, `entity/mod.rs`.** Add the four new dependency lines (plus `thiserror` if not already present) and the `pub mod entity;` declaration. Observable: `cargo build -p rc-mechanics` resolves dependencies; source files still `todo!()`-stubbed.
 3. **`entity/ids.rs`.** `EntityUuid::new_random` is `Self(uuid::Uuid::new_v4().as_u128())`. `NetworkEntityIdAllocator` mirrors `rc_core::RcEntityIdAllocator`'s own already-merged implementation exactly (`AtomicI32::new(1)`, `fetch_add(1, Ordering::Relaxed)`). Observable: `entity_ids.rs` acceptance tests pass.
-4. **`entity/nbt.rs` — `ToNbtField`/`FromNbtField` impls.** One `impl` block per concrete type Context's mapping table names: primitives delegate directly to `rc_nbt::schema::NbtCompoundExt`'s existing `require_*`/`owned::NbtCompound::insert` (M2-B02); `[f64;3]`/`[f32;2]` build/read a `List<Double>`/`List<Float>` via `owned::NbtList::Double(vec)`/`borrow::NbtList::doubles()` (mirroring M2-B06's own already-established `Pos`/`Motion`/`Rotation` handling, restated for this crate); `EntityUuid` packs/unpacks its `u128` into 4 big-endian `i32` chunks via an `IntArray`/`int_array()` pair (`((self.0 >> 96) as i32, (self.0 >> 64) as i32, (self.0 >> 32) as i32, self.0 as i32)`, and the exact inverse via `((a as u32 as u128) << 96) | ((b as u32 as u128) << 64) | ((c as u32 as u128) << 32) | (d as u32 as u128)`); `RegistryEntryId` writes/reads a plain `Int` (`self.0 as i32`/`raw as u32`). Observable: compiles.
+4. **`entity/nbt.rs` — `ToNbtField`/`FromNbtField` impls.** One `impl` block per concrete type Context's mapping table names: primitives delegate directly to `rc_nbt::schema::NbtCompoundExt`'s existing `require_*`/`owned::NbtCompound::insert` (M2-B02); `[f64;3]`/`[f32;2]` build/read a `List<Double>`/`List<Float>` via `owned::NbtList::Double(vec)`/`borrow::NbtList::doubles()` (mirroring M2-B06's own already-established `Pos`/`Motion`/`Rotation` handling, restated for this crate); `EntityUuid` packs/unpacks its `u128` into 4 big-endian `i32` chunks via an `IntArray`/`int_array()` pair (`((self.0 >> 96) as i32, (self.0 >> 64) as i32, (self.0 >> 32) as i32, self.0 as i32)`, and the exact inverse via `((a as u32 as u128) << 96) | ((b as u32 as u128) << 64) | ((c as u32 as u128) << 32) | (d as u32 as u128)`); `RegistryEntryId` writes/reads a plain `Int` (`self.0 as i32`/`raw as u32`); `Option<rc_core::BlockPos>` (`sleeping_bed_pos`'s own `#[nbt(name = "sleeping_pos")]`) writes/reads a `{X: Int, Y: Int, Z: Int}` compound when `Some`, omitting the key entirely when `None` (mirroring `CustomNameVisible`-class "write only when present" fields already in this same struct, not `storeNullable`'s own null-marker shape). Observable: compiles.
 5. **`entity/nbt.rs` — `EntityRecord`.** `to_nbt`: clone `base.unwrap_or_default()` (an empty `owned::NbtCompound`), call `entity.write_nbt_fields`/`living.map(|l| l.write_nbt_fields(...))`/the payload variant's own `write_nbt_fields` against it, then `insert("id", owned::NbtTag::String(kind.namespaced_id().into()))`. `from_nbt`: `BaseEntity::read_nbt_fields`, `living: if kind.is_living() { Some(LivingEntity::read_nbt_fields(...)?) } else { None }`, the payload variant matching `kind`, and `base: Some(compound.to_owned())`. Observable: `entity_nbt_roundtrip.rs` passes.
 6. **`entity/base.rs`, `entity/living.rs`, `entity/kinds.rs`.** Field lists, attributes, and derives exactly as Deliverables. `EntityKind`'s four `const fn` match arms per Context's own tables. `status_flags`'s bit layout (documented, not itself tested by this blueprint's own acceptance suite beyond round-tripping as an opaque `u8`): bit 0 = on fire, bit 4 = invisible... (full vanilla bit table, restated from the research doc's own §3.1 `DATA_SHARED_FLAGS_ID` enumeration: fire=0, sneak=1, sprint=3, swim=4, invisible=5, glowing=6, elytra=7) — computed from `on_ground`/`glowing`/etc. at the point a future blueprint's own encode call site builds a `BaseEntity` for the wire, not stored redundantly; this blueprint's own tests construct `status_flags` directly as a literal `u8`. Observable: compiles; `entity_nbt_roundtrip.rs`'s four per-kind cases pass.
 7. **`entity/metadata.rs`.** `type_id` module: 43 `pub const` literals exactly as Deliverables. `Pose::to_ordinal`/`from_ordinal`: a two-arm match each. `encode_metadata_entries`: for each `(index, value)`, push `index`, then the value's own `type_id::*` constant VarInt-encoded (this file's own small, private VarInt writer — LEB128, identical algorithm to `rc-protocol`'s own M1-B01 restatement, reimplemented here since this crate cannot depend on `rc-protocol`), then the value's own payload per the Deliverables wire-shape table; finally push `0xFF`. `decode_metadata_entries`: loop reading one `u8` index; if `0xFF`, stop; else read a VarInt type id, dispatch on it to construct the matching `MetadataValue`, `Err(UnknownTypeId)` for any id not in this blueprint's own ten-variant set. Observable: `entity_metadata_wire.rs` passes.
 8. **`entity/snapshot.rs`.** `serialize_entity_snapshot`: build one `ComponentBlob` per present component (`postcard::to_allocvec(base).unwrap()`, etc. — `postcard::to_allocvec` only fails on a type that cannot be serialized at all, never on valid input for these plain-data structs, so `.expect(...)` with a message citing this is the correct, non-`Result`-propagating choice here), assemble `SnapshotPayload { format_version: ENTITY_SNAPSHOT_FORMAT_VERSION, entity_kind: kind, components }`, `postcard::to_allocvec(&payload).unwrap()`. `deserialize_entity_snapshot`: `postcard::from_bytes::<SnapshotPayload>(bytes).map_err(|e| SnapshotError::Decode(e.to_string()))?`, then check `format_version` before returning `Ok`. Observable: `entity_snapshot.rs` passes.
 9. **`entity/tracking.rs`.** `compute_tracking_delta`: for each `(id, kind, pos)` in `live_entities` (materialized once into a local `Vec`/`HashMap` — `impl IntoIterator` may only be consumed once), compute squared distance to `viewer_pos`, compare against `kind.client_tracking_range_blocks().powi(2)`; classify into `to_spawn`/`still_tracked` per whether `tracked.contains(&id)`; then for every id in `tracked` not present in the just-built live-entity id set, push to `to_despawn`. Observable: `entity_tracking.rs` (the `rc-mechanics` one) passes.
 10. **`rc-scheduler` — `pipeline.rs`, `region.rs`, `registry.rs`, `executor.rs`.** Exactly as Deliverables/Context. Update `crates/scheduler/tests/pipeline_ordering.rs`'s test 1 per Context's own cited, minimal, non-weakening instruction (register one more instrumented system into `DomainGroup::EntityAiSelection`, alongside the pre-existing five; update the asserted log to the new six-stage ascending sequence). Observable: `cargo nextest run -p rc-scheduler` — every pre-existing test not touched by this step still passes; `pipeline_ordering.rs`'s updated test 1 passes with the new six-entry sequence.
-11. **`rusty-clanker-server` — `entity_packets.rs`.** Packet structs exactly as Deliverables; the `u128` `WireWrite`/`WireRead` impl (16 bytes, big-endian, via `buf.put_u128()`/`buf.get_u128()` — `bytes::{Buf,BufMut}` already provide these); `SetEntityData`'s hand-written `RcPacket` impl (`encode_body`: `write_varint_field(self.entity_id, buf); buf.extend_from_slice(&self.metadata);`; `decode_body`: `read_varint_field` then take all remaining bytes as `metadata` via `buf.copy_to_bytes(buf.remaining()).to_vec()` — trailing-byte validation is therefore a no-op for this one packet, since its own body genuinely has no fixed length, a documented exception to `decode_one`'s usual trailing-bytes check, which this packet's own catalog entry must call `P::decode_body` directly for rather than `decode_one`, exactly as `RcPacket`'s own doc comment already anticipates: "never implemented by hand except in a test" — restated here as this blueprint's own one production exception, cited); `encode_angle`/`encode_velocity_fixed_point`/`encode_position_delta` per Context's own formulas; `encode_metadata_value`/`decode_metadata_value` translate each `rc_mechanics::entity::MetadataValue` variant into/from `rc-protocol`'s own `VarInt`/`String`/primitive `WireWrite`/`WireRead` calls, one match arm per variant. Observable: compiles; `play_entity_spawn_track_untrack.rs` can now decode real packets.
+11. **`rusty-clanker-server` — `entity_packets.rs`.** Packet structs exactly as Deliverables; the `u128` `WireWrite`/`WireRead` impl (16 bytes, big-endian, via `buf.put_u128()`/`buf.get_u128()` — `bytes::{Buf,BufMut}` already provide these); `LpVec3`'s own `WireWrite`/`WireRead` impl per Context's own restated algorithm (`SpawnEntity.movement` and `SetEntityVelocity.velocity` both go through it); `SetEntityData`'s hand-written `RcPacket` impl (`encode_body`: `write_varint_field(self.entity_id, buf); buf.extend_from_slice(&self.metadata);`; `decode_body`: `read_varint_field` then take all remaining bytes as `metadata` via `buf.copy_to_bytes(buf.remaining()).to_vec()` — trailing-byte validation is therefore a no-op for this one packet, since its own body genuinely has no fixed length, a documented exception to `decode_one`'s usual trailing-bytes check, which this packet's own catalog entry must call `P::decode_body` directly for rather than `decode_one`, exactly as `RcPacket`'s own doc comment already anticipates: "never implemented by hand except in a test" — restated here as this blueprint's own one production exception, cited); `encode_angle`/`encode_position_delta` per Context's own formulas; `encode_metadata_value`/`decode_metadata_value` translate each `rc_mechanics::entity::MetadataValue` variant into/from `rc-protocol`'s own `VarInt`/`String`/primitive `WireWrite`/`WireRead` calls, one match arm per variant. Observable: compiles; `play_entity_spawn_track_untrack.rs` can now decode real packets.
 12. **`rusty-clanker-server` — `entity_persistence.rs`.** `write_entities_chunk`: build one `owned::NbtCompound` root with `DataVersion: Int(4903)`, `Position: IntArray([chunk.x, chunk.z])`, `Entities: List(Compound(entities.iter().map(|(kind, rec)| rec.to_nbt(*kind)).collect()))`; `rc_nbt::write_owned` it; `backend.write_chunk(dim, RegionFileKind::Entities, chunk.x, chunk.z, &bytes, epoch)`. `read_entities_chunk`: `backend.read_chunk(...)`, `None` passthrough, else `rc_nbt::read_borrowed_strict`, extract `Entities` list, for each compound read its `id` string, match against `EntityKind::namespaced_id`'s four values (`Err(UnknownKind)` otherwise), `EntityRecord::from_nbt`. Observable: a small round-trip test this blueprint's own implementer may add as a doctest (not required by Acceptance tests, since `entity_nbt_roundtrip.rs` already proves the per-entity half and M2-B03's own already-merged tests prove `ChunkStorageBackend` itself) confirms the container assembly compiles and type-checks against real `AnvilDiskBackend`/`ChunkKey` types.
 13. **`rusty-clanker-server` — `entity_tracking.rs`.** `apply_tracking_delta_for_player`: call `compute_tracking_delta` with `marker.tracked_entities` and the supplied `live_entities` (mapped to `(id, kind, base.pos)`); for each `to_spawn` id, look up its full `(base, living, payload)` from `live_entities` again (the caller's own iterator, `Clone`d — Deliverables' own bound), encode `SpawnEntity`/`SetEntityData` (via `encode_metadata_value` over `base.metadata_entries()` chained with `living`'s and `payload`'s own `metadata_entries()`, all through `entity_packets::SetEntityData`), `marker.connection.try_send_payload(...)` for both, in that order; for each `to_despawn` id, `try_send_payload(encode_payload(&RemoveEntities{entity_ids: vec![VarInt::new(id-as-network-id)]}))` (this function's own signature takes `RcEntityId`, not the network id — Constraints notes this gap explicitly: a real network-id lookup requires a per-region `RcEntityId -> network_entity_id` map this blueprint does not itself own the composition-root wiring for; this function's own Deliverables signature is written generic enough that the future blueprint supplying that map plugs it in without a signature change, and this blueprint's own acceptance test constructs that mapping locally, inline, exactly as its own debug-spawn seam already must). Update `marker.tracked_entities` to reflect the new spawn/despawn state. Observable: `play_entity_spawn_track_untrack.rs` passes.
 14. **`play/world.rs` — the test/debug seam.** Add `tracked_entities: std::collections::HashSet<rc_core::RcEntityId>` to `PlayerMarker` (default empty on construction — every existing `PlayerMarker` construction site in already-merged code gains this one field via `..Default::default()` or an explicit literal, per whichever shape M2-B07/M3-B02 left it in). Add `HardcodedWorld::debug_spawn_entity`/`debug_move_entity`/`debug_despawn_entity` (mirroring `debug_query_block`'s own established test/diagnostic-only precedent, M2-B07) plus one new manual tick-loop step calling `apply_tracking_delta_for_player` once per `PlayerMarker`, inserted per Context's own specified placement. Observable: `play_entity_spawn_track_untrack.rs` passes end-to-end.

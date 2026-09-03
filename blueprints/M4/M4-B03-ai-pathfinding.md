@@ -170,7 +170,7 @@ pub fn should_full_tick(tick_count: u64, entity_id: RcEntityId) -> bool {
 Restated from research doc §3.6, bounded to exactly what Villager (this milestone's one Brain-driven kind) needs, per M4-B01's own "reserve the seam, do not fabricate content for it" convention (used there for metadata indices 10/11) applied here to `MemoryModuleType`/`Activity`/`Sensor` variants this blueprint does not instantiate.
 
 ```rust
-/// A justified, bounded subset of vanilla's ~90 memory keys — exactly what this
+/// A justified, bounded subset of vanilla's 116 memory keys — exactly what this
 /// blueprint's own Villager config (Context §K) reads or writes. A future blueprint
 /// extends this enum for a new brain-driven mob or activity; no renumbering needed
 /// (memories are looked up by enum variant, never a numeric index).
@@ -215,8 +215,15 @@ impl Brain {
 
 pub trait Sensor: Send + Sync {
     fn requires(&self) -> &'static [MemoryModuleType];
-    /// Unthrottled — every sensor runs every brain tick (research doc §3.6, `Sensing`
-    /// the per-tick LOS cache is a *different* type, §I below — do not conflate).
+    /// Vanilla's own outer dispatch loop (`Brain.tickSensors`) calls every registered
+    /// sensor's `tick` unconditionally, but each sensor's real work is itself throttled
+    /// by a per-instance scan-rate countdown (`Sensor.tick` is `final` and gated: work
+    /// runs only once every `scanRate` ticks, default 20, staggered by a randomized
+    /// start delay). This blueprint's own `Sensor::tick` is a bounded, explicit
+    /// simplification of that: it runs every brain tick, unthrottled, since no tier-2
+    /// kind's own active sensor set at M4 scope (Context §J) is expensive enough to
+    /// need the per-instance countdown — `Sensing`, the *different*, per-tick LOS
+    /// cache, §I below, must not be conflated with this scan-rate concept.
     fn tick(&self, ctx: &AiContext, brain: &mut Brain);
 }
 
@@ -264,14 +271,25 @@ pub struct BrainProgram {
 }
 
 impl BrainProgram {
-    /// One full brain tick (research doc §3.6, restated):
+    /// One full brain tick (research doc §3.6, restated). Vanilla's own `Brain.tick`
+    /// itself has exactly FOUR phases — memory forgetting, sensors, behavior starting,
+    /// behavior stopping/ticking; activity selection is not one of them there, running
+    /// instead from a separate, externally-invoked, schedule-throttled entry point. This
+    /// blueprint's own `BrainProgram::tick` deliberately bundles activity selection in
+    /// as its own step 3 below anyway — a bounded, explicit simplification kept for one
+    /// call site instead of two, restated honestly rather than claimed as a literal port
+    /// of `Brain.tick`'s own four phases:
     /// 1. `brain.forget_outdated_memories()`.
     /// 2. Every sensor's `tick(ctx, &mut brain)`, unconditionally, in `sensors`' order.
     /// 3. Every `schedule_update_delay_ticks` ticks (this blueprint's own throttle
     ///    counter, `PathNavigation`-adjacent bookkeeping in the caller — Context §K):
-    ///    scan `packages` in declared order, `set_active_activity` to the first whose
-    ///    every `ActivityRequirement` is met by `brain`'s current memory state, falling
-    ///    back to `Activity::Idle` if none match (vanilla's own `useDefaultActivity`).
+    ///    scan `packages` in declared order and `set_active_activity` to the first whose
+    ///    every `ActivityRequirement` is met by `brain`'s current memory state — doing
+    ///    nothing at all (the previous selection persists) if none match. There is no
+    ///    Idle fallback branch here (vanilla's own `useDefaultActivity` belongs to a
+    ///    different entry point entirely); `Activity::Idle`'s own package instead simply
+    ///    carries no requirements, so it is always eligible once the scan reaches it,
+    ///    which is why every kind's `packages` list ends with it (Context §J).
     ///    `set_active_activity` clears `brain.active_activities` to
     ///    `core_activities ∪ {chosen}` and erases every memory the *previous* activity's
     ///    own `erase_on_stop` list names.
@@ -279,10 +297,15 @@ impl BrainProgram {
     ///    `brain.active_activities`, priority-ascending: if the behavior is `Stopped` and
     ///    `required_memories` are all met and `check_extra_start_conditions`, call
     ///    `start(ctx)`.
-    /// 5. For every currently-`Running` behavior across all active packages (one flat
-    ///    pass, priority order irrelevant here per research doc §3.6): if `!can_still_use`
-    ///    or its own randomized `min..max`-tick duration has elapsed, `stop(ctx)`;
-    ///    otherwise `tick(ctx)`.
+    /// 5. For every currently-`Running` behavior across EVERY registered package,
+    ///    regardless of whether that package's own `activity` is still in
+    ///    `brain.active_activities` — one flat pass in priority-ascending order across
+    ///    packages (not priority-irrelevant, and not limited to the active packages: a
+    ///    behavior belonging to an activity `set_active_activity` just deactivated keeps
+    ///    being ticked here until its own `can_still_use` fails or its randomized
+    ///    duration elapses, exactly vanilla's own behavior): if `!can_still_use` or its
+    ///    own randomized `min..max`-tick duration has elapsed, `stop(ctx)`; otherwise
+    ///    `tick(ctx)`.
     pub fn tick(&mut self, ctx: &mut AiContext, brain: &mut Brain, tick_count: u64, rng: &mut dyn FnMut() -> u32);
 }
 ```
@@ -336,17 +359,24 @@ Hand-populated rows (Implementation steps gives the exact `BlockStateId` lookups
 
 ```rust
 pub trait NodeEvaluator {
-    /// The 4 cardinal neighbors first (N,S,E,W, in that fixed order), then the 4
-    /// diagonals — a diagonal is only emitted if **both** its adjacent cardinal
-    /// neighbors are themselves valid (non-impassable), preventing the path from
-    /// cutting a solid corner (research doc §3.8, `isDiagonalValid`). For each
-    /// candidate `(dx, dz)`, up to three vertical placements are tried in order —
-    /// same-Y (walk), Y+1 (step up, only if the column has ≥ entity-height clearance
-    /// and the step-up is not disabled — see below), and a bounded downward scan
-    /// (Y-1..=Y-3, this blueprint's own bounded, moderate-confidence descent limit —
+    /// The 4 cardinal neighbors first (N, E, S, W, in that fixed order), then the 4
+    /// diagonals (NE, SE, SW, NW) — a diagonal is only emitted if **both** its adjacent
+    /// cardinal neighbors are themselves valid (non-impassable) **and** the diagonal
+    /// node itself is independently valid, preventing the path from cutting a solid
+    /// corner (research doc §3.8, `isDiagonalValid`, checked once on the cardinal pair
+    /// and once more on the diagonal). For each candidate `(dx, dz)`, an outright
+    /// rejection applies first: if the candidate column's floor level rises more than
+    /// `get_mob_jump_height()` (`max(1.125, step_height)`) above the current node, no
+    /// node is emitted for that `(dx,dz)` at all. Otherwise the vertical placement is
+    /// **not** a first-valid-wins scan over three tries — the same-Y (walk) placement is
+    /// tried first, and only when it is missing or itself negative-malus does the search
+    /// fall into one of two MUTUALLY EXCLUSIVE alternatives selected by the candidate's
+    /// own `PathType`: a step-up to Y+1 (only if the step-up is not disabled — see below
+    /// — and the type is not one of a short disqualifying list), or a bounded downward
+    /// scan (Y-1..=Y-3, this blueprint's own bounded, moderate-confidence descent limit —
     /// vanilla's real algorithm scans further under specific conditions; reconciliation
-    /// flagged) for the first Y whose column has clearance — the first vertically-valid
-    /// placement found is the one candidate node emitted for that `(dx,dz)`.
+    /// flagged) for the first Y whose column has clearance — never both in the same
+    /// call, and a failed step-up does not fall through to the downward scan.
     /// Step-up (`jumpSize`) is `floor(max(1.0, step_height))` blocks (`STEP_HEIGHT`
     /// attribute, default 0.6 → 1 block, Context §J) and is disabled entirely
     /// (no Y+1 candidate tried) if the block directly above the *current* node has a
@@ -451,10 +481,18 @@ impl PathNavigation {
     /// `recompute_cooldown_ticks == 0`, calls `find_path` (Context §F) and resets the
     /// cooldown to 20 regardless of outcome (matching vanilla's own throttle — a failed
     /// search still consumes the throttle window); if `stuck_check_countdown` reaches 0,
-    /// compares `entity_pos` against `position_at_last_stuck_check` — if the squared
-    /// distance moved is below `(movement_speed_attr * 20.0).powi(2) * 0.25`, sets
-    /// `is_stuck = true` and clears `current_path`; resets the 100-tick countdown and
-    /// `position_at_last_stuck_check` regardless.
+    /// compares `entity_pos` against `position_at_last_stuck_check` — computing
+    /// `effective_speed = if movement_speed_attr >= 1.0 { movement_speed_attr } else {
+    /// movement_speed_attr * movement_speed_attr }` and `threshold = effective_speed *
+    /// 100.0 * 0.25` (vanilla's own `STUCK_CHECK_INTERVAL * STUCK_THRESHOLD_DISTANCE_FACTOR`
+    /// product, i.e. `effective_speed * 25.0` — not a flat `* 20.0` applied outside the
+    /// square), sets `is_stuck = true` and clears `current_path` when the squared
+    /// distance moved is below `threshold * threshold`; resets the 100-tick countdown
+    /// and `position_at_last_stuck_check` regardless. (Vanilla's own input to this
+    /// formula is `Mob.getSpeed()`, a move-control-set field that can differ from the
+    /// raw `MOVEMENT_SPEED` attribute; this blueprint's own `movement_speed_attr`
+    /// parameter is the attribute value directly, a bounded simplification since no
+    /// equivalent move-control speed field exists in this blueprint's own design.)
     pub fn tick(
         &mut self,
         entity_pos: [f64; 3],
@@ -519,7 +557,7 @@ impl LookControl {
 }
 ```
 
-**`JumpControl`** — a one-tick trigger, not a continuous state: set when `PathNavigation`'s current path waypoint requires the Y+1 step-up placement (Context §F) *and* the entity is `on_ground` this tick (mirrors vanilla's own jump-when-path-requires-it behavior for the 1-block auto-step case being handled by continuous ground contact instead — this blueprint's own `JumpControl` fires only for a genuine "hop," which at M4's ground-only ​`WalkNodeEvaluator` scope means: never, in practice, since Y+1 step-up is handled by the physics collision step-up itself, not a jump impulse — restated as an honest, bounded scope note: `PendingMovementIntent.jumping` is `false` for every tier-2 kind's every navigation tick this blueprint's own algorithm produces at M4 scope; the field/seam exists for a future mob (e.g. a fence-hopping or swimming-adjacent one) that needs it).
+**`JumpControl`** — a one-tick trigger, not a continuous state. **Vanilla's own full one-block step-up is resolved by a discrete jump impulse, not continuous ground/step-height contact**: `MoveControl.tick` fires the jump control when the required rise exceeds the mob's own `STEP_HEIGHT` attribute (default 0.6), which a 1.0-block rise always does — continuous step-height contact only resolves rises up to that attribute's own value (slabs, stairs), and the pathfinder's own `jumpSize = 1` (Context §F) deliberately admits Y+1 candidates a mob can only reach by jumping. This blueprint's own `JumpControl` therefore *should* fire whenever `PathNavigation`'s current path waypoint requires the Y+1 step-up placement and the entity is `on_ground` this tick — but wiring that condition through to a real jump requires the physics-integration half of Stage 6b (M4-B02, not read or bound to here) to actually consume a `jumping` flag against its own step-height/collision model, which this blueprint cannot yet confirm the shape of. **Restated as an honest, bounded, explicitly flagged deviation rather than a claim it is unneeded**: `JumpControl::should_jump` returns `false` unconditionally at M4 scope, so `PendingMovementIntent.jumping` is `false` for every tier-2 kind's every navigation tick this blueprint's own algorithm produces — meaning a tier-2 mob's own 1-block step-up is not actually resolved correctly by this blueprint's own output alone; the seam exists, named and ready, for whichever future blueprint wires the real condition through (see design_consequences).
 
 **Final assembly — the produced `PendingMovementIntent`:**
 
@@ -651,8 +689,8 @@ impl AttributeMap {
 |---|---|---|---|---|
 | `MAX_HEALTH` | `20.0 [1,1024]` | `20.0` | `20.0` | `10.0` |
 | `MOVEMENT_SPEED` | `0.7 [0,1024]` | `0.23` | `0.5` | `0.2` |
-| `FOLLOW_RANGE` | `32.0 [0,2048]` | `35.0` | `32.0` | `32.0` |
-| `ATTACK_DAMAGE` | `2.0 [0,2048]` | `3.0` | `0.0` (no melee) | `0.0` |
+| `FOLLOW_RANGE` | `32.0 [0,2048]` | `35.0` | `16.0` | `16.0` |
+| `ATTACK_DAMAGE` | `2.0 [0,2048]` | `3.0` | `0.0`\* (no melee) | `0.0`\* |
 | `ATTACK_KNOCKBACK` | `0.0 [0,5]` | `0.0` | `0.0` | `0.0` |
 | `KNOCKBACK_RESISTANCE` | `0.0 [-2,1]` | `0.0` | `0.0` | `0.0` |
 | `ARMOR` | `0.0 [0,30]` | `0.0` | `0.0` | `0.0` |
@@ -660,7 +698,9 @@ impl AttributeMap {
 | `STEP_HEIGHT` | `0.6 [0,10]` | `0.6` | `0.6` | `0.6` |
 | `JUMP_STRENGTH` | `0.42 [0,32]` | `0.42` | `0.42` | `0.42` |
 
-`ATTACK_DAMAGE`/`ATTACK_KNOCKBACK`/`KNOCKBACK_RESISTANCE`/`ARMOR`/`ARMOR_TOUGHNESS` exist in every tier-2 kind's `AttributeMap` (a future combat blueprint's own scope to consume) purely so that map is complete per-kind, not partially populated — this blueprint constructs them at their registry defaults, applies no combat-relevant modifier logic, and asserts nothing about them beyond round-tripping.
+`FOLLOW_RANGE`'s own registry-level default (`32.0`) is only what a supplier gets when it adds the attribute without naming a value; `Mob.createMobAttributes` overrides that default to `16.0` for every Mob, and neither Villager's nor Cow's own attribute chain re-adds it — so both carry a `16.0` base, not the registry's `32.0` (Zombie's own explicit `35.0` override is unaffected).
+
+`ATTACK_KNOCKBACK`/`KNOCKBACK_RESISTANCE`/`ARMOR`/`ARMOR_TOUGHNESS` exist in every tier-2 kind's `AttributeMap` because vanilla's own `LivingEntity.createLivingAttributes` already adds all four to every Mob. `ATTACK_DAMAGE` does not: in vanilla it is added only by `Monster.createMonsterAttributes` (or a handful of individual animals' own overrides, none of which apply to Villager or Cow) — Villager's and Cow's own real `AttributeSupplier` carries no `ATTACK_DAMAGE` entry at all, and querying it throws rather than yielding a value. The `0.0`\* cells above are this blueprint's own deliberate, bounded deviation from that: `default_attribute_map` constructs `ATTACK_DAMAGE` at `0.0` for every tier-2 kind anyway (never vanilla's registry default of `2.0`), purely so `AttributeMap` stays uniformly complete per-kind rather than partially populated, and applies no combat-relevant modifier logic to it. This is flagged for planning under design_consequences: a future blueprint may instead want `AttributeMap` to model per-kind attribute *absence* (an `Option`/error-returning query, matching vanilla's own `IllegalArgumentException`-on-missing-attribute behavior) rather than this fabricated-default placeholder.
 
 **`mob_config::default_attribute_map(kind: EntityKind) -> AttributeMap`** — builds exactly the table above for the given kind.
 
@@ -687,13 +727,14 @@ This blueprint hand-implements `RcPacket` for `UpdateAttributes` directly in `cr
 
 **Zombie** (`GoalSelector`) — restated from a public-knowledge, long-stable priority table for vanilla's own Zombie (research doc §3.5 names the concrete goal classes; this blueprint's own priority numbers are cross-checked general knowledge, **moderate confidence, flagged for reconciliation**):
 
+Vanilla's own Zombie registers **no** `FloatGoal` and no priority-0 goal at all — `Zombie.registerGoals` never calls into the shared empty base registration, and a zombie deliberately sinks and walks along the bottom rather than floating (the drowning-to-Drowned mechanic, out of this blueprint's own scope), so this blueprint's own selector likewise starts at priority 3:
+
 | Selector | Priority | Goal | Flags | `can_use` |
 |---|---|---|---|---|
-| goal | 0 | `FloatGoal` | JUMP | always (swims up when submerged) |
-| goal | 2 | `ZombieAttackGoal` (melee) | MOVE\|LOOK | `target_selector`'s own current target is set and in `ATTACK_DAMAGE`-adjacent range |
+| goal | 3 | `ZombieAttackGoal` (melee) | MOVE\|LOOK | `target_selector`'s own current target is set and in `ATTACK_DAMAGE`-adjacent range (vanilla's own priority 2 in this goal selector is a ranged `SpearUseGoal`, out of this blueprint's own scope, not modeled) |
 | goal | 7 | `WaterAvoidingRandomStrollGoal` | MOVE | no current `WalkTarget`, `1/120`-per-tick chance to start (vanilla's own `RandomStrollGoal` interval, research doc general convention) |
 | goal | 8 | `LookAtPlayerGoal` | LOOK | a player is within its own look range (`ENTITY_INTERACTION_RANGE`-adjacent, this blueprint uses a fixed 8-block range, moderate confidence) |
-| goal | 8 | `RandomLookAroundGoal` | LOOK | no player in range (mutually exclusive with the above via equal-priority insertion order + shared LOOK flag) |
+| goal | 8 | `RandomLookAroundGoal` | MOVE\|LOOK | no player in range (mutually exclusive with the above via equal-priority insertion order + shared LOOK flag; its own MOVE flag additionally contends against the priority-7 stroll goal) |
 | target | 1 | `HurtByTargetGoal` | TARGET | this entity was just damaged this tick (a future combat blueprint's own signal — this blueprint's own goal `can_use` reads a `AiContext`-supplied `hurt_by: Option<RcEntityId>` this blueprint does not itself populate, an explicit, bounded seam) |
 | target | 2 | `NearestAttackableTargetGoal<Player>` | TARGET | `nearest_within_range` (§H) against `FOLLOW_RANGE`, with `has_line_of_sight` |
 
@@ -703,21 +744,22 @@ This blueprint hand-implements `RcPacket` for `UpdateAttributes` directly in `cr
 |---|---|---|---|---|
 | goal | 0 | `FloatGoal` | JUMP | always |
 | goal | 1 | `PanicGoal` | MOVE | `hurt_by.is_some()` this tick (same bounded seam as Zombie's `HurtByTargetGoal`) |
-| goal | 2 | `BreedGoal` | MOVE | **`false`, always** — declared for priority-slot completeness only; `Animal`/`AgeableMob` `in_love`/age state does not exist on `CowBundle` (M4-B01 never modeled it) — a future breeding blueprint fills this `can_use`/`start`/`tick` body in without renumbering anything else |
-| goal | 3 | `TemptGoal` | MOVE | **`false`, always** — identical reason |
-| goal | 4 | `FollowParentGoal` | MOVE | **`false`, always** — identical reason |
+| goal | 2 | `BreedGoal` | MOVE\|LOOK | **`false`, always** — declared for priority-slot completeness only; `Animal`/`AgeableMob` `in_love`/age state does not exist on `CowBundle` (M4-B01 never modeled it) — a future breeding blueprint fills this `can_use`/`start`/`tick` body in without renumbering anything else |
+| goal | 3 | `TemptGoal` | MOVE\|LOOK | **`false`, always** — identical reason |
+| goal | 4 | `FollowParentGoal` | *(none)* | **`false`, always** — identical reason; vanilla's own `FollowParentGoal` never calls `setFlags` at all, so it takes no flag lock and is never blocked by one — materially different from holding MOVE, restated here even though this blueprint's own stubbed `can_use` never lets it run |
 | goal | 5 | `WaterAvoidingRandomStrollGoal` | MOVE | same as Zombie's own |
 | goal | 6 | `LookAtPlayerGoal` | LOOK | same as Zombie's own |
-| goal | 7 | `RandomLookAroundGoal` | LOOK | fallback |
+| goal | 7 | `RandomLookAroundGoal` | MOVE\|LOOK | fallback; its own MOVE flag additionally contends against the priority-5 stroll goal |
 | target | — | *(none)* | — | Cow is never hostile; `target_selector` is constructed empty |
 
 **Villager** (`Brain`) — restated from research doc §3.7's own 7-activity table, bounded to the 3 activities reachable without a POI system (Context §E):
 
-- **Sensors instantiated**: `NearestPlayersSensor` (writes `MemoryModuleType::NearestVisiblePlayer` via `nearest_within_range` + `has_line_of_sight`), `HurtBySensor` (writes `HurtBy`/`HurtByEntity` from the same bounded `hurt_by` seam Zombie/Cow use). `VillagerHostilesSensor`/`SecondaryPoisSensor`/`GolemDetectedSensor`/`NearestBedSensor`/`VillagerBabiesSensor`/`NearestItemsSensor` (research doc §3.7's remaining 6) are declared as `Sensor` impls with an empty `tick` body and documented as inactive-at-M4-scope, not omitted from the framework.
+- **Sensors instantiated**: `PlayerSensor` (writes `MemoryModuleType::NearestVisiblePlayer` via `nearest_within_range` + `has_line_of_sight`), `HurtBySensor` (writes `HurtBy`/`HurtByEntity` from the same bounded `hurt_by` seam Zombie/Cow use). Vanilla's own Villager registers NINE sensor types in total, not eight — `NearestLivingEntitySensor`/`VillagerHostilesSensor`/`SecondaryPoiSensor`/`GolemSensor`/`NearestBedSensor`/`VillagerBabiesSensor`/`NearestItemSensor` (the remaining 7, research doc §3.7, corrected) are declared as `Sensor` impls with an empty `tick` body and documented as inactive-at-M4-scope, not omitted from the framework — `NearestLivingEntitySensor` is the one this blueprint's own prior count omitted; vanilla's own `VillagerHostilesSensor`/`VillagerBabiesSensor`/`GolemSensor` each read the nearest-living-entity memories it populates, though all four stay inert at M4 scope here regardless.
 - **`Activity::Core`** (`core_activities`, always active): `SwimBehavior` (float up if submerged — mirrors `FloatGoal`'s own goal-selector-side purpose, ported to a `Behavior`), `LookAtTargetSink` (drives `LookControl` toward `LookTarget` memory when present).
-- **`Activity::Idle`** (`Brain`'s own default fallback, `useDefaultActivity`, research doc §3.6): `WalkToRandomPoiOrStroll` (this blueprint's own reduced stand-in for vanilla's real village-bound stroll, since no POI/village-bounds system exists — a `WaterAvoidingRandomStrollGoal`-equivalent `Behavior`), `InteractWithNearestVillager` — declared, `check_extra_start_conditions` returns `false` (no second villager modeled in this blueprint's own test fixtures; framework-ready, inert at M4 scope).
-- **`Activity::Panic`** (requirement: `HurtBy` memory `ValuePresent`): `CalmDownCheck` (returns to `Idle` once `HurtBy` expires), `FleeFromHostile` (a `MoveControl`-driving `Behavior` moving away from the `HurtByEntity` memory's own position at `1.5×` `MOVEMENT_SPEED`, matching research doc §3.7's own villager-panic speed multiplier).
-- **`Activity::Work`/`Rest`/`Meet`**: declared in `Activity`'s own enum and named in `BrainProgram.packages` with their real vanilla `ActivityRequirement`s (`JobSite`/`Home`/`MeetingPoint` memory `ValuePresent` respectively) — since this blueprint never populates any of those three memories (no POI system exists), `set_active_activity_to_first_valid` structurally never selects them; declared, not implemented, exactly mirroring M4-B01's own metadata-index-10/11 "reserve the seam" convention.
+- **`Activity::Idle`** (this blueprint's own trailing, always-eligible package — Context §E's own corrected `BrainProgram::tick` step 3, not vanilla's separate `useDefaultActivity` mechanism): `WalkToRandomPoiOrStroll` (this blueprint's own reduced stand-in for vanilla's real village-bound stroll, since no POI/village-bounds system exists — a `WaterAvoidingRandomStrollGoal`-equivalent `Behavior`), `InteractWithNearestVillager` — declared, `check_extra_start_conditions` returns `false` (no second villager modeled in this blueprint's own test fixtures; framework-ready, inert at M4 scope).
+- **`Activity::Panic`**: vanilla's own PANIC activity carries **no** memory requirement at all — it is entered by a trigger behavior in `Activity::Core` whenever `HurtBy` or `NearestHostile` becomes present, not by an `ActivityRequirement` on PANIC itself. This blueprint's own package-scanning `BrainProgram::tick` (Context §E, corrected) has no equivalent push-based trigger mechanism, so — as a deliberate, bounded, explicitly flagged simplification kept in place of implementing that mechanism (design_consequences) — this blueprint's own `Activity::Panic` package retains a `HurtBy` memory `ValuePresent` requirement (narrower than vanilla's own trigger, which also reacts to `NearestHostile`). Behaviors: `VillagerCalmDown` (returns to the schedule-derived activity once neither `HurtBy` nor a nearby `HurtByEntity` attacker remains present — vanilla's own real behavior name; this blueprint's prior `CalmDownCheck` name did not exist), and a `MoveControl`-driving flee `Behavior` moving away from the `HurtByEntity` memory's own position (vanilla registers two such flee behaviors, one per memory — `NearestHostile` and `HurtByEntity` — this blueprint's own `FleeFromHostile` name models only the `HurtByEntity` one it has a memory seam for) at the panic package's own speed modifier ×1.5 (**not** `1.5×` `MOVEMENT_SPEED` directly — vanilla multiplies the *package's* speed modifier by 1.5, and `MoveControl` then multiplies that resulting walk-target modifier by `MOVEMENT_SPEED` as usual, netting `0.75×` the attribute for a villager's own `0.5` package modifier).
+- **`Activity::Work`/`Meet`**: declared in `Activity`'s own enum and named in `BrainProgram.packages` with their real vanilla `ActivityRequirement`s (`JobSite`/`MeetingPoint` memory `ValuePresent` respectively) — since this blueprint never populates either memory (no POI system exists), `set_active_activity_to_first_valid` structurally never selects them; declared, not implemented, exactly mirroring M4-B01's own metadata-index-10/11 "reserve the seam" convention.
+- **`Activity::Rest`**: vanilla's own REST activity carries **no** memory requirement at all (unlike Work/Meet, there is no `Home` gate on it). This blueprint's own package-scanning selection mechanism relies on requirement-gating to keep an activity structurally unreachable when its supporting system (here, POI/Home) does not exist yet, so — as the identical deliberate, bounded, explicitly flagged simplification named under `Activity::Panic` above (design_consequences) — this blueprint's own `Activity::Rest` package retains a `Home` memory `ValuePresent` requirement, keeping it declared-but-unreachable at M4 scope rather than matching vanilla's own always-eligible gate.
 
 ### K. Stage-6a placement — the access-set discipline, concretely
 
@@ -739,13 +781,13 @@ Every system this blueprint registers into `DomainGroup::EntityAiSelection` decl
 - Vanilla's goal-selector start pass breaks ties between equal-priority goals by insertion order, matching the underlying `ObjectLinkedOpenHashSet`.
 - Vanilla's `Mob.serverAiStep()` throttles a full `GoalSelector.tick()` (the cleanup+start passes) to run only every other tick, gated by `(tickCount + entityId) % 2`; on the intervening ("off") tick only `tickRunningGoals(false)` runs, while any already-running goal that needs continuous updating still ticks unconditionally on every tick regardless of this key.
 - In vanilla's Brain system, `forget_outdated_memories` (memory-TTL expiry) runs first, every brain tick, before any sensor runs.
-- In vanilla's Brain system, every registered `Sensor` runs unthrottled -> every sensor ticks on every brain tick.
+- In vanilla's Brain system, `Brain.tickSensors` dispatches every registered `Sensor` each brain tick, but each `Sensor`'s own work is throttled by a per-instance scan-rate countdown (`Sensor.tick` is final and gated by `timeToTick`) -> a sensor's `doTick` runs only once every `scanRate` ticks, the no-arg default being 20, staggered by a randomized start delay; only the outer dispatch loop is unthrottled.
 - A vanilla `Behavior`'s default minimum and maximum duration are both 60 ticks.
 - Vanilla's Activity/Behavior system registry has 26 entries.
-- Vanilla's Brain tick executes its five phases -> memory forgetting, sensors, activity selection, behavior starting, and behavior stopping/ticking -> in that fixed order every brain tick.
-- Vanilla's Brain activity-selection pass scans activity packages in declared order and switches to the first whose every `ActivityRequirement` is satisfied by the brain's current memory state, falling back to `Activity::Idle` when none match (`useDefaultActivity`).
+- Vanilla's Brain tick executes exactly FOUR phases, in order -> memory forgetting, sensors, behavior starting, and behavior stopping/ticking; activity selection is not one of them, running instead outside `Brain.tick` from the entity's own AI step and from a schedule-update behavior the brain's own packages register.
+- Vanilla's Brain activity-selection method (`setActiveActivityToFirstValid`) scans a caller-supplied activity list in order and switches to the first whose every `ActivityRequirement` is satisfied by the brain's current memory state, but does nothing at all when none match -> there is no Idle fallback on that path; the `useDefaultActivity`/`Activity::Idle` fallback belongs to a different entry point entirely.
 - Vanilla's Brain starts every not-yet-running behavior across all currently-active activity packages, in priority-ascending order, whenever its required memories are met and its extra start conditions pass.
-- Vanilla's Brain stops a currently-running behavior when its `can_still_use` check fails or its own randomized minimum-to-maximum-tick duration has elapsed, and otherwise ticks it -> checked in one flat pass across every active package, independent of priority order.
+- Vanilla's Brain stops a currently-running behavior when its `can_still_use` check fails or its own randomized minimum-to-maximum-tick duration has elapsed, and otherwise ticks it -> checked in one flat pass in priority-ascending order across EVERY registered behavior whose status is running, including behaviors of an activity no longer active, not only the currently-active packages.
 - Vanilla's brain schedule-update throttle (`SCHEDULE_UPDATE_DELAY`) is 20 ticks.
 - In vanilla's pathfinding, the `PathType` values `Blocked`, `PowderSnow`, `Fence`, `Lava`, `UnpassableRail`, `DoorWoodClosed`, `DoorIronClosed`, `Leaves`, and `Damaging` each carry a default malus of -1 (impassable).
 - In vanilla's pathfinding, the `PathType` values `Water`, `WaterBorder`, `FireInNeighbor`, `DamagingInNeighbor`, and `StickyHoney` each carry a default malus of 8.
@@ -753,8 +795,8 @@ Every system this blueprint registers into `DomainGroup::EntityAiSelection` decl
 - In vanilla's pathfinding, the `PathType` values `Breach` and `BigMobsCloseToDanger` each carry a default malus of 4.
 - In vanilla's pathfinding, the `PathType` values `Open`, `Walkable`, `WalkableDoor`, `Trapdoor`, `OnTopOfPowderSnow`, `Rail`, `DoorOpen`, `Cocoa`, `DamageCautious`, and `OnTopOfTrapdoor` each carry a default malus of 0.
 - Vanilla's pathfinding `NodeEvaluator` system has four evaluator types: Walk, Fly, Amphibious, and Swim.
-- Vanilla's neighbor generation for pathfinding produces the 4 cardinal neighbors first (North, South, East, West, in that fixed order), then the 4 diagonal neighbors, and a diagonal neighbor is only emitted if both of its adjacent cardinal neighbors are themselves valid (non-impassable), preventing the path from cutting a solid corner (`isDiagonalValid`).
-- Vanilla's pathfinding neighbor generation tries up to three vertical placements per horizontal candidate -> the same elevation, one block up for a step-up, and a downward scan for the first elevation with sufficient clearance -> using the first vertically-valid placement found for that candidate.
+- Vanilla's neighbor generation for pathfinding produces the 4 cardinal neighbors first (North, East, South, West, in that fixed order), then the 4 diagonal neighbors (NE, SE, SW, NW), and a diagonal neighbor is only emitted if both of its adjacent cardinal neighbors are themselves valid and the diagonal node itself is also independently valid, preventing the path from cutting a solid corner (`isDiagonalValid`).
+- Vanilla's pathfinding neighbor generation is not a first-valid-wins scan over three vertical placements -> the same-elevation placement is tried first, and the step-up and the downward scan are then mutually exclusive alternatives selected by the candidate's own `PathType` (a failed step-up never falls through to a downward scan), after an earlier outright rejection when the candidate's elevation rise exceeds the mob's own jump height.
 - Vanilla's pathfinding step-up size (`jumpSize`) is `floor(max(1.0, step_height))` blocks, and with the `STEP_HEIGHT` attribute's default value of 0.6, this evaluates to 1 block.
 - Vanilla's pathfinding disables the step-up (Y+1) candidate entirely whenever the block directly above the current node has a negative-malus `PathType`.
 - Vanilla's pathfinding computes a candidate neighbor's cost as the straight-line distance from the current node (1.0 for a cardinal move, the square root of 2 for a diagonal move) plus the destination's `PathType` malus.
@@ -770,12 +812,12 @@ Every system this blueprint registers into `DomainGroup::EntityAiSelection` decl
 - Vanilla's navigation recompute throttle still resets its cooldown window even when a path search fails to find a route, so a failed search consumes the same throttle period as a successful one.
 - Vanilla's navigation stuck-check interval (`STUCK_CHECK_INTERVAL`) is 100 ticks.
 - Vanilla's navigation stuck-detection distance factor (`STUCK_THRESHOLD_DISTANCE_FACTOR`) is 0.25.
-- Vanilla's navigation stuck check flags an entity as stuck when the squared distance it moved since the last check is below `(movement_speed_attribute x 20.0) squared x 0.25`.
+- Vanilla's navigation stuck check flags an entity as stuck when the squared distance it moved since the last check is below `(effective_speed x 25.0) squared`, where `effective_speed` is the mob's own current speed value (squared when below 1.0) and 25.0 is `STUCK_CHECK_INTERVAL x STUCK_THRESHOLD_DISTANCE_FACTOR` (100 x 0.25), not a flat `x 20.0` multiplier applied outside the square.
 - Vanilla's `MoveControl.MAX_TURN` constant is 90 degrees per tick.
 - Vanilla's yaw convention computes a desired yaw as `atan2(dz, dx)` in degrees, minus 90.0.
 - Vanilla's look-control pitch convention computes pitch as the negative of `atan2(dy, horizontal_distance)` in degrees (a down-positive pitch convention).
 - Vanilla's look-control pitch turn rate is a separate, smaller constant than the yaw turn rate in some contexts, rather than sharing one shared per-tick turn-rate limit.
-- In vanilla, a mob's normal one-block pathfinding step-up is resolved through continuous ground/step-height contact during movement rather than a discrete jump impulse.
+- In vanilla, a mob's full one-block pathfinding step-up is resolved by a discrete jump impulse -> `MoveControl` fires the jump control when the required rise exceeds the mob's own `STEP_HEIGHT` attribute (default 0.6, exceeded by a 1.0 rise); continuous ground/step-height contact only resolves rises up to that attribute's own value.
 - In vanilla, the per-tick sensing seen/unseen line-of-sight cache is cleared every tick, before any line-of-sight check that tick.
 - Vanilla's real line-of-sight test uses a block's exact partial `VoxelShape` for occlusion, not full-cube-only opacity.
 - Vanilla's `AttributeModifierOperation` enum has three values in this order: `AddValue` = 0, `AddMultipliedBase` = 1, `AddMultipliedTotal` = 2.
@@ -804,41 +846,41 @@ Every system this blueprint registers into `DomainGroup::EntityAiSelection` decl
 - Vanilla's Zombie has an `ATTACK_DAMAGE` attribute value of 3.0.
 - Vanilla's Villager has a `MAX_HEALTH` attribute value of 20.0.
 - Vanilla's Villager has a `MOVEMENT_SPEED` attribute value of 0.5.
-- Vanilla's Villager has a `FOLLOW_RANGE` attribute value of 32.0.
-- Vanilla's Villager has no melee attack, an `ATTACK_DAMAGE` attribute value of 0.0.
+- Vanilla's Villager has a `FOLLOW_RANGE` attribute value of 16.0, not 32.0 -> `Mob.createMobAttributes` overrides the registry default of 32.0 with 16.0 for every Mob, and Villager never re-adds `FOLLOW_RANGE`.
+- Vanilla's Villager has no `ATTACK_DAMAGE` attribute at all, so there is no 0.0 value -> `ATTACK_DAMAGE` is added only by `Monster.createMonsterAttributes`, and querying an absent attribute throws rather than yielding a default; the villager's own lack of a melee attack follows from this absence, not from a zero value.
 - Vanilla's Cow has a `MAX_HEALTH` attribute value of 10.0.
 - Vanilla's Cow has a `MOVEMENT_SPEED` attribute value of 0.2.
-- Vanilla's Cow has a `FOLLOW_RANGE` attribute value of 32.0.
-- Vanilla's Cow has an `ATTACK_DAMAGE` attribute value of 0.0.
+- Vanilla's Cow has a `FOLLOW_RANGE` attribute value of 16.0, not 32.0 -> `Mob.createMobAttributes` overrides the registry default of 32.0 with 16.0 for every Mob, and neither `Animal` nor `AbstractCow` re-adds `FOLLOW_RANGE`.
+- Vanilla's Cow has no `ATTACK_DAMAGE` attribute at all, so there is no 0.0 value -> the animal attribute chain never adds it, and querying an absent attribute throws rather than yielding a default.
 - Vanilla's Zombie entity hitbox is 0.6 blocks wide by 1.95 blocks tall.
 - Vanilla's Villager entity hitbox is 0.6 blocks wide by 1.95 blocks tall.
 - Vanilla's Cow entity hitbox is 0.9 blocks wide by 1.4 blocks tall.
 - Vanilla's clientbound `Update Attributes` (`update_attributes`) packet has id `0x83`.
 - Vanilla's `Update Attributes` packet layout is, in order: `entity_id` (VarInt), `count` (VarInt), then per entry: `attribute_id` (VarInt registry id), `base_value` (Double), `modifier_count` (VarInt), then per modifier: `id` (Identifier, VarInt-length-prefixed UTF-8 `namespace:path`), `amount` (Double), `operation` (VarInt: 0=AddValue, 1=AddMultipliedBase, 2=AddMultipliedTotal).
-- Vanilla's Zombie goal selector registers `FloatGoal` at priority 0 with the JUMP flag, always active, to swim up when submerged.
-- Vanilla's Zombie goal selector registers `ZombieAttackGoal` at priority 2 with the MOVE and LOOK flags.
+- Vanilla's Zombie goal selector registers no `FloatGoal` and no priority-0 goal at all -> `Zombie.registerGoals` never calls into the shared empty base registration; a zombie deliberately sinks and walks along the bottom rather than floating.
+- Vanilla's Zombie goal selector registers `ZombieAttackGoal` at priority 3, not 2, with the MOVE and LOOK flags -> priority 2 in the same block is held by a ranged `SpearUseGoal`.
 - Vanilla's Zombie goal selector registers `WaterAvoidingRandomStrollGoal` at priority 7 with the MOVE flag.
-- Vanilla's Zombie goal selector registers `LookAtPlayerGoal` and `RandomLookAroundGoal` both at priority 8 with the LOOK flag, mutually exclusive via the priority tie.
+- Vanilla's Zombie goal selector registers `LookAtPlayerGoal` and `RandomLookAroundGoal` both at priority 8, mutually exclusive via the priority tie, but `RandomLookAroundGoal`'s own flag set is MOVE and LOOK together, not LOOK alone -> it also contends for the MOVE lock against the priority-7 stroll goal; only `LookAtPlayerGoal` is LOOK-only.
 - Vanilla's Zombie target selector registers `HurtByTargetGoal` at priority 1 with the TARGET flag.
 - Vanilla's Zombie target selector registers `NearestAttackableTargetGoal<Player>` at priority 2 with the TARGET flag.
 - Vanilla's `RandomStrollGoal`-family goals have roughly a 1-in-120 chance per tick to start when there is no current walk target.
 - Vanilla's Zombie `LookAtPlayerGoal` activates when a player is within roughly 8 blocks of the entity.
 - Vanilla's Cow goal selector registers `FloatGoal` at priority 0 with the JUMP flag.
 - Vanilla's Cow goal selector registers `PanicGoal` at priority 1 with the MOVE flag.
-- Vanilla's Cow goal selector registers `BreedGoal` at priority 2 with the MOVE flag.
-- Vanilla's Cow goal selector registers `TemptGoal` at priority 3 with the MOVE flag.
-- Vanilla's Cow goal selector registers `FollowParentGoal` at priority 4 with the MOVE flag.
+- Vanilla's Cow goal selector registers `BreedGoal` at priority 2, but its own flag set is MOVE and LOOK together, not MOVE alone -> it also takes and holds the LOOK lock while running.
+- Vanilla's Cow goal selector registers `TemptGoal` at priority 3, but its own flag set is MOVE and LOOK together, not MOVE alone.
+- Vanilla's Cow goal selector registers `FollowParentGoal` at priority 4, but it never calls `setFlags` at all -> its flag set is EMPTY, so it locks nothing and is never blocked by a flag lock, materially different from holding MOVE.
 - Vanilla's Cow goal selector registers `WaterAvoidingRandomStrollGoal` at priority 5 with the MOVE flag.
 - Vanilla's Cow goal selector registers `LookAtPlayerGoal` at priority 6 with the LOOK flag.
-- Vanilla's Cow goal selector registers `RandomLookAroundGoal` at priority 7 with the LOOK flag.
+- Vanilla's Cow goal selector registers `RandomLookAroundGoal` at priority 7, but its own flag set is MOVE and LOOK together, not LOOK alone -> it also contends for the MOVE lock against the priority-5 stroll goal.
 - Vanilla's Cow is never hostile and has no target-selector goals.
 - Vanilla's Villager brain has a Core activity (always active) running `SwimBehavior` and `LookAtTargetSink`.
 - Vanilla's Villager brain has an Idle default-fallback activity running a `WaterAvoidingRandomStrollGoal`-equivalent stroll behavior and an `InteractWithNearestVillager` behavior.
-- Vanilla's Villager brain has a Panic activity, requiring the `HurtBy` memory to be present, running `CalmDownCheck` and `FleeFromHostile`.
-- Vanilla's Villager panic-flee behavior moves the villager away from the hurt-by entity's position at 1.5x its `MOVEMENT_SPEED`.
-- Vanilla's Villager brain has `Work`, `Rest`, and `Meet` activities gated respectively by the `JobSite`, `Home`, and `MeetingPoint` memories being present.
-- Vanilla's Villager brain uses eight sensor types in total: `NearestPlayersSensor`, `HurtBySensor`, `VillagerHostilesSensor`, `SecondaryPoisSensor`, `GolemDetectedSensor`, `NearestBedSensor`, `VillagerBabiesSensor`, and `NearestItemsSensor`.
-- Vanilla's Brain system has roughly 90 distinct memory module types in total.
+- Vanilla's Villager brain has a Panic activity carrying NO memory requirement at all -> it is entered by a trigger behavior in the Core package whenever `HurtBy` or `NearestHostile` is present, running `VillagerCalmDown` plus two separate flee behaviors, one fleeing `NearestHostile` and one fleeing `HurtByEntity`.
+- Vanilla's Villager panic-flee behavior multiplies the goal package's own speed modifier by 1.5, not the `MOVEMENT_SPEED` attribute directly -> `MoveControl` then multiplies that resulting walk-target speed modifier by the `MOVEMENT_SPEED` attribute as usual, netting 0.75x the attribute for a villager's own 0.5 package modifier, never 1.5x the attribute.
+- Vanilla's Villager brain has `Work` and `Meet` activities gated by the `JobSite` and `MeetingPoint` memories respectively, but `Rest` carries no memory requirement at all -> there is no `Home` gate on the REST activity in vanilla.
+- Vanilla's Villager brain uses NINE sensor types in total, not eight -> the omitted one is `NearestLivingEntitySensor`, which populates the nearest-living-entities memories several of the villager's other sensors read from.
+- Vanilla's Brain system has 116 distinct memory module types in total, not roughly 90.
 
 ## Deliverables
 
