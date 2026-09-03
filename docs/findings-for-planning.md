@@ -638,6 +638,36 @@ Entries name the milestone that surfaced them and the code they concern.
   scenario deadline starts, so a cold CI/agent checkout cannot fail on build
   time alone.
 
+- **First real protocol-diff inventory (2026-09-03, run 33736929221) — the
+  clientbound surface vanilla sends in the scripted session and we do not.**
+  Per step, oracle-only packet types: every break of a block -> `add_entity`,
+  `set_entity_motion`, `move_entity_pos`/`_pos_rot`, `rotate_head`,
+  `set_entity_data` (the item drop; M4-B01/B02 scope); every step ->
+  `set_time` (we never sync world time — small NET item); movement/sneak ->
+  `chunk_batch_start`/`_finished` + `level_chunk_with_light` (vanilla streams
+  chunks at view distance 10 and paces batches at 2–5 chunks by the client's
+  reported rate; we send one 121-chunk batch at spawn); gamemode switch ->
+  `game_event`; join/reconnect -> `change_difficulty`, `commands`,
+  `container_set_content`, `initialize_border`, `player_abilities`,
+  `player_info_update`, `recipe_book_add`/`_settings`, `server_data`,
+  `set_experience`, `set_held_slot`, `ticking_state`/`ticking_step`,
+  `update_advancements`, `update_attributes`, `update_recipes`,
+  `system_chat` (join message), `bundle_delimiter`, `entity_event`,
+  `remove_entities`. Body differences: configuration `custom_payload` brand
+  (`rusty-clanker` vs `vanilla` — by design, the normalizer must mask the brand
+  value), configuration `registry_data` for `minecraft:dialog` (vanilla ships
+  built-in dialog entries we do not send — registry-sync gap), `login_finished`
+  (26.2's second field is a random session UUID: `ClientboundLoginFinishedPacket
+  (GameProfile, UUID sessionId)` — the normalizer must mask it), `block_update`
+  on the survival dig (position Y one lower on the oracle: the vanilla `flat`
+  preset's surface sits one layer below our placeholder world's — world-parity
+  item for the harness worlds). Needs decisions: (a) which of the join-sequence
+  packets are M4/M5 deliverables and which form a dedicated NET hardening pass
+  (proposal: a NET hardening blueprint before M5 covering time sync, chunk
+  pacing by client rate, the join sequence, game events); (b) whether our
+  placeholder world adopts the vanilla flat preset's layer layout exactly
+  (proposal: yes — every harness that compares geometry benefits).
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
