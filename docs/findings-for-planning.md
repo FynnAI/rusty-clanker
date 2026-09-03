@@ -1942,6 +1942,51 @@ Entries name the milestone that surfaced them and the code they concern.
   `light_propagation_golden_grids.rs`'s own module-level doc comment,
   restated here per this project's own "every deviation recorded in the
   ledger" rule).
+- **M1 field-report superflat floor fix (2026-09-03) — scoping calls made while
+  adapting ~30 test/harness files to the corrected layer table.** The fix
+  itself (bedrock -64, dirt -63/-62, grass -61, stand height -60, replacing
+  the old bedrock -64/dirt -63..=-61/grass -60/stand -59 that carried one
+  extra dirt layer) is mechanical and unambiguous, restated in `crates/
+  server/src/play/chunk.rs`, `crates/server/src/play/block_action.rs`,
+  `crates/server/src/play/connection.rs`'s `SPAWN_POSITION`, and `crates/
+  chunk-storage/src/superflat.rs`. Two things needed a judgment call this
+  file records rather than deciding silently:
+
+  1. **Which of the ~50 files matching `-59`/`-60`/`-61`/`-62`/`-63` actually
+     pin real world content, versus using those numbers as arbitrary/local
+     test values that happen to overlap the same range.** Determined per
+     file by checking whether it drives `HardcodedWorld`/`SuperflatFiller`
+     (real production content -> shift) or a self-contained double/pure
+     function (e.g. `mining_placement_obstruction.rs`'s and `mining_destroy_
+     state_machine.rs`'s own local `FakeWorld`/`DestroyState`, both explicitly
+     annotated "fixed/local test-world position" and backed by an empty
+     `HashMap`; `crates/chunk-storage/tests/heightmap_updates.rs`'s own
+     `HeightmapSet` API tests, which never call `SuperflatFiller`; `crates/
+     chunk-storage/tests/{save_cadence,stage9_tick_budget_isolation,
+     component_access_disjointness}.rs`'s and `lifecycle_dirty_and_unload_
+     save.rs`'s own `BlockStateColumn::new(BlockStateId(0), ..)` (blank,
+     never `.fill()`-ed) chunk spawns; `crates/chunk-storage/tests/
+     block_entity_record_roundtrip.rs` and `crates/mechanics/tests/{hopper_
+     enabled_reeval,block_entity_codec_record_roundtrip}.rs`, each a pure
+     codec/behavior round-trip with no world dependency at all (the former's
+     own file header states "codec round-trip suite, no world interaction");
+     `play_persistence_store.rs`, `play_movement_packet_roundtrip.rs`, and
+     `play_level_event_packet_roundtrip.rs`, each an explicitly `HardcodedWorld`
+     -free wire/store round-trip). Left unshifted; every other matching file
+     genuinely reads real content and was shifted. No test assertion changed
+     without first confirming which category it falls into, but a different
+     reviewer applying stricter or looser judgment on a couple of the
+     borderline cases (`level_dat_roundtrip.rs`'s and `player_data_roundtrip.
+     rs`'s own "fresh_default" spawn-adjacent tuples, shifted for consistency
+     with `SPAWN_POSITION` even though their own round-trip assertions don't
+     strictly require it) would not be unreasonable.
+  2. **`crates/testing/paritybot/src/redstone_wire_capture.rs` carries no
+     height reference at all** (contra the task brief's expectation of a
+     "near y = -60" doc comment there to update) — the actual "makes the
+     entire `y == -60` layer solid" prose lives in `crates/testing/paritybot/
+     src/restart_persistence.rs` (already shifted to `y == -61`). Recorded in
+     case the brief's expectation reflects a real, differently-named file this
+     research pass missed rather than a simple misattribution.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
