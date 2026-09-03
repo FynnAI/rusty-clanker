@@ -20,7 +20,9 @@ use rc_mechanics::fluid::{
 use rc_mechanics::neighbor_update::NeighborUpdateEngine;
 use rc_mechanics::scheduled_tick::ScheduledTickQueue;
 use rc_mechanics::stage4::ecs::{ChunkIndex, bootstrap_default_stage4_resources, register_stage4};
-use rc_mechanics::{BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, TickPriority};
+use rc_mechanics::{
+    BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue, TickPriority,
+};
 use rc_messaging::{
     Address, BorderUpdateEvent, BorderUpdateKind, Message, RegionId, RegionMessage, Transport,
     TransportError,
@@ -393,6 +395,7 @@ fn inbound_neighbor_changed_border_event_is_handled_correctly() {
     // inbound border event via `apply_inbound_border_event`, then drains the neighbor-update
     // engine to a fixed point -- exactly the already-shipped code path this test proves
     // correctly dispatches `on_neighbor_changed` for `BorderUpdateKind::NeighborChanged` too.
+    let mut light_dirty = LightDirtyQueue::new();
     rc_mechanics::stage4::run_scheduled_phase(
         &mut map_world,
         std::slice::from_ref(&ev),
@@ -404,6 +407,7 @@ fn inbound_neighbor_changed_border_event_is_handled_correctly() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_mechanics::LightDirtyQueue;
 use rc_mechanics::block_event::BlockEventQueue;
 use rc_mechanics::border::RegionOwnership;
 use rc_mechanics::direction::Direction;
@@ -176,6 +177,7 @@ fn willtickthisitick_guard_blocks_duplicate_rearm_within_the_same_batch() {
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
     let before = scheduled.fluid_len();
     {
+        let mut light_dirty = LightDirtyQueue::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -184,6 +186,7 @@ fn willtickthisitick_guard_blocks_duplicate_rearm_within_the_same_batch() {
             outbound: &mut outbound,
             changed: &mut changed,
             ownership: &ownership,
+            light_dirty: &mut light_dirty,
             current_tick: 5,
         };
         behavior.on_neighbor_changed(&mut ctx, pos, Direction::East);
@@ -230,6 +233,7 @@ fn willtickthisitick_guard_does_not_block_the_ticks_own_self_reschedule() {
 
     // Not pending yet from `pos`'s own perspective until the dispatch below re-arms it --
     // `drain_due_fluid_ticks` (called inside `run_scheduled_phase`) will pop this exact entry.
+    let mut light_dirty = LightDirtyQueue::new();
     run_scheduled_phase(
         &mut world,
         &[],
@@ -241,6 +245,7 @@ fn willtickthisitick_guard_does_not_block_the_ticks_own_self_reschedule() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
     // The dispatched entry's own unconditional self-reschedule (Context §K: never guarded at
@@ -314,6 +319,7 @@ fn block_ticks_fully_drain_before_fluid_ticks_begin() {
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
+    let mut light_dirty = LightDirtyQueue::new();
     run_scheduled_phase(
         &mut world,
         &[],
@@ -325,6 +331,7 @@ fn block_ticks_fully_drain_before_fluid_ticks_begin() {
         &registry,
         &mut outbound,
         &mut changed,
+        &mut light_dirty,
         0,
     );
 

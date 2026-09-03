@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_mechanics::LightDirtyQueue;
 use rc_mechanics::block_event::BlockEventQueue;
 use rc_mechanics::border::RegionOwnership;
 use rc_mechanics::direction::Direction;
@@ -139,6 +140,7 @@ fn spread_to_waterlogs_a_registered_target_instead_of_overwriting() {
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
     {
+        let mut light_dirty = LightDirtyQueue::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -147,6 +149,7 @@ fn spread_to_waterlogs_a_registered_target_instead_of_overwriting() {
             outbound: &mut outbound,
             changed: &mut changed,
             ownership: &ownership,
+            light_dirty: &mut light_dirty,
             current_tick: 0,
         };
         spread_to(
@@ -187,6 +190,7 @@ fn spread_to_hard_overwrites_an_unregistered_non_air_target() {
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
     {
+        let mut light_dirty = LightDirtyQueue::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -195,6 +199,7 @@ fn spread_to_hard_overwrites_an_unregistered_non_air_target() {
             outbound: &mut outbound,
             changed: &mut changed,
             ownership: &ownership,
+            light_dirty: &mut light_dirty,
             current_tick: 0,
         };
         spread_to(

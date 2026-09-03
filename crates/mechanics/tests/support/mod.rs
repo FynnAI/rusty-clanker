@@ -16,6 +16,7 @@ use std::sync::Mutex;
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId};
+use rc_mechanics::LightDirtyQueue;
 use rc_mechanics::border::RegionOwnership;
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::RedstoneSignalSource;
@@ -145,6 +146,7 @@ pub fn settle_fluids(
     for current_tick in 0..ticks {
         let mut outbound = Vec::new();
         let mut changed = Vec::new();
+        let mut light_dirty = LightDirtyQueue::new();
         run_scheduled_phase(
             world,
             &[],
@@ -156,6 +158,7 @@ pub fn settle_fluids(
             registry,
             &mut outbound,
             &mut changed,
+            &mut light_dirty,
             current_tick,
         );
     }
