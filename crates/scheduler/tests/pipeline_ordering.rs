@@ -23,7 +23,14 @@ fn recorder_factory(log: Arc<Mutex<Vec<Stage>>>, stage: Stage) -> SystemFactory 
 }
 
 #[test]
-fn stages_4_6_8_9_11_execute_in_ascending_order() {
+fn stages_4_6a_6b_9_10_12_execute_in_ascending_order() {
+    // M4-B01 (cited, minimal, non-weakening edit -- Context: "Breaking change to
+    // `Stage`"): `Stage::EntityAiPhysics`/`DomainGroup::AiPhysics` no longer exist,
+    // replaced by ARCH-D15's own Stage-6a/6b split. This test's own guarantee
+    // (inter-group ordering is enforced, worker-count-independent) becomes *more*
+    // precise -- one more instrumented no-op system, registered into the new
+    // `DomainGroup::EntityAiSelection`, and the asserted log now names six stage
+    // transitions instead of five, never fewer or looser assertions than before.
     let log: Arc<Mutex<Vec<Stage>>> = Arc::new(Mutex::new(Vec::new()));
 
     let mut builder = RcExecutorBuilder::new(common::empty_bootstrap);
@@ -33,8 +40,13 @@ fn stages_4_6_8_9_11_execute_in_ascending_order() {
         vec![],
     );
     builder.register_system(
-        DomainGroup::AiPhysics,
-        recorder_factory(Arc::clone(&log), Stage::EntityAiPhysics),
+        DomainGroup::EntityAiSelection,
+        recorder_factory(Arc::clone(&log), Stage::EntityAiSelection),
+        vec![],
+    );
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        recorder_factory(Arc::clone(&log), Stage::EntityPhysicsIntegration),
         vec![],
     );
     builder.register_system(
@@ -65,7 +77,8 @@ fn stages_4_6_8_9_11_execute_in_ascending_order() {
         recorded,
         vec![
             Stage::ScheduledBlockTick,
-            Stage::EntityAiPhysics,
+            Stage::EntityAiSelection,
+            Stage::EntityPhysicsIntegration,
             Stage::Lighting,
             Stage::ChunkSnapshot,
             Stage::NetworkOutboundEncode,
@@ -93,12 +106,12 @@ fn conflicting_systems_in_the_same_group_never_overlap() {
 
     let mut builder = RcExecutorBuilder::new(common::empty_bootstrap);
     builder.register_system(
-        DomainGroup::AiPhysics,
+        DomainGroup::EntityPhysicsIntegration,
         make_factory(Arc::clone(&active), Arc::clone(&log)),
         vec![],
     );
     builder.register_system(
-        DomainGroup::AiPhysics,
+        DomainGroup::EntityPhysicsIntegration,
         make_factory(Arc::clone(&active), Arc::clone(&log)),
         vec![],
     );

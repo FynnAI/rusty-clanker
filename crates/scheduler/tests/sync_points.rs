@@ -119,8 +119,16 @@ fn stage_10_apply_order_is_stage_then_order_tag_ascending() {
     let a_id = probe.component_id::<common::A>().unwrap();
 
     let mut builder = RcExecutorBuilder::new(bootstrap_a);
-    builder.register_system(DomainGroup::AiPhysics, make_spawner(600), vec![a_id]);
-    builder.register_system(DomainGroup::AiPhysics, make_spawner(601), vec![a_id]);
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        make_spawner(600),
+        vec![a_id],
+    );
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        make_spawner(601),
+        vec![a_id],
+    );
     builder.register_system(DomainGroup::Lighting, make_spawner(800), vec![a_id]);
 
     let executor = builder.build().expect("build should succeed");
@@ -155,7 +163,11 @@ fn stage_10_apply_order_is_deterministic_and_matches_declaration_order() {
     }
 
     let mut builder = RcExecutorBuilder::new(bootstrap_a);
-    builder.register_system(DomainGroup::AiPhysics, make_mutator(10, 6), vec![]);
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        make_mutator(10, 6),
+        vec![],
+    );
     builder.register_system(DomainGroup::Lighting, make_mutator(10, 8), vec![]);
     builder.register_system(DomainGroup::ChunkSerialize, make_mutator(10, 9), vec![]);
 

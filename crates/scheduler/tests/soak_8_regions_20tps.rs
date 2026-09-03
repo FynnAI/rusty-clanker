@@ -40,7 +40,11 @@ fn soak_duration() -> Duration {
 #[test]
 fn soak_8_regions_stable_20tps_10min() {
     let mut builder = RcExecutorBuilder::new(bootstrap_default_profile);
-    builder.register_system(DomainGroup::AiPhysics, synthetic_system_factory(), vec![]);
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        synthetic_system_factory(),
+        vec![],
+    );
     let executor = builder
         .build()
         .expect("synthetic_busy_work_system must build without a conflict-graph error");

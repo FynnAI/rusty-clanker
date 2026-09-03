@@ -44,8 +44,11 @@ fn structural_write_conflicting_with_declared_mutable_access_is_rejected() {
     let a_id = probe_component_id::<common::A>();
 
     let mut builder = RcExecutorBuilder::new(bootstrap);
-    let system_id =
-        builder.register_system(DomainGroup::AiPhysics, factory_writer_of_a(), vec![a_id]);
+    let system_id = builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        factory_writer_of_a(),
+        vec![a_id],
+    );
 
     let result = builder.build();
     match result {
@@ -62,7 +65,11 @@ fn structural_write_on_a_different_component_than_declared_access_is_accepted() 
     let b_id = probe_component_id::<common::B>();
 
     let mut builder = RcExecutorBuilder::new(bootstrap);
-    builder.register_system(DomainGroup::AiPhysics, factory_writer_of_a(), vec![b_id]);
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        factory_writer_of_a(),
+        vec![b_id],
+    );
 
     assert!(builder.build().is_ok());
 }
@@ -72,7 +79,11 @@ fn structural_write_alone_with_no_query_access_is_accepted() {
     let a_id = probe_component_id::<common::A>();
 
     let mut builder = RcExecutorBuilder::new(bootstrap);
-    builder.register_system(DomainGroup::AiPhysics, factory_commands_only(), vec![a_id]);
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        factory_commands_only(),
+        vec![a_id],
+    );
 
     assert!(builder.build().is_ok());
 }

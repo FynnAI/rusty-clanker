@@ -31,7 +31,11 @@ fn same_final_state_across_worker_counts() {
     for n in [1usize, 2, 8] {
         let mut builder = RcExecutorBuilder::new(bootstrap_a);
         for _ in 0..4 {
-            builder.register_system(DomainGroup::AiPhysics, increment_factory(), vec![]);
+            builder.register_system(
+                DomainGroup::EntityPhysicsIntegration,
+                increment_factory(),
+                vec![],
+            );
         }
         let executor = builder.build().expect("build should succeed");
         let mut region = executor.spawn_region(RegionId(0));
@@ -99,7 +103,11 @@ fn same_emitted_message_sequence_across_worker_counts() {
     for n in [1usize, 2, 8] {
         let mut builder = RcExecutorBuilder::new(bootstrap_markers);
         builder.register_system(DomainGroup::BlockRedstone, noop_factory::<M0>(), vec![]);
-        builder.register_system(DomainGroup::AiPhysics, noop_factory::<M1>(), vec![]);
+        builder.register_system(
+            DomainGroup::EntityPhysicsIntegration,
+            noop_factory::<M1>(),
+            vec![],
+        );
         builder.register_system(DomainGroup::Lighting, noop_factory::<M2>(), vec![]);
         builder.register_system(DomainGroup::ChunkSerialize, noop_factory::<M3>(), vec![]);
         builder.register_system(DomainGroup::NetCodec, noop_factory::<M4>(), vec![]);
@@ -108,8 +116,14 @@ fn same_emitted_message_sequence_across_worker_counts() {
         let mut region = executor.spawn_region(RegionId(0));
 
         // Merged by *test setup*, before ticking, in (stage, order_tag)
-        // ascending order (Context: "Why message-sending is not modeled...").
-        for stage_num in [4u32, 6, 8, 9, 11] {
+        // ascending order (Context: "Why message-sending is not modeled...") -- these
+        // five marker values are `Stage::ScheduledBlockTick`/`EntityPhysicsIntegration`/
+        // `Lighting`/`ChunkSnapshot`/`NetworkOutboundEncode`'s own real numeric
+        // discriminants (M4-B01's renumbering: 4, 7, 9, 10, 12), used purely as
+        // distinct, orderable opaque payloads -- this test asserts FIFO/insertion-order
+        // preservation across worker counts, not a re-sort against any registered
+        // system's own dispatch stage.
+        for stage_num in [4u32, 7, 9, 10, 12] {
             let mut bus = RegionMessageBus::new();
             bus.send(Address::Region(RegionId(999)), marker_message(stage_num));
             region.message_state.merge(bus);
@@ -123,7 +137,7 @@ fn same_emitted_message_sequence_across_worker_counts() {
         let markers: Vec<u32> = sent.iter().map(|m| decode_marker(&m.payload)).collect();
         assert_eq!(
             markers,
-            vec![4, 6, 8, 9, 11],
+            vec![4, 7, 9, 10, 12],
             "worker count {n} produced {markers:?}"
         );
     }
