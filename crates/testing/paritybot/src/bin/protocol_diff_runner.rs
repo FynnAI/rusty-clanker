@@ -46,13 +46,26 @@
 //! ```text
 //! protocol-diff-runner: begin <side> steps=<n> contraptions=<m>
 //! protocol-diff-runner: done <step-or-contraption-id> in <elapsed_ms> ms
-//! protocol-diff-runner: finished <side> total_ms=<ms>
+//! protocol-diff-runner: finished <side> total_ms=<ms> failed=<n>
 //! ```
 //! `begin`/`finished` are printed by this binary itself (`run_oracle_side`/
 //! `run_ours_side`); one `done` line per scripted-session step comes from
 //! `protocol_session::push_step`, and one per redstone-corpus contraption from
 //! `redstone_wire_capture::capture_contraption_over_wire` — `xtask::corpus::
 //! protocol_diff::parse_progress_lines` is this format's own sole parser.
+//!
+//! M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "missing
+//! contraptions still reported pass" finding): `finished`'s own `failed=<n>`
+//! counts how many redstone-corpus contraptions `redstone_wire_capture::
+//! run_redstone_wire_capture` itself reports as failed (its own returned count,
+//! never re-derived from stderr here) — every one of them already printed its own
+//! `redstone_wire_capture: <id> failed: <err>` line (that function's own doc
+//! comment). `xtask::corpus::protocol_diff`'s own completeness gate
+//! (TEST-D48/TEST-D50) treats `failed=0` as one of the conditions a `capture-
+//! <side>` case needs to `Pass` — a run whose contraption pass itself returned an
+//! `Err` (never even reaching its own per-contraption loop, e.g. every connect
+//! attempt failing) reports every planned contraption as failed here, since none
+//! of them were ever actually attempted.
 
 use std::cell::RefCell;
 use std::io::Write as _;
@@ -294,7 +307,7 @@ async fn run_oracle_side(
     // to stderr and degraded to zero wire steps rather than propagated as a hard `?`
     // that would abort this whole subprocess before `write_capture` ever runs.
     let port = handle.borrow().port;
-    match redstone_wire_capture::run_redstone_wire_capture(
+    let wire_failed = match redstone_wire_capture::run_redstone_wire_capture(
         "127.0.0.1",
         port,
         specs,
@@ -303,19 +316,25 @@ async fn run_oracle_side(
     )
     .await
     {
-        Ok(wire_steps) => capture.steps.extend(wire_steps),
-        Err(err) => eprintln!(
-            "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
-             session's own steps only: {err}"
-        ),
-    }
+        Ok((wire_steps, failed)) => {
+            capture.steps.extend(wire_steps);
+            failed
+        }
+        Err(err) => {
+            eprintln!(
+                "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
+                 session's own steps only: {err}"
+            );
+            planned_contraption_count(specs, tail.only.as_deref())
+        }
+    };
 
     // `handle` is dropped (killing the oracle process) only after every real
     // capture this run needed has already happened.
     drop(handle);
 
     eprintln!(
-        "protocol-diff-runner: finished oracle total_ms={}",
+        "protocol-diff-runner: finished oracle total_ms={} failed={wire_failed}",
         side_started.elapsed().as_millis()
     );
     let _ = std::io::stderr().flush();
@@ -402,7 +421,7 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
     // Governance fix (real-run finding, `docs/findings-for-planning.md`) — same as the
     // oracle side above: never discard the scripted session's own already-succeeded
     // capture just because the redstone-wire pass failed.
-    match redstone_wire_capture::run_redstone_wire_capture(
+    let wire_failed = match redstone_wire_capture::run_redstone_wire_capture(
         "127.0.0.1",
         port,
         specs,
@@ -411,19 +430,25 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
     )
     .await
     {
-        Ok(wire_steps) => capture.steps.extend(wire_steps),
-        Err(err) => eprintln!(
-            "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
-             session's own steps only: {err}"
-        ),
-    }
+        Ok((wire_steps, failed)) => {
+            capture.steps.extend(wire_steps);
+            failed
+        }
+        Err(err) => {
+            eprintln!(
+                "protocol_diff_runner: redstone wire capture failed, keeping the scripted \
+                 session's own steps only: {err}"
+            );
+            planned_contraption_count(specs, tail.only.as_deref())
+        }
+    };
 
     // `managed` is dropped only after the capture completes — same
     // guaranteed-teardown discipline as the oracle side above.
     drop(managed);
 
     eprintln!(
-        "protocol-diff-runner: finished ours total_ms={}",
+        "protocol-diff-runner: finished ours total_ms={} failed={wire_failed}",
         side_started.elapsed().as_millis()
     );
     let _ = std::io::stderr().flush();
