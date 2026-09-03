@@ -159,6 +159,9 @@ packet path, not only through the engine.
   reach, break/place regression from M2 — **no findings**; redstone/placement
   round — the §4 class-2/class-3 defects (all fixed the same night, verified
   by `placement-diff` 85/85, parity 52/52, real-connection tests, CI green).
-- Re-test with the final binary: **pending manual sign-off** — the owner has
-  postponed it (2026-09-03); the verdict is appended here when it exists, and
-  M4 does not start before it does.
+- Re-test with the final binary: **pending manual sign-off** — the owner
+  play-tests the pinned `m3.5-final` tag's release binary (kept outside the
+  repository under `C:/Users/krank/rusty-clanker-releases/m3.5-final/`);
+  the verdict is appended here when it exists. On the owner's explicit
+  decision (2026-09-03) M4 implementation started before this sign-off;
+  findings from the play test are M3 field reports against that tag.
