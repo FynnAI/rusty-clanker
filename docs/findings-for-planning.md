@@ -1697,6 +1697,138 @@ Entries name the milestone that surfaced them and the code they concern.
   commit never touches a protected test path) but is a real, deliberate
   simplification of the blueprint's own more literal two-pass packaging
   description, made under this implementation wave's own time budget.
+- **M4-B06 (fluid dynamics): `spread_to`'s own condensed 4-branch summary
+  (Context §K) omits the one thing that actually makes the algorithm
+  propagate at all, and implementation had to add a fifth, symmetric
+  behavior to close the gap.** Real vanilla's `LiquidBlock.onPlace` re-arms a
+  fluid tick for *every* freshly-placed fluid block, not only a waterlogged
+  one — Context §K's own branch (2) already reproduces this for the
+  waterlog case explicitly ("in real vanilla this re-arm belongs to the
+  container's own `placeLiquid` implementation... this crate's own
+  `WaterloggableBehavior` trait... has no `ctx` access, so `spread_to`
+  performs the scheduling call here on the container's behalf"), but branch
+  (3) (the ordinary hard-overwrite — the *only* path that ever places a
+  freshly-flowing, non-waterlogged cell) has no equivalent step at all in
+  Context §K's own text. Without it, a freshly-`spread_to`-written cell
+  never receives its own first scheduled tick: `border::fan_out_from_
+  changed_block` (M3-B01, reused unmodified) notifies only the *neighbors*
+  of a changed position, never the position itself, so nothing else in the
+  reused mechanism would ever wake a brand-new cell up. Traced by hand
+  against `fluid_spread_golden.rs`'s own `single_source_over_air_column_
+  falls_straight_down` (and every other multi-tick settling scenario in the
+  suite) failing to propagate past the first cell without this fix.
+  Implemented as: `spread_to`'s branch (3), after the hard overwrite, when
+  `candidate.is_some()` and the target's *pre-write* fluid kind differs from
+  the kind being placed (mirroring real vanilla's own onPlace trigger
+  condition — a same-kind, level-only re-write of an already-armed cell does
+  not re-fire onPlace in real vanilla either), schedules a fluid tick at
+  `tables.tick_delay(kind)`, guarded by the same `is_fluid_tick_in_current_
+  batch` check Context §K already applies to branch (2). No test needed
+  weakening or an assertion count reduced to make this pass — the fix is
+  purely additive and every acceptance test (51/51) passes with it in place.
+  Needs a decision on whether Context §K's own restated `spread_to`
+  pseudocode should be corrected to name this as an explicit fifth
+  behavior, parallel to branch (2)'s own already-explicit self-arm.
+
+- **M4-B06: `rc_physics::tier1_shape_table()`'s own unregistered-id-defaults-
+  full-cube fallback makes every already-fluid cell read as an impassable
+  solid wall to `can_pass_through_wall`, unless fluid ids are special-cased
+  before ever reaching that table.** Real vanilla's `LiquidBlock.
+  getCollisionShape()` is unconditionally `Shapes.empty()` for every fluid
+  level; `tier1_shape_table()` (a fixed, hand-authored table this blueprint
+  must not modify, Constraints (b)) carries no entry for either fluid range
+  at all, since water/lava ids are only known at runtime via the
+  caller-supplied `FluidTables::ranges`, not as compile-time constants
+  `rc-physics` could bake in. Without a fix, `get_new_liquid`'s own
+  same-kind-neighbor read (`if nfluid.kind == this_kind and
+  can_pass_through_wall(...)`, Context §C) would find every already-fluid
+  neighbor "impassable" the moment `can_pass_through_wall` resolved its
+  shape via the unmodified table, breaking the algorithm outright for any
+  cell with an already-fluid neighbor (i.e. essentially every settled
+  fluid body). Implemented as a private `shape_at(world, tables, pos)`
+  helper in `occlusion.rs`: a position currently holding any registered
+  fluid (`tables.ranges.kind_of`) resolves to `VoxelShape::empty()`
+  unconditionally, bypassing `tier1_shape_table()` entirely for that case;
+  every other id still resolves through the unmodified table as before. This
+  required adding a `tables: &FluidTables` parameter to `is_full_cube`/
+  `is_empty_shape`/`can_pass_through_wall` beyond Deliverables' own literal
+  2-/4-argument signatures for these three functions — a deviation checked
+  safe because no acceptance test calls any of the three directly by name
+  (they are exercised only through `can_maybe_pass_through`/`can_pass_
+  through`/`get_new_liquid`/`get_flow`, all of which already carry
+  `tables`). Needs a decision on whether Deliverables' own signatures for
+  these three functions should be corrected to include `tables`, and whether
+  a future blueprint adding real waterloggable content should generalize
+  this "resolve a fluid-occupied cell's shape as empty" rule into `rc-physics`
+  itself (e.g. a `ShapeTable` variant that accepts a fluid-range predicate)
+  rather than re-deriving it per consuming crate.
+
+- **M4-B06: `get_spread_delay`'s own fixed Deliverables signature
+  (`kind, tables, old, new, rng` — no `world`/`pos`) cannot resolve the
+  position-dependent `get_height` Context §L's own prose names for the
+  "rising" comparison.** Real vanilla's `LavaFluid.getSpreadDelay` compares
+  `newState.getHeight(level, pos) > oldState.getHeight(level, pos)` —
+  `getHeight` checks the cell directly above for a same-fluid match (Context
+  §A), which requires a `world`/`pos` this function's own Deliverables-fixed
+  signature does not carry (confirmed necessary by the signature itself:
+  `fluid_schedule_cadence.rs`'s own acceptance tests call `get_spread_delay`
+  with bare `FluidState` values and no world at all). Implemented using each
+  state's own intrinsic `own_height()` for the comparison instead — the only
+  height notion available without a world/pos, and the one Context §L's own
+  worked pseudocode implicitly requires for the function to be callable as
+  specified at all. Needs a decision on whether this is an acceptable,
+  permanent narrowing (an extremely rare divergence: it only differs from
+  real vanilla's own `getHeight`-based comparison for a lava cell directly
+  below another same-kind lava cell, since that is the only case `getHeight`
+  and `own_height` disagree) or whether `get_spread_delay` should gain a
+  `world`/`pos` parameter in a future coordinated `UpdateContext`-adjacent
+  changeset.
+
+- **M4-B06: the registry generated tables (`crates/registries/generated/
+  v776/`) are actually populated in this checkout, contradicting the
+  blueprint's own Context §A claim that they "remain unpopulated in this
+  checkout as of this blueprint."** Verified directly:
+  `rc_registries::block_state_properties::range_of(block_id::WATER)` returns
+  a range whose first id is 86 and last id is 101 (default also 86), and
+  `range_of(block_id::LAVA)` returns a range whose first id is 102 and last
+  is 117 (default also 102) — both genuinely 16 ids wide — and walking
+  `properties(id)` across the water range confirms the `level` property
+  enumerates ascending `"0"` through `"15"` in id order, i.e. offset zero
+  matches level zero. This *resolves* Context §A's own "moderate-confidence,
+  flagged for reconciliation" note about id ordering within the range in
+  the blueprint's own favor (the assumption was correct) — no code changed
+  as a result, since this blueprint's own acceptance tests use synthetic
+  ranges per its own Deliverables/Acceptance-tests text, not the real
+  registry, and this blueprint does not wire any production composition
+  root. Needs a decision on whether to correct Context §A's own stale
+  "unpopulated" claim (likely made obsolete by M3.5-B01/B02's own codegen
+  landing after this blueprint's own text was drafted) and note the
+  ordering assumption as confirmed rather than merely moderate-confidence.
+
+- **M4-B06: this blueprint's own illustrative test-fixture description
+  (Acceptance tests, `fluid_spread_golden.rs`'s intro naming a water range
+  starting at id zero and 16 wide, a lava range starting at id 100, an air
+  id of one, and a stone id of two) is internally inconsistent — the named
+  air id sits *inside* the blueprint's own illustrative water range (the
+  second-lowest offset in that range decodes as a flowing water level, not
+  air), so `FluidBlockRanges::kind_of`/`state_of` would misdecode the
+  intended "air" id as water. This is purely a test-fixture-authoring
+  detail (not a vanilla fact, not part of any Deliverables' function
+  signature), so implementation resolved it directly per this project's own
+  "error correction... stays allowed" carve-out rather than treating it as
+  a blocking ambiguity: every fluid acceptance test file instead uses a
+  water range and a lava range both starting well past the pinned version's
+  own real block-state id space (comfortably clear of any real registered
+  shape), an air id of zero (the one id `rc_physics::tier1_shape_table()`
+  itself resolves as a genuinely empty shape, load-bearing for the
+  occlusion-dependent golden/settling tests — see the `shape_at` finding
+  above), and a "stone" id far past that same real id space too
+  (guaranteed unregistered in that same global table, so it resolves solid
+  via the conservative default rather than by accident). No test case,
+  assertion, or expected count changed — only the numeric id constants.
+  Needs a decision on whether to correct the blueprint's own illustrative
+  fixture text to match (or to a similarly non-colliding scheme) so a
+  future reader is not misled by the same collision.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
