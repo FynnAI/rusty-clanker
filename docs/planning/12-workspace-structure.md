@@ -305,7 +305,7 @@ keyring           = "4.1.6"    # rc-auth, ASSET-D10
 # 15-crossplay.md additions
 p384              = "0.14.0"   # rc-bedrock-auth ES384 chain verification, CROSS-D11
 base64            = "0.23.1"   # rc-bedrock-auth JWT chain decoding, CROSS-D11
-uuid              = { version = "1.24.0", features = ["v4", "v5"] }  # rc-bedrock-auth UUIDv5 derivation, CROSS-D12; "v4" for M1-B04's LoginSuccess.session_id
+uuid              = { version = "1.25.0", features = ["v4"] }  # "v4" for M1-B04's LoginSuccess.session_id; "v5" is added when rc-bedrock-auth's UUIDv5 derivation lands (CROSS-D12)
 
 # 14-performance-engineering.md additions
 mimalloc          = "0.1.52"   # global allocator, PERF-D7

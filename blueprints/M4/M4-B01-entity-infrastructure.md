@@ -479,6 +479,8 @@ M0-B05's own `Stage` enum already carries a single `EntityAiPhysics = 6` discrim
 - Vanilla assigns a freshly-spawned entity's UUID via Mth.createInsecureUUID(this.random), a per-entity java.util.Random-family RandomSource.create() stream, not java.util.UUID.randomUUID() and not SecureRandom-backed.
 - Vanilla re-assigns a fresh network entity id and internal object identity to an entity on every load; only UUID is load-stable across a save/load cycle.
 
+**Text components on the wire (planning correction 2026-09-03, verified against `ComponentSerialization`/`EntityDataSerializers.OPTIONAL_COMPONENT` in the reference):** every `OptionalTextComponent` value is encoded through the component codec over network NBT, and that codec *collapses* a component that is plain text (no style, no siblings, no translate/keybind/score) to a bare unnamed `TAG_String` — only a richer component becomes a `TAG_Compound`. `rc_protocol::wire::NbtTextComponent`'s `{"text": …}` compound form (M1-B05) is therefore the *rich* shape only; `encode_metadata_value`, `rc-mechanics`'s `encode_network_nbt_text`/`decode_network_nbt_text` and `NbtTextComponent` itself must emit the bare string for plain text and the compound otherwise, so a real client and the TEST-D54 diff see vanilla's bytes. Recorded in `docs/findings-for-planning.md` as an M1-B05/M4-B01 field-report follow-up.
+
 ## Deliverables
 
 ### `crates/entity-macros/Cargo.toml` (modify)

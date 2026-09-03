@@ -678,6 +678,24 @@ Entries name the milestone that surfaced them and the code they concern.
   for `light.rs` and its chunk-packet mask use) must land before M4-B07's
   implementation starts; M4-B07's Context §1 names the gap.
 
+- **Text components on the wire collapse to a bare string — M1-B05's
+  `NbtTextComponent` and M4-B01's metadata encoders emit the compound form
+  for plain text (decided 2026-09-03, follow-up implementation owed).**
+  `ComponentSerialization`'s codec (reference, `tryCollapseToString` in the
+  NBT encode path) writes a plain-text component as an unnamed `TAG_String`
+  and only a styled/sibling-bearing/translatable component as a
+  `TAG_Compound`; `EntityDataSerializers.OPTIONAL_COMPONENT` uses that codec.
+  Our `rc_protocol::wire::NbtTextComponent` always writes `{"text": …}`, and
+  M4-B01 reproduced that shape in `entity_packets::encode_metadata_value` and
+  `rc_mechanics::entity::metadata::encode_network_nbt_text` (ledger item 5 of
+  the M4-B01 entry) — client-tolerated, not vanilla-identical, and visible to
+  the TEST-D54 diff wherever a component crosses the wire. Decision: the wire
+  form follows the codec (bare string when collapsible, compound otherwise)
+  in all three places; a `M1 field-report` test-authoring + implementation
+  pair for `rc-protocol` and an `M4-B01 implementation` follow-up for the two
+  encoders land before M4-B02 consumes the metadata path. The M4-B01
+  blueprint carries the corrected rule above its Deliverables.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
