@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 
 use bevy_ecs::prelude::Resource;
 use rc_core::BlockPos;
@@ -60,6 +60,11 @@ pub struct ScheduledTickQueue {
     block_heap: BinaryHeap<Reverse<HeapEntry>>,
     fluid_heap: BinaryHeap<Reverse<HeapEntry>>,
     next_sub_tick_order: u64,
+    /// M4-B06 (Context §K): the position set returned by the *most recent*
+    /// `drain_due_fluid_ticks` call, rebuilt fresh on every call — backs
+    /// `is_fluid_tick_in_current_batch`'s own `willTickThisTick`-equivalent guard. Empty until
+    /// the first `drain_due_fluid_ticks` call.
+    current_fluid_batch: HashSet<BlockPos>,
 }
 
 impl ScheduledTickQueue {
@@ -162,5 +167,16 @@ impl ScheduledTickQueue {
 
     pub fn fluid_len(&self) -> usize {
         self.fluid_heap.len()
+    }
+
+    /// `willTickThisTick(pos, Fluid)` (`08-redstone-ticking.md` §3.4, restated in
+    /// `M4-B06`'s Context §K): `true` iff `pos` was present in the `Vec` most recently returned
+    /// by `drain_due_fluid_ticks` — a strictly tighter guard than `is_fluid_tick_pending`
+    /// (M3-B01's own coarser "any pending, due or not" stand-in, which this method does not
+    /// replace or modify — both coexist). Calling `schedule_fluid_tick` does not itself affect
+    /// this method's result; only a `drain_due_fluid_ticks` call does.
+    pub fn is_fluid_tick_in_current_batch(&self, pos: BlockPos) -> bool {
+        let _ = pos;
+        todo!()
     }
 }

@@ -10,6 +10,7 @@ pub mod border;
 pub mod container;
 pub mod direction;
 pub mod entity;
+pub mod fluid;
 pub mod item_stack;
 pub mod neighbor_update;
 pub mod random;
@@ -44,6 +45,9 @@ pub use container::{
     find_leftmost_insert_slot, move_one_item, place_or_stack_output,
 };
 pub use direction::Direction;
+pub use fluid::{
+    FluidBehavior, FluidBlockRanges, FluidKind, FluidState, FluidTables, register_fluids,
+};
 pub use item_stack::{item_stack_from_nbt, item_stack_to_nbt};
 pub use neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 pub use random::{RcRandom, chunk_random_seed};

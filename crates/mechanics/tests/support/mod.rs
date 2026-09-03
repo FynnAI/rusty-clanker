@@ -16,9 +16,14 @@ use std::sync::Mutex;
 
 use rc_chunk_storage::BlockStateId;
 use rc_core::{BlockPos, ChunkKey, DimensionId};
-use rc_mechanics::BlockWorldAccess;
+use rc_mechanics::border::RegionOwnership;
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::RedstoneSignalSource;
+use rc_mechanics::stage4::run_scheduled_phase;
+use rc_mechanics::{
+    BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo, NeighborUpdateEngine,
+    ScheduledTickQueue,
+};
 use rc_messaging::{Address, RegionId};
 
 /// A `HashMap<BlockPos, BlockStateId>`-backed `BlockWorldAccess`, with a fixed single-region
@@ -69,6 +74,90 @@ impl BlockWorldAccess for FakeWorld {
     }
     fn local_identity(&self) -> Address {
         self.local
+    }
+}
+
+/// `M4-B06` — a `HashMap<BlockPos, BlockStateId>`-backed `BlockWorldAccess` where every
+/// unset position resolves to a caller-supplied default (`fluid_spread_golden.rs`'s own
+/// "all terrain defaulting to solid stone unless explicitly set to air/fluid" convention),
+/// rather than `FakeWorld`'s own "unset = no block" (`None`) — the fluid algorithm's own
+/// occlusion/solidity checks (`occlusion::is_solid`/`is_full_cube`) need every position to
+/// resolve to *some* shape, and "no block loaded" would otherwise silently read as "no
+/// occlusion at all" rather than "ordinary solid terrain," which is not what any of the
+/// fluid acceptance tests intend to exercise.
+pub struct FluidFakeWorld {
+    blocks: HashMap<BlockPos, BlockStateId>,
+    pub default_state: BlockStateId,
+    pub local: Address,
+}
+
+impl FluidFakeWorld {
+    pub fn new(default_state: BlockStateId) -> Self {
+        Self {
+            blocks: HashMap::new(),
+            default_state,
+            local: Address::Region(RegionId(0)),
+        }
+    }
+
+    pub fn set(&mut self, pos: BlockPos, state: BlockStateId) {
+        self.blocks.insert(pos, state);
+    }
+}
+
+impl BlockWorldAccess for FluidFakeWorld {
+    fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
+        Some(self.blocks.get(&pos).copied().unwrap_or(self.default_state))
+    }
+    fn set_block(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
+        let changed = self.blocks.get(&pos) != Some(&state);
+        self.blocks.insert(pos, state);
+        changed
+    }
+    fn dimension(&self) -> DimensionId {
+        DimensionId::OVERWORLD
+    }
+    fn owner_of(&self, _chunk: ChunkKey) -> Address {
+        self.local
+    }
+    fn local_identity(&self) -> Address {
+        self.local
+    }
+}
+
+/// `M4-B06` — runs `stage4::run_scheduled_phase` once per simulated tick, `ticks` times, over a
+/// single local region (`ownership`, no inbound border events). Fluid settling is not
+/// necessarily "queue eventually empties" (a stable fluid network keeps re-arming its own
+/// neighbors forever via `set_block`'s own "a no-op write still fans out" rule, exactly mirroring
+/// vanilla's own perpetual-but-observably-stable re-tick behavior) — every golden/settling test
+/// instead runs a fixed, generously-sized tick budget and asserts on the resulting world state.
+#[allow(clippy::too_many_arguments)]
+pub fn settle_fluids(
+    world: &mut FluidFakeWorld,
+    scheduled: &mut ScheduledTickQueue,
+    registry: &BlockBehaviorRegistry,
+    ownership: &RegionOwnership,
+    ticks: u64,
+) {
+    let mut engine = NeighborUpdateEngine::new();
+    let mut events = BlockEventQueue::new();
+    let mut halo = BorderHalo::new();
+    for current_tick in 0..ticks {
+        let mut outbound = Vec::new();
+        let mut changed = Vec::new();
+        run_scheduled_phase(
+            world,
+            &[],
+            &mut halo,
+            ownership,
+            &mut engine,
+            scheduled,
+            &mut events,
+            registry,
+            &mut outbound,
+            &mut changed,
+            current_tick,
+        );
     }
 }
 
