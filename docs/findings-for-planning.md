@@ -661,6 +661,35 @@ Entries name the milestone that surfaced them and the code they concern.
   batched invocation so a Windows development machine's local gate stays
   usable as the workspace keeps growing.
 
+- **Text components on the wire collapse to a bare string (decided
+  2026-09-03, `M1 field-report` + `M4-B01 field-report` follow-up landed).**
+  `ComponentSerialization`'s codec (reference, `tryCollapseToString` in the
+  NBT encode path) writes a plain-text component as an unnamed `TAG_String`
+  and only a styled/sibling-bearing/translatable component as a
+  `TAG_Compound`; `EntityDataSerializers.OPTIONAL_COMPONENT` uses that codec.
+  `rc_protocol::wire::NbtTextComponent`, `entity_packets::encode_metadata_
+  value`/`decode_metadata_value`, and `rc_mechanics::entity::metadata::
+  encode_network_nbt_text`/`decode_network_nbt_text` now all follow that
+  rule: every plain-text value (the only kind any of these three currently
+  carry) writes as the collapsed bare `TAG_String`, and every reader still
+  accepts the legacy `{"text": …}` `TAG_Compound` form. Every existing
+  `NbtTextComponent` caller (the Configuration-phase `Disconnect` reason,
+  the entity metadata `OptionalTextComponent` path) inherited the fix
+  without its own code change, since each reuses `NbtTextComponent`/the
+  metadata encoder directly rather than re-deriving the shape. The M4-B01
+  blueprint already carries the corrected rule above its Deliverables.
+
+- **Flaky under CI load: `play_block_break_place_full::creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event`
+  (run 33779660538, `ubuntu-24.04` gates).** Failed once with "peer closed
+  before a full frame arrived" after 33 s while the same test passes in 2.7 s
+  locally (3 of 3) and passed on the rerun and on `windows-2025`. Same class
+  as the M3 delayed-destroy keep-alive starvation: a test that holds a second
+  connection idle while waiting on the first can be disconnected by the
+  server's keep-alive timeout when the runner is slow. Test-authoring
+  follow-up: service every socket concurrently in this file's helpers (the
+  pattern already used by the multiplayer tests) or raise the keep-alive
+  window for test servers.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
