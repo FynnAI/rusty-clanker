@@ -690,6 +690,44 @@ Entries name the milestone that surfaced them and the code they concern.
   pattern already used by the multiplayer tests) or raise the keep-alive
   window for test servers.
 
+- **Tier-2 input components have no blueprint (PLAN-D10 follow-up).** M3-B04
+  §H excluded lever, button and pressure plate together; PLAN-D10 pulled the
+  lever into M3. Button (auto-off scheduled tick per material, wooden buttons
+  also arrow-triggered) and pressure plate (entity-presence trigger, weighted
+  variants) are tier 2 and now reachable — M4-B02's item entities and M4-B03's
+  mobs can stand on plates. The roadmap names blueprint `M4-B10` for them;
+  it is not written. Planning: author it before M4 wave 3 closes.
+- **Engine-side block self-destruction never drops an item.** Every support
+  loss handled inside `rc-mechanics` (wire/torch pop via `on_shape_update`,
+  a piston overwriting a `PushClass::Destroy` block, the lever's pop) returns
+  air and nothing else: `UpdateContext` has no entity-spawn access;
+  `spawn_drop_if_needed` is wired only from the player-mining handlers in
+  `world.rs`. Vanilla drops the block (`Block.dropResources`). M4-B02 shipped
+  the item-entity primitive, so the missing piece is a drop request channel
+  out of Stage 4 (e.g. a per-tick "destroyed with drops" outbox next to the
+  MECH-D83 block-event outbox, consumed where the mining drops are spawned).
+  Planning: decide the channel; the owner will see dust vanish without a
+  drop after the PLAN-D10 fixes until it exists.
+- **Piston–entity interaction is unimplemented and now reachable.**
+  `piston.rs` has no entity-aware code: no crushing, no push displacement,
+  no destruction of item entities in the push line (vanilla:
+  `PistonBaseBlock`'s moving-block entity collision handling). With M4-B02's
+  entity physics on `main` this is a visible tier-2 gap; MECH-D13 names
+  "entity displacement" for the piston, so it belongs to an M4 blueprint
+  (M4-B09's scenario suite or M4-B10). Planning: assign.
+- **`PushPlan.to_destroy` is computed by `resolve_extend` and never read by
+  `commit_extend`.** The write loop's own `i == n` target always coincides
+  with the destroyed block's position, so world state is correct today; the
+  field only matters once the drop channel above exists (the destroyed block
+  must drop). Keep the field, wire it into the drop channel then.
+- **Corpus fixtures need a support-validity lint.** The M3.5 protocol-diff
+  wave found one floating fixture (`comparator_container_fullness_chest`) and
+  the wave-3 drafts produced another (a wire with no floor). The oracle pops
+  such blocks one tick after setup and the trace silently records the pop.
+  A `verify-fixtures`-style check that every wire/torch/diode/lever cell has
+  a non-air block in its support direction would catch both; ships with the
+  PLAN-D10 corpus wave.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2315,6 +2353,42 @@ Entries name the milestone that surfaced them and the code they concern.
       input whatsoever. Shipped as `stationary_item_gets_floor_push_in_
       slow_lava`.
 
+### PLAN-D10 wave (M3 field-report wave 3) — deviations found by the diagnosis, not yet closed
+
+- **Scheduled-tick dedup guard is coarser than vanilla's.**
+  `ScheduledTickQueue::is_block_tick_pending` (`crates/mechanics/src/
+  scheduled_tick.rs:150-158`, documented there as "a coarser stand-in for
+  vanilla's own per-tick `willTickThisTick`") is true for *any* queued tick
+  at the position; vanilla's `LevelTicks.willTickThisTick` is true only for
+  ticks in the current tick's run set. Repeater, comparator and torch gate
+  their re-schedule on it, so a diode with a tick queued for a later tick
+  cannot be scheduled again here but can in vanilla. No corpus fixture
+  exposes it (52/52 green). The PLAN-D10 corpus wave adds fixtures that
+  target the difference (a delay-4 repeater receiving a second input change
+  while its tick is pending; a torch toggled twice inside its own re-eval
+  window); if the oracle trace differs, the guard is replaced by the exact
+  semantics as an M3 field-report implementation changeset.
+- **MECH-D78 is decided but not implemented.** `respond_place` (`crates/
+  server/src/play/world.rs` ~4000-4034) still resends the placement-direction
+  cell to the actor on rejection only, and never the clicked cell; `Applied`
+  sends nothing to the actor beyond the broadcast; `NothingToPlace` sends
+  nothing at all (the client's ghost lever vanished only because the
+  client's own prediction timed out). Closed in the PLAN-D10 wave as its own
+  changeset pair (the outcome type gains the clicked cell's state).
+- **`write_block_state` never marks the light-dirty queue (M4-B07).**
+  `UpdateContext::set_block` is the only caller of `LightDirtyQueue::mark`;
+  every settled redstone state flip goes through `write_block_state` — a
+  redstone torch relighting (light 7) never reaches the light engine, so the
+  client's light stays stale until an unrelated `set_block` nearby. Closed in
+  the PLAN-D10 wave as an `M4-B07 field-report` changeset (mark in
+  `write_block_state` too; light emission is a property of the state alone).
+- **Moving-piston placeholder still unmodelled after MECH-D83.** The client
+  animates from the `block_event` and our final block updates arrive two
+  ticks later; vanilla additionally writes `moving_piston` states with block
+  entities at trigger time. Registered as a TEST-D59 `Missing` divergence for
+  the piston contraptions once the packet lands; closes with a future
+  blueprint that models the placeholder (none scheduled).
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
@@ -2380,3 +2454,16 @@ Entries name the milestone that surfaced them and the code they concern.
   may want `09-testing-quality.md` (TEST-D2's per-test process isolation) to
   state that libtest is also a supported runner for Tier 1, so no future test
   relies on process isolation for process-global state (environment, cwd).
+
+- **M3-B04 §G and §H annotated for PLAN-D10.** §G's "toggled by an
+  out-of-scope use-item interaction" and §H's lever exclusion now state that
+  the block-use dispatch (MECH-D82) and the lever (MECH-D13) were pulled into
+  M3 as field-report changesets; button and pressure plate stay excluded
+  (M4-B10). The earlier ledger note "we never send `block_event` … closes in
+  M4" is superseded: MECH-D83 owns it and it closes in the PLAN-D10 wave.
+- **M3-B05 Context §D's decision to leave extended piston bases without
+  shape rows is overturned by MECH-D84** — the reference's
+  `PistonBaseBlock.getShape` is a 12/16 slab on every facing, and the top
+  face is not sturdy on any horizontal facing, so the missing rows were a
+  parity defect, not a simplification. `piston_shape_table.rs`'s protected
+  fallback test targets a sentinel id and stays valid.

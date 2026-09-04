@@ -165,3 +165,35 @@ packet path, not only through the engine.
   the verdict is appended here when it exists. On the owner's explicit
   decision (2026-09-03) M4 implementation started before this sign-off;
   findings from the play test are M3 field reports against that tag.
+- **2026-09-04, owner play test of `m3.5-final` (real Java client 26.2), wave 3
+  field report — six findings, diagnosed per finding by an independent agent,
+  every vanilla claim re-verified against the ASSET-D18(f) reference, closed
+  under PLAN-D10:**
+  1. Right-click on a repeater/comparator does nothing (delay stuck at 1, mode
+     stuck at compare, no block update) — **scope gap**: M3-B04 §G left block
+     use out; the server turned every use-item-on into a placement (no
+     `on_use` dispatch existed anywhere). Closed by MECH-D82.
+  2. Lever cannot be placed (client ghost vanishes) — **scope gap**: M3-B04 §H
+     excluded the lever; the item fell outside the closed placeable set and the
+     MECH-D78 resend erased the prediction. Closed by MECH-D13/PLAN-D10.
+  3. Two-repeater loop clock latches at 15 after a hand-length pulse —
+     **not a bug**: with both repeaters at delay 1 (finding 1) a pulse longer
+     than one repeater's own delay latches the loop in vanilla too (`DiodeBlock`
+     turn-on without self-reschedule, never-cancelled queued ticks). Settled
+     against the oracle by three new loop-clock fixtures; the analysis also
+     surfaced a real deviation in the scheduled-tick dedup guard (ledger B).
+  4. Torch under a solid block does not power dust on top — **bug** (wall
+     variant): `direct_signal_toward` derived the strong-signal axis from the
+     attachment; vanilla's `getDirectSignal` is hard-coded to straight up for
+     both torch variants. Floor torches were correct by coincidence.
+  5. Pistons teleport instead of animating — **known gap** now owned by
+     MECH-D83: the engine computed every accepted block event and discarded it
+     at the ECS boundary; no `block_event` packet existed.
+  6. Dust on piston parts never pops — **bug**: the shape table had no rows for
+     the twelve extended piston-base states, so an extended base read as a
+     full-cube conductor and the wire's floor check (and placement's) kept the
+     dust; vanilla's top face is not sturdy on any horizontal facing. Closed by
+     the true shapes plus MECH-D84's per-face predicate.
+  Fixes land as `M3 field-report` changesets on `main` (M4 waves 1–2 already
+  merged), the owner re-tests on a fresh pinned binary; verdicts are appended
+  here.
