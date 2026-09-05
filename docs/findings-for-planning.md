@@ -2389,6 +2389,39 @@ Entries name the milestone that surfaced them and the code they concern.
   the piston contraptions once the packet lands; closes with a future
   blueprint that models the placeholder (none scheduled).
 
+- **Two-repeater loop clock drifts out of phase against the oracle from tick 7
+  (Stream A, PLAN-D10 corpus wave).** `redstone/clock/repeater_loop_clock_
+  delay1_pulse1` (two delay-1 repeaters, 1-tick starting pulse) oscillates in
+  both engines, but a 28-tick capture shows our phase drifting from the
+  oracle's from tick 7 on; the committed fixture is trimmed to `max_ticks: 6`
+  (the exactly-matching prefix) so CI stays green — a documented, temporary
+  scoping, not a closure. The two dedicated dedup-guard probes
+  (`update_order_repeater_dedup_guard`, `update_order_torch_dedup_guard`) came
+  back green, so the coarser `is_block_tick_pending` guard is not exposed by
+  cross-tick input changes; the same-tick window (a diode whose tick already
+  ran this tick receiving a neighbour change from the other diode's tick in
+  the same game tick — vanilla's `LevelTicks.willTickThisTick`/`toRunThisTick`
+  refuses, ours sees no pending tick and schedules) is the leading suspect.
+  Root-caused and fixed by an instrumented diagnosis task in this wave; the
+  fixture returns to 28 ticks with the fix.
+- **`moving_piston` placeholder: now a measured parity divergence, not only a
+  wire one.** The oracle capture of a wire resting on the block a piston
+  pushes pops it at trigger time (the block becomes `moving_piston`, whose
+  support shape is empty), ours two ticks later when the head lands; the
+  fixture `piston_push_pops_wire_on_moved_block` is withheld from the corpus
+  because `parity-check redstone` has no allowlist. PLAN-D10 add-on: model the
+  placeholder states (`moving_piston[facing,type]` at every moved cell and the
+  head cell for the 2-tick window, empty support shape, final commit replaces
+  them) as an M3 field-report changeset after Stream B lands; entity
+  displacement stays the separate M4 item.
+- **Six pre-existing corpus fixtures float** (found by the new support lint in
+  `rc_gametest::spec::load_spec`): `comparator_2tick_fixed_delay`,
+  `comparator_compare_vs_subtract` (a torch), `comparator_container_fullness_
+  chest`, `comparator_priority_diode_behind`, `comparator_tie_no_turn_on`,
+  `comparator_wire_signal_read`. Allowlisted in `spec.rs` with a rationale;
+  the paused M3.5 harness worktree already re-geometries exactly these six —
+  when it lands, the allowlist is removed and the six are recaptured.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
