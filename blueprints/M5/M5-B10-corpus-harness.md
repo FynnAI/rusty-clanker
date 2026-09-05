@@ -509,7 +509,7 @@ pub const BOT_SPACING_BLOCKS: i32 = 512;
 /// Vanilla's own tracked/sent chunk set for render distance `r` is a rounded
 /// square, not a full `(2r+1)x(2r+1)` grid and not a circle either:
 /// `ChunkTrackingView`'s own buffer-2 ("include neighbors") predicate —
-/// `max(0, |dx|-2)^2 + max(0, |dz|-2)^2 < r*r` — is exactly what gates which
+/// `max(0, abs(dx)-2)^2 + max(0, abs(dz)-2)^2 < r*r` — is exactly what gates which
 /// chunks the server sends as `Level Chunk with Light` packets, so it is what
 /// this blueprint's own packet-observed `loaded_count` must be measured
 /// against, never `(2r+1)^2` (unreachable — corners are always cut). Pure,
@@ -644,7 +644,7 @@ pub fn analyze_radius_exhaustion(entries: &[LoadedRadiusEntry]) -> RadiusReport;
 - In vanilla, chunk generation triggered by "forceload" happens asynchronously on background worker threads, and the generated chunk data is not guaranteed to be reflected on disk until an explicit save such as "save-all flush" is performed.
 - In vanilla, a structure-placed container stores only an unrolled loot-table reference plus a seed at chunk generation time, with the actual loot contents rolled lazily on first access to the container (not only a player interaction); a structure-placed spawner stores no loot-table reference at all, only spawn data (entity type plus a seed).
 - In vanilla's protocol, each chunk that enters a client's render distance is sent to that client as a "Level Chunk with Light" class packet.
-- Vanilla's client chunk-loading area for a given render distance of r chunks is a rounded square, not a full (2r+1) by (2r+1) grid and not a circular approximation either: a chunk at relative offset (dx, dz) is tracked/sent iff max(0, |dx|-2)^2 + max(0, |dz|-2)^2 < r*r (637 chunks at r=12, versus 625 for (2r+1)^2 and 533 for the narrower in-view-only variant that drops the buffer to 1).
+- Vanilla's client chunk-loading area for a given render distance of r chunks is a rounded square, not a full (2r+1) by (2r+1) grid and not a circular approximation either: a chunk at relative offset (dx, dz) is tracked/sent iff max(0, abs(dx)-2)^2 + max(0, abs(dz)-2)^2 < r*r (637 chunks at r=12, versus 625 for (2r+1)^2 and 533 for the narrower in-view-only variant that drops the buffer to 1).
 
 ## Deliverables
 
