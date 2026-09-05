@@ -799,6 +799,34 @@ Entries name the milestone that surfaced them and the code they concern.
   sampling helper exists: read the region's `CurrentTick` with each sample
   and compare deltas per tick, not per sleep.
 
+- **Random-tick vegetation has no owning blueprint.** The protocol-diff oracle
+  (before the M3.5-B03 background freeze) showed grass-spread `block_update`s
+  from vanilla's random ticks; `rc_mechanics::random_tick` ships the per-chunk
+  draw algorithm with zero receivers, and no M4/M5 blueprint schedules grass
+  spread, crop growth, leaf decay or any other random-tick receiver. Planning:
+  name the milestone and blueprint that owns Stage-5 random-tick receivers
+  (MECH- rows exist for the draw only).
+- **Tag and registry sync order is Java `HashMap` iteration order.** The
+  `update_tags` bodies of both sides are the same 35,203 bytes reordered: the
+  reference serializes both the per-registry tag map and the outer registry map
+  from plain hash maps, so the wire order is bucket order over the identifier
+  keys, not declaration or alphabetical order. A literal port would reimplement
+  Java's string hashing and bucketing; the pragmatic closure is to capture the
+  pinned 26.2 order once (generator-produced table, hash-manifested) and emit
+  it. Registered as a `Body` divergence (closes_with "NET hardening:
+  registry/tag sync order", expires M5). Planning: decide table-versus-port and
+  the owning changeset.
+- **Known-packs negotiation is not implemented.** The oracle sends
+  `select_known_packs` (`minecraft:core 26.2`) in configuration and, for a
+  client that does not acknowledge the pack, full per-entry NBT in every
+  `registry_data` (e.g. `minecraft:enchantment` 32,084 bytes versus our 967);
+  our server never sends `select_known_packs` and always sends `has_data =
+  false`, which a real client accepts only because it declares the core pack
+  unasked. Registered as `Missing`/`Body` entries (closes_with "NET hardening:
+  known-packs negotiation" / "registry sync content", expires M5). Planning:
+  the negotiation plus the inline-NBT fallback for unknown packs is one NET
+  hardening changeset before M5.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
