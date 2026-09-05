@@ -28,6 +28,77 @@ use crate::spec::PlacedBlock;
 /// track — never a genuine behavioral difference worth reporting.
 const ORACLE_VIEW_DISTANCE: u32 = 5;
 
+/// `server.properties`' own `level-name` default (never overridden by
+/// `server_properties_text` below) — the single, fixed subdirectory of `work_dir`
+/// `clear_world_dir` removes before every fresh launch.
+const ORACLE_LEVEL_NAME: &str = "world";
+
+/// Pure: the exact `server.properties` text `launch_oracle_server` writes into a
+/// fresh `work_dir` before every oracle launch. M3.5-B03 follow-up (protocol-diff
+/// closure wave, `docs/findings-for-planning.md`): a prior pass proposed adding
+/// `spawn-animals=false`/`spawn-npcs=false` here, reasoning (from the observed
+/// captures alone, never checked against the reference) that vanilla's chunk-
+/// generation-time mob population reads them. Checked directly against the pinned
+/// 26.2 reference's own dedicated-server-properties class (ASSET-D18(f)) instead of
+/// assumed: that class declares exactly one spawn-related boolean key,
+/// `spawn-monsters` — no `spawn-animals`, no `spawn-npcs` key exists to write in this
+/// version at all (both were evidently retired upstream; writing them here would be
+/// dead configuration `java.util.Properties` silently ignores, not a fix). Written
+/// anyway, since it is real and harmless belt-and-suspenders alongside
+/// `difficulty=peaceful` (which already prevents every hostile-mob category
+/// regardless of this key). The real fix for the animals actually observed in the
+/// captures is `clear_world_dir` below, not this property — see that function's own
+/// doc comment.
+pub fn server_properties_text(port: u16) -> String {
+    format!(
+        "online-mode=false\n\
+         level-type=flat\n\
+         generate-structures=false\n\
+         spawn-protection=0\n\
+         difficulty=peaceful\n\
+         gamemode=creative\n\
+         spawn-monsters=false\n\
+         server-port={port}\n\
+         view-distance={ORACLE_VIEW_DISTANCE}\n"
+    )
+}
+
+/// Removes `work_dir.join(ORACLE_LEVEL_NAME)` (recursively), if it exists — a no-op,
+/// never an error, when it does not (the common case: a brand-new `work_dir`).
+///
+/// M3.5-B03 follow-up (protocol-diff closure wave, `docs/findings-for-planning.md`):
+/// `launch_oracle_server`'s own `work_dir` is a *fixed* path
+/// (`target/protocol-diff-oracle/<version>`, `xtask::corpus::protocol_diff::run`'s own
+/// choice) reused across every single capture attempt — this function's own prior
+/// form never cleared it, only `create_dir_all`'d it and (re)wrote `eula.txt`/
+/// `server.properties`, leaving any previously-generated `world/` save completely
+/// untouched. A live run's own persisted world save was found (directly, by
+/// decompressing its `dimensions/minecraft/overworld/entities/*.mca` region files)
+/// to already carry saved `minecraft:cow`/`minecraft:pig`/`minecraft:chicken`/
+/// `minecraft:item` entity NBT from an EARLIER capture attempt (predating whatever
+/// fix currently keeps the *live* server quiet) — every subsequent run, gamerule
+/// freeze or not, reloads this same stale save and re-announces its
+/// already-persisted entities to the observing bot via ordinary `add_entity`/
+/// `set_entity_data`/`entity_position_sync` chunk-load traffic, entirely independent
+/// of whether *new* spawning is currently disabled. This is the actual root cause of
+/// every wild-animal/leftover-item divergence this session's own real oracle
+/// captures showed (`session/spawn`, `session/move`, `session/observe_chunk`,
+/// `session/disconnect_reconnect`, `session/dig_stone_survival`) — confirmed, not the
+/// chunk-generation-time population mechanism a prior pass assumed (that mechanism
+/// is itself a hard no-op on a `level-type=flat` world in this pinned version,
+/// verified directly against the reference's own `FlatLevelSource.spawnOriginalMobs`
+/// override, an empty method body). Wiping only the save (never `work_dir` itself)
+/// keeps every downloaded-once asset (`libraries/`, `versions/`) cached across runs —
+/// only the world state needs to start fresh.
+pub fn clear_world_dir(work_dir: &Path) -> std::io::Result<()> {
+    let world_dir = work_dir.join(ORACLE_LEVEL_NAME);
+    match std::fs::remove_dir_all(&world_dir) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
     #[error("io error: {0}")]
@@ -183,8 +254,10 @@ pub fn verify_setup_commands_accepted(
     }
 }
 
-/// Writes `eula.txt`/`server.properties` into `work_dir` (blueprint Context, "Capture
-/// pipeline" step 2's exact property list), spawns `<resolved java> -jar <jar_path>
+/// Clears any previously-persisted `work_dir/world` save (`clear_world_dir`'s own doc
+/// comment has the full "stale entities survive across runs" citation), then writes
+/// `eula.txt`/`server.properties` into `work_dir` (`server_properties_text`'s own doc
+/// comment), spawns `<resolved java> -jar <jar_path>
 /// nogui` (see `resolve_java_binary`) with piped stdin and `work_dir` as the current
 /// directory, polls a raw TCP connect against `port` until one succeeds, then —
 /// governance fix, empirically motivated — keeps polling `read_server_log` until it
@@ -206,18 +279,12 @@ pub fn launch_oracle_server(
     startup_timeout: Duration,
 ) -> Result<OracleServerHandle, CaptureError> {
     std::fs::create_dir_all(work_dir)?;
+    clear_world_dir(work_dir)?;
     std::fs::write(work_dir.join("eula.txt"), b"eula=true\n")?;
-    let properties = format!(
-        "online-mode=false\n\
-         level-type=flat\n\
-         generate-structures=false\n\
-         spawn-protection=0\n\
-         difficulty=peaceful\n\
-         gamemode=creative\n\
-         server-port={port}\n\
-         view-distance={ORACLE_VIEW_DISTANCE}\n"
-    );
-    std::fs::write(work_dir.join("server.properties"), properties)?;
+    std::fs::write(
+        work_dir.join("server.properties"),
+        server_properties_text(port),
+    )?;
 
     let java_bin = resolve_java_binary().map_err(CaptureError::JavaNotFound)?;
     let mut child = Command::new(java_bin)

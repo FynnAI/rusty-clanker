@@ -97,6 +97,14 @@ const SETTLE_TICKS: usize = 10;
 /// whole session that needs *real* survival timing, not merely "eventually settles"
 /// (blueprint §4.3: "dig with timing").
 const SURVIVAL_DIG_HOLD: Duration = Duration::from_secs(9);
+/// `session/disconnect_reconnect`'s own reconnect boundary: how long the recorder
+/// must go quiet before it is trusted (`wait_for_recorder_quiescence`'s own doc
+/// comment has the full mechanism/citation).
+const RECONNECT_QUIESCENCE_WINDOW: Duration = Duration::from_millis(300);
+/// Upper bound on the total wait — `wait_for_recorder_quiescence` never blocks
+/// forever even if the dying first connection's own relay task never quiets down
+/// within this budget (a real server hang would otherwise stall the whole session).
+const RECONNECT_QUIESCENCE_MAX_WAIT: Duration = Duration::from_secs(5);
 
 fn slug_for(kind: BlockKind) -> &'static str {
     kind.slug()
@@ -269,6 +277,57 @@ fn resolve_multi_phase(packets: &[(i32, Vec<u8>)]) -> Vec<CapturedPacket> {
             }
         })
         .collect()
+}
+
+/// M3.5-B03 follow-up (protocol-diff closure wave, `docs/findings-for-planning.md`):
+/// waits until `recorder` has stopped growing for `quiet_for`, or `max_wait` total
+/// elapses — whichever comes first; never blocks forever. Called once, right after
+/// `client.disconnect()` and before the reconnect's own `recorder.clear()` +
+/// `connect_and_observe_with_recorder`, replacing a prior fixed
+/// `tokio::time::sleep(500ms)` that raced a real harness bug: `packet_recorder::
+/// spawn_with_recorder`'s own relay binds ONE listener for this whole session and
+/// spawns a brand-new task per ACCEPTED connection (its own doc comment), every one
+/// of them sharing this SAME `recorder` — and `RelayHandle` "has no shutdown API"
+/// (`vanilla_registry_defaults`'s own doc comment) for a superseded connection's own
+/// task. A fixed, short sleep here is a race against that dying first connection's
+/// own relay task, which keeps pumping whatever the real upstream server still sends
+/// it (the server's own detection of the client-side close is not instantaneous)
+/// into the very same recorder the second connection's own fresh handshake bytes are
+/// about to start landing in too. Decoded live from a real oracle capture
+/// (`target/verify/protocol-diff-oracle.postcard`, `session/disconnect_reconnect`):
+/// the step's leading two packets were exactly this trailing traffic — `id=83`
+/// (`rotate_head`, an ordinary timer tick from the dying first connection) then
+/// `id=32` with a decoded NBT body `{"translate":"multiplayer.disconnect.
+/// duplicate_login"}` (the real server kicking that same dying connection once the
+/// second connection logs in under the identical account name) — both landing IN
+/// THE MIDDLE of the second connection's own Login handshake (between its own
+/// `login_compression` and `login_finished`), so `resolve_multi_phase`'s
+/// fresh-stream-starts-in-`ConnState::Login` assumption tries to decode them via the
+/// Login-state packet table and fails (`<unresolved>`) — not a packet-catalogue gap
+/// (both names are already fully catalogued, `protocol_packet_catalog.rs`'s own Play
+/// table), a genuine connection-boundary race. Waiting for actual quiescence drains
+/// this trailing traffic into the (soon-to-be-cleared) recorder before it can ever
+/// race the second connection's own first bytes.
+async fn wait_for_recorder_quiescence(
+    recorder: &PacketRecorder,
+    quiet_for: Duration,
+    max_wait: Duration,
+) {
+    let deadline = Instant::now() + max_wait;
+    let mut last_len = recorder.len();
+    let mut quiet_since = Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let now = Instant::now();
+        let len = recorder.len();
+        if len != last_len {
+            last_len = len;
+            quiet_since = now;
+        }
+        if now.duration_since(quiet_since) >= quiet_for || now >= deadline {
+            return;
+        }
+    }
 }
 
 /// Pushes `step_id`'s own `raw` capture into `out` (subject to `only`, as before), and
@@ -595,7 +654,12 @@ pub async fn run_protocol_session(
     // and the full reconnect handshake under the identical account name.
     client.disconnect();
     drop(observer);
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_recorder_quiescence(
+        &recorder,
+        RECONNECT_QUIESCENCE_WINDOW,
+        RECONNECT_QUIESCENCE_MAX_WAIT,
+    )
+    .await;
     recorder.clear();
     match connect_and_observe_with_recorder(
         host,
@@ -694,4 +758,67 @@ pub async fn run_protocol_session(
     }
 
     Ok(out)
+}
+
+/// M3.5-B03 follow-up: `wait_for_recorder_quiescence`'s own two edges — real writes
+/// (no live oracle/server/network needed, `PacketRecorder` is a plain in-process
+/// `Arc<Mutex<...>>`), never touching `run_protocol_session` itself.
+#[cfg(test)]
+mod quiescence_tests {
+    use super::*;
+    use crate::packet_recorder::PacketRecorder;
+
+    #[tokio::test]
+    async fn returns_promptly_once_writes_stop_well_before_max_wait() {
+        let recorder = PacketRecorder::new();
+        let writer = recorder.clone();
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                writer.record(1, &[0u8]);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+
+        let start = Instant::now();
+        wait_for_recorder_quiescence(
+            &recorder,
+            Duration::from_millis(100),
+            Duration::from_secs(5),
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(recorder.len(), 3, "all three writes must have landed first");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "must return once quiet, never wait out the full 5s max_wait: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn never_exceeds_max_wait_when_writes_never_stop() {
+        let recorder = PacketRecorder::new();
+        let writer = recorder.clone();
+        let keep_writing = tokio::spawn(async move {
+            loop {
+                writer.record(1, &[0u8]);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let start = Instant::now();
+        wait_for_recorder_quiescence(
+            &recorder,
+            Duration::from_millis(50),
+            Duration::from_millis(150),
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        keep_writing.abort();
+        assert!(
+            elapsed >= Duration::from_millis(150) && elapsed < Duration::from_secs(2),
+            "must give up at max_wait rather than block forever against a never-quiet recorder: {elapsed:?}"
+        );
+    }
 }
