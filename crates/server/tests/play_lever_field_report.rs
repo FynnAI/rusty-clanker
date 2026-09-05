@@ -9,7 +9,7 @@
 use bytes::{Bytes, BytesMut};
 use rc_core::BlockPos;
 use rc_protocol::{CompressionState, RcPacket, VarInt, VarLong, decode_one, encode_payload};
-use rc_registries::block_state_properties::{properties, state_id};
+use rc_registries::block_state_properties::{properties, state_id, with_property};
 use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::BlockStateId as GenStateId;
 use rc_registries::generated_v776::block_states::default_state::STONE;
@@ -340,6 +340,38 @@ fn wire_power(raw: i32) -> u8 {
         .unwrap()
 }
 
+/// M3 field-report test-authoring (wave 3, "Wire beside a toggled signal source loses its power
+/// in the replay harness"): the FULL `minecraft:redstone_wire` state id for one explicit
+/// `(east, north, power, south, west)` tuple. The toggle test below used to compare only
+/// `wire_power`'s single decoded digit, so a toggle that got the power right while silently
+/// rewriting the wire's four connection digits (`RedStoneWireBlock.updateShape`'s own
+/// connections-only recompute racing `DefaultRedstoneWireEvaluator.updatePowerStrength`'s own
+/// power-only writeback) read as a pass -- exactly the blind spot that ledger entry names.
+fn wire_id(east: &str, north: &str, power: u8, south: &str, west: &str) -> i32 {
+    let power = power.to_string();
+    state_id(
+        block_id::REDSTONE_WIRE,
+        &[
+            ("east", east),
+            ("north", north),
+            ("power", power.as_str()),
+            ("south", south),
+            ("west", west),
+        ],
+    )
+    .expect("every (east,north,power,south,west) combination is a real redstone_wire state")
+    .0 as i32
+}
+
+/// `raw` with only its `power` digit replaced -- the "connection shape untouched" half of the
+/// full-id assertions below, expressed against a wire's own real resting id rather than a
+/// second hand-derived literal (`wire_id`'s own doc comment).
+fn wire_id_with_power(raw: i32, power: u8) -> i32 {
+    with_property(GenStateId(raw as u32), "power", &power.to_string())
+        .expect("power is always a legal minecraft:redstone_wire property value (0 through 15)")
+        .0 as i32
+}
+
 async fn place_lever(
     actor: &mut TcpStream,
     acc: &mut BytesMut,
@@ -498,6 +530,25 @@ async fn toggle_powers_a_wire_chain_sounds_the_bystander_and_toggling_off_depowe
         place_and_read_id(&mut a, &mut a_acc, &mut seq, wire1_floor, 1).await;
         place_and_read_id(&mut a, &mut a_acc, &mut seq, wire2_floor, 1).await;
 
+        // M3 field-report test-authoring (wave 3): pin the RESTING full state id of both wires,
+        // not merely their power digit. Both sit in a straight west/east run (wire1's west side
+        // faces the lever, which `RedStoneWireBlock.shouldConnectTo` connects to because a lever
+        // `isSignalSource`; wire2's lone west connection is straightened into a west/east line by
+        // `getConnectionState`'s own post-processing), so both rest at
+        // `east=side,north=none,power=0,south=none,west=side`.
+        let wire1_rest = world.debug_query_block(wire1_pos).await.unwrap().raw_state as i32;
+        let wire2_rest = world.debug_query_block(wire2_pos).await.unwrap().raw_state as i32;
+        assert_eq!(
+            wire1_rest,
+            wire_id("side", "none", 0, "none", "side"),
+            "the wire beside the lever must rest as an unpowered west/east line"
+        );
+        assert_eq!(
+            wire2_rest,
+            wire_id("side", "none", 0, "none", "side"),
+            "the second wire must rest as an unpowered west/east line too"
+        );
+
         drain_traffic_for(&mut b, &mut b_acc, Duration::from_millis(300)).await;
         world.debug_set_held_item(1, HeldItemStub::EmptyHand).await;
 
@@ -540,6 +591,21 @@ async fn toggle_powers_a_wire_chain_sounds_the_bystander_and_toggling_off_depowe
             wire2_final.map(wire_power),
             Some(14),
             "the next wire in the chain must read one less, via ordinary wire decay"
+        );
+        // M3 field-report test-authoring (wave 3): the FULL id, not just the power digit -- a
+        // toggle must move ONLY the power digit and leave all four connection digits exactly as
+        // they rested (`wire_id`'s own doc comment has the ledger citation; `RedStoneWireBlock.
+        // updateShape`'s horizontal single-property fast path is what guarantees it in vanilla,
+        // since the connecting side toward the lever never changes when only POWERED flips).
+        assert_eq!(
+            wire1_final,
+            Some(wire_id_with_power(wire1_rest, 15)),
+            "the toggle must raise only the first wire's power digit, never its connection shape"
+        );
+        assert_eq!(
+            wire2_final,
+            Some(wire_id_with_power(wire2_rest, 14)),
+            "the toggle must raise only the second wire's power digit, never its connection shape"
         );
 
         // The actor never hears its own click; the bystander hears exactly one `Sound`,
@@ -596,9 +662,13 @@ async fn toggle_powers_a_wire_chain_sounds_the_bystander_and_toggling_off_depowe
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         let mut both_zero = false;
+        let mut wire1_off = None;
+        let mut wire2_off = None;
         while tokio::time::Instant::now() < deadline {
             let w1 = world.debug_query_block(wire1_pos).await.unwrap().raw_state as i32;
             let w2 = world.debug_query_block(wire2_pos).await.unwrap().raw_state as i32;
+            wire1_off = Some(w1);
+            wire2_off = Some(w2);
             if wire_power(w1) == 0 && wire_power(w2) == 0 {
                 both_zero = true;
                 break;
@@ -608,6 +678,13 @@ async fn toggle_powers_a_wire_chain_sounds_the_bystander_and_toggling_off_depowe
         assert!(
             both_zero,
             "toggling the lever off must depower the whole chain"
+        );
+        // M3 field-report test-authoring (wave 3): full ids again -- toggling off must land both
+        // wires back on their exact resting ids, connection digits included.
+        assert_eq!(
+            (wire1_off, wire2_off),
+            (Some(wire1_rest), Some(wire2_rest)),
+            "toggling off must restore both wires' full resting state ids, shape included"
         );
         let lever_after = world.debug_query_block(lever_pos).await.unwrap().raw_state as i32;
         assert_eq!(lever_after, lever_id("wall", "east", false));

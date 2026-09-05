@@ -22,7 +22,7 @@ use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::piston::PistonBehavior;
 use rc_mechanics::redstone::{
-    ComparatorBehavior, ComparatorMode, ContainerSignalSource, RedstoneSignalSource,
+    ComparatorBehavior, ComparatorMode, ContainerSignalSource, LeverBehavior, RedstoneSignalSource,
     RepeaterBehavior, SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
     notify_neighbor_changed_only, register_redstone_block,
 };
@@ -792,6 +792,33 @@ pub fn tier1_registry(
         hi,
         Arc::clone(&comparator) as Arc<dyn RedstoneSignalSource>,
     );
+
+    // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever, tier 1's fifth component --
+    // registered here in exactly the position `register_tier1_redstone` registers it (last of
+    // the five, after the comparator, before the two-phase bind below). Restored by the M3
+    // field-report diagnosis of `docs/findings-for-planning.md`'s own "Wire beside a toggled
+    // signal source loses its power in the replay harness" entry: this hand-reconstructed
+    // registry (module doc comment: it must rebuild `register_tier1_redstone`'s own
+    // construction/registration order by hand, because two of the five components need
+    // pre-`Arc` placement seeding) silently fell one component behind the production
+    // composition root the moment the lever landed, so every lever id in this corpus resolved
+    // to the shared `NoSignalSource`/`NoOpBehavior` defaults instead. Instrumented evidence
+    // from `redstone/qc/lever_toggle_powers_adjacent_wire`: an adjacent wire's own
+    // `on_neighbor_changed` read `is_signal_source=false`/`connects_from=false` for a lever
+    // already stored as `powered=true`, so its power stayed 0 AND all four of its connection
+    // sides computed `None` -- which `compute_connection_shapes`' straight-line post-processing
+    // (`RedStoneWireBlock.getConnectionState`) then turned into the four-side cross, exactly
+    // the `4591`-instead-of-`4873` divergence that entry reports.
+    //
+    // Registered directly from the `LeverBehavior` value, not through
+    // `register_tier1_redstone`: this function deliberately never calls that one (module doc
+    // comment). Needs no `bind_registry` and carries no per-position placement state at all
+    // (`lever.rs`'s own module doc comment: every read decodes the stored id), so unlike the
+    // repeater/comparator/piston above it needs no `spec.blocks` seeding pass either.
+    let lever = Arc::new(LeverBehavior::new());
+    let (lo, hi) = exclusive(block_id::LEVER);
+    behaviors.register_range(lo, hi, Arc::clone(&lever) as Arc<dyn BlockBehavior>);
+    signals.register_range(lo, hi, lever as Arc<dyn RedstoneSignalSource>);
 
     // Two-phase registry self-reference (Context §I½, `Tier1RedstoneHandles::bind_registry`'s
     // own identical order: wire, torch-floor, torch-wall, repeater, comparator).

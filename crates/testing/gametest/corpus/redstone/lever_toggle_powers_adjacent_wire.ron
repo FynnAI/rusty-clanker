@@ -1,0 +1,45 @@
+// M3 field-report corpus (PLAN-D10/MECH-D13, wave 3): a lever toggled directly BESIDE a wire
+// tile — the geometry `lever_powers_wire_via_state_swap.ron` deliberately scoped itself away
+// from, restored here as its own fixture because the divergence that scoping hid
+// (`docs/findings-for-planning.md`, "Wire beside a toggled signal source loses its power in the
+// replay harness") is exactly what this fixture pins.
+//
+// Geometry: a floor lever at (0,0,0) on its own stone at (0,-1,0); a wire tile at (1,0,0) —
+// directly east, the lever's own immediate neighbour, so the `/setblock`'s own
+// `updateNeighboursOnBlockSet` neighbour-changed fan-out really does reach it — resting on its
+// own separate stone at (1,-1,0).
+//
+// The wire's declared connection digits are the ones vanilla's own placement pipeline derives
+// anyway (`BlockInput.place` runs `Block.updateFromNeighbourShapes` before the write, and
+// `RedStoneWireBlock.getConnectionState`'s straight-line post-processing turns the lone
+// `west=side` connection toward the lever into a west/east line) — spelled out in full here
+// rather than left to `overwriteWithDefinedProperties`, so the declared `state_id` is
+// self-evidently the one the oracle stores and the fixture never depends on a placement-time
+// derivation to be readable.
+//
+// Every block_id/state_id below was resolved directly against the generated registry
+// (`rc_registries::block_state_properties::state_id`): `minecraft:lever` = `block_id` 520,
+// range `[6771, 6794]` (6772 = face=floor/facing=north/powered=false, 6771 = the same
+// powered=true); `minecraft:redstone_wire` = `block_id` 893, range `[4011, 5306]` (4738 =
+// east=side/north=none/power=0/south=none/west=side, 4873 = the same at power 15);
+// `minecraft:stone` = 1.
+ContraptionSpec(
+    id: "redstone/qc/lever_toggle_powers_adjacent_wire",
+    category: QcShowcase,
+    description: "A floor lever (facing north) on its own stone, with a redstone wire tile directly east of it on its own separate stone floor. Toggling the lever on raises the adjacent wire to power 15 without disturbing its connection shape; toggling it back off drops the wire to 0, again leaving the shape untouched.",
+    quirk: "A `/setblock` state swap of a lever is `Level.setBlock(pos, state, 2|256)` followed by `ServerLevel.updateNeighboursOnBlockSet` — shape updates first, then the neighbour-changed fan-out. The wire's `RedStoneWireBlock.updateShape` for the horizontal trigger direction takes the single-property fast path (the connecting side toward the lever is unchanged, and the state is not a cross), so only `DefaultRedstoneWireEvaluator.updatePowerStrength`'s POWER digit moves; the lever's own `getSignal` is an unconditional weak 15 toward every neighbour while POWERED.",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 0, 0), vanilla_state: "minecraft:lever[face=floor,facing=north,powered=false]", state_id: 6772),
+        (pos: (1, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:redstone_wire[east=side,north=none,power=0,south=none,west=side]", state_id: 4738),
+    ],
+    actions: [
+        // Tick 3: flip the lever in place from powered=false to powered=true (this project's
+        // own state-id-swap action convention, standing in for a real player pull()).
+        (tick: 3, pos: (0, 0, 0), vanilla_state: "minecraft:lever[face=floor,facing=north,powered=true]", state_id: 6771),
+        // Tick 5: flip it back off — pins the depower half of the same path.
+        (tick: 5, pos: (0, 0, 0), vanilla_state: "minecraft:lever[face=floor,facing=north,powered=false]", state_id: 6772),
+    ],
+)

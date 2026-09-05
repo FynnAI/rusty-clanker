@@ -105,6 +105,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "lever_toggle_powers_adjacent_wire.ron",
+      "sha256": "6ce4a994a6382d62c5a970925e1a7ebe87601c2afd12a3a3f1705a0f527cbe77",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "piston_door_double_flush.ron",
       "sha256": "38e696761e8262d2307fa01b86f4cbcd9a9008dc642219d6fc02f232cec549ee",
       "generator_tool_version": "manual/M3-corpus-wave",
