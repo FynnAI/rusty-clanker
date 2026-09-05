@@ -79,6 +79,8 @@ pub enum PlaceableBlockKind {
     BlastFurnace,
     Smoker,
     Hopper,
+    /// PLAN-D10/MECH-D13 (M3 field-report wave 3): tier 1's manual input, the lever.
+    Lever,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -183,6 +185,7 @@ pub fn placeable_kind_for_item_id(item_id: i32) -> Option<PlaceableBlockKind> {
     const BLAST_FURNACE_ITEM: i32 = item::BLAST_FURNACE.0 as i32;
     const SMOKER_ITEM: i32 = item::SMOKER.0 as i32;
     const HOPPER_ITEM: i32 = item::HOPPER.0 as i32;
+    const LEVER_ITEM: i32 = item::LEVER.0 as i32;
 
     match item_id {
         STONE_ITEM => Some(PlaceableBlockKind::Stone),
@@ -197,6 +200,7 @@ pub fn placeable_kind_for_item_id(item_id: i32) -> Option<PlaceableBlockKind> {
         BLAST_FURNACE_ITEM => Some(PlaceableBlockKind::BlastFurnace),
         SMOKER_ITEM => Some(PlaceableBlockKind::Smoker),
         HOPPER_ITEM => Some(PlaceableBlockKind::Hopper),
+        LEVER_ITEM => Some(PlaceableBlockKind::Lever),
         _ => None,
     }
 }
@@ -253,6 +257,15 @@ pub fn dig_properties(kind: PlaceableBlockKind) -> DigProperties {
             hardness: 3.0,
             effective_tool: ToolKind::Pickaxe,
             min_tier_for_drops: Some(1),
+        },
+        // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever -- hardness 0.5, any tool
+        // (including bare hand) always drops, mirroring the wire/torch/repeater/comparator
+        // row's identical `min_tier_for_drops: None` shape (this module's own doc comment,
+        // "Two resolved ambiguities": a `None` bypasses the tool-kind check too, not only tier).
+        PlaceableBlockKind::Lever => DigProperties {
+            hardness: 0.5,
+            effective_tool: ToolKind::None,
+            min_tier_for_drops: None,
         },
     }
 }
@@ -682,6 +695,20 @@ pub enum Orientation {
     /// depends on whether this placement merged into an existing neighbor
     /// (`resolve_chest_placement`'s own doc comment below has the full merge algorithm).
     Chest(Direction, ChestType),
+    /// Lever-only (PLAN-D10/MECH-D13): the resolved `(face, facing)` pair -- `Horizontal`/
+    /// `Full` alone cannot distinguish a floor lever from a ceiling one (both need a `facing`
+    /// too, unlike hopper's `Full(Down)`, which has none), so the lever gets its own third
+    /// face value via `AttachFace`.
+    Attached(AttachFace, Direction),
+}
+
+/// `minecraft:lever`'s own `face` block-state property (PLAN-D10/MECH-D13) -- `AttachFace` in
+/// the reference (`FaceAttachedHorizontalDirectionalBlock`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AttachFace {
+    Floor,
+    Wall,
+    Ceiling,
 }
 
 /// A chest's own `TYPE` block-state property (M3 field-report fix, chest-merge) -- `Single`
@@ -795,19 +822,28 @@ fn move_to_front(order: &mut [Direction; 6], value: Direction) {
 
 /// Context's own per-block-type table, dispatched by `kind`. `clicked_face`/`yaw`/`pitch` are
 /// the inputs each row's own rule (Context) actually reads; unused inputs for a given `kind`
-/// are simply ignored. `sneaking`/`is_full_cube_at`/`chest_neighbor_at` are injected world
+/// are simply ignored. `sneaking`/`is_sturdy_at`/`chest_neighbor_at` are injected world
 /// queries (M3 field-report fix, torch-candidate + chest-merge: this function stays "pure, no
 /// sockets" -- `mining_placement_orientation.rs`'s own file-level doc comment -- by taking the
 /// world as caller-supplied closures rather than an ECS/`BlockWorldAccess` dependency,
 /// mirroring `BlockShapeSource`'s own injection-seam precedent elsewhere in this codebase);
-/// every kind except `RedstoneTorch`/`Chest` ignores all three.
+/// every kind except `RedstoneTorch`/`Chest`/`Lever` ignores the first two.
+///
+/// `is_sturdy_at` (M3 field-report wave 3, MECH-D84 swap -- previously `is_full_cube_at:
+/// &mut dyn FnMut(Direction) -> bool`, a bare "is this neighbor an exact full cube" probe):
+/// widened to also carry the `SupportKind` the caller needs answered for that specific
+/// candidate direction, since a floor torch's own candidate needs only `Center`-sturdiness on
+/// the block below's top face while a wall torch's or a lever's own candidate needs `Full` --
+/// the production call site (`apply_placement_with_redstone`) answers this via `rc_mechanics::
+/// redstone::signal::is_face_sturdy` directly, so placement and the engine's own later pop
+/// checks can never disagree.
 pub fn resolve_orientation(
     kind: PlaceableBlockKind,
     clicked_face: Face,
     yaw_degrees: f32,
     pitch_degrees: f32,
     sneaking: bool,
-    is_full_cube_at: &mut dyn FnMut(Direction) -> bool,
+    is_sturdy_at: &mut dyn FnMut(Direction, rc_physics::SupportKind) -> bool,
     chest_neighbor_at: &mut dyn FnMut(Direction) -> Option<ChestNeighbor>,
 ) -> Result<PlacementSelection, RejectReason> {
     match kind {
@@ -824,18 +860,15 @@ pub fn resolve_orientation(
             // ordered by closeness to the player's own look vector, with the clicked face's
             // own OPPOSITE moved to the front (this tier-1 scope never places into a
             // replaceable block, so that front-insertion always applies), UP always skipped.
-            // For `Down`: a floor torch, valid iff the block below the target cell is a full
-            // cube (`is_full_cube_at(Direction::Down)` -- Context's own simplified "full-cube
-            // conductor" stand-in for vanilla's `canSupportCenter`/`SupportType::CENTER`, this
-            // module's own established convention: `apply_placement`'s wire check already
-            // uses the identical simplification). For a horizontal candidate `d`: a wall
-            // torch with `FACING = d.opposite()` (pointing away from the wall, into the
-            // room), valid iff the wall block -- at `target.relative(d)`, i.e.
-            // `is_full_cube_at(d)` -- is a full cube (the identical simplification, applied to
-            // `isFaceSturdy` instead of `canSupportCenter`: this tier-1 world has no
-            // partial-shape block that is sturdy on a side without also being a full-cube
-            // conductor). The FIRST valid candidate wins; if none is valid, placement fails
-            // (Context: "vanilla acks with no change").
+            // For `Down`: a floor torch, valid iff the block below the target cell is
+            // `Center`-sturdy on its own top face (`is_sturdy_at(Direction::Down, SupportKind::
+            // Center)` -- MECH-D84's own literal `canSupportCenter` port, M3 field-report wave
+            // 3: superseding the former "full-cube conductor" stand-in). For a horizontal
+            // candidate `d`: a wall torch with `FACING = d.opposite()` (pointing away from the
+            // wall, into the room), valid iff the wall block -- at `target.relative(d)` -- is
+            // `Full`-sturdy on the face toward the torch (`is_sturdy_at(d, SupportKind::Full)`,
+            // MECH-D84's own literal `isFaceSturdy(.., FULL)` port). The FIRST valid candidate
+            // wins; if none is valid, placement fails (Context: "vanilla acks with no change").
             let look = look_vector(yaw_degrees, pitch_degrees);
             let mut order = ordered_by_nearest(look);
             move_to_front(&mut order, face_to_direction(clicked_face).opposite());
@@ -844,7 +877,7 @@ pub fn resolve_orientation(
                 match dir {
                     Direction::Up => continue,
                     Direction::Down => {
-                        if is_full_cube_at(Direction::Down) {
+                        if is_sturdy_at(Direction::Down, rc_physics::SupportKind::Center) {
                             return Ok(PlacementSelection {
                                 kind,
                                 orientation: Orientation::None,
@@ -854,7 +887,7 @@ pub fn resolve_orientation(
                         }
                     }
                     horizontal => {
-                        if is_full_cube_at(horizontal) {
+                        if is_sturdy_at(horizontal, rc_physics::SupportKind::Full) {
                             return Ok(PlacementSelection {
                                 kind,
                                 orientation: Orientation::Horizontal(horizontal.opposite()),
@@ -910,6 +943,67 @@ pub fn resolve_orientation(
                 is_wall_variant: false,
                 chest_merge: None,
             })
+        }
+        // PLAN-D10/MECH-D13 (M3 field-report wave 3): `FaceAttachedHorizontalDirectionalBlock.
+        // getStateForPlacement`, verified against the ASSET-D18(f) reference -- the identical
+        // six-candidate loop torch's own arm above uses (clicked face's own opposite
+        // front-inserted into the player's own nearest-look order, `Up` never skipped this
+        // time), but with a THIRD attach face (`Ceiling`) and a different per-axis rule: a
+        // vertical candidate (`Up`/`Down`) resolves `face` = `Ceiling`/`Floor` with `facing` =
+        // the player's OWN horizontal direction (never its opposite -- unlike the wall case
+        // just below, and unlike every other tier-1 kind's own "faces away from the player"
+        // convention); a horizontal candidate resolves `face = Wall` with `facing = dir.
+        // opposite()` (pointing away from the wall, into the room, matching the wall torch's
+        // identical convention). Every candidate's own support check is `Full`-sturdiness on
+        // the mount block's own face toward the lever (`canSurvive`'s own citation,
+        // `mount_direction`'s doc comment in `rc_mechanics::redstone::lever`) -- never `Center`,
+        // unlike the floor torch. The FIRST valid candidate wins; if none is valid, placement
+        // fails.
+        PlaceableBlockKind::Lever => {
+            let look = look_vector(yaw_degrees, pitch_degrees);
+            let mut order = ordered_by_nearest(look);
+            move_to_front(&mut order, face_to_direction(clicked_face).opposite());
+
+            for dir in order {
+                match dir {
+                    Direction::Down => {
+                        if is_sturdy_at(Direction::Down, rc_physics::SupportKind::Full) {
+                            let facing = nearest_horizontal_direction4(yaw_degrees);
+                            return Ok(PlacementSelection {
+                                kind,
+                                orientation: Orientation::Attached(AttachFace::Floor, facing),
+                                is_wall_variant: false,
+                                chest_merge: None,
+                            });
+                        }
+                    }
+                    Direction::Up => {
+                        if is_sturdy_at(Direction::Up, rc_physics::SupportKind::Full) {
+                            let facing = nearest_horizontal_direction4(yaw_degrees);
+                            return Ok(PlacementSelection {
+                                kind,
+                                orientation: Orientation::Attached(AttachFace::Ceiling, facing),
+                                is_wall_variant: false,
+                                chest_merge: None,
+                            });
+                        }
+                    }
+                    horizontal => {
+                        if is_sturdy_at(horizontal, rc_physics::SupportKind::Full) {
+                            return Ok(PlacementSelection {
+                                kind,
+                                orientation: Orientation::Attached(
+                                    AttachFace::Wall,
+                                    horizontal.opposite(),
+                                ),
+                                is_wall_variant: true,
+                                chest_merge: None,
+                            });
+                        }
+                    }
+                }
+            }
+            Err(RejectReason::InvalidLeverFace)
         }
     }
 }
@@ -1316,6 +1410,35 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
         HOPPER.0,
     ));
 
+    // Lever (PLAN-D10/MECH-D13, M3 field-report wave 3): twelve entries -- one per (face,
+    // facing) pair, `powered=false` only (a freshly-placed lever always starts unpowered,
+    // Context; `on_use`'s own toggle writes the `powered=true` sibling directly via
+    // `with_property`, never through this table).
+    for face in ["floor", "wall", "ceiling"] {
+        let attach_face = match face {
+            "floor" => AttachFace::Floor,
+            "wall" => AttachFace::Wall,
+            "ceiling" => AttachFace::Ceiling,
+            _ => unreachable!(),
+        };
+        for dir in HORIZONTAL4 {
+            entries.push((
+                (
+                    PlaceableBlockKind::Lever,
+                    Orientation::Attached(attach_face, dir),
+                ),
+                id_of(
+                    block_id::LEVER,
+                    &[
+                        ("face", face),
+                        ("facing", direction_str(dir)),
+                        ("powered", "false"),
+                    ],
+                ),
+            ));
+        }
+    }
+
     // Piston/sticky_piston: `extended` is always `false` at placement (a freshly-placed piston
     // is never mid-extend); `PISTON`/`STICKY_PISTON`'s own generated default is already
     // `extended=false, facing=north`, so overriding only `facing` covers every placement
@@ -1574,6 +1697,11 @@ pub enum RejectReason {
     /// this broader, real one.
     InvalidTorchFace,
     NoSolidSupportBelow,
+    /// PLAN-D10/MECH-D13 (M3 field-report wave 3): every candidate direction the lever's own
+    /// six-candidate loop tried (`resolve_orientation`'s own `Lever` arm) failed its own
+    /// `Full`-sturdy mount check -- mirrors `InvalidTorchFace`'s identical shape for the torch's
+    /// own candidate loop.
+    InvalidLeverFace,
     /// Not part of the blueprint's own literal `RejectReason` listing — added because a
     /// `UseItemOn` sent while holding a `Tool`/`EmptyHand` (only reachable via
     /// `debug_set_held_item`, since every real join defaults to `Block(Stone)`) has no
@@ -1932,17 +2060,17 @@ pub fn apply_block_use(
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
 /// unchanged), checks the cursor sanity bound (`cursor_within_sanity_bound`, M3 field-report
 /// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`, fed a pair of
-/// closures over `ctx_world` -- `is_full_cube_at`/`chest_neighbor_at`, M3 field-report fix,
-/// torch-candidate + chest-merge), resolves the raw state via `tier1_oriented_state_table()`,
+/// closures over `ctx_world` -- `is_sturdy_at`/`chest_neighbor_at`, M3 field-report fix,
+/// torch-candidate + chest-merge; M3 field-report wave 3 renamed/widened the first to carry a
+/// `SupportKind`, MECH-D84), resolves the raw state via `tier1_oriented_state_table()`,
 /// checks `is_placement_obstructed` (M3 field-report fix, Defect 1 -- run after the raw state
 /// is resolved, before `ctx.set_block`, matching vanilla's own `isUnobstructed` ordering),
 /// calls `ctx.set_block` + `settle_neighbor_updates`. Wire/repeater/comparator additionally
-/// check `NoSolidSupportBelow` (Context's own simplified "block below is the `FULL_CUBE`
-/// default shape-table row" rule -- M3 field-report fix, placement-time survival refusal:
-/// repeater/comparator never had this check before; wire's own pre-existing check now also
-/// accepts a hopper directly below, vanilla's own dedicated exception for wire alone) before
-/// calling `set_block`; a floor/wall torch's own equivalent refusal is already built into
-/// `resolve_orientation`'s own candidate loop (no valid candidate `Err`s the whole call). A
+/// check `NoSolidSupportBelow` (MECH-D84's own per-face sturdiness predicate -- M3 field-report
+/// wave 3 swap, superseding the former hand-rolled exact-full-cube probe: wire needs `Full`
+/// plus its own hard-coded hopper exception, repeater/comparator need `Rigid`) before calling
+/// `set_block`; a floor/wall torch's and a lever's own equivalent refusal are already built
+/// into `resolve_orientation`'s own candidate loop (no valid candidate `Err`s the whole call). A
 /// chest placement that merges into an existing neighbor (`selection.chest_merge`) also
 /// writes that neighbor's own complementary `TYPE` (M3 field-report fix, chest-merge) via a
 /// plain `ctx.set_block` -- `UpdateContext::set_block`'s own `changed` collector (M3 field-
@@ -2101,15 +2229,17 @@ pub fn apply_placement_with_redstone(
         };
     }
 
-    let mut is_full_cube_at = |dir: Direction| -> bool {
-        let pos = dir.apply(target);
-        ctx_world
-            .get_block(pos)
-            .map(|state| {
-                rc_physics::tier1_shape_table().lookup(state.to_raw()).shape
-                    == rc_physics::VoxelShape::full_cube()
-            })
-            .unwrap_or(false)
+    // M3 field-report wave 3 (MECH-D84 swap): the mount candidate's own real per-face
+    // sturdiness -- `dir` is the direction from `target` to the mount candidate, so the block
+    // being queried is `dir.apply(target)` and the face of THAT block facing back toward
+    // `target` is `dir.opposite()` (mirrors `TorchBehavior::should_pop`'s/`LeverBehavior::
+    // on_shape_update`'s identical mount-face derivation exactly). Replaces the former exact
+    // `shape == VoxelShape::full_cube()` probe -- a strictly narrower special case of `Full`-
+    // sturdiness that wrongly refused, e.g., an extended piston base facing down (`Full`-sturdy
+    // on top per MECH-D84, never an exact full cube).
+    let mut is_sturdy_at = |dir: Direction, kind: rc_physics::SupportKind| -> bool {
+        let mount_pos = dir.apply(target);
+        rc_mechanics::redstone::signal::is_face_sturdy(ctx_world, mount_pos, dir.opposite(), kind)
     };
     let mut chest_neighbor_at = |dir: Direction| -> Option<ChestNeighbor> {
         let pos = dir.apply(target);
@@ -2128,7 +2258,7 @@ pub fn apply_placement_with_redstone(
         yaw_degrees,
         pitch_degrees,
         sneaking,
-        &mut is_full_cube_at,
+        &mut is_sturdy_at,
         &mut chest_neighbor_at,
     ) {
         Ok(selection) => selection,
@@ -2143,6 +2273,16 @@ pub fn apply_placement_with_redstone(
         }
     };
 
+    // M3 field-report wave 3 (MECH-D84 swap): the former hand-rolled `shape == full_cube()`
+    // probe is replaced by the real per-face sturdiness predicate, one `SupportKind` per kind
+    // -- wire needs `Full` (plus its own hard-coded hopper exception, below), repeater/
+    // comparator need `Rigid` (a hopper's rim is `Rigid`-sturdy but not `Full`-sturdy, so this
+    // is also the fix that lets a repeater/comparator stand on a hopper, previously wrongly
+    // refused by the old exact-full-cube check) -- so placement and the engine's own later pop
+    // checks (`RepeaterBehavior`/`ComparatorBehavior::on_neighbor_changed`) can never disagree.
+    // The floor/wall torch's and the lever's own equivalent checks already ran inside
+    // `resolve_orientation`'s own candidate loop above (no valid candidate `Err`s the whole
+    // call before this point is ever reached).
     if matches!(
         kind,
         PlaceableBlockKind::RedstoneWire
@@ -2151,20 +2291,27 @@ pub fn apply_placement_with_redstone(
     ) {
         let below = BlockPos::new(target.x, target.y - 1, target.z);
         let below_raw = ctx_world.get_block(below).map(|state| state.to_raw());
-        let solid_below = below_raw
-            .map(|raw| {
-                rc_physics::tier1_shape_table().lookup(raw).shape
-                    == rc_physics::VoxelShape::full_cube()
-            })
-            .unwrap_or(false);
+        let support_kind = match kind {
+            PlaceableBlockKind::RedstoneWire => rc_physics::SupportKind::Full,
+            PlaceableBlockKind::Repeater | PlaceableBlockKind::Comparator => {
+                rc_physics::SupportKind::Rigid
+            }
+            _ => unreachable!("guarded by the outer matches! above"),
+        };
+        let sturdy_below = rc_mechanics::redstone::signal::is_face_sturdy(
+            ctx_world,
+            below,
+            Direction::Up,
+            support_kind,
+        );
         // M3 field-report fix (verified vanilla rule, redstone_wire's own "or a hopper below"
-        // exception): a hopper is never a full-cube conductor (`tier1_shape_table`'s own
-        // hopper row is the funnel/rim shape) yet vanilla still lets wire rest directly on
-        // one (`RedstoneWireBlock`'s own dedicated hopper carve-out) -- repeater/comparator
-        // have no such exception, only wire's own rule names it.
+        // exception): a hopper's rim is `Rigid`-sturdy but never `Full`-sturdy (MECH-D84), so
+        // wire (which needs `Full`) still needs this dedicated carve-out on top of the general
+        // predicate -- repeater/comparator (which need `Rigid`) already pass the general check
+        // on a hopper directly, needing no separate exception of their own.
         let hopper_below = matches!(kind, PlaceableBlockKind::RedstoneWire)
             && below_raw.is_some_and(|raw| (HOPPER.0..=HOPPER.0 + 4).contains(&raw));
-        if !solid_below && !hopper_below {
+        if !sturdy_below && !hopper_below {
             return PlaceOutcome::Rejected {
                 pos: target,
                 reason: RejectReason::NoSolidSupportBelow,

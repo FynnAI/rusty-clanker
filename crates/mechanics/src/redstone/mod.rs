@@ -3,6 +3,7 @@
 
 pub mod comparator;
 pub mod dispatch_ranges;
+pub mod lever;
 pub mod piston;
 pub mod redstone_block;
 pub mod registration;
@@ -15,6 +16,7 @@ pub use comparator::{ComparatorBehavior, ComparatorMode, ContainerSignalSource};
 pub use dispatch_ranges::{
     derive_hopper_state_ids, derive_piston_state_ids, derive_tier1_state_ids,
 };
+pub use lever::LeverBehavior;
 pub use piston::{PistonBehavior, register_piston};
 pub use redstone_block::RedstoneBlockSource;
 pub use registration::{

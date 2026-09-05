@@ -501,6 +501,28 @@ fn build_tier1_table() -> ShapeTable {
         flat(hopper_shape),
     ));
 
+    // --- Lever (M3 field-report wave 3, PLAN-D10/MECH-D13) — own clearly delimited section,
+    // deliberately placed BEFORE piston_head below (a future blueprint's own `moving_piston`
+    // rows land at the END of this function instead, per that blueprint's own convention). All
+    // 24 real states (3 `face` values x 4 `facing` values x 2 `powered` values) -- non-full,
+    // non-conductor, not sturdy on any face for any `SupportKind` (`lever_shape`'s own doc
+    // comment, below, has the full per-`(face, facing)` box derivation).
+    for face in ["floor", "wall", "ceiling"] {
+        for facing in HORIZONTAL4 {
+            let shape = flat(lever_shape(face, facing));
+            for powered in ["true", "false"] {
+                entries.push((
+                    id_of(
+                        block_id::LEVER,
+                        &[("face", face), ("facing", facing), ("powered", powered)],
+                    ),
+                    shape.clone(),
+                ));
+            }
+        }
+    }
+    // --- end Lever ---------------------------------------------------------------------------
+
     // piston_head (M3 field-report fix, Task 3: own-state writeback writes the real
     // `minecraft:piston_head` id -- `crates/mechanics/src/redstone/piston.rs`'s own
     // `piston_head_id` doc comment has the full property citation). Twelve entries: one per
@@ -637,6 +659,56 @@ fn piston_base_extended_shape(axis: usize, positive: bool) -> VoxelShape {
         min: Vec3::new(min[0], min[1], min[2]),
         max: Vec3::new(max[0], max[1], max[2]),
     }])
+}
+
+/// The lever's own single box for one `(face, facing)` pair (M3 field-report wave 3,
+/// PLAN-D10/MECH-D13), identical for `powered=true`/`false` (Context: the client-visible
+/// paddle angle never changes the collision hitbox). Base box, `wall`/`north` (in sixteenths):
+/// `X[5,11] Y[4,12] Z[10,16]` — touches the South boundary (`z=1`), the mount side for
+/// `facing=north` (mount = `facing.opposite()` = South, `lever.rs`'s own `mount_direction` doc
+/// comment). Every other `(face, facing)` pair rotates this same box (verified against the
+/// ASSET-D18(f) reference's own `Shapes.rotateAttachFace` + per-facing horizontal rotation,
+/// restated here as plain box arithmetic rather than a generic rotation utility):
+/// - `wall` rotates horizontally, around the vertical (Y) axis, per facing: the perpendicular
+///   in-plane width (`X[5,11]` for north/south, the identical interval placed on Z for
+///   east/west) is unaffected, only which boundary the depth axis touches changes (the mount
+///   side, `facing.opposite()`).
+/// - `floor`/`ceiling` tip the wall box 90 degrees about the horizontal axis perpendicular to
+///   both the mount direction and the box's own vertical extent: the former "vertical along the
+///   wall" interval (`Y[4,12]`) becomes the new in-plane interval along the facing axis
+///   (`Z[4,12]` for north/south facing, `X[4,12]` for east/west), and the former "depth from the
+///   wall" interval (`Z[10,16]`, touching the mount boundary at its high end) becomes the new
+///   vertical interval touching the floor (`Y[0,6]`) or ceiling (`Y[10,16]`, the mirrored high
+///   end) — the horizontal footprint is identical between `floor` and `ceiling` for the same
+///   facing; only the vertical placement differs.
+fn lever_shape(face: &str, facing: &str) -> VoxelShape {
+    let one_box = |min: (f64, f64, f64), max: (f64, f64, f64)| {
+        VoxelShape::from_boxes(vec![Aabb {
+            min: Vec3::new(min.0, min.1, min.2),
+            max: Vec3::new(max.0, max.1, max.2),
+        }])
+    };
+    match (face, facing) {
+        ("wall", "north") => one_box((0.3125, 0.25, 0.625), (0.6875, 0.75, 1.0)),
+        ("wall", "south") => one_box((0.3125, 0.25, 0.0), (0.6875, 0.75, 0.375)),
+        ("wall", "west") => one_box((0.625, 0.25, 0.3125), (1.0, 0.75, 0.6875)),
+        ("wall", "east") => one_box((0.0, 0.25, 0.3125), (0.375, 0.75, 0.6875)),
+        ("floor", "north") | ("floor", "south") => {
+            one_box((0.3125, 0.0, 0.25), (0.6875, 0.375, 0.75))
+        }
+        ("floor", "west") | ("floor", "east") => {
+            one_box((0.25, 0.0, 0.3125), (0.75, 0.375, 0.6875))
+        }
+        ("ceiling", "north") | ("ceiling", "south") => {
+            one_box((0.3125, 0.625, 0.25), (0.6875, 1.0, 0.75))
+        }
+        ("ceiling", "west") | ("ceiling", "east") => {
+            one_box((0.25, 0.625, 0.3125), (0.75, 1.0, 0.6875))
+        }
+        _ => {
+            unreachable!("lever_shape: {face:?}/{facing:?} is not a real lever (face,facing) pair")
+        }
+    }
 }
 
 fn piston_head_shape(axis: usize, positive: bool) -> VoxelShape {

@@ -51,6 +51,8 @@ pub fn derive_tier1_state_ids() -> Tier1RedstoneStateIds {
         torch_wall: exclusive(range_of(block_id::REDSTONE_WALL_TORCH)),
         repeater: exclusive(range_of(block_id::REPEATER)),
         comparator: exclusive(range_of(block_id::COMPARATOR)),
+        // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever's own real 24-state range.
+        lever: exclusive(range_of(block_id::LEVER)),
     }
 }
 

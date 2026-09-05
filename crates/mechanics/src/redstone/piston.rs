@@ -357,7 +357,14 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
     {
         return PushClass::Immovable;
     }
-    if DESTROY_IDS.contains(&raw) {
+    // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever's own full reachable range joins
+    // the tier-1 `Destroy`-class set (`DESTROY_IDS`'s own doc comment) — vanilla's
+    // `PushReaction.DESTROY` for `minecraft:lever` — as a real generated-registry range rather
+    // than a single default-state literal, since (unlike `DESTROY_IDS`'s own five entries, each
+    // a deliberate M3.5-B02 exact-equality-preserving swap) no prior hand-authored placeholder
+    // ever covered the lever at all; nothing here narrows this to the default substate only.
+    let lever_range = range_of(block_id::LEVER);
+    if DESTROY_IDS.contains(&raw) || (lever_range.first.0..=lever_range.last.0).contains(&raw) {
         return PushClass::Destroy;
     }
     PushClass::Normal

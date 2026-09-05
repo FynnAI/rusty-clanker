@@ -11,6 +11,7 @@ use crate::behavior::{BlockBehavior, BlockBehaviorRegistry};
 use crate::direction::Direction;
 
 use super::comparator::{ComparatorBehavior, ContainerSignalSource};
+use super::lever::LeverBehavior;
 use super::redstone_block::RedstoneBlockSource;
 use super::repeater::RepeaterBehavior;
 use super::signal::{RedstoneSignalSource, SignalSourceRegistry};
@@ -28,6 +29,8 @@ pub struct Tier1RedstoneStateIds {
     pub torch_wall: (BlockStateId, BlockStateId),
     pub repeater: (BlockStateId, BlockStateId),
     pub comparator: (BlockStateId, BlockStateId),
+    /// PLAN-D10/MECH-D13 (M3 field-report wave 3): tier 1's fifth component, the lever.
+    pub lever: (BlockStateId, BlockStateId),
 }
 
 /// Opaque handle to the four tier-1 behavior instances `register_tier1_redstone` just
@@ -45,11 +48,16 @@ pub struct Tier1RedstoneHandles {
 
 impl Tier1RedstoneHandles {
     /// Completes Context §I½'s two-phase construction: binds `registry` into every behavior
-    /// instance the `register_tier1_redstone` call that produced this handle constructed (once
-    /// each, via each behavior's own `bind_registry`). Call this exactly once, immediately
-    /// after wrapping the `SignalSourceRegistry` that same call populated into an `Arc`, and
-    /// before any Stage-4 dispatch can reach any of the four behaviors. Panics if called a
-    /// second time.
+    /// instance the `register_tier1_redstone` call that produced this handle constructed that
+    /// actually needs one (once each, via each behavior's own `bind_registry`). PLAN-D10/
+    /// MECH-D13 (M3 field-report wave 3)'s own fifth tier-1 component, the lever, is
+    /// deliberately absent from both this struct and this method: `LeverBehavior`'s own module
+    /// doc comment — every read decodes the world's own stored block-state id directly — means
+    /// it never needs a `SignalSourceRegistry` handle at all, unlike the other four, so
+    /// `register_tier1_redstone` below constructs and registers it without carrying its own
+    /// `Arc` through to this handle. Call this exactly once, immediately after wrapping the
+    /// `SignalSourceRegistry` that same call populated into an `Arc`, and before any Stage-4
+    /// dispatch can reach any of the four behaviors it does bind. Panics if called a second time.
     pub fn bind_registry(&self, registry: Arc<SignalSourceRegistry>) {
         self.wire.bind_registry(Arc::clone(&registry));
         self.torch_floor.bind_registry(Arc::clone(&registry));
@@ -152,6 +160,24 @@ pub fn register_tier1_redstone(
         ids.comparator.0,
         ids.comparator.1,
         Arc::clone(&comparator) as Arc<dyn RedstoneSignalSource>,
+    );
+
+    // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever, tier 1's fifth component and
+    // manual input — stateless (`LeverBehavior`'s own doc comment), so this instance is never
+    // carried into `Tier1RedstoneHandles` at all (`bind_registry`'s own doc comment has the
+    // full "why lever is absent from that struct" reasoning) — `register_range` already cloned
+    // every `Arc` either registry needs, so the local binding can simply be dropped once both
+    // calls return.
+    let lever = Arc::new(LeverBehavior::new());
+    behaviors.register_range(
+        ids.lever.0,
+        ids.lever.1,
+        Arc::clone(&lever) as Arc<dyn BlockBehavior>,
+    );
+    signals.register_range(
+        ids.lever.0,
+        ids.lever.1,
+        lever as Arc<dyn RedstoneSignalSource>,
     );
 
     Tier1RedstoneHandles {

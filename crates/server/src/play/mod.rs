@@ -54,7 +54,7 @@ pub use entity_tracking::{
 };
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
 pub use mining::{
-    BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER, BLOCK_INTERACTION_RANGE_CREATIVE,
+    AttachFace, BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER, BLOCK_INTERACTION_RANGE_CREATIVE,
     BLOCK_INTERACTION_RANGE_SURVIVAL, BlockEntityWireKind, BreakOutcome, ChestMerge, ChestNeighbor,
     ChestType, DestroyOutcome, DestroySpeed, DestroyState, DigProperties, GameModeState, HeldItem,
     HeldItemStub, Orientation, OrientedStateTable, PlaceOutcome, PlaceableBlockKind,
