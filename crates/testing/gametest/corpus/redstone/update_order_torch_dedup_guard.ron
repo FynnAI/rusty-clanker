@@ -1,0 +1,21 @@
+// M3 field-report corpus wave 3 (PLAN-D10) — the torch analogue of update_order_repeater_
+// dedup_guard.ron: a floor torch's own input (a redstone_block placed at its north side, a
+// non-attachment face) toggles on then off within the torch's own 2-tick re-eval window
+// (TorchBehavior::REEVAL_DELAY), so vanilla's own checkTickOnNeighbor schedules a second,
+// fresher re-eval reflecting the latest state; our coarser dedup guard refuses it. Content
+// plan: UpdateOrderProbe.
+ContraptionSpec(
+    id: "redstone/update_order/update_order_torch_dedup_guard",
+    category: UpdateOrderProbe,
+    description: "A floor torch (always lit at placement) whose neighbor input toggles on at tick 2 then off at tick 3 — both changes fall inside the torch's own 2-tick re-eval window.",
+    quirk: "Scheduled-tick dedup guard is coarser than vanilla's own (docs/findings-for-planning.md) — the torch analogue of update_order_repeater_dedup_guard.ron's own repeater case.",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

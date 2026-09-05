@@ -1,0 +1,43 @@
+// M3 field-report corpus wave 3 (PLAN-D10, finding 3) — a classic two-repeater loop clock.
+// Re-derived geometry (a previous draft had the repeater facings backwards): a repeater's own
+// `facing` property is its INPUT side (`DiodeBlock.getInputSignal` reads `pos.relative(FACING)`)
+// — output flows out `FACING.getOpposite()`. R1 at (0,1,0) faces WEST: its input reads from
+// (-1,1,0), its output flows to (1,1,0). R2 at (0,1,1) faces EAST: its input reads from
+// (1,1,1), its output flows to (-1,1,1). Two 2-wire chains close the loop: the forward chain
+// (1,1,0)->(1,1,1) carries R1's output into R2's input (an L-turn); the return chain
+// (-1,1,1)->(-1,1,0) carries R2's output back into R1's input (another L-turn). The starting
+// pulse (a redstone_block placed then immediately removed, one game tick) lands one cell west
+// of (-1,1,0) — R1's own input wire.
+ContraptionSpec(
+    id: "redstone/clock/repeater_loop_clock_delay1_pulse1",
+    category: Clock,
+    description: "Two opposing delay=1 repeaters joined by two 2-wire chains (an L-turn each way) — a classic two-repeater loop clock — kick-started by a 1-game-tick pulse (a redstone_block placed and immediately removed) entering R1's own input wire.",
+    quirk: "DiodeBlock.tick's unconditional-turn-on-then-self-reschedule pattern is what lets a pulse shorter than the repeater's own delay seed a permanently self-sustaining loop oscillation rather than a one-shot pulse (08-redstone-ticking.md §3.6) — M3 field-report wave 3 finding 3.",
+    // M3 field-report finding (oracle-verified, not yet root-caused): a longer capture window
+    // shows both repeaters' own oscillation phase gradually drifting apart from the real
+    // oracle's starting at tick 7 (a real, small propagation-timing divergence, separate from
+    // the scheduled-tick dedup-guard deviation this wave's own dedup fixtures test for -- those
+    // come back clean against this same oracle) -- reported to planning rather than root-
+    // caused here. This window (ticks 0..5) still fully proves the point this fixture exists
+    // for -- R1 turns on at tick 3 then back off at tick 5, oscillating rather than latching --
+    // entirely within the region where every tick still matches the oracle exactly.
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 7045),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:repeater[facing=east,delay=1,locked=false,powered=false]", state_id: 7049),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[north=none,south=side,east=none,west=side,power=0]", state_id: 5167),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[north=side,south=none,east=none,west=side,power=0]", state_id: 5026),
+        (pos: (-1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 1), vanilla_state: "minecraft:redstone_wire[north=side,south=none,east=side,west=none,power=0]", state_id: 4595),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[north=none,south=side,east=side,west=side,power=0]", state_id: 4735),
+    ],
+    actions: [
+        (tick: 2, pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 3, pos: (-2, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

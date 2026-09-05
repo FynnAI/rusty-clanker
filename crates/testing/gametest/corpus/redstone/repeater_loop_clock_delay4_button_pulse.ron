@@ -1,0 +1,28 @@
+// M3 field-report corpus wave 3 (PLAN-D10, finding 3). Same geometry and wire ids as
+// repeater_loop_clock_delay1_pulse1.ron (that file's own header has the full re-derivation) —
+// repeaters here are delay=4 instead of delay=1, driven by a 10-game-tick, button-scale pulse.
+ContraptionSpec(
+    id: "redstone/clock/repeater_loop_clock_delay4_button_pulse",
+    category: Clock,
+    description: "Two opposing delay=4 repeaters joined by two 2-wire chains (an L-turn each way) — same loop-clock topology as repeater_loop_clock_delay1_pulse1.ron, scaled to the maximum DELAY setting — kick-started by a 10-game-tick, button-scale pulse.",
+    quirk: "A 10-tick pulse is longer than a single delay=4 repeater's own 8-tick delay window, which is the actual threshold for permanent lock-on in this loop topology (not the loop's full 16-tick period) — the same turn-on-without-reschedule mechanism as the delay=1 long-pulse case, just on a longer timescale (M3 field-report wave 3 finding 3, 08-redstone-ticking.md §3.6).",
+    max_ticks: 60,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=4,locked=false,powered=false]", state_id: 7093),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:repeater[facing=east,delay=4,locked=false,powered=false]", state_id: 7097),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[north=none,south=side,east=none,west=side,power=0]", state_id: 5167),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[north=side,south=none,east=none,west=side,power=0]", state_id: 5026),
+        (pos: (-1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 1), vanilla_state: "minecraft:redstone_wire[north=side,south=none,east=side,west=none,power=0]", state_id: 4595),
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_wire[north=none,south=side,east=side,west=side,power=0]", state_id: 4735),
+    ],
+    actions: [
+        (tick: 2, pos: (-2, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 12, pos: (-2, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+    ],
+)

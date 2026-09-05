@@ -105,6 +105,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "piston_extend_pops_wire_on_base.ron",
+      "sha256": "f2883c36157914b2ebbb9e9757fb6aeee0d687d61dddff975cf69939fe1c92c5",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "piston_max_push_depth_12.ron",
       "sha256": "2db8f35d13c639339f03bb2acbc86d4eb1b2d28cd546ce38ca45c8f182cd418d",
       "generator_tool_version": "manual/M3-corpus-wave",
@@ -183,6 +189,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "qc_wall_torch_strong_signal_up.ron",
+      "sha256": "a482d9720c31ff64d33b520aba41fa68d8db9396e0ae0f6787176af2e5487b30",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "repeater_chain_delay_sum_2_4_6_8.ron",
       "sha256": "7cf9371e28163eac133165105c1f73506852ae82bbaf9109b33bba93c3577e81",
       "generator_tool_version": "manual/M3-corpus-wave",
@@ -198,6 +210,24 @@
       "path": "repeater_lock_t_flip_flop.ron",
       "sha256": "e24d216de8e757e6306202be304d3d9dcceb50600af9261e87a32c3813eab166",
       "generator_tool_version": "manual/M3-corpus-wave",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "repeater_loop_clock_delay1_pulse1.ron",
+      "sha256": "8458465b31b15a3af9b0aa3aab8f12ba459e8ba51005aead1a879e0835dffd20",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "repeater_loop_clock_delay1_pulse_long.ron",
+      "sha256": "4c801a224ec8123626fab90e842f4f0403ed648919235c43e206961d34f760a4",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "repeater_loop_clock_delay4_button_pulse.ron",
+      "sha256": "998d468bbd713f750dac84091a41428f1c79586b230b6f440739e35a10d896e5",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
       "source_jar_sha1": "n/a"
     },
     {
@@ -261,6 +291,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "update_order_repeater_dedup_guard.ron",
+      "sha256": "857e38401e1d079cb0880f4c5d73ec02a559064ae77cf8d8f65466bf06788fe1",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "update_order_shape_update_destroys_torch.ron",
       "sha256": "cc5b7381bea31dd85c03dc6cd3d8e709598fceaa7d28527e68c702e9aa9b9ec8",
       "generator_tool_version": "manual/M3-corpus-wave",
@@ -276,6 +312,12 @@
       "path": "update_order_six_simultaneous_torches.ron",
       "sha256": "db98ab7617d739acd3111fe6a2a988530d488e7eed02c094f8f619ada3a561f2",
       "generator_tool_version": "manual/M3-corpus-wave",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "update_order_torch_dedup_guard.ron",
+      "sha256": "121005fa7c8cf824a55f2c4849ab8b169d375a0a00079cebb8174bd0794dc647",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
       "source_jar_sha1": "n/a"
     },
     {

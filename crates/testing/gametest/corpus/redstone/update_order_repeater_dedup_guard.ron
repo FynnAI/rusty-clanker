@@ -1,0 +1,24 @@
+// M3 field-report corpus wave 3 (PLAN-D10) — targets the scheduled-tick dedup guard
+// deviation (docs/findings-for-planning.md, "Scheduled-tick dedup guard is coarser than
+// vanilla's own"): ScheduledTickQueue::is_block_tick_pending is true for ANY queued tick at a
+// position; vanilla's own LevelTicks.willTickThisTick is true only for ticks in the CURRENT
+// tick's own run set. A delay=4 repeater (8-tick schedule) has its own input driven on, then
+// off, then on again, all within that 8-tick window — vanilla's own checkTickOnNeighbor
+// schedules a fresh tick on each change (its own pending tick is never "this tick" yet); our
+// coarser guard refuses every change after the first. Content plan: UpdateOrderProbe.
+ContraptionSpec(
+    id: "redstone/update_order/update_order_repeater_dedup_guard",
+    category: UpdateOrderProbe,
+    description: "A delay=4 repeater whose own input (a redstone_block placed directly at its input face) is driven on at tick 2, off at tick 5, on again at tick 7 — all inside the repeater's own 8-tick delay window.",
+    quirk: "Scheduled-tick dedup guard is coarser than vanilla's own (docs/findings-for-planning.md) — a second, third input change inside an already-pending tick's own window must still schedule its own fresh tick in vanilla.",
+    max_ticks: 24,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=4,locked=false,powered=false]", state_id: 7093),
+    ],
+    actions: [
+        (tick: 2, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (tick: 5, pos: (-1, 1, 0), vanilla_state: "minecraft:air", state_id: 0),
+        (tick: 7, pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+    ],
+)

@@ -132,6 +132,146 @@ fn rejects_empty_blocks() {
     assert!(matches!(err, rc_gametest::spec::SpecError::NoBlocks { .. }));
 }
 
+/// M3 field-report test-authoring (PLAN-D10 Task A3, fixture-support lint): every wire/
+/// torch/repeater/comparator/lever block in a spec must have a non-air block in its own
+/// support direction at setup — the oracle pops a floating one within a tick of setup.
+#[test]
+fn rejects_a_floating_wire_with_no_floor_below() {
+    let path = write_synthetic(
+        "floating_wire.ron",
+        r#"ContraptionSpec(
+            id: "test/synthetic/floating_wire",
+            category: PulseGenerator,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [(pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4864)],
+            actions: [],
+        )"#,
+    );
+
+    let err = load_spec(&path).expect_err("a wire with no floor below must be rejected");
+    assert!(matches!(
+        err,
+        rc_gametest::spec::SpecError::MissingSupport {
+            support_pos: (0, 0, 0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn accepts_a_wire_with_a_real_floor_below() {
+    let path = write_synthetic(
+        "wire_with_floor.ron",
+        r#"ContraptionSpec(
+            id: "test/synthetic/wire_with_floor",
+            category: PulseGenerator,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [
+                (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+                (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4864),
+            ],
+            actions: [],
+        )"#,
+    );
+
+    load_spec(&path).expect("a wire resting on a real floor must load cleanly");
+}
+
+#[test]
+fn rejects_a_floating_wall_torch_with_no_mount_behind_its_own_facing() {
+    let path = write_synthetic(
+        "floating_wall_torch.ron",
+        r#"ContraptionSpec(
+            id: "test/synthetic/floating_wall_torch",
+            category: QcShowcase,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [(pos: (1, 0, 0), vanilla_state: "minecraft:redstone_wall_torch[facing=east,lit=true]", state_id: 6893)],
+            actions: [],
+        )"#,
+    );
+
+    // facing=east: the wall it mounts on sits behind it, at (0, 0, 0) (facing's own
+    // opposite direction), never (2, 0, 0).
+    let err = load_spec(&path).expect_err("a wall torch with no mount block must be rejected");
+    assert!(matches!(
+        err,
+        rc_gametest::spec::SpecError::MissingSupport {
+            support_pos: (0, 0, 0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn rejects_a_floating_wall_lever_with_no_mount_behind_its_own_facing() {
+    let path = write_synthetic(
+        "floating_wall_lever.ron",
+        r#"ContraptionSpec(
+            id: "test/synthetic/floating_wall_lever",
+            category: QcShowcase,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [(pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=false]", state_id: 6786)],
+            actions: [],
+        )"#,
+    );
+
+    let err = load_spec(&path).expect_err("a wall lever with no mount block must be rejected");
+    assert!(matches!(
+        err,
+        rc_gametest::spec::SpecError::MissingSupport {
+            support_pos: (0, 0, 0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn accepts_a_floor_lever_with_a_real_floor_below() {
+    let path = write_synthetic(
+        "floor_lever.ron",
+        r#"ContraptionSpec(
+            id: "test/synthetic/floor_lever",
+            category: QcShowcase,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [
+                (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+                (pos: (0, 1, 0), vanilla_state: "minecraft:lever[face=floor,facing=east,powered=false]", state_id: 6778),
+            ],
+            actions: [],
+        )"#,
+    );
+
+    load_spec(&path).expect("a floor lever resting on a real floor must load cleanly");
+}
+
+#[test]
+fn allowlisted_ids_skip_the_support_lint_entirely() {
+    let path = write_synthetic(
+        "allowlisted_floating_comparator.ron",
+        r#"ContraptionSpec(
+            id: "redstone/comparator/comparator_container_fullness_chest",
+            category: ComparatorCircuit,
+            description: "synthetic",
+            quirk: "synthetic",
+            max_ticks: 5,
+            blocks: [(pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264)],
+            actions: [],
+        )"#,
+    );
+
+    load_spec(&path).expect("an id on SUPPORT_LINT_ALLOWLIST must skip the support check entirely");
+}
+
 #[test]
 fn bounding_box_covers_every_block_and_action_position() {
     let spec = ContraptionSpec {

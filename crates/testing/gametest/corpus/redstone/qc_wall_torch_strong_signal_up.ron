@@ -1,0 +1,15 @@
+// M3 field-report corpus wave 3 (PLAN-D10, finding 4) — content plan: QcShowcase.
+ContraptionSpec(
+    id: "redstone/qc/qc_wall_torch_strong_signal_up",
+    category: QcShowcase,
+    description: "A wall torch attached to a stone's east face; a second stone rests directly above the torch cell; redstone wire rests on top of that second stone. The torch's own direct/strong signal must reach straight up through the conductor and read power=15 on the wire, exactly like a floor torch's would.",
+    quirk: "RedstoneTorchBlock.getDirectSignal is hard-coded to fire only when the receiver sits directly above the torch, for both the floor and wall variants (RedstoneWallTorchBlock never overrides it) — M3 field-report wave 3 finding 4.",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:redstone_wall_torch[facing=east,lit=true]", state_id: 6893),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 2, 0), vanilla_state: "minecraft:redstone_wire[east=side,north=side,power=15,south=side,west=side]", state_id: 4726),
+    ],
+    actions: [],
+)

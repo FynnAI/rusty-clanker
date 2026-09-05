@@ -1,0 +1,16 @@
+// M3 field-report corpus wave 3 (PLAN-D10, finding 6) — content plan: PistonDoor.
+ContraptionSpec(
+    id: "redstone/piston/piston_extend_pops_wire_on_base",
+    category: PistonDoor,
+    description: "An east-facing piston on a floor with redstone wire resting on top of its own (retracted) base; activated by a redstone_block appearing at its north face. Once the base extends, its own top face is no longer full — the wire above it must pop.",
+    quirk: "MECH-D84 (M3 field-report wave 3 finding 6): the shape table had no rows for the twelve extended piston-base states, so an extended base read as a full-cube conductor and the wire's own floor check (and placement's) kept the dust.",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
+        (pos: (0, 2, 0), vanilla_state: "minecraft:redstone_wire[east=side,north=side,power=0,south=side,west=side]", state_id: 4591),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+    ],
+)
