@@ -2467,3 +2467,14 @@ Entries name the milestone that surfaced them and the code they concern.
   face is not sturdy on any horizontal facing, so the missing rows were a
   parity defect, not a simplification. `piston_shape_table.rs`'s protected
   fallback test targets a sentinel id and stays valid.
+
+- **MECH-D84's first wording was wrong and is corrected.** Its `Center`/`Rigid`
+  descriptions and the chest example ("torches and diodes stand on chests")
+  inverted the reference: `RIGID_SUPPORT_SHAPE` is the outer 2-pixel ring, and
+  a chest's shape never reaches its top plane, so a chest supports nothing;
+  the hopper rim is `Rigid` only. Stream A implemented a reconstruction that
+  satisfied the wrong examples (chest `Center`/`Rigid` true); the fix-up
+  changeset replaces it with the literal `getFaceShape` + `SupportType` port
+  and corrects the tests. Root cause: the planning row stated examples from
+  memory instead of from the reference shapes — every future MECH row that
+  names concrete block outcomes cites the shape it derives them from.
