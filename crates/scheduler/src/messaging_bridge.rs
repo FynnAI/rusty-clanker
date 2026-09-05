@@ -7,7 +7,7 @@
 
 use bevy_ecs::prelude::Resource;
 use rc_messaging::{
-    Address, BorderUpdateEvent, LightBorderUpdate, RegionMessage, RegionMessageBus,
+    Address, BorderUpdateEvent, EntitySnapshot, LightBorderUpdate, RegionMessage, RegionMessageBus,
 };
 
 /// This tick's inbound `BorderUpdateEvent` payloads, drained from `dyn Transport` at
@@ -58,3 +58,13 @@ impl RegionMessageOutbox {
 /// overwritten every tick's Stage-1 step, in the same pass that populates `BorderUpdateInbox`.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentTick(pub u64);
+
+/// M4-B08 (Context, Part 1.2): this tick's inbound `RegionTransferRequest` payloads, drained
+/// from `dyn Transport` at `RcExecutor::tick_region`'s Stage-1 step, mirroring
+/// `BorderUpdateInbox`/`LightBorderInbox` exactly. Auto-inserted (empty) by
+/// `RcExecutor::spawn_region`; overwritten (replace, not append) every tick — populated
+/// *before* any registered `EntityArrivalDriver` runs, and stays readable afterward (a
+/// driver does not clear it) so a test can assert what arrived a given tick without needing
+/// the driver's own side effects as the only observable signal.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct RegionTransferInbox(pub Vec<EntitySnapshot>);

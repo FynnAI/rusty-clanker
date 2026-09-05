@@ -29,12 +29,15 @@ pub use grid::GridCell;
 pub use lifecycle::{LifecycleOutcome, largest_connectivity_cut};
 pub use managed_region::ManagedRegion;
 pub use measurement::{RegionTickHistogram, SoakReport, SoakStatus};
-pub use messaging_bridge::{BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox};
+pub use messaging_bridge::{
+    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox, RegionTransferInbox,
+};
 pub use pipeline::{DomainGroup, Stage};
 pub use region::RegionState;
 pub use region_manager::RegionManager;
 pub use registry::{
-    ExecutorBuildError, LightingStageDriver, RcExecutorBuilder, SystemFactory, SystemId,
+    EntityArrivalDriver, ExecutorBuildError, LightingStageDriver, RcExecutorBuilder, SystemFactory,
+    SystemId,
 };
 pub use synthetic_load::{
     SyntheticLoadProfile, bootstrap_default_profile, busy_spin, synthetic_busy_work_system,

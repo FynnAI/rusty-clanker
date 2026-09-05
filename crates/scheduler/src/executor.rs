@@ -8,12 +8,12 @@ use bevy_ecs::world::World;
 
 use crate::access::ComponentAccessSummary;
 use crate::messaging_bridge::{
-    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox,
+    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox, RegionTransferInbox,
 };
 use crate::pipeline::DomainGroup;
 use crate::pool::RcWorkerPool;
 use crate::region::RegionState;
-use crate::registry::{LightingStageDriver, SystemFactory};
+use crate::registry::{EntityArrivalDriver, LightingStageDriver, SystemFactory};
 use rc_messaging::{RegionId, RegionMessage, Transport};
 
 pub(crate) struct CompiledSystem {
@@ -68,6 +68,10 @@ pub struct RcExecutor {
     /// M4-B07: Stage 8's own additive dispatch path (Context §8) — `None` unless a
     /// caller registered one via `RcExecutorBuilder::with_lighting_driver`.
     lighting_driver: Option<LightingStageDriver>,
+    /// M4-B08 (Context, Part 1.2): Stage 1's own additive arrival-application hook —
+    /// `None` unless a caller registered one via
+    /// `RcExecutorBuilder::with_entity_arrival_driver`.
+    entity_arrival_driver: Option<EntityArrivalDriver>,
 }
 
 /// Minimal per-tick result. Extended by later blueprints as needed (e.g. per-stage
@@ -84,11 +88,13 @@ impl RcExecutor {
         bootstrap: fn(&mut World),
         groups: [CompiledGroup; 8],
         lighting_driver: Option<LightingStageDriver>,
+        entity_arrival_driver: Option<EntityArrivalDriver>,
     ) -> Self {
         Self {
             bootstrap,
             groups,
             lighting_driver,
+            entity_arrival_driver,
         }
     }
 
@@ -149,6 +155,8 @@ impl RcExecutor {
         world.insert_resource(CurrentTick::default());
         // M4-B07: mirrors the three resources above exactly (Context §8).
         world.insert_resource(LightBorderInbox::default());
+        // M4-B08 (Context, Part 1.2): mirrors the resources above exactly.
+        world.insert_resource(RegionTransferInbox::default());
 
         RegionState {
             id,
@@ -203,7 +211,28 @@ impl RcExecutor {
             })
             .collect();
 
+        // M4-B08 (Context, Part 1.1/1.2): the same already-drained `inbound` batch, no
+        // second drain call. Populated *before* the entity-arrival driver below runs, and
+        // stays readable afterward.
+        let arrivals: Vec<rc_messaging::EntitySnapshot> = inbound
+            .iter()
+            .filter_map(|m| match m {
+                RegionMessage::RegionTransferRequest(snap) => Some((**snap).clone()),
+                _ => None,
+            })
+            .collect();
+        region.world.resource_mut::<RegionTransferInbox>().0 = arrivals.clone();
+
         region.message_state.set_inbox(inbound);
+
+        // M4-B08 (Context, Part 1.1: "Arrive-tick"): applies this tick's drained arrivals
+        // to `world`, strictly before any registered `DomainGroup` system starts (Stage 1's
+        // own internal step) — the third legal structural-mutation call site alongside
+        // ARCH-D9's two sync points, since no system holds a live `Query`/`QueryState`
+        // borrow into `world` at this point in `tick_region`.
+        if let Some(driver) = self.entity_arrival_driver {
+            driver(&mut region.world, arrivals);
+        }
 
         // Stages 2, 3, 5, 7: content-less no-ops at M0 (no `DomainGroup` maps to
         // them; Context's "no mechanics content exists").

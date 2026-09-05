@@ -15,6 +15,7 @@ pub mod physics;
 pub mod pickup;
 pub mod snapshot;
 pub mod tracking;
+pub mod transfer;
 
 pub use base::BaseEntity;
 pub use ids::{EntityUuid, NetworkEntityIdAllocator};
@@ -39,3 +40,8 @@ pub use snapshot::{
     deserialize_entity_snapshot, serialize_entity_snapshot,
 };
 pub use tracking::{TrackingDelta, compute_tracking_delta};
+pub use transfer::{
+    EntityIdentity, MobCrossing, MobTransferDecodeError, SharedNetworkEntityIdAllocator,
+    TRANSFER_PAYLOAD_KIND_MOB, build_mob_entity_snapshot, default_mob_marker, detect_mob_crossings,
+    mob_arrival_driver, try_decode_mob_snapshot,
+};

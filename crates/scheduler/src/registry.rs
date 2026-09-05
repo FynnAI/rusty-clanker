@@ -24,6 +24,14 @@ pub type SystemFactory = Box<dyn Fn() -> Box<dyn System<In = (), Out = ()>> + Se
 /// (`ExecutorBuildError::DuplicateLightingDriver`).
 pub type LightingStageDriver = fn(&mut bevy_ecs::world::World, &RcWorkerPool);
 
+/// M4-B08 (Context, Part 1.2): Stage 1's own arrival-application hook. Applies this tick's
+/// drained `RegionTransferRequest` arrivals to `world`, called once per tick immediately
+/// after `RegionTransferInbox` is populated, with the exact same `Vec<EntitySnapshot>`.
+/// Exactly one may be registered per `RcExecutorBuilder` (mirrors `LightingStageDriver`'s
+/// own "one driver per concern" rule) — a second registration attempt is a build-time
+/// error (`ExecutorBuildError::DuplicateEntityArrivalDriver`).
+pub type EntityArrivalDriver = fn(&mut bevy_ecs::world::World, Vec<rc_messaging::EntitySnapshot>);
+
 /// Identifies one registered system by its group and declaration index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SystemId {
@@ -39,6 +47,10 @@ pub struct RcExecutorBuilder {
     /// later" — mirrors `register_system`'s own shape); `build()` rejects a builder
     /// whose length exceeds 1.
     lighting_driver: Vec<LightingStageDriver>,
+    /// M4-B08 (Context, Part 1.2): accumulates every `with_entity_arrival_driver` call,
+    /// identical "accumulate, validate later" shape; `build()` rejects a builder whose
+    /// length exceeds 1.
+    entity_arrival_driver: Vec<EntityArrivalDriver>,
 }
 
 struct Registration {
@@ -65,6 +77,7 @@ impl RcExecutorBuilder {
                 Vec::new(),
             ],
             lighting_driver: Vec::new(),
+            entity_arrival_driver: Vec::new(),
         }
     }
 
@@ -75,6 +88,14 @@ impl RcExecutorBuilder {
     /// with `ExecutorBuildError::DuplicateLightingDriver`.
     pub fn with_lighting_driver(&mut self, driver: LightingStageDriver) {
         self.lighting_driver.push(driver);
+    }
+
+    /// M4-B08 (Context, Part 1.2): registers Stage 1's entity-arrival driver. Calling this
+    /// a second time on the same builder is **not** rejected at this call site (mirrors
+    /// `with_lighting_driver`'s own "accumulate, validate later" shape) — `build()` rejects
+    /// a builder whose `entity_arrival_driver` was set more than once.
+    pub fn with_entity_arrival_driver(&mut self, driver: EntityArrivalDriver) {
+        self.entity_arrival_driver.push(driver);
     }
 
     /// Registers one system into `group`. `order_tag` is assigned automatically as
@@ -106,6 +127,9 @@ impl RcExecutorBuilder {
     pub fn build(self) -> Result<crate::executor::RcExecutor, ExecutorBuildError> {
         if self.lighting_driver.len() > 1 {
             return Err(ExecutorBuildError::DuplicateLightingDriver);
+        }
+        if self.entity_arrival_driver.len() > 1 {
+            return Err(ExecutorBuildError::DuplicateEntityArrivalDriver);
         }
 
         let mut prototype = World::new();
@@ -170,7 +194,13 @@ impl RcExecutorBuilder {
             .unwrap_or_else(|_| unreachable!("exactly 8 domain groups by construction"));
 
         let lighting_driver = self.lighting_driver.into_iter().next();
-        Ok(RcExecutor::new(self.bootstrap, groups, lighting_driver))
+        let entity_arrival_driver = self.entity_arrival_driver.into_iter().next();
+        Ok(RcExecutor::new(
+            self.bootstrap,
+            groups,
+            lighting_driver,
+            entity_arrival_driver,
+        ))
     }
 }
 
@@ -188,4 +218,9 @@ pub enum ExecutorBuildError {
         "with_lighting_driver was called more than once on the same RcExecutorBuilder — Stage 8 hosts exactly one light engine"
     )]
     DuplicateLightingDriver,
+    /// M4-B08: Stage 1 hosts exactly one entity-arrival driver.
+    #[error(
+        "with_entity_arrival_driver was called more than once on the same RcExecutorBuilder — Stage 1 hosts exactly one entity-arrival driver"
+    )]
+    DuplicateEntityArrivalDriver,
 }
