@@ -218,6 +218,10 @@ packet path, not only through the engine.
      full-cube conductor and the wire's floor check (and placement's) kept the
      dust; vanilla's top face is not sturdy on any horizontal facing. Closed by
      the true shapes plus MECH-D84's per-face predicate.
-  Fixes land as `M3 field-report` changesets on `main` (M4 waves 1–2 already
-  merged), the owner re-tests on a fresh pinned binary; verdicts are appended
-  here.
+  All six fixes are on `main` as `M3 field-report` changesets (M4 waves 1–2
+  included); the re-test binary is the pinned tag `m3-fr3-final`
+  (commit e63a780, release profile, kept outside the repository under
+  `C:/Users/krank/rusty-clanker-releases/m3-fr3-final/`; the intermediate
+  `m3-fr3-rc1` build without the moving-piston placeholder and the
+  collision-shape table stays available for pinpointing). Verdict: **pending
+  the owner's play test** — appended here when it exists.
