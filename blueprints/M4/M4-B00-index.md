@@ -11,7 +11,10 @@ Brain AI systems; natural mob spawning with a cross-region census; a full
 melee combat/damage pipeline; water/lava flow; the Stage-8 light engine at
 real scale; and the first real exercise of cross-region entity transfer
 (`ARCH-D10`) and cross-chunk-border hopper chains (`ARCH-D17`) with real
-players and mobs. Nine blueprints implement M4.
+players and mobs; and the tier-2 input components — button and pressure
+plate — that PLAN-D10 named as M4's own follow-up to the lever it pulled into
+M3, the first blocks in this project driven by entity presence rather than by
+a player action or a redstone edge. Ten blueprints implement M4.
 
 M4's own parallel-derivation design — independent waves, each reconciled by a
 later blueprint — is the intended pattern (M4-B09's own Parts B/C/I are three
@@ -44,6 +47,7 @@ superseded baseline.
 | M4-B07 | Light Engine: Push-Model BFS, Stage-8 BSP Rounds, Cross-Region Propagation, Client Sync | L |
 | M4-B08 | Cross-Region Entity Transfer & Cross-Chunk Hopper Chains | L |
 | M4-B09 | Acceptance Harness: Region-Boundary Delta, Hopper Cadence, AI/Combat Scenario Suite, M4 Completion Report | L |
+| M4-B10 | Tier-2 Input Components: Button and Pressure Plate | M |
 
 ## Dependency graph
 
@@ -70,6 +74,7 @@ flowchart TD
     subgraph L3["Wave 3"]
         direction LR
         B09["M4-B09\nAcceptance harness\n(AC1-3 integration,\nAttributeMap reconciliation,\nAI-to-combat bridge)"]
+        B10["M4-B10\nTier-2 input components\n(button auto-off tick,\npressure plate entity census,\nStage-4 sound outbox)"]
     end
 
     M0M1M2M3 --> B01
@@ -88,6 +93,9 @@ flowchart TD
     B04 --> B09
     B05 --> B09
     B08 --> B09
+
+    B01 --> B10
+    B02 --> B10
 ```
 
 **Recommended execution order:**
@@ -122,6 +130,17 @@ flowchart TD
    sibling that shares a file (`rc-mechanics::combat`, `rc-mechanics::ai`,
    `crates/server/src/play/world.rs`) to have already landed in the form M4-B09's
    own governance changeset assumes.
+4. **M4-B10** sits in the dependency graph's own wave 3 alongside M4-B09, but
+   carries no edge to or from that blueprint: its own Prerequisites list only
+   M4-B01 and M4-B02, both already merged once wave 2 starts. It is therefore
+   actually startable earlier than M4-B09 in practice — as soon as M4-B02
+   specifically lands, with no need to wait on M4-B03, M4-B04, M4-B05 or
+   M4-B08 the way M4-B09 does — and can run in parallel with any of those
+   four, alongside M4-B09 itself, or after all of them, whichever this
+   project's own parallel-execution capacity favors at the time. M4-B09's own
+   eleven-scenario AI/combat suite never references a button or a pressure
+   plate, so nothing in either blueprint's own text creates an ordering
+   constraint between the two.
 
 ## Per-blueprint summary
 
@@ -294,6 +313,38 @@ M4's three criteria, so no `Mode::{Smoke,Full}` split is needed, unlike
 M1/M2/M3's own harnesses). *Decisions covered:* M4's roadmap Acceptance
 Criteria 1–3 (mapped onto report cases), TEST-D37/D40/D42/D45–D47/D50.
 
+**M4-B10 — Tier-2 Input Components: Button and Pressure Plate.** The tier-2
+half of the input-component set PLAN-D10 named as M4's own follow-up to the
+lever it pulled into M3: the button (`ButtonBlock`, all 14 block-set
+variants) — face-attached placement identical to the lever, an `on_use`
+press that powers the block and schedules its own release 20
+(stone/polished blackstone) or 30 (every wooden variant) ticks out, weak 15
+all round while pressed and strong 15 only into its mount block, popping
+when the mount face stops being `Full`-sturdy — and the pressure-plate
+family (`PressurePlateBlock`, `WeightedPressurePlateBlock`, all 16
+variants) — a new entity-presence trigger (`on_entity_inside`) re-checked
+by a scheduled tick every 20 (plain) or 10 (weighted) ticks, boolean 15/0
+or analog `ceil(min(count, max_weight)/max_weight*15)` signal, popping when
+the block below stops being `Rigid`-or-`Center`-sturdy. Consumes M4-B01's
+entity infrastructure and M4-B02's own per-kind dimension table (promoted
+to a public `entity_dimensions` function so item entities and mobs can be
+censused) to build the entity-box census (`EntityPresenceSource`, one
+production implementation in `rusty-clanker-server`, the only crate that
+can see both players and `BaseEntity` entities — WS-D3 rule 2) the plate
+reads through; only entities the region itself owns are counted (ARCH-D10).
+Ships two small mechanisms this content needs and no more: a
+Stage-4-reachable sound outbox (`UpdateContext.sounds`/`TickSoundOutbox`,
+absorbing `UseUpdateContext`'s own former duplicate) so a scheduled tick or
+an entity-presence dispatch can produce a client-audible sound, and the
+`on_entity_inside` `BlockBehavior` hook plus its `rusty-clanker-server`-side
+driver (`entity_inside_step`). Placement is exposed for a bounded six-kind
+representative subset (§H) covering every distinct behavioural class, not
+all 30 blocks. *Decisions covered:* MECH-D13 (the tier-2 half of the
+input-component set), MECH-D73/D78/D82/D84 (exercised by new content),
+ARCH-D10/D13/D14. No new decision ID; closes the
+`docs/findings-for-planning.md` entry "Tier-2 input components have no
+blueprint" (PLAN-D10).
+
 ## M4 acceptance criteria → blueprint mapping
 
 | # | Acceptance criterion (`11-roadmap-milestones.md`) | Blueprint(s) | Status |
@@ -354,4 +405,11 @@ recommended execution order above, and (b) M4-B09's own `m4-acceptance` CI
 job is green on both reference OS legs from a clean checkout, at which point
 that job's first meaningfully green run is this milestone's own completion
 signal, exactly as M0-B08/M1-B06/M2-B08/M3-B08's own harness jobs already
-established this project's standing pattern.
+established this project's standing pattern. M4-B10 sits outside that
+criteria mapping entirely — PLAN-D10 assigned it to M4 as the tier-2 half of
+the input-component set (button and pressure plate), not as an answer to any
+of M4's own three roadmap Acceptance Criteria — so its own Tier-1 Done state
+is independent of every other M4 blueprint's Done state and of the
+`m4-acceptance` CI job alike; M4 as a whole is not complete, in this
+project's own sense of the word, until M4-B10 has landed too, alongside
+M4-B01 through M4-B09.
