@@ -378,6 +378,11 @@ pub async fn enter_play(
 
     let mut keepalive = KeepAliveDriver::new(Instant::now());
     let mut hotbar = HotbarState::new();
+    // M3 field-report fix (packet-order sneak): this connection's own mirror of the last
+    // decoded `player_input` shift flag, stamped onto every block action queued after it
+    // (`PendingBlockAction::sneaking`) so the region applies each action with the sneak state
+    // vanilla's in-order packet handling would see. A real client starts standing.
+    let mut sneaking = false;
     let mut poll = tokio::time::interval(KEEPALIVE_POLL_INTERVAL);
 
     loop {
@@ -408,6 +413,7 @@ pub async fn enter_play(
                     raw,
                     &mut keepalive,
                     &mut hotbar,
+                    &mut sneaking,
                     &handle,
                     world,
                     network_entity_id,
@@ -508,6 +514,7 @@ fn dispatch_inbound(
     raw: RawPacket,
     keepalive: &mut KeepAliveDriver,
     hotbar: &mut HotbarState,
+    sneaking: &mut bool,
     handle: &ConnectionHandle,
     world: &HardcodedWorld,
     network_entity_id: i32,
@@ -645,6 +652,7 @@ fn dispatch_inbound(
                         connection: handle.clone(),
                         kind,
                         sequence: packet.sequence,
+                        sneaking: *sneaking,
                     })
                     .is_err()
                 {
@@ -672,6 +680,7 @@ fn dispatch_inbound(
                         connection: handle.clone(),
                         kind,
                         sequence: packet.sequence,
+                        sneaking: *sneaking,
                     })
                     .is_err()
                 {
@@ -687,16 +696,20 @@ fn dispatch_inbound(
         // State.sneaking`, which `mining::is_within_block_interaction_range`'s own pose-aware
         // eye height (`movement::eye_position`) reads.
         PlayerInput::ID => {
-            if let Ok(packet) = decode_one::<PlayerInput>(raw.body)
-                && world
+            if let Ok(packet) = decode_one::<PlayerInput>(raw.body) {
+                // M3 field-report fix (packet-order sneak): mirrored here first, so every
+                // block action this loop decodes after this packet carries it.
+                *sneaking = packet.shift();
+                if world
                     .queue_player_input(PendingPlayerInput {
                         network_entity_id,
                         sneaking: packet.shift(),
                     })
                     .is_err()
-            {
-                tracing::error!("region unavailable; closing connection");
-                return false;
+                {
+                    tracing::error!("region unavailable; closing connection");
+                    return false;
+                }
             }
         }
         // M3 field-report fix ("everything I place becomes stone"): a real client's own

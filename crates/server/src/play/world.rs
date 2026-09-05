@@ -2204,15 +2204,17 @@ impl HardcodedWorld {
                         .and_then(|e| region.world.get::<DestroyState>(e))
                         .copied()
                         .unwrap_or_default();
-                    // M3 field-report fix (Symptom 2): pose for this action's own eye height
-                    // -- `PlayerInputState`'s own doc comment has the full "no flying state
-                    // tracked" caveat this crouching-iff-shift reduction relies on. A
-                    // not-yet-spawned actor (no `PlayerInputState` component yet) falls back
-                    // to standing, matching every other per-player fallback in this block.
-                    let crouching = entity
-                        .and_then(|e| region.world.get::<PlayerInputState>(e))
-                        .map(|s| s.sneaking)
-                        .unwrap_or(false);
+                    // M3 field-report fix (Symptom 2), restated for packet order: the pose
+                    // for this action's own eye height and MECH-D82's sneak suppression read
+                    // the sneak state `enter_play` stamped onto the action when it decoded
+                    // the packet -- exactly the last `player_input` that connection received
+                    // before it, which is what vanilla's in-order packet handling sees. The
+                    // per-tick `PlayerInputState` drain above can lag this action by one
+                    // drain window (the two queues are drained at different points of this
+                    // loop), so it is deliberately not consulted here. `PlayerInputState`'s
+                    // own doc comment has the "no flying state tracked" caveat this
+                    // crouching-iff-shift reduction relies on.
+                    let crouching = action.sneaking;
 
                     let range = if instabuild {
                         BLOCK_INTERACTION_RANGE_CREATIVE

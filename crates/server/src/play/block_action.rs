@@ -85,6 +85,12 @@ pub struct PendingBlockAction {
     pub connection: ConnectionHandle,
     pub kind: BlockActionKind,
     pub sequence: i32,
+    /// M3 field-report fix (packet-order sneak): the acting player's sneak state as of the
+    /// last `player_input` packet `enter_play` decoded before this action -- stamped at
+    /// decode time so the region's drain step applies the action with the state vanilla's
+    /// in-order packet handling would see, instead of whatever the separately-drained
+    /// `PlayerInputState` component held one drain window earlier.
+    pub sneaking: bool,
 }
 
 /// M3-B03 (supersedes M2-B07's own `Break`/`Place`/`Ignored` shape — Context, "The M2-B07
