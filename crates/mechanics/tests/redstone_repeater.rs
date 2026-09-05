@@ -152,6 +152,13 @@ fn repeater_turns_on_and_off_at_its_own_delay() {
     assert_eq!(due[0].trigger_tick, 4);
     assert_eq!(due[0].priority, TickPriority::High);
 
+    // M3 field-report wave 3 (finding 3): `run_scheduled_phase` takes each collected entry out
+    // of the game tick's run set immediately before dispatching it, so
+    // `will_block_tick_this_tick` is already `false` for `pos` while its own tick — and the
+    // neighbour change below, which vanilla reaches in the same game tick — runs. A test that
+    // drives the queue by hand has to reproduce that step, or it is simulating a run loop the
+    // engine does not have.
+    h.scheduled.run_block_tick(pos);
     {
         let mut ctx = h.ctx_at(4);
         repeater.on_scheduled_tick(&mut ctx, pos);
@@ -168,6 +175,7 @@ fn repeater_turns_on_and_off_at_its_own_delay() {
     assert_eq!(due2[0].trigger_tick, 8);
     assert_eq!(due2[0].priority, TickPriority::VeryHigh);
 
+    h.scheduled.run_block_tick(pos);
     {
         let mut ctx = h.ctx_at(8);
         repeater.on_scheduled_tick(&mut ctx, pos);
@@ -848,5 +856,134 @@ fn repeater_on_placed_resets_powered_to_the_fresh_placement_default() {
     assert!(
         !repeater.powered(pos),
         "on_placed must fully reset this position's own state, not just reseed facing/delay"
+    );
+}
+
+/// M3 field-report wave 3 (PLAN-D10, finding 3) — the same-game-tick window, at the diode.
+///
+/// Vanilla's `DiodeBlock.checkTickOnNeighbor` refuses to schedule while `willTickThisTick` is
+/// true, i.e. while this repeater's own tick has been collected for the current game tick and
+/// has not run yet. Our engine used to consult "is a tick queued at all", which is already
+/// `false` in that window (collecting the batch takes the entry out of the queue) — so a
+/// neighbour change arriving mid-batch queued a duplicate tick. In a two-repeater loop clock
+/// both repeaters come due on the same game tick, and the first to run fans a neighbour change
+/// straight into the second before the second's own collected tick has run; the duplicate then
+/// re-entered the diode's unconditional turn-on branch right after its own turn-off and latched
+/// the clock permanently on (`redstone/clock/repeater_loop_clock_delay1_pulse1`).
+#[test]
+fn repeater_refuses_a_tick_while_its_own_tick_is_collected_but_not_yet_run() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let input = Arc::new(TestSignalSource::fixed(0));
+    let repeater = setup_repeater(
+        pos,
+        Direction::East,
+        2,
+        vec![(
+            INPUT_ID,
+            BlockStateId(INPUT_ID.0 + 1),
+            Arc::clone(&input) as Arc<dyn RedstoneSignalSource>,
+        )],
+    );
+    let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
+    h.world.set_block(pos, REPEATER_ID);
+    h.world.set_block(front, INPUT_ID);
+
+    // Bring it on: rising edge at tick 0 -> turn-on tick at tick 4, run it there.
+    input.set_power(15);
+    {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+    assert_eq!(h.scheduled.drain_due_block_ticks(4).len(), 1);
+    h.scheduled.run_block_tick(pos);
+    {
+        let mut ctx = h.ctx_at(4);
+        repeater.on_scheduled_tick(&mut ctx, pos);
+    }
+    assert!(repeater.powered(pos));
+
+    // Falling edge at tick 4 -> turn-off tick queued for tick 8.
+    input.set_power(0);
+    {
+        let mut ctx = h.ctx_at(4);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+    }
+
+    // Tick 8's batch is collected but nothing in it has run yet -- the window.
+    let due = h.scheduled.drain_due_block_ticks(8);
+    assert_eq!(due.len(), 1);
+    assert!(h.scheduled.will_block_tick_this_tick(pos));
+
+    // A neighbour change reaching this repeater inside that window still sees a genuine
+    // mismatch (it is powered, its input is gone) and must nonetheless schedule nothing.
+    {
+        let mut ctx = h.ctx_at(8);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::North);
+    }
+    assert_eq!(
+        h.scheduled.block_len(),
+        0,
+        "a diode whose own tick is collected-but-not-yet-run this game tick must not queue a \
+         second one"
+    );
+
+    // Once that entry is taken off to be run, the guard lifts -- the very next neighbour change
+    // schedules normally, which is what keeps a real clock oscillating.
+    h.scheduled.run_block_tick(pos);
+    {
+        let mut ctx = h.ctx_at(8);
+        repeater.on_neighbor_changed(&mut ctx, pos, Direction::North);
+    }
+    assert_eq!(h.scheduled.block_len(), 1);
+}
+
+/// The other half of the same rule: a tick already queued for a *later* game tick is refused
+/// too, but one level down -- by the queue's own per-position dedup rather than by the diode's
+/// `willTickThisTick` guard, which is `false` there. The observable outcome is unchanged from
+/// before this wave (one queued entry, keeping the first schedule's priority), and that is
+/// exactly what has to stay true now that the diode's own guard no longer covers this case.
+#[test]
+fn repeater_keeps_a_single_queued_tick_across_repeated_neighbour_changes() {
+    let pos = BlockPos::new(0, 0, 0);
+    let front = Direction::East.apply(pos);
+    let input = Arc::new(TestSignalSource::fixed(0));
+    let repeater = setup_repeater(
+        pos,
+        Direction::East,
+        2,
+        vec![(
+            INPUT_ID,
+            BlockStateId(INPUT_ID.0 + 1),
+            Arc::clone(&input) as Arc<dyn RedstoneSignalSource>,
+        )],
+    );
+    let mut h = Harness::new();
+    h.world.set_block(Direction::Down.apply(pos), FLOOR_ID);
+    h.world.set_block(pos, REPEATER_ID);
+    h.world.set_block(front, INPUT_ID);
+
+    input.set_power(15);
+    for from in [Direction::East, Direction::North, Direction::South] {
+        let mut ctx = h.ctx_at(0);
+        repeater.on_neighbor_changed(&mut ctx, pos, from);
+    }
+
+    assert_eq!(h.scheduled.block_len(), 1);
+    assert!(h.scheduled.is_block_tick_pending(pos));
+    assert!(!h.scheduled.will_block_tick_this_tick(pos));
+
+    let due = h.scheduled.drain_due_block_ticks(4);
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].trigger_tick, 4);
+    assert_eq!(
+        due[0].priority,
+        TickPriority::High,
+        "the first schedule's priority survives; a later one is dropped, never merged"
+    );
+    assert_eq!(
+        due[0].sub_tick_order, 0,
+        "the surviving entry is the first one queued"
     );
 }

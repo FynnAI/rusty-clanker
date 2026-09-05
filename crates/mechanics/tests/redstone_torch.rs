@@ -113,6 +113,13 @@ fn torch_inverter_full_cycle_nondefault_case() {
     assert_eq!(due[0].trigger_tick, 2);
     assert_eq!(due[0].priority, TickPriority::Normal);
 
+    // M3 field-report wave 3 (finding 3): `run_scheduled_phase` takes each collected entry out
+    // of the game tick's run set immediately before dispatching it, so
+    // `will_block_tick_this_tick` is already `false` for `t` while its own tick — and the
+    // neighbour change below, which vanilla reaches in the same game tick — runs. A test that
+    // drives the queue by hand has to reproduce that step, or it is simulating a run loop the
+    // engine does not have.
+    h.scheduled.run_block_tick(t);
     {
         let mut ctx = h.ctx_at(2);
         torch.on_scheduled_tick(&mut ctx, t);
@@ -142,6 +149,7 @@ fn torch_inverter_full_cycle_nondefault_case() {
     assert_eq!(due.len(), 1);
     assert_eq!(due[0].trigger_tick, 4);
 
+    h.scheduled.run_block_tick(t);
     {
         let mut ctx = h.ctx_at(4);
         torch.on_scheduled_tick(&mut ctx, t);
@@ -206,6 +214,10 @@ fn torch_burnout_after_8_toggles_in_60_ticks() {
             1,
             "cycle {cycle}: expected exactly one due turn-off tick"
         );
+        // M3 field-report wave 3 (finding 3): `run_scheduled_phase`'s own per-entry run-loop
+        // step — `will_block_tick_this_tick` must already answer `false` for `t` while `t`'s
+        // own tick, and every same-game-tick neighbour change below, runs.
+        h.scheduled.run_block_tick(t);
         {
             let mut ctx = h.ctx_at(fire_tick);
             torch.on_scheduled_tick(&mut ctx, t);
@@ -226,6 +238,7 @@ fn torch_burnout_after_8_toggles_in_60_ticks() {
                 1,
                 "cycle {cycle}: expected exactly one due turn-on tick"
             );
+            h.scheduled.run_block_tick(t);
             {
                 let mut ctx = h.ctx_at(relit_tick);
                 torch.on_scheduled_tick(&mut ctx, t);
@@ -276,6 +289,10 @@ fn torch_toggles_outside_the_60_tick_window_do_not_accumulate() {
     }
     let due = h.scheduled.drain_due_block_ticks(2);
     assert_eq!(due.len(), 1);
+    // M3 field-report wave 3 (finding 3): `run_scheduled_phase`'s own per-entry run-loop step —
+    // `will_block_tick_this_tick` must already answer `false` for `t` while `t`'s own tick, and
+    // every same-game-tick neighbour change below, runs.
+    h.scheduled.run_block_tick(t);
     {
         let mut ctx = h.ctx_at(2);
         torch.on_scheduled_tick(&mut ctx, t);
@@ -290,6 +307,7 @@ fn torch_toggles_outside_the_60_tick_window_do_not_accumulate() {
     }
     let due2 = h.scheduled.drain_due_block_ticks(4);
     assert_eq!(due2.len(), 1);
+    h.scheduled.run_block_tick(t);
     {
         let mut ctx = h.ctx_at(4);
         torch.on_scheduled_tick(&mut ctx, t);
@@ -306,6 +324,7 @@ fn torch_toggles_outside_the_60_tick_window_do_not_accumulate() {
     }
     let due3 = h.scheduled.drain_due_block_ticks(second_toggle_tick);
     assert_eq!(due3.len(), 1);
+    h.scheduled.run_block_tick(t);
     {
         let mut ctx = h.ctx_at(second_toggle_tick);
         torch.on_scheduled_tick(&mut ctx, t);

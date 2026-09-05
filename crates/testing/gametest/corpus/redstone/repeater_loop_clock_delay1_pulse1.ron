@@ -13,15 +13,13 @@ ContraptionSpec(
     category: Clock,
     description: "Two opposing delay=1 repeaters joined by two 2-wire chains (an L-turn each way) — a classic two-repeater loop clock — kick-started by a 1-game-tick pulse (a redstone_block placed and immediately removed) entering R1's own input wire.",
     quirk: "DiodeBlock.tick's unconditional-turn-on-then-self-reschedule pattern is what lets a pulse shorter than the repeater's own delay seed a permanently self-sustaining loop oscillation rather than a one-shot pulse (08-redstone-ticking.md §3.6) — M3 field-report wave 3 finding 3.",
-    // M3 field-report finding (oracle-verified, not yet root-caused): a longer capture window
-    // shows both repeaters' own oscillation phase gradually drifting apart from the real
-    // oracle's starting at tick 7 (a real, small propagation-timing divergence, separate from
-    // the scheduled-tick dedup-guard deviation this wave's own dedup fixtures test for -- those
-    // come back clean against this same oracle) -- reported to planning rather than root-
-    // caused here. This window (ticks 0..5) still fully proves the point this fixture exists
-    // for -- R1 turns on at tick 3 then back off at tick 5, oscillating rather than latching --
-    // entirely within the region where every tick still matches the oracle exactly.
-    max_ticks: 6,
+    // A 28-tick window: long enough that the loop's own self-sustaining oscillation has to
+    // hold its phase against the oracle for many full periods, not merely start correctly.
+    // It is the window that exposed the `willTickThisTick` divergence M3 field-report wave 3
+    // root-caused (a diode receiving a neighbour change inside the same game tick, before its
+    // own already-collected scheduled tick had run, used to get a second tick scheduled) --
+    // the phase used to drift apart from the oracle's from tick 7 on.
+    max_ticks: 28,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, 0), vanilla_state: "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]", state_id: 7045),
