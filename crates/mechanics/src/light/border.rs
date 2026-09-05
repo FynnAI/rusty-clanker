@@ -149,6 +149,7 @@ fn seed_face(
                 from_level,
                 directions,
                 increase_from_emission: true,
+                foreign_origin: None,
             });
         }
     }

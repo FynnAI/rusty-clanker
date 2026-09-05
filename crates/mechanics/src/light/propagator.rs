@@ -6,7 +6,7 @@ use rc_core::{BlockPos, ChunkKey, DimensionId};
 
 use crate::direction::Direction;
 use crate::light::properties::{LightProperties, LightPropertiesRegistry, shape_occludes};
-use crate::light::queue::{ChannelState, QueueEntry, all_except, contains};
+use crate::light::queue::{ChannelState, QueueEntry, all_except, contains, only};
 use crate::light::section_ops::{self, LIGHT_HEIGHT, LIGHT_MIN_Y};
 use crate::light::sky_source::SkyLightSourceColumn;
 
@@ -132,6 +132,7 @@ pub fn check_node_block(
             from_level: current,
             directions: crate::light::queue::ALL_DIRECTIONS,
             increase_from_emission: false,
+            foreign_origin: None,
         });
     } else {
         state.decrease.push_back(QueueEntry {
@@ -139,6 +140,7 @@ pub fn check_node_block(
             from_level: 1,
             directions: crate::light::queue::ALL_DIRECTIONS,
             increase_from_emission: false,
+            foreign_origin: None,
         });
     }
     if new_emission > 0 {
@@ -147,6 +149,7 @@ pub fn check_node_block(
             from_level: new_emission,
             directions: crate::light::queue::ALL_DIRECTIONS,
             increase_from_emission: true,
+            foreign_origin: None,
         });
     }
 }
@@ -169,12 +172,14 @@ pub fn check_node_sky(
             from_level: 15,
             directions,
             increase_from_emission: false,
+            foreign_origin: None,
         });
         state.increase.push_back(QueueEntry {
             pos,
             from_level: 15,
             directions,
             increase_from_emission: false,
+            foreign_origin: None,
         });
     } else {
         let current = get_stored(local, pos, LightChannel::Sky);
@@ -185,6 +190,7 @@ pub fn check_node_sky(
                 from_level: current,
                 directions: crate::light::queue::ALL_DIRECTIONS,
                 increase_from_emission: false,
+                foreign_origin: None,
             });
         } else {
             state.decrease.push_back(QueueEntry {
@@ -192,6 +198,7 @@ pub fn check_node_sky(
                 from_level: 1,
                 directions: crate::light::queue::ALL_DIRECTIONS,
                 increase_from_emission: false,
+                foreign_origin: None,
             });
         }
     }
@@ -215,20 +222,39 @@ fn defer_chunk_key(pos: BlockPos) -> ChunkKey {
 
 /// Context §2's `propagate_increase_step`, one dequeued entry. A cross-boundary
 /// target is pushed onto `state.outgoing` instead of being applied locally.
+///
+/// M4-B07 field-report fix ("light bounce", `docs/findings-for-planning.md`'s own
+/// entry on this changeset has the full writeup): `entry.foreign_origin.is_some()`
+/// marks a cross-chunk-boundary deferral -- `entry.pos` then names the *origin*
+/// node, in the *sending* chunk, never local to `local` -- so every read/write this
+/// function would otherwise perform directly against `entry.pos` (the stale check,
+/// the emission re-materialize write, and `from_props`'s own resolve) is skipped in
+/// favor of the sender-supplied `from_level`/`foreign_origin` instead; the single
+/// set bit in `entry.directions` then yields exactly the one local neighbour cell
+/// the sender deferred, and every neighbour-side check below (level comparison,
+/// opacity, shape occlusion, `set_stored`, re-enqueue) runs bit-for-bit identical to
+/// the ordinary local path -- restoring the missing occlusion/opacity check a naive
+/// direct write into the neighbour cell used to skip entirely.
 pub fn propagate_increase_step(
     local: &mut LocalChunkLight,
     entry: QueueEntry,
     channel: LightChannel,
     state: &mut ChannelState,
 ) {
-    let mut from_level = get_stored(local, entry.pos, channel);
-    if entry.increase_from_emission && from_level < entry.from_level {
-        set_stored(local, entry.pos, channel, entry.from_level);
-        from_level = entry.from_level;
-    }
-    if from_level != entry.from_level {
-        return; // Stale -- superseded by a larger increase queued after it.
-    }
+    let from_level = match entry.foreign_origin {
+        Some(_) => entry.from_level,
+        None => {
+            let mut from_level = get_stored(local, entry.pos, channel);
+            if entry.increase_from_emission && from_level < entry.from_level {
+                set_stored(local, entry.pos, channel, entry.from_level);
+                from_level = entry.from_level;
+            }
+            if from_level != entry.from_level {
+                return; // Stale -- superseded by a larger increase queued after it.
+            }
+            from_level
+        }
+    };
 
     for &dir in &ALL_DIRECTION_VALUES {
         if !contains(entry.directions, dir) {
@@ -245,13 +271,34 @@ pub fn propagate_increase_step(
         }
 
         if !is_local(neighbor_pos, local.chunk_origin_x, local.chunk_origin_z) {
+            if entry.foreign_origin.is_some() {
+                // A foreign-origin entry's own single direction always resolves to a
+                // local neighbour by construction (the sender deferred exactly this
+                // one edge into this chunk, `defer_chunk_key`'s own routing already
+                // guarantees it) -- never actually reachable; skip rather than
+                // attempt a second, doubly-deferred hop through another chunk's data
+                // this one cannot resolve.
+                debug_assert!(
+                    false,
+                    "foreign-origin QueueEntry's own single direction produced a non-local neighbour"
+                );
+                continue;
+            }
+            // `entry.pos` is genuinely local here (`foreign_origin` is `None`) --
+            // the deferred edge itself is "origin node (here, at its own established
+            // `from_level`) -> the neighbour cell in the chunk `neighbor_pos` falls
+            // in", carried at `entry.pos` (not `neighbor_pos`) with a single
+            // direction so the *receiving* chunk's own next round runs this same
+            // neighbour-side check itself, instead of trusting a value computed
+            // against this chunk's own opacity data.
             state.outgoing.push((
                 defer_chunk_key(neighbor_pos),
                 QueueEntry {
-                    pos: neighbor_pos,
-                    from_level: max_possible,
-                    directions: all_except(dir.opposite()),
+                    pos: entry.pos,
+                    from_level,
+                    directions: only(dir),
                     increase_from_emission: true,
+                    foreign_origin: Some(resolve_properties(local, entry.pos)),
                 },
             ));
             continue;
@@ -262,7 +309,10 @@ pub fn propagate_increase_step(
             continue;
         }
 
-        let from_props = resolve_properties(local, entry.pos);
+        let from_props = match entry.foreign_origin {
+            Some(props) => props,
+            None => resolve_properties(local, entry.pos),
+        };
         let neighbor_props = resolve_properties(local, neighbor_pos);
         if shape_occludes(from_props, neighbor_props, dir) {
             continue;
@@ -280,12 +330,27 @@ pub fn propagate_increase_step(
                 from_level: new_level,
                 directions: all_except(dir.opposite()),
                 increase_from_emission: false,
+                foreign_origin: None,
             });
         }
     }
 }
 
 /// Context §2's `propagate_decrease_step`, one dequeued entry.
+///
+/// M4-B07 field-report fix ("light bounce"): this function never reads `entry.pos`
+/// itself (only `dir.apply(entry.pos)`, pure coordinate arithmetic, safe regardless
+/// of whether `entry.pos` is local), so a `foreign_origin.is_some()` entry needs no
+/// special-cased body here -- the fix is entirely in the deferred entry's own
+/// *shape*, below: `pos` carries the true origin (never an already-crossed
+/// neighbour position masquerading as one), and `directions` carries only the one
+/// direction that actually crosses the boundary, so the receiving chunk's own next
+/// round updates exactly the one real border cell the origin's decrease reaches --
+/// never fans out to that cell's *own* other neighbours before that cell's own
+/// value has even been reconciled (the previous shape's own bug: a decrease
+/// deferral used to carry `neighbor_pos` in `pos` and `all_except(dir.opposite())`
+/// in `directions`, running the loop below against neighbours of a still-unupdated
+/// node instead of against the node itself).
 pub fn propagate_decrease_step(
     local: &mut LocalChunkLight,
     entry: QueueEntry,
@@ -303,13 +368,23 @@ pub fn propagate_decrease_step(
         }
 
         if !is_local(neighbor_pos, local.chunk_origin_x, local.chunk_origin_z) {
+            if entry.foreign_origin.is_some() {
+                // See `propagate_increase_step`'s own identical assertion -- never
+                // actually reachable by construction.
+                debug_assert!(
+                    false,
+                    "foreign-origin QueueEntry's own single direction produced a non-local neighbour"
+                );
+                continue;
+            }
             state.outgoing.push((
                 defer_chunk_key(neighbor_pos),
                 QueueEntry {
-                    pos: neighbor_pos,
+                    pos: entry.pos,
                     from_level: entry.from_level,
-                    directions: all_except(dir.opposite()),
+                    directions: only(dir),
                     increase_from_emission: false,
+                    foreign_origin: Some(resolve_properties(local, entry.pos)),
                 },
             ));
             continue;
@@ -328,6 +403,7 @@ pub fn propagate_decrease_step(
                     from_level: current,
                     directions: all_except(dir.opposite()),
                     increase_from_emission: false,
+                    foreign_origin: None,
                 });
             }
             if own_source > 0 {
@@ -336,6 +412,7 @@ pub fn propagate_decrease_step(
                     from_level: own_source,
                     directions: crate::light::queue::ALL_DIRECTIONS,
                     increase_from_emission: true,
+                    foreign_origin: None,
                 });
             }
         } else {
@@ -344,6 +421,7 @@ pub fn propagate_decrease_step(
                 from_level: current,
                 directions: crate::light::queue::only(dir.opposite()),
                 increase_from_emission: false,
+                foreign_origin: None,
             });
         }
     }

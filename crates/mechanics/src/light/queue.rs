@@ -9,7 +9,7 @@ use rc_core::BlockPos;
 use std::collections::VecDeque;
 
 use crate::direction::Direction;
-use crate::light::properties::direction_index;
+use crate::light::properties::{LightProperties, direction_index};
 
 /// A 6-bit set of `Direction`s (bit `i` = `direction_index`'s own index for that
 /// direction), replacing vanilla's packed `u64` metadata field (Context §4) with a
@@ -42,6 +42,20 @@ pub struct QueueEntry {
     /// Increase-queue only: re-check `pos`'s current stored level against its own
     /// emission before propagating (Context §2's "lazy materialization").
     pub increase_from_emission: bool,
+    /// `Some` iff this entry is a cross-chunk-boundary deferral (M4-B07 field-report
+    /// fix, "light bounce"): it represents the edge "origin node, at `pos` -- non-
+    /// local to whichever chunk dequeues this entry -- currently at level
+    /// `from_level` -> this chunk's own single neighbour cell in `directions`'
+    /// sole set direction", not a real local node. Carries the origin's own
+    /// `LightProperties`, resolved by the *sending* chunk (the receiving chunk has
+    /// no access to the sender's own block data) -- `propagate_increase_step`'s own
+    /// foreign-origin branch uses it as `shape_occludes`'s `from_props` instead of
+    /// re-resolving (or, worse, stale-checking/re-materializing) a position that
+    /// does not belong to the receiving chunk's own `LocalChunkLight`. `None` for
+    /// every purely local entry -- the ordinary case, including every entry a
+    /// receiving chunk's own further local propagation enqueues after applying a
+    /// foreign-origin one.
+    pub foreign_origin: Option<LightProperties>,
 }
 
 /// One light channel's two work queues plus this round's outgoing cross-boundary
