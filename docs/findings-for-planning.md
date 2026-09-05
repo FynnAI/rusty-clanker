@@ -767,6 +767,15 @@ Entries name the milestone that surfaced them and the code they concern.
   broken directly (pre-existing). Closes by deriving dig properties per block
   from the generated registry (`block_of(state)`) instead of per raw id.
 
+- **The corpus `ContraptionSpec` has no "use" action.** Every scripted action
+  is a block-state write (`/setblock` on the oracle side), so a button press
+  or a lever pull cannot be driven the way a player does it; button auto-off
+  timing and click-triggered fan-out are covered by unit and real-connection
+  tests only (M4-B10 §J). Planning: decide whether the capture harness gains
+  a `Use { pos, face }` action executed by the paritybot client (the oracle
+  then runs its real `useWithoutItem`), which would also let the lever and
+  repeater/comparator fixtures exercise MECH-D82 end to end.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2508,6 +2517,33 @@ Entries name the milestone that surfaced them and the code they concern.
   `/setblock` uses flag `2|256` (shapes, then `updateNeighboursOnBlockSet`)
   and skips `updateFromNeighbourShapes`; no fixture distinguishes the orders
   today — the harness should mirror `/setblock` exactly once a fixture does.
+
+- **Shape table stored outline shapes; every server-side consumer needs the
+  collision shape (M4-B10 author finding, fixed in this wave).** Vanilla's
+  conductor test (`isCollisionShapeFullBlock`), the `SupportType` predicates
+  (`getBlockSupportShape` defaults to the collision shape) and placement
+  obstruction (`isUnobstructed`) all read the collision shape, which is EMPTY
+  for every `noCollision` block (wire, both torches, lever; buttons and
+  plates next). Our rows for those blocks carried the outline boxes, so a
+  face-attached block could find a sturdy face on a lever handle and a torch
+  placed into the player's own cell was refused as obstructed. Closed by an
+  M3 field-report changeset that makes the table the collision/support
+  table; MECH-D84's "true shape" wording means the collision shape.
+- **`LeverBehavior::on_use` guards on `may_build`; vanilla's
+  `LeverBlock.useWithoutItem` has no such guard** (only the diodes check
+  `mayBuild`). Unobservable while `may_build` is always true; the M4-B10
+  button follows the reference. Remove the lever guard when game modes land.
+- **M6-B06 relied on a client-side view distance; the server clamps it.**
+  The TEST-D57 pass corrected the blueprint: the server's `view-distance`
+  setting (default 10, clamped to [2, 32]) bounds the client's request, so
+  the M6 harness now sets a server-side view distance and records the
+  effective clamped radius. The server has no such setting yet — the same
+  NET-hardening gap the M3.5 protocol-diff recorded (our fixed send radius 5
+  versus the oracle's 10). Planning: a `--view-distance` flag / config key
+  with vanilla's clamp is a prerequisite for M6-B06 and should close in the
+  NET hardening changeset before M6.
+
+## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
   all corrected in the blueprints; planning documents may still carry the
