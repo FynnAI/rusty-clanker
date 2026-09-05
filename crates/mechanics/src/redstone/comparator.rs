@@ -8,9 +8,11 @@ use rc_core::BlockPos;
 use rc_registries::block_state_properties::{properties, state_id};
 use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
+use rc_registries::generated_v776::registries::sound_event;
 
-use crate::behavior::{BlockBehavior, UpdateContext};
+use crate::behavior::{BlockBehavior, UpdateContext, UseContext, UseOutcome, UseUpdateContext};
 use crate::direction::Direction;
+use crate::sound_request::{SoundRequest, SoundSource};
 use crate::world_access::BlockWorldAccess;
 
 use super::signal::{self, RedstoneSignalSource, SignalSourceRegistry};
@@ -154,8 +156,11 @@ impl ComparatorBehavior {
         );
     }
 
-    /// Test/composition-root-only mode toggle (Context §G — use-item mode cycling is out of
-    /// scope, no item-use handling exists at M3).
+    /// Updates ONLY the `mode` field of `pos`'s own side-table entry -- never a `place()` call,
+    /// which would reset `powered`/`output`/`seeded` too (`place`'s own doc comment). MECH-D82
+    /// (M3 field-report wave 3) promotes this from a test/composition-root-only helper to
+    /// `on_use`'s own real production mode-cycle write (previously doc-commented "use-item mode
+    /// cycling is out of scope, no item-use handling exists at M3" -- no longer true).
     pub fn set_mode(&self, pos: BlockPos, mode: ComparatorMode) {
         self.state
             .lock()
@@ -363,6 +368,43 @@ impl ComparatorBehavior {
         }
         input > side || (input == side && mode == ComparatorMode::Compare)
     }
+
+    /// `refreshOutputState` (Context §G), factored out so both `on_scheduled_tick` (the
+    /// natural signal-settle path) and `on_use` (MECH-D82's mode-cycle path) call the identical
+    /// logic -- vanilla's own `tick`/`useWithoutItem` both delegate to this same method. The
+    /// analog `output` is always stored; `powered` is only re-evaluated, written back, and the
+    /// front cell notified -- UNCONDITIONALLY inside that branch, whether or not `powered`
+    /// itself actually flips this call, matching vanilla's own unconditional `updateNeighbors
+    /// InFront` call right alongside the `POWERED` reassignment attempt -- if the analog value
+    /// changed or `mode` is `Compare`. Reads `mode` off the side table, which the caller (`on_
+    /// use`) must have already updated via `set_mode` before calling this, exactly mirroring
+    /// vanilla's own "cycle `MODE` on the local `state` var, THEN call `refreshOutputState`
+    /// with that already-cycled state" ordering.
+    fn refresh_output(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        let registry = Arc::clone(self.registry());
+        let input = self.get_input_signal(ctx.world, &registry, pos);
+        let side = self.side_input_signal(ctx.world, &registry, pos);
+        let mode = self.mode(pos);
+        let new_output = Self::calculate_output_signal(input, side, mode);
+        let new_should = Self::should_turn_on(input, side, mode);
+        let stored_output = self.output(pos);
+
+        self.set_output(pos, new_output);
+        if new_output != stored_output || mode == ComparatorMode::Compare {
+            self.set_powered(pos, new_should);
+            // Own-state writeback (M3 field-report fix): vanilla's `ComparatorBlock::
+            // refreshOutputState` writes `POWERED` back via `level.setBlock(pos, .., 2)` (flag 2
+            // = clients-only, no cascading neighbor/shape update of its own) whenever this same
+            // branch flips it -- the real neighbor notify is `notify_neighbor_changed_only`
+            // below, unchanged, so this never goes through `ctx.set_block`. The analog `output`
+            // value has no `BlockStateId` representation (`comparator_state_id`'s own doc
+            // comment) -- only `POWERED` is ever encoded here.
+            let facing = self.facing(pos);
+            let id = comparator_state_id(facing, mode, new_should);
+            ctx.write_block_state(pos, id);
+            signal::notify_neighbor_changed_only(ctx, pos);
+        }
+    }
 }
 
 impl RedstoneSignalSource for ComparatorBehavior {
@@ -462,33 +504,10 @@ impl BlockBehavior for ComparatorBehavior {
         }
     }
 
-    /// `refresh_output_state` (Context §G): the analog `output` is always stored; `powered` is
-    /// only flipped and neighbors only notified if the analog value changed or the mode is
-    /// `Compare`.
+    /// `tick` (Context §G): delegates to `refresh_output` (below), the shared `refreshOutputState`
+    /// core both this natural signal-settle path and `on_use`'s own mode-cycle path call.
     fn on_scheduled_tick(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        let registry = Arc::clone(self.registry());
-        let input = self.get_input_signal(ctx.world, &registry, pos);
-        let side = self.side_input_signal(ctx.world, &registry, pos);
-        let mode = self.mode(pos);
-        let new_output = Self::calculate_output_signal(input, side, mode);
-        let new_should = Self::should_turn_on(input, side, mode);
-        let stored_output = self.output(pos);
-
-        self.set_output(pos, new_output);
-        if new_output != stored_output || mode == ComparatorMode::Compare {
-            self.set_powered(pos, new_should);
-            // Own-state writeback (M3 field-report fix): vanilla's `ComparatorBlock::
-            // refreshOutputState` writes `POWERED` back via `level.setBlock(pos, .., 2)` (flag 2
-            // = clients-only, no cascading neighbor/shape update of its own) whenever this same
-            // branch flips it -- the real neighbor notify is `notify_neighbor_changed_only`
-            // below, unchanged, so this never goes through `ctx.set_block`. The analog `output`
-            // value has no `BlockStateId` representation (`comparator_state_id`'s own doc
-            // comment) -- only `POWERED` is ever encoded here.
-            let facing = self.facing(pos);
-            let id = comparator_state_id(facing, mode, new_should);
-            ctx.write_block_state(pos, id);
-            signal::notify_neighbor_changed_only(ctx, pos);
-        }
+        self.refresh_output(ctx, pos);
     }
 
     /// M3 field-report fix (Task 2): reseeds `facing`/`mode` (a full replace-on-replace via
@@ -516,6 +535,59 @@ impl BlockBehavior for ComparatorBehavior {
         let facing = signal::diode_facing_from_str(comparator_property(props, "facing", current.0));
         let mode = mode_from_str(comparator_property(props, "mode", current.0));
         self.place(pos, facing, mode);
+    }
+
+    /// MECH-D82 (M3 field-report wave 3): `ComparatorBlock.useWithoutItem` -- cycles `mode`
+    /// (compare<->subtract), requests the `block.comparator.click` sound (except the actor,
+    /// pitch `0.55` when the NEW mode is subtract, `0.5` for compare -- vanilla's own pitch is
+    /// computed off the already-cycled local state, matched here by computing it off `new_
+    /// mode`), writes the new state with NO fan-out (vanilla's own flag-2 `level.setBlock`),
+    /// updates the side table via `set_mode` (never `place`, which would also reset `powered`/
+    /// `output`/`seeded`), then calls the shared `refresh_output` core -- vanilla's own
+    /// "`refreshOutputState` reads the already-cycled `MODE` off its own local `state` var"
+    /// ordering, reproduced here by updating the side table before calling it. `may_build:
+    /// false` is a no-op (`Pass`).
+    fn on_use(
+        &self,
+        ctx: &mut UseUpdateContext,
+        pos: BlockPos,
+        use_ctx: &UseContext,
+    ) -> UseOutcome {
+        if !use_ctx.may_build {
+            return UseOutcome::Pass;
+        }
+        let Some(current) = ctx.get_block(pos) else {
+            return UseOutcome::Pass;
+        };
+        if !is_comparator_range(current.0) {
+            return UseOutcome::Pass; // defensive only -- dispatch never reaches here otherwise
+        }
+        let props = properties(GenStateId(current.0));
+        let facing = signal::diode_facing_from_str(comparator_property(props, "facing", current.0));
+        let powered = comparator_property(props, "powered", current.0) == "true";
+        let current_mode = mode_from_str(comparator_property(props, "mode", current.0));
+        let new_mode = match current_mode {
+            ComparatorMode::Compare => ComparatorMode::Subtract,
+            ComparatorMode::Subtract => ComparatorMode::Compare,
+        };
+        let pitch = if new_mode == ComparatorMode::Subtract {
+            0.55
+        } else {
+            0.5
+        };
+        ctx.request_sound(SoundRequest {
+            pos,
+            sound: sound_event::BLOCK_COMPARATOR_CLICK,
+            source: SoundSource::Blocks,
+            volume: 0.3,
+            pitch,
+            except_actor: true,
+        });
+        let new_id = comparator_state_id(facing, new_mode, powered);
+        ctx.write_block_state(pos, new_id);
+        self.set_mode(pos, new_mode);
+        self.refresh_output(&mut ctx.base, pos);
+        UseOutcome::Consumed
     }
 }
 

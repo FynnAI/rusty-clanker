@@ -48,7 +48,8 @@ use rc_core::BlockPos;
 use rc_mechanics::redstone::{SignalSourceRegistry, best_neighbor_signal};
 use rc_mechanics::{
     BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, Direction, LightDirtyQueue,
-    NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, SoundRequest,
+    UpdateContext, UseContext, UseOutcome, UseUpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 use rc_physics::Vec3;
@@ -1615,11 +1616,37 @@ pub enum PlaceOutcome {
     Applied {
         pos: BlockPos,
         new_state: u32,
+        /// MECH-D78 (M3 field-report wave 3): the clicked cell's own post-action live state
+        /// -- `respond_place`'s own dual-cell resend needs it on every outcome, this one
+        /// included (a successful placement can itself change the clicked cell too, e.g. a
+        /// chest-merge neighbor write -- read fresh, after the action, never assumed
+        /// unchanged). `None` only if `clicked_pos` itself has no chunk loaded (never true in
+        /// practice for a cell the player just reached and clicked).
+        clicked_pos: BlockPos,
+        clicked_state: Option<u32>,
     },
     Rejected {
         pos: BlockPos,
         reason: RejectReason,
         current_state: Option<u32>,
+        /// MECH-D78: see `Applied::clicked_pos`'s doc comment -- identical rationale, every
+        /// rejection branch included (`NothingToPlace`'s own resend is what `play_use_resend_
+        /// field_report.rs` exercises as the previously-red case: today's code sends nothing
+        /// at all for it).
+        clicked_pos: BlockPos,
+        clicked_state: Option<u32>,
+    },
+    /// MECH-D82 (M3 field-report wave 3): the clicked cell's own `on_use` hook (a repeater's
+    /// delay cycle, a comparator's mode cycle) consumed this interaction -- placement never
+    /// ran at all. `target_pos`/`target_state` is the placement-direction cell placement would
+    /// have targeted, read live (untouched by this outcome, but MECH-D78's own resend still
+    /// wants it); `clicked_state` is always `Some` in practice (a `Consumed` result only comes
+    /// from a real behavior dispatch at an already-occupied `clicked_pos`).
+    UseConsumed {
+        clicked_pos: BlockPos,
+        clicked_state: u32,
+        target_pos: BlockPos,
+        target_state: Option<u32>,
     },
 }
 
@@ -1802,6 +1829,106 @@ pub fn finalize_break(
     }
 }
 
+/// MECH-D82 (M3 field-report wave 3): the pre-placement block-use dispatch (`ServerPlayerGame
+/// Mode.useItemOn`'s own leading `state.useItemOn`/`useWithoutItem` calls) -- resolves the
+/// CLICKED cell's own behaviour (`location`, never `resolve_place_position`'s own placement-
+/// direction cell) and calls `BlockBehavior::on_use` unless the caller's own `sneaking &&
+/// has_item` suppression gate already applies (vanilla's own `suppressUsingBlock`, computed
+/// by the caller -- `world.rs`'s own call site mirrors `apply_placement_with_redstone`'s
+/// existing `sneaking` parameter for this). Returns `None` on every non-consuming path
+/// (suppressed, no block loaded at `location`, or the resolved behaviour's own `on_use`
+/// returned `Pass`) -- the caller falls through to `apply_placement_with_redstone` exactly as
+/// if this function did not exist. Returns `Some(PlaceOutcome::UseConsumed { .. })` only when
+/// a handler actually reports `Consumed`: settles the neighbor-update engine to a fixed point
+/// (mirroring `apply_placement_with_redstone`'s own `settle_neighbor_updates` tail call after
+/// its own `ctx.set_block`), then reads both cells' own live post-action state for MECH-D78's
+/// dual-cell resend.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_block_use(
+    ctx_world: &mut dyn BlockWorldAccess,
+    engine: &mut NeighborUpdateEngine,
+    scheduled: &mut ScheduledTickQueue,
+    events: &mut BlockEventQueue,
+    outbound: &mut Vec<(Address, RegionMessage)>,
+    changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
+    light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
+    ownership: &RegionOwnership,
+    behaviors: &BlockBehaviorRegistry,
+    current_tick: u64,
+    location: BlockPos,
+    face: Face,
+    inside_block: bool,
+    cursor: (f32, f32, f32),
+    sneaking: bool,
+    has_item: bool,
+) -> Option<PlaceOutcome> {
+    // Vanilla's own `suppressUsingBlock` (`ServerPlayerGameMode.useItemOn`): sneaking with a
+    // non-empty hand skips block-use dispatch entirely, falling straight through to placement.
+    if sneaking && has_item {
+        return None;
+    }
+
+    let clicked_before = ctx_world.get_block(location)?;
+    let behavior = behaviors.resolve(clicked_before);
+    let use_context = UseContext {
+        sneaking,
+        has_item,
+        may_build: true,
+        face: face_to_direction(face),
+        cursor,
+    };
+
+    let outcome = {
+        let mut ctx = UseUpdateContext {
+            base: UpdateContext {
+                world: ctx_world,
+                engine,
+                scheduled,
+                events,
+                outbound,
+                changed,
+                ownership,
+                current_tick,
+                light_dirty,
+            },
+            sounds,
+        };
+        behavior.on_use(&mut ctx, location, &use_context)
+    };
+
+    if outcome != UseOutcome::Consumed {
+        return None;
+    }
+
+    settle_neighbor_updates(
+        ctx_world,
+        engine,
+        scheduled,
+        events,
+        outbound,
+        changed,
+        light_dirty,
+        ownership,
+        behaviors,
+        current_tick,
+    );
+
+    let clicked_state = ctx_world
+        .get_block(location)
+        .map(|s| s.to_raw())
+        .unwrap_or_else(|| clicked_before.to_raw());
+    let target_pos = resolve_place_position(location, face, inside_block);
+    let target_state = ctx_world.get_block(target_pos).map(|s| s.to_raw());
+
+    Some(PlaceOutcome::UseConsumed {
+        clicked_pos: location,
+        clicked_state,
+        target_pos,
+        target_state,
+    })
+}
+
 /// Placement: resolves the target position (`block_action::resolve_place_position`,
 /// unchanged), checks the cursor sanity bound (`cursor_within_sanity_bound`, M3 field-report
 /// fix), checks `TargetNotAir`, resolves orientation (`resolve_orientation`, fed a pair of
@@ -1927,11 +2054,21 @@ pub fn apply_placement_with_redstone(
         .get_block(target)
         .unwrap_or_else(|| to_storage_id(AIR.0));
 
+    // MECH-D78 (M3 field-report wave 3): the clicked cell's own live state, read once here --
+    // every early-return `Rejected` branch below returns before any mutation happens, so a
+    // single read at this point is equivalent to re-reading fresh at each individual return
+    // site. The final `Applied` branch re-reads fresh instead (Context, that return site's own
+    // doc comment), since a successful placement can itself change `location` (a chest-merge
+    // neighbor write).
+    let clicked_state_before = ctx_world.get_block(location).map(|s| s.to_raw());
+
     if !cursor_within_sanity_bound(location, cursor) {
         return PlaceOutcome::Rejected {
             pos: target,
             reason: RejectReason::CursorOutOfBounds,
             current_state: Some(current.to_raw()),
+            clicked_pos: location,
+            clicked_state: clicked_state_before,
         };
     }
 
@@ -1941,7 +2078,15 @@ pub fn apply_placement_with_redstone(
             return PlaceOutcome::Rejected {
                 pos: target,
                 reason: RejectReason::NothingToPlace,
-                current_state: None,
+                // MECH-D78: previously `None` ("nothing to correct to") -- vanilla's own
+                // unconditional dual-cell resend (`ServerGamePacketListenerImpl.
+                // handleUseItemOn`'s own two trailing `this.send(new ClientboundBlockUpdate
+                // Packet(..))` calls) fires regardless of outcome, `NothingToPlace` (an
+                // empty-hand/tool click) included -- there IS something to report now: the
+                // target cell's own live (unchanged) state.
+                current_state: Some(current.to_raw()),
+                clicked_pos: location,
+                clicked_state: clicked_state_before,
             };
         }
     };
@@ -1951,6 +2096,8 @@ pub fn apply_placement_with_redstone(
             pos: target,
             reason: RejectReason::TargetNotAir,
             current_state: Some(current.to_raw()),
+            clicked_pos: location,
+            clicked_state: clicked_state_before,
         };
     }
 
@@ -1990,6 +2137,8 @@ pub fn apply_placement_with_redstone(
                 pos: target,
                 reason,
                 current_state: Some(current.to_raw()),
+                clicked_pos: location,
+                clicked_state: clicked_state_before,
             };
         }
     };
@@ -2020,6 +2169,8 @@ pub fn apply_placement_with_redstone(
                 pos: target,
                 reason: RejectReason::NoSolidSupportBelow,
                 current_state: Some(current.to_raw()),
+                clicked_pos: location,
+                clicked_state: clicked_state_before,
             };
         }
     }
@@ -2052,6 +2203,8 @@ pub fn apply_placement_with_redstone(
             pos: target,
             reason: RejectReason::Obstructed,
             current_state: Some(current.to_raw()),
+            clicked_pos: location,
+            clicked_state: clicked_state_before,
         };
     }
 
@@ -2186,10 +2339,17 @@ pub fn apply_placement_with_redstone(
         .get_block(target)
         .map(|s| s.to_raw())
         .unwrap_or(raw_state);
+    // MECH-D78: re-read fresh (never `clicked_state_before`) -- a chest-merge write can touch
+    // `location` itself (this function's own doc comment above `apply_placement_with_
+    // redstone`'s signature has the full "why a re-read, not the pre-action snapshot"
+    // reasoning).
+    let clicked_state_after = ctx_world.get_block(location).map(|s| s.to_raw());
 
     PlaceOutcome::Applied {
         pos: target,
         new_state: final_state,
+        clicked_pos: location,
+        clicked_state: clicked_state_after,
     }
 }
 

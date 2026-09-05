@@ -5,10 +5,11 @@
 //! registry is M3.5-B02 — this module only ships the registry and its accessors.
 
 use crate::generated_v776::block_state_properties::{
-    BLOCK_RANGES, BLOCK_STATE_INDEX, BlockId, BlockStateRange, STATE_BLOCK, STATE_PROPERTIES,
-    STATE_REPLACEABLE,
+    BLOCK_RANGES, BLOCK_STATE_INDEX, BLOCK_WIRE_ID, BlockId, BlockStateRange, STATE_BLOCK,
+    STATE_PROPERTIES, STATE_REPLACEABLE,
 };
 use crate::generated_v776::block_states::BlockStateId;
+use crate::generated_v776::registries::RegistryEntryId;
 
 /// `block`'s own full state range + default state. Panics if `block.0` is out of range
 /// (a config-time bug — every real `BlockId` comes from `block_id::*` or `block_of`).
@@ -19,6 +20,15 @@ pub fn range_of(block: BlockId) -> BlockStateRange {
 /// `id`'s owning block type. Panics if `id` is not a real generated state id.
 pub fn block_of(id: BlockStateId) -> BlockId {
     STATE_BLOCK[id.0 as usize]
+}
+
+/// MECH-D83 (M3 field-report wave 3): `block`'s own wire `minecraft:block` registry id --
+/// what the `block_event` packet's own `block_state` field actually transmits (never `block`'s
+/// internal `BlockId.0`/any `BlockStateId`, both of which are this crate's own alphabetical-
+/// by-full-name numbering, unrelated to vanilla's real registration order). Panics if
+/// `block.0` is out of range (mirrors `range_of`).
+pub fn wire_block_id(block: BlockId) -> RegistryEntryId {
+    RegistryEntryId(BLOCK_WIRE_ID[block.0 as usize])
 }
 
 /// `id`'s full `(property, value)` list, in the report's own per-state order. Panics if

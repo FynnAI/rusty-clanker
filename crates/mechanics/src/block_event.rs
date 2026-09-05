@@ -58,6 +58,17 @@ pub struct BlockEventQueue {
     /// since a reentrant `emit` from inside that function's own loop is just an ordinary `emit`
     /// with `deferring` false, landing straight in `queue` like any other.
     deferring: bool,
+    /// MECH-D83 (M3 field-report wave 3, Stream B): the per-tick accepted-events outbox --
+    /// every event a `BlockBehavior::on_block_event` handler's own success branch confirmed
+    /// (via `UpdateContext::confirm_block_event`, itself a thin `self.events.confirm(..)`
+    /// forwarder -- Context: reusing this already-threaded field, rather than adding a tenth
+    /// field to `UpdateContext` itself, keeps every one of this workspace's existing direct
+    /// `UpdateContext { .. }` struct-literal construction sites, across a dozen-plus test
+    /// files and `crates/testing/gametest/src/replay.rs`, compiling unchanged). Drained once
+    /// per tick by `stage4::ecs::system_block_event_subphase` into the ECS-level
+    /// `TickBlockEventOutbox` resource, exactly mirroring `TickChangedPositions`'s own
+    /// per-system-call-then-merge-into-a-tick-wide-resource shape.
+    confirmed: Vec<BlockEvent>,
 }
 
 impl BlockEventQueue {
@@ -132,5 +143,23 @@ impl BlockEventQueue {
     /// event is still mid-rotation, waiting for a `begin_pass` call to advance it.
     pub fn pending(&self) -> usize {
         self.queue.len() + self.ready.len() + self.incoming.len()
+    }
+
+    /// MECH-D83: records `event` as one this tick's Stage-4 accepted into the confirmed
+    /// outbox -- `UpdateContext::confirm_block_event`'s only call site (piston's own
+    /// `on_block_event` success branches: an extend whose `resolve_extend` resolved a plan,
+    /// every contract/drop). Never gated by `deferring` -- unlike `emit`, a confirmed event is
+    /// never itself re-dispatched, so the two-generation rotation `emit`/`begin_pass` maintain
+    /// is irrelevant here; this is a plain per-tick collector, drained once per tick exactly
+    /// like `TickChangedPositions`.
+    pub fn confirm(&mut self, event: BlockEvent) {
+        self.confirmed.push(event);
+    }
+
+    /// Drains every event `confirm`'d since the last call, in confirmation order, leaving the
+    /// outbox empty. `stage4::ecs::system_block_event_subphase`'s own call site, once per
+    /// tick, right after `stage4::run_block_event_subphase` returns.
+    pub fn drain_confirmed(&mut self) -> Vec<BlockEvent> {
+        std::mem::take(&mut self.confirmed)
     }
 }

@@ -15,7 +15,7 @@ use rc_scheduler::{
 };
 
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
-use crate::block_event::BlockEventQueue;
+use crate::block_event::{BlockEvent, BlockEventQueue};
 use crate::border::{BorderHalo, RegionOwnership};
 use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
@@ -61,6 +61,32 @@ impl TickChangedPositions {
     /// Drains every accumulated `(pos, state)` pair, in first-change order, leaving this
     /// resource empty for the next tick.
     pub fn drain(&mut self) -> Vec<(BlockPos, BlockStateId)> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+/// MECH-D83 (M3 field-report wave 3, Stream B): the tick-wide accumulation of every `BlockEvent`
+/// `BlockEventQueue::confirm` recorded across this tick's own `system_block_event_subphase`
+/// call -- mirrors `TickChangedPositions`'s own identical "a system-local collector, merged
+/// into a `Default`-able resource, drained once per tick by the production tick loop right
+/// where changed positions are broadcast" shape exactly. Only `system_block_event_subphase`
+/// ever merges into this (piston's own `on_block_event` is the only real confirmer, and that
+/// method is dispatched exclusively from `stage4::run_block_event_subphase`, never from the
+/// scheduled-tick phase) -- `system_scheduled_phase` needs no matching drain-and-merge step of
+/// its own.
+#[derive(Resource, Default)]
+pub struct TickBlockEventOutbox(pub Vec<BlockEvent>);
+
+impl TickBlockEventOutbox {
+    /// Appends `incoming` (one system call's own freshly-drained confirmed-events list, in
+    /// confirmation order) onto whatever this resource already holds this tick.
+    pub fn merge(&mut self, incoming: Vec<BlockEvent>) {
+        self.0.extend(incoming);
+    }
+
+    /// Drains every accumulated event, in first-confirmed order, leaving this resource empty
+    /// for the next tick.
+    pub fn drain(&mut self) -> Vec<BlockEvent> {
         std::mem::take(&mut self.0)
     }
 }
@@ -224,6 +250,7 @@ fn system_block_event_subphase(
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
     mut tick_changed: ResMut<TickChangedPositions>,
     mut light_dirty: ResMut<LightDirtyQueue>,
+    mut block_event_outbox: ResMut<TickBlockEventOutbox>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -250,6 +277,10 @@ fn system_block_event_subphase(
         region_outbox.send(to, msg);
     }
     tick_changed.merge(changed);
+    // MECH-D83 (M3 field-report wave 3): drains whatever `events` (`BlockEventQueue`'s own
+    // confirmed outbox) accumulated this call into the tick-wide `TickBlockEventOutbox` --
+    // mirrors `tick_changed.merge(changed)` immediately above.
+    block_event_outbox.merge(events.drain_confirmed());
 }
 
 fn scheduled_phase_factory() -> SystemFactory {
@@ -268,11 +299,14 @@ fn block_event_subphase_factory() -> SystemFactory {
 
 /// Registers this blueprint's two Stage-4 systems (`order_tag` 0 then 1, Context: "Sequential
 /// collapse") into `builder`. As a documented side effect the caller must account for, every
-/// region's `World` needs eight resources present before Stage 4 first runs:
+/// region's `World` needs ten resources present before Stage 4 first runs (M3 field-report fix,
+/// this doc comment corrected to match `bootstrap_default_stage4_resources`'s own already-longer
+/// real body -- it undercounted even before this changeset, missing `LightDirtyQueue`):
 /// `ChunkIndex`/`NeighborUpdateEngine`/`ScheduledTickQueue`/`BlockEventQueue`/
-/// `BlockBehaviorRegistry`/`BorderHalo`/`TickChangedPositions` (all `Default`) plus
-/// `RegionOwnership` (no `Default` — its `resolve` closure is inherently per-region data).
-/// `bootstrap_default_stage4_resources` (below) inserts the seven `Default`-able ones and is
+/// `BlockBehaviorRegistry`/`BorderHalo`/`TickChangedPositions`/`TickBlockEventOutbox`/
+/// `LightDirtyQueue` (all `Default`) plus `RegionOwnership` (no `Default` — its `resolve`
+/// closure is inherently per-region data).
+/// `bootstrap_default_stage4_resources` (below) inserts the nine `Default`-able ones and is
 /// meant to be called from the plain `fn(&mut World)` passed to `RcExecutorBuilder::new` — that
 /// function pointer cannot itself capture per-region data, so it *cannot* insert
 /// `RegionOwnership`. Callers instead insert `RegionOwnership` directly into `region.world`
@@ -308,6 +342,10 @@ pub fn bootstrap_default_stage4_resources(world: &mut World) {
     world.insert_resource(BlockBehaviorRegistry::new());
     world.insert_resource(BorderHalo::default());
     world.insert_resource(TickChangedPositions::default());
+    // MECH-D83 (M3 field-report wave 3): `TickBlockEventOutbox` -- `system_block_event_
+    // subphase`'s own per-tick merge target needs this resource present before Stage 4 first
+    // runs, exactly like every other resource this function inserts.
+    world.insert_resource(TickBlockEventOutbox::default());
     // M4-B07: `LightDirtyQueue` -- `UpdateContext::set_block`'s own enqueue seam into
     // Stage 8's light recompute needs this resource present before Stage 4 first
     // runs, exactly like every other resource this function inserts.

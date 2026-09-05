@@ -11,6 +11,7 @@ use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::random::RcRandom;
 use crate::scheduled_tick::{ScheduledTickQueue, TickPriority};
+use crate::sound_request::SoundRequest;
 use crate::world_access::BlockWorldAccess;
 
 /// Everything a `BlockBehavior` callback may read/mutate during Stage 4 (Context: the
@@ -142,6 +143,19 @@ impl<'a> UpdateContext<'a> {
             block_state,
         });
     }
+
+    /// MECH-D83 (M3 field-report wave 3): records `event` into the per-tick confirmed-events
+    /// outbox (`self.events.confirm`, `BlockEventQueue`'s own doc comment has the full
+    /// "why this reuses the `events` field rather than a new one" rationale) -- the narrow
+    /// call `PistonBehavior::on_block_event`'s own success branches make (an extend whose
+    /// `resolve_extend` resolved a plan; every contract/drop, which never fail) once a
+    /// `block_event` packet must actually reach clients for this accepted event. Never called
+    /// for a rejected/stale event -- `run_block_event_subphase`'s own staleness gate skips
+    /// dispatch entirely before a handler ever runs, so a stale event never even reaches a
+    /// point where this method could be called for it.
+    pub fn confirm_block_event(&mut self, event: &BlockEvent) {
+        self.events.confirm(*event);
+    }
 }
 
 /// New (M3-B06): a random-tick handler's own context — `UpdateContext`'s full mutation
@@ -184,6 +198,82 @@ impl<'a, 'b> RandomTickContext<'a, 'b> {
     }
 }
 
+/// MECH-D82/MECH-D73 (M3 field-report wave 3): the packet-level context a use-item-on
+/// dispatch supplies to the clicked cell's own `BlockBehavior::on_use` hook -- vanilla's own
+/// `ServerPlayerGameMode.useItemOn` computes an identical bundle (sneak-suppression input,
+/// the clicked face/cursor `BlockHitResult` already carries) before ever calling
+/// `BlockState.useItemOn`/`useWithoutItem`.
+#[derive(Copy, Clone, Debug)]
+pub struct UseContext {
+    /// The acting player's own current sneak/crouch state -- `sneaking && has_item` is
+    /// vanilla's own `suppressUsingBlock` gate (`ServerPlayerGameMode.useItemOn`'s own
+    /// `player.isSecondaryUseActive() && haveSomethingInOurHands`); computed by the caller
+    /// (`crates/server/src/play/mining.rs`'s own dispatch, mirroring `apply_placement_with_
+    /// redstone`'s existing `sneaking` parameter) before this hook is ever reached at all --
+    /// suppressed interactions never call `on_use`, so a concrete behavior never needs to
+    /// re-check this field for that purpose; it is carried through only so a behavior that
+    /// legitimately cares about sneak state for some other reason has it available.
+    pub sneaking: bool,
+    /// `true` iff the acting player's held item is non-empty (`HeldItemStub::EmptyHand`
+    /// excluded) -- the other half of vanilla's own `haveSomethingInOurHands`/
+    /// `suppressUsingBlock` gate, alongside `sneaking`.
+    pub has_item: bool,
+    /// Vanilla's `Player.getAbilities().mayBuild` (`RepeaterBlock`/`ComparatorBlock.
+    /// useWithoutItem`'s own leading guard). Always `true` until this engine has game modes
+    /// (documented simplification, MECH-D82's own decision-table row) -- no survival/
+    /// adventure/spectator distinction exists yet, so every real dispatch site sets this
+    /// unconditionally `true`; the field exists so a `may_build: false` behavior test can
+    /// exercise the no-op path without waiting on that future work.
+    pub may_build: bool,
+    pub face: Direction,
+    pub cursor: (f32, f32, f32),
+}
+
+/// MECH-D82: a `BlockBehavior::on_use` hook's own result -- `Consumed` mirrors vanilla's own
+/// `InteractionResult.consumesAction()` (ends the `useItemOn` dispatch right here, no
+/// fall-through to the held item's own placement `useOn`); `Pass` (the default) falls through
+/// to placement exactly as if no `on_use` hook existed at all.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum UseOutcome {
+    Pass,
+    Consumed,
+}
+
+/// MECH-D82 (M3 field-report wave 3): the block-use dispatch's own extended update context --
+/// `UpdateContext`'s full mutation surface (via `base`) plus a per-call sound-request outbox
+/// (`sounds`, B3's own clientbound `sound` packet concern) -- mirrors `RandomTickContext`'s
+/// own identical "wrap `UpdateContext`, add exactly the one extra per-hook-kind capability"
+/// shape, for the same reason: adding a new REQUIRED field to `UpdateContext` itself would
+/// break every one of this workspace's dozen-plus pre-existing direct `UpdateContext { .. }`
+/// struct-literal construction sites (test files this changeset must not touch, plus
+/// `crates/testing/gametest/src/replay.rs`). `on_use` is a brand-new hook this same changeset
+/// introduces, so its own context type carries no such backward-compatibility burden at all.
+pub struct UseUpdateContext<'a, 'b> {
+    pub base: UpdateContext<'a>,
+    pub sounds: &'b mut Vec<SoundRequest>,
+}
+
+impl<'a, 'b> UseUpdateContext<'a, 'b> {
+    pub fn get_block(&self, pos: BlockPos) -> Option<BlockStateId> {
+        self.base.get_block(pos)
+    }
+
+    pub fn set_block(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        self.base.set_block(pos, new_state)
+    }
+
+    pub fn write_block_state(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        self.base.write_block_state(pos, new_state)
+    }
+
+    /// Queues one clientbound `sound` packet request (B3) -- drained by whichever direct-action
+    /// call site dispatched this `on_use` call in the first place (`crates/server/src/play/
+    /// world.rs`'s own `BlockActionKind::Place` handling), never by a per-tick Stage-4 system.
+    pub fn request_sound(&mut self, request: SoundRequest) {
+        self.sounds.push(request);
+    }
+}
+
 /// The dispatch target for one block-state range (Context: "tier-1 registry"). Every method
 /// has a no-op default — a behavior overrides only what it needs.
 pub trait BlockBehavior: Send + Sync {
@@ -222,6 +312,22 @@ pub trait BlockBehavior: Send + Sync {
     /// "Random-tick position selection"). Default no-op — `NoOpBehavior` and every
     /// already-shipped M3-B01 implementor need zero changes (additive, backward-compatible).
     fn on_random_tick(&self, _ctx: &mut RandomTickContext, _pos: BlockPos) {}
+    /// MECH-D82 (M3 field-report wave 3): a use-item-on packet's own pre-placement block-use
+    /// dispatch, called at the CLICKED cell (never the placement-direction cell) unless the
+    /// caller's own `sneaking && has_item` suppression gate already applies (vanilla's
+    /// `ServerPlayerGameMode.useItemOn`'s own `suppressUsingBlock`, computed by the caller
+    /// before this hook is ever reached -- Context on `UseContext::sneaking`). Default `Pass`
+    /// — every block this blueprint does not name a handler for keeps today's placement-only
+    /// behavior unchanged (additive, backward-compatible, mirrors `on_random_tick`'s identical
+    /// convention).
+    fn on_use(
+        &self,
+        _ctx: &mut UseUpdateContext,
+        _pos: BlockPos,
+        _use_ctx: &UseContext,
+    ) -> UseOutcome {
+        UseOutcome::Pass
+    }
 }
 
 /// The tier-1 default: every method's default no-op body, shared by every unregistered

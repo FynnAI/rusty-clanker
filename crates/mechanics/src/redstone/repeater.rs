@@ -9,7 +9,7 @@ use rc_registries::block_state_properties::{properties, state_id};
 use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
-use crate::behavior::{BlockBehavior, UpdateContext};
+use crate::behavior::{BlockBehavior, UpdateContext, UseContext, UseOutcome, UseUpdateContext};
 use crate::direction::Direction;
 use crate::scheduled_tick::TickPriority;
 use crate::world_access::BlockWorldAccess;
@@ -170,6 +170,21 @@ impl RepeaterBehavior {
             seeded: false,
         });
         entry.powered = value;
+    }
+
+    /// MECH-D82 (M3 field-report wave 3): updates ONLY the `delay_setting` field of `pos`'s own
+    /// side-table entry -- never a `place()` call, which would reset `powered`/`seeded` too
+    /// (`place`'s own doc comment: "a full replace-on-replace... not a partial update"). This
+    /// is `on_use`'s own delay-cycle write, mirroring `set_powered`'s identical "read-modify-
+    /// write one field only" shape.
+    fn set_delay_setting(&self, pos: BlockPos, delay_setting: u8) {
+        let mut state = self.state.lock().unwrap();
+        let entry = state.entry(pos).or_insert(RepeaterState {
+            powered: false,
+            delay_setting: 1,
+            seeded: false,
+        });
+        entry.delay_setting = delay_setting;
     }
 
     /// Own-state writeback's read-side companion (M3 field-report fix) -- `RepeaterState::
@@ -445,5 +460,42 @@ impl BlockBehavior for RepeaterBehavior {
             });
         let facing = signal::diode_facing_from_str(repeater_property(props, "facing", current.0));
         self.place(pos, facing, delay_setting);
+    }
+
+    /// MECH-D82 (M3 field-report wave 3): `RepeaterBlock.useWithoutItem` -- cycles `delay`
+    /// 1->2->3->4->1 via a full-fan-out write (`ctx.set_block`, vanilla's own flag-3
+    /// `level.setBlock`), updates the side table through the dedicated `set_delay_setting`
+    /// setter (never `place`, which would also reset `powered`/`seeded`), and reports
+    /// `Consumed` -- no sound, no scheduled tick, matching vanilla exactly. `may_build: false`
+    /// is a no-op (`Pass`, vanilla's own `InteractionResult.PASS` guard).
+    fn on_use(
+        &self,
+        ctx: &mut UseUpdateContext,
+        pos: BlockPos,
+        use_ctx: &UseContext,
+    ) -> UseOutcome {
+        if !use_ctx.may_build {
+            return UseOutcome::Pass;
+        }
+        let Some(current) = ctx.get_block(pos) else {
+            return UseOutcome::Pass;
+        };
+        if !is_repeater_range(current.0) {
+            return UseOutcome::Pass; // defensive only -- dispatch never reaches here otherwise
+        }
+        let props = properties(GenStateId(current.0));
+        let locked = repeater_property(props, "locked", current.0) == "true";
+        let powered = repeater_property(props, "powered", current.0) == "true";
+        let facing = self.facing(pos);
+        let current_delay = self.delay_setting(pos);
+        let next_delay = if current_delay >= 4 {
+            1
+        } else {
+            current_delay + 1
+        };
+        let new_id = repeater_state_id(next_delay, facing, locked, powered);
+        ctx.set_block(pos, new_id);
+        self.set_delay_setting(pos, next_delay);
+        UseOutcome::Consumed
     }
 }

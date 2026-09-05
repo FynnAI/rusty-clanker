@@ -55,16 +55,19 @@ use super::mining::{
     DestroyOutcome, DestroyState, GameModeState, HeldItem, HeldItemStub, PlaceOutcome,
     PlaceableBlockKind, StopOutcome, TickOutcome, ToolKind, ToolMaterial,
 };
+// `mining::apply_block_use` is reached via `mining::` (the module alias above), never
+// imported by name directly -- mirrors `mining::apply_placement_with_redstone`'s own
+// identical already-established call-site convention.
 use super::movement::{
     ChunkBlockShapeSource, MovementOutcome, PendingMoveReport, PendingMovementPacket,
     PendingPlayerInput, PlayerInputState, PlayerMotion, TeleportState, evaluate_movement,
     eye_position, feet_block_pos, merge_move_report,
 };
 use super::packets::{
-    AcknowledgeBlockChange, BlockEntityInfo, BlockUpdate, ChunkBatchFinished, ChunkBatchStart,
-    LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent, SectionBlocksUpdate,
-    SetBlockDestroyStage, SetChunkCacheCenter, SynchronizePlayerPosition, pack_block_in_section,
-    pack_position, pack_section_position,
+    AcknowledgeBlockChange, BlockEntityInfo, BlockEvent as BlockEventPacket, BlockUpdate,
+    ChunkBatchFinished, ChunkBatchStart, LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent,
+    SectionBlocksUpdate, SetBlockDestroyStage, SetChunkCacheCenter, Sound as SoundPacket,
+    SynchronizePlayerPosition, pack_block_in_section, pack_position, pack_section_position,
 };
 use super::persistence::PlayerSessionStore;
 use super::registry_resolvers::McRegistryResolvers;
@@ -2484,7 +2487,15 @@ impl HardcodedWorld {
                                 region.world.resource::<SignalRegistryResource>().0.clone();
                             let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> =
                                 Vec::new();
-                            let outcome = mining::apply_placement_with_redstone(
+                            // MECH-D82 (M3 field-report wave 3): block use precedes item use,
+                            // exactly in vanilla's order (`ServerPlayerGameMode.useItemOn`'s
+                            // own leading `state.useItemOn`/`useWithoutItem` calls) -- resolved
+                            // at the CLICKED cell (`location`), never `target`. `has_item` is
+                            // the other half of vanilla's own `suppressUsingBlock` gate
+                            // alongside `crouching`/`sneaking`.
+                            let has_item = !matches!(held, HeldItemStub::EmptyHand);
+                            let mut sound_requests: Vec<rc_mechanics::SoundRequest> = Vec::new();
+                            let use_outcome = mining::apply_block_use(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
                                     dimension: DimensionId::OVERWORLD,
@@ -2496,6 +2507,7 @@ impl HardcodedWorld {
                                 &mut mining_outbound,
                                 &mut direct_changed,
                                 &mut light_dirty,
+                                &mut sound_requests,
                                 &mining_ownership,
                                 &behaviors,
                                 current_tick,
@@ -2503,28 +2515,79 @@ impl HardcodedWorld {
                                 face,
                                 inside_block,
                                 cursor,
-                                held,
-                                motion.yaw,
-                                motion.pitch,
-                                &player_boxes,
-                                // M3 field-report fix (chest-merge): the acting player's own
-                                // current sneak state, feeding `resolve_orientation`'s own
-                                // chest-merge branch -- `crouching` is already computed just
-                                // above (this tick loop's own pre-existing reach-check input,
-                                // `PlayerInputState.sneaking`), reused here unchanged.
                                 crouching,
-                                Some(&redstone_registry),
+                                has_item,
                             );
+                            let outcome = match use_outcome {
+                                Some(consumed) => consumed,
+                                None => mining::apply_placement_with_redstone(
+                                    &mut DirectBlockWorld {
+                                        world: &mut region.world,
+                                        dimension: DimensionId::OVERWORLD,
+                                        local: Address::Region(HARDCODED_REGION_ID),
+                                    },
+                                    &mut engine,
+                                    &mut scheduled,
+                                    &mut events,
+                                    &mut mining_outbound,
+                                    &mut direct_changed,
+                                    &mut light_dirty,
+                                    &mining_ownership,
+                                    &behaviors,
+                                    current_tick,
+                                    location,
+                                    face,
+                                    inside_block,
+                                    cursor,
+                                    held,
+                                    motion.yaw,
+                                    motion.pitch,
+                                    &player_boxes,
+                                    // M3 field-report fix (chest-merge): the acting player's own
+                                    // current sneak state, feeding `resolve_orientation`'s own
+                                    // chest-merge branch -- `crouching` is already computed just
+                                    // above (this tick loop's own pre-existing reach-check input,
+                                    // `PlayerInputState.sneaking`), reused here unchanged.
+                                    crouching,
+                                    Some(&redstone_registry),
+                                ),
+                            };
                             let outcome_pos = match outcome {
                                 PlaceOutcome::Applied { pos, .. }
                                 | PlaceOutcome::Rejected { pos, .. } => pos,
+                                PlaceOutcome::UseConsumed { clicked_pos, .. } => clicked_pos,
+                            };
+                            // MECH-D82 (M3 field-report wave 3): `broadcast_changed_positions`'s
+                            // own `primary` exclusion exists only to avoid double-sending a
+                            // position `respond_place` ALSO broadcasts to every OTHER player on
+                            // its own (`Applied`'s own `broadcast_to_all` call) -- `UseConsumed`
+                            // never does that (its own match arm in `respond_place` is a no-op;
+                            // only the actor-only dual-cell resend follows), so the clicked
+                            // cell's own state change must NOT be excluded here, or a
+                            // bystander would never see a repeater/comparator's own `on_use`
+                            // state flip at all.
+                            let broadcast_primary = match outcome {
+                                PlaceOutcome::Applied { .. } => Some(outcome_pos),
+                                PlaceOutcome::Rejected { .. }
+                                | PlaceOutcome::UseConsumed { .. } => None,
                             };
                             respond_place(&region.world, &action, outcome);
                             broadcast_changed_positions(
                                 &region.world,
                                 &direct_changed,
-                                Some(outcome_pos),
+                                broadcast_primary,
                             );
+                            // B3 (M3 field-report wave 3): the comparator's own mode-cycle
+                            // click sound -- drained right here, the direct-action call site
+                            // that produced it (`sound_request.rs`'s own doc comment: "never a
+                            // per-tick Stage-4 background resource").
+                            for request in sound_requests {
+                                broadcast_sound_request(
+                                    &region.world,
+                                    action.network_entity_id,
+                                    request,
+                                );
+                            }
                             // M3-B0X production block-entity spawn wiring (Context, owner's
                             // real-client field report: "chest placed, rejoin -> invisible" --
                             // production never spawned a real block entity for the six BE-
@@ -2532,7 +2595,7 @@ impl HardcodedWorld {
                             // value above); `outcome` is `Copy` too (`PlaceOutcome`'s own
                             // derive) -- both safe to read again here.
                             if let (
-                                PlaceOutcome::Applied { pos, new_state },
+                                PlaceOutcome::Applied { pos, new_state, .. },
                                 HeldItemStub::Block(kind),
                             ) = (outcome, held)
                             {
@@ -3266,6 +3329,25 @@ impl HardcodedWorld {
                     broadcast_changed_positions(&region.world, &tick_changed_positions, None);
                 }
 
+                // MECH-D83 (M3 field-report wave 3): drains `TickBlockEventOutbox` once per
+                // tick, right after `TickChangedPositions`'s own drain immediately above --
+                // vanilla's own real tick order confirms this same relative placement:
+                // `ChunkHolder.broadcastChanges` (this tick's queued block-update packets)
+                // runs inside `ServerChunkCache.tick`, called from `ServerLevel.tick` strictly
+                // BEFORE that same tick's own `runBlockEvents()` call (`ServerLevel.tick`'s own
+                // `chunkSource.tick(haveTime, true)` -> `blockEvents` profiler-section
+                // ordering, ASSET-D18(f) reference, decompiled-source-verified) -- so this
+                // tick's own block-update packets always reach a client before that same
+                // tick's `block_event` packets, exactly reproduced here by draining
+                // `TickChangedPositions` first, `TickBlockEventOutbox` second.
+                let tick_block_events = region
+                    .world
+                    .resource_mut::<rc_mechanics::stage4::ecs::TickBlockEventOutbox>()
+                    .drain();
+                for event in tick_block_events {
+                    broadcast_block_event(&region.world, event);
+                }
+
                 lifecycle.post_tick();
 
                 // M3-B08: appended immediately after this iteration's own tick work
@@ -3915,6 +3997,129 @@ fn broadcast_to_others(world: &World, exclude_network_id: i32, payload: bytes::B
     }
 }
 
+/// MECH-D83/B3 (M3 field-report wave 3): sends `payload` to every currently-connected player
+/// within a flat Euclidean `range` of `(x, y, z)` -- vanilla's own `PlayerList.broadcast`
+/// (ASSET-D18(f) reference, decompiled-source-verified: `xd*xd + yd*yd + zd*zd < range*range`,
+/// a **strict** less-than against each player's own live entity position, `player.getX()/
+/// getY()/getZ()` -- `PlayerMarker.position`'s own identical feet-position shape) --
+/// deliberately independent of `send_filtered_by_chunk`'s own chunk/view-distance filter
+/// (`block_event`'s own MECH-D83 row: "independent of chunk tracking"). Every currently-
+/// connected player in this world is, by this engine's own current one-dimension-per-region
+/// architecture, already "of the same dimension" (Context, `broadcast_block_event`'s own doc
+/// comment has the full "why no separate dimension filter" note) -- `except_network_id`
+/// (`None` for `block_event`'s own "actor included" broadcast, `Some(actor)` for a sound
+/// request's own `except_actor`) is the only exclusion this function applies.
+fn broadcast_within_range(
+    world: &World,
+    x: f64,
+    y: f64,
+    z: f64,
+    range: f64,
+    except_network_id: Option<i32>,
+    payload: bytes::Bytes,
+) {
+    let range_sq = range * range;
+    for entity_ref in world.iter_entities() {
+        let Some(marker) = entity_ref.get::<PlayerMarker>() else {
+            continue;
+        };
+        if except_network_id == Some(marker.network_entity_id) {
+            continue;
+        }
+        let dx = x - marker.position[0];
+        let dy = y - marker.position[1];
+        let dz = z - marker.position[2];
+        if dx * dx + dy * dy + dz * dz < range_sq {
+            let _ = marker.connection.try_send_payload(payload.clone());
+        }
+    }
+}
+
+/// MECH-D83: one `block_event` packet, drained from `TickBlockEventOutbox` once per tick
+/// (`executor.tick_region`'s own call site, above). Bridges `event.block_state`'s owning
+/// block (`rc_registries::block_state_properties::block_of`) to the wire `minecraft:block`
+/// registry id (`wire_block_id`) -- never the internal `BlockStateId`/`BlockId`. Broadcast at
+/// vanilla's own fixed `64.0`-block radius, actor included, independent of chunk tracking
+/// (`broadcast_within_range`'s own doc comment). This engine has exactly one dimension per
+/// region today (no cross-dimension mixing within one region's `World` at all), so "every
+/// player of the same dimension" (vanilla's own `PlayerList.broadcast`'s `dimension`
+/// parameter) reduces to "every connected player in this region" -- the same documented
+/// simplification `broadcast_to_all`/`broadcast_to_others`/`broadcast_changed_positions`
+/// already carry.
+fn broadcast_block_event(world: &World, event: rc_mechanics::BlockEvent) {
+    let block = rc_registries::block_state_properties::block_of(block_states::BlockStateId(
+        event.block_state.to_raw(),
+    ));
+    let wire_id = rc_registries::block_state_properties::wire_block_id(block);
+    let payload = encode_payload(&BlockEventPacket {
+        location: pack_position(event.pos),
+        action_id: event.event_id,
+        action_param: event.event_param,
+        block_id: wire_id.0 as i32,
+    });
+    broadcast_within_range(
+        world,
+        event.pos.x as f64,
+        event.pos.y as f64,
+        event.pos.z as f64,
+        64.0,
+        None,
+        payload,
+    );
+}
+
+/// MECH-D82/B3 (M3 field-report wave 3): one clientbound `sound` packet, drained right at the
+/// direct-action call site that produced it (`sound_request.rs`'s own doc comment: "never a
+/// per-tick Stage-4 background resource"). Position is the block's own CENTER (vanilla's own
+/// `Level.playSound(Player, BlockPos, ..)` overload: `pos.getX()+0.5, pos.getY()+0.5,
+/// pos.getZ()+0.5`, ASSET-D18(f) reference, decompiled-source-verified) -- both for the
+/// broadcast-range distance check and the wire fixed-point encoding (`(coordinate * 8.0) as
+/// i32`). `seed`: vanilla draws this from the level's own dedicated `soundSeedGenerator`
+/// stream (`Level.playSound`'s own double-based overload, `RandomSource.nextLong()`) --
+/// independent of this engine's own `RegionDropEntropy`/loot-roll RNG stream, which this
+/// changeset deliberately does NOT reuse (entangling an unrelated vanilla RNG stream with
+/// sound seeds risks a real determinism drift the moment a differential test ever checks
+/// drop-sequence determinism against a captured oracle trace). No dedicated `soundSeedGenerator`
+/// resource exists yet -- `SOUND_SEED_PLACEHOLDER` is a fixed, documented stand-in
+/// (`docs/findings-for-planning.md` carries this as an open deviation for planning to assign a
+/// real per-region stream to).
+const SOUND_SEED_PLACEHOLDER: i64 = 0;
+
+fn broadcast_sound_request(
+    world: &World,
+    actor_network_id: i32,
+    request: rc_mechanics::SoundRequest,
+) {
+    let x = (request.pos.x as f64 + 0.5) * 8.0;
+    let y = (request.pos.y as f64 + 0.5) * 8.0;
+    let z = (request.pos.z as f64 + 0.5) * 8.0;
+    let payload = encode_payload(&SoundPacket {
+        sound_registry_id_plus_one: request.sound.0 as i32 + 1,
+        source: request.source.vanilla_ordinal() as i32,
+        x: x as i32,
+        y: y as i32,
+        z: z as i32,
+        volume: request.volume,
+        pitch: request.pitch,
+        seed: SOUND_SEED_PLACEHOLDER,
+    });
+    let range = if request.volume > 1.0 {
+        16.0 * request.volume as f64
+    } else {
+        16.0
+    };
+    let except = request.except_actor.then_some(actor_network_id);
+    broadcast_within_range(
+        world,
+        request.pos.x as f64 + 0.5,
+        request.pos.y as f64 + 0.5,
+        request.pos.z as f64 + 0.5,
+        range,
+        except,
+        payload,
+    );
+}
+
 /// A finalized break's own broadcast: `Block Update` (new state, always `AIR`) to every
 /// connected player, unconditionally -- the block-state resync itself is never subject to any
 /// exclusion (Context: "the broadcast to every connected player interest-set simplification...
@@ -3997,42 +4202,86 @@ fn respond_break(
     }
 }
 
-/// `mining::apply_placement`'s own response side: `Applied` broadcasts `Block Update` only
-/// (no `Level Event` for a placement, Context); `Rejected` sends a corrective `Block Update`
-/// to the actor alone only when `current_state` is populated (never for `RejectReason::
-/// OutOfReach` -- unreachable here, already filtered before dispatch -- and never for
-/// `NothingToPlace`, which has nothing to correct to).
+/// `mining::apply_placement`'s own response side: `Applied` broadcasts `Block Update` to
+/// every currently-connected player (no `Level Event` for a placement, Context); `Rejected`
+/// additionally sends a corrective `Block Update` to the actor alone when `current_state` is
+/// populated (never for `RejectReason::OutOfReach` -- unreachable here, already filtered
+/// before dispatch). `UseConsumed` (MECH-D82) sends no broadcast of its own here -- its own
+/// state change already reached every OTHER player via `broadcast_changed_positions`
+/// (`direct_changed`, this call site's own sibling call), since a repeater/comparator's own
+/// `on_use` writes through `ctx.set_block`/`ctx.write_block_state` exactly like placement
+/// does.
+///
+/// MECH-D78 (M3 field-report wave 3): beyond the per-outcome broadcast above, EVERY outcome
+/// (success, rejection, nothing-to-place, and `UseConsumed` alike) additionally resends the
+/// actor two more `Block Update` packets -- the clicked cell and the placement-direction
+/// cell, both read live, after the action -- reproducing vanilla's own unconditional
+/// `ServerGamePacketListenerImpl.handleUseItemOn` tail (`this.send(new
+/// ClientboundBlockUpdatePacket(level, pos)); this.send(new ClientboundBlockUpdatePacket(
+/// level, pos.relative(direction)));`, ASSET-D18(f) reference, decompiled-source-verified:
+/// sent unconditionally, regardless of `interactionResult`). This is the actual corrective
+/// mechanism for a rejected placement or a suppressed/no-op use -- no bespoke rejection
+/// protocol needed, the client just reconverges off these two resends.
 fn respond_place(world: &World, action: &PendingBlockAction, outcome: PlaceOutcome) {
-    match outcome {
-        PlaceOutcome::Applied { pos, new_state } => {
-            let payload = encode_payload(&BlockUpdate {
-                location: pack_position(pos),
-                block_state_id: new_state as i32,
-            });
-            broadcast_to_all(
-                world,
-                &action.connection,
-                action.network_entity_id,
-                pos,
-                payload,
-            );
-        }
+    // `Applied` broadcasts the target's own new state to every currently-connected player
+    // (the actor included, `broadcast_to_all`'s own established "actor may not be spawned
+    // yet" fallback). `Rejected`/`UseConsumed` broadcast nothing of their own here -- MECH-
+    // D78's own unconditional dual-cell resend below (every outcome alike) is now the
+    // complete corrective mechanism for those; the previous rejection-only single-cell
+    // corrective send this branch used to also perform is fully subsumed by it (that send
+    // was always exactly the `target_pos` half of what the dual resend now sends anyway --
+    // keeping both would double-send the same packet to the actor for a rejection).
+    if let PlaceOutcome::Applied { pos, new_state, .. } = outcome {
+        let payload = encode_payload(&BlockUpdate {
+            location: pack_position(pos),
+            block_state_id: new_state as i32,
+        });
+        broadcast_to_all(
+            world,
+            &action.connection,
+            action.network_entity_id,
+            pos,
+            payload,
+        );
+    }
+
+    let (clicked_pos, clicked_state, target_pos, target_state) = match outcome {
+        PlaceOutcome::Applied {
+            pos,
+            new_state,
+            clicked_pos,
+            clicked_state,
+        } => (clicked_pos, clicked_state, pos, Some(new_state)),
         PlaceOutcome::Rejected {
             pos,
-            current_state: Some(current),
+            current_state,
+            clicked_pos,
+            clicked_state,
             ..
-        } => {
-            let payload = encode_payload(&BlockUpdate {
-                location: pack_position(pos),
-                block_state_id: current as i32,
-            });
-            let _ = action.connection.try_send_payload(payload);
-        }
-        PlaceOutcome::Rejected {
-            current_state: None,
-            ..
-        } => {}
-    }
+        } => (clicked_pos, clicked_state, pos, current_state),
+        PlaceOutcome::UseConsumed {
+            clicked_pos,
+            clicked_state,
+            target_pos,
+            target_state,
+        } => (clicked_pos, Some(clicked_state), target_pos, target_state),
+    };
+    send_block_update_to_actor(action, clicked_pos, clicked_state);
+    send_block_update_to_actor(action, target_pos, target_state);
+}
+
+/// MECH-D78's own dual-cell resend, one cell at a time -- sends nothing if `state` is `None`
+/// (the position has no chunk loaded at all; nothing a real client could compare against
+/// either).
+fn send_block_update_to_actor(action: &PendingBlockAction, pos: BlockPos, state: Option<u32>) {
+    let Some(state) = state else {
+        return;
+    };
+    let payload = encode_payload(&BlockUpdate {
+        location: pack_position(pos),
+        block_state_id: state as i32,
+    });
+    let _ = action.connection.try_send_payload(payload);
 }
 
 /// `evaluate_movement`'s response side (Context: "Issuing a correction"). On

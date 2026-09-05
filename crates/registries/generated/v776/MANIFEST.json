@@ -22,7 +22,7 @@
     },
     {
       "path": "block_state_properties.rs",
-      "sha256": "205b17d5095d41644c8e598ff87627b3d847a729b919a1f75c957cb89e618151",
+      "sha256": "df0cd4bf63510c353178e3f1f902c02e3115ed9f0794884adabeebba222c3af3",
       "generator_tool_version": "xtask-codegen/0.1.0",
       "source_jar_sha1": "823e2250d24b3ddac457a60c92a6a941943fcd6a"
     }

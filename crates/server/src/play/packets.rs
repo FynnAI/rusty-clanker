@@ -721,6 +721,57 @@ pub struct LevelEvent {
 /// broken block's own raw pre-break state id (Context).
 pub const LEVEL_EVENT_BLOCK_BREAK: i32 = 2001;
 
+/// MECH-D83 (M3 field-report wave 3): vanilla's own `ClientboundBlockEventPacket` (`net.
+/// minecraft.network.protocol.game.ClientboundBlockEventPacket`, ASSET-D18(f) reference,
+/// decompiled-source-verified field-by-field): position packed exactly like `BlockUpdate::
+/// location` above, an unsigned byte action id, an unsigned byte parameter, then a VarInt id
+/// into the wire `minecraft:block` registry -- never a `BlockStateId`
+/// (`rc_registries::block_state_properties::wire_block_id`'s own doc comment has the full
+/// "why not the internal id" reasoning). Play clientbound id `0x07` -- counted directly
+/// against the real `GameProtocols` clientbound builder (`CLIENTBOUND_TEMPLATE`'s own
+/// `addPacket` chain, ASSET-D18(f) reference): `bundle=0, add_entity=1, animate=2,
+/// award_stats=3, block_changed_ack=4, block_destruction=5, block_entity_data=6,
+/// block_event=7, block_update=8` -- cross-checked against this crate's own already-committed
+/// `AcknowledgeBlockChange = 0x04`/`SetBlockDestroyStage = 0x05`/`BlockUpdate = 0x08` above,
+/// all three of which independently confirm this exact same counted sequence.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x07)]
+pub struct BlockEvent {
+    pub location: i64,
+    pub action_id: u8,
+    pub action_param: u8,
+    #[rc(varint)]
+    pub block_id: i32,
+}
+
+/// MECH-D82/B3 (M3 field-report wave 3): vanilla's own `ClientboundSoundPacket` (ASSET-D18(f)
+/// reference, decompiled-source-verified field-by-field). `sound_registry_id_plus_one` is
+/// `ByteBufCodecs.holder`'s own registry-id-holder encoding (VarInt `0` means an inline sound
+/// event follows; VarInt `n+1` means registry id `n`) -- this crate only ever sends the
+/// registry-id form for a real, already-registered `minecraft:sound_event` entry, so this
+/// field is always that entry's own `RegistryEntryId.0 + 1`, never `0`. `source` is vanilla's
+/// own `SoundSource` enum ordinal, written as a plain VarInt (`FriendlyByteBuf.writeEnum`'s
+/// own encoding -- `rc_mechanics::SoundSource::vanilla_ordinal`). `x`/`y`/`z` are vanilla's own
+/// fixed-point form, `(coordinate * 8.0) as i32` (`ClientboundSoundPacket.LOCATION_ACCURACY =
+/// 8.0F`). `volume`/`pitch` are plain `f32`; `seed` a plain `i64`. Play clientbound id `0x75`
+/// -- counted directly against the same real `GameProtocols` clientbound builder
+/// `BlockEvent`'s own doc comment already establishes the `bundle=0`-based count for: index
+/// `117` in that same sequence.
+#[derive(RcPacket, Debug, Clone, Copy, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x75)]
+pub struct Sound {
+    #[rc(varint)]
+    pub sound_registry_id_plus_one: i32,
+    #[rc(varint)]
+    pub source: i32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub volume: f32,
+    pub pitch: f32,
+    pub seed: i64,
+}
+
 /// Inverse of this file's already-existing `pack_position` (Context: exact bit layout
 /// restated). Sign-extends each two's-complement field back from its packed width.
 pub fn unpack_position(packed: i64) -> BlockPos {

@@ -1059,6 +1059,12 @@ impl BlockBehavior for PistonBehavior {
         match event.event_id {
             TRIGGER_EXTEND => {
                 if let Ok(plan) = resolve_extend(ctx.world, ctx.ownership, pos, facing) {
+                    // MECH-D83 (M3 field-report wave 3): confirms this event into the per-tick
+                    // `block_event` outbox -- the success branch only (a `resolve_extend` that
+                    // resolved a real plan); `Blocked`/`TooManyBlocks` below never call this,
+                    // vanilla's own `triggerEvent` returning `false` for an unresolvable extend
+                    // (never broadcast, Context "MECH-D83" row).
+                    ctx.confirm_block_event(event);
                     // M3 field-report fix (Task 3): the base's own `EXTENDED` flip happens
                     // immediately, synchronously with `triggerEvent`/`moveBlocks` -- real
                     // vanilla's own `TICKS_TO_EXTEND=2` animation delay governs only the *moved*
@@ -1091,6 +1097,10 @@ impl BlockBehavior for PistonBehavior {
                 // every subsequent unrelated neighbor-changed call.
             }
             TRIGGER_CONTRACT | TRIGGER_DROP => {
+                // MECH-D83 (M3 field-report wave 3): confirmed unconditionally -- a retract or
+                // drop never fails to resolve (Context, "retract/drop never fail" -- unlike
+                // extend, there is no `Blocked`/`TooManyBlocks`-equivalent rejection here).
+                ctx.confirm_block_event(event);
                 let plan = resolve_retract(ctx.world, ctx.ownership, pos, facing, sticky);
                 // M3 field-report fix (retract content/base timing split, verified against a
                 // now-deterministic real-oracle capture: `docs/findings-for-planning.md`'s own

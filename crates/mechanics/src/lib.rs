@@ -19,6 +19,7 @@ pub mod random;
 pub mod random_tick;
 pub mod redstone;
 pub mod scheduled_tick;
+pub mod sound_request;
 #[cfg(feature = "server-systems")]
 pub mod stage4;
 #[cfg(feature = "server-systems")]
@@ -29,6 +30,7 @@ pub mod world_access;
 
 pub use behavior::{
     BlockBehavior, BlockBehaviorRegistry, NoOpBehavior, RandomTickContext, UpdateContext,
+    UseContext, UseOutcome, UseUpdateContext,
 };
 pub use block_entity::{
     BlockEntityHeader, BlockEntityKind, BlockEntityWorldAccess,
@@ -65,4 +67,5 @@ pub use random_tick::{
     DEFAULT_RANDOM_TICK_SPEED, RandomTickPosition, WorldSeed, draw_random_tick_positions,
 };
 pub use scheduled_tick::{ScheduledTickEntry, ScheduledTickQueue, TickPriority};
+pub use sound_request::{SoundRequest, SoundSource};
 pub use world_access::BlockWorldAccess;

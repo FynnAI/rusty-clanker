@@ -9,6 +9,8 @@ pub mod ecs; // crates/mechanics/src/stage4/ecs.rs
 use rc_chunk_storage::BlockStateId;
 use rc_core::BlockPos;
 use rc_messaging::{Address, BorderUpdateEvent, RegionMessage};
+use rc_registries::block_state_properties::block_of;
+use rc_registries::generated_v776::block_states::BlockStateId as GenBlockStateId;
 
 use crate::behavior::{BlockBehaviorRegistry, UpdateContext};
 use crate::block_event::BlockEventQueue;
@@ -339,6 +341,27 @@ pub fn run_block_event_subphase(
             break;
         };
         processed += 1;
+
+        // MECH-D83 (M3 field-report wave 3): vanilla's own `doBlockEvent` staleness gate --
+        // re-reads the live block at the event's own position and compares its owning block
+        // *type* (`block_of`, never the exact state id -- vanilla's own `state.is(eventData.
+        // block())` is block-identity-only) against the event's own recorded `block_state`.
+        // A position whose block has since become something else entirely (broken, replaced,
+        // or force-finalized by a superseding trigger before this pass ever reached it) drops
+        // the event silently here -- no dispatch, no drain, exactly vanilla's own "return
+        // false" outcome, which itself also means no `block_event` packet is ever confirmed/
+        // sent for it (`PistonBehavior::on_block_event`'s own success-branch `confirm_block_
+        // event` calls are simply never reached).
+        let stale = match world.get_block(event.pos) {
+            Some(live) => {
+                block_of(GenBlockStateId(live.0)) != block_of(GenBlockStateId(event.block_state.0))
+            }
+            None => true,
+        };
+        if stale {
+            continue;
+        }
+
         {
             let behavior = behaviors.resolve(event.block_state);
             let mut ctx = make_ctx(
