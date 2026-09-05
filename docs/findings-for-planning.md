@@ -2612,6 +2612,28 @@ Entries name the milestone that surfaced them and the code they concern.
   it. The blueprint's implementation step 2 (adding `Component` derives to
   seven entity structs) was already satisfied by landed M4-B01/B02 code.
 
+- **No M4 blueprint wires the Stage-8 light engine or the Stage-6a AI dispatch
+  into the production composition root.** M4-B07 scoped the composition root
+  out ("a shared resource a composition root populates, is out of this
+  blueprint's scope"), M4-B03 deferred "wiring into `HardcodedWorld`'s live
+  tick loop" to a future blueprint, and M4-B09 names neither; M4-B04's natural
+  spawning then read light 0 everywhere (every `LightColumn` stays
+  uninitialized without the driver) and its darkness gate spawned zombies at
+  noon, breaking an M4-B01 tracking test deterministically. Closed for lighting
+  by an `M4-B07 field-report` changeset (production `LightPropertiesRegistry`
+  with vanilla's emitter table, `LightPropagatorState`/`SkyLightSourceColumn`
+  on every chunk entity, `with_lighting_driver` in `HardcodedWorld`, the
+  region's single `LightDirtyQueue` fed by every write path, a
+  `debug_query_light` channel) that lands before M4-B04; the client still
+  receives the placeholder full-bright chunk light and no `update_light` —
+  sending the real light data is a NET changeset the protocol-diff harness
+  must see land deliberately. Planning: M4-B09 must own the composition-root
+  reconciliation explicitly (Stage-6a AI dispatch, the three-way Stage-6b
+  order B02/B04/B05, the M4-B03 AI wiring) instead of implying it; and the
+  M4 acceptance harness needs a day/night source before any light-gated
+  behavior can be tested against vanilla (`sky_darken` is a constant 0 and
+  time never advances on our server).
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
