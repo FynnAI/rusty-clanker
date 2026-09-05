@@ -2485,23 +2485,29 @@ Entries name the milestone that surfaced them and the code they concern.
   register entry (the schema has `steps, packet, class, closes_with, expires`
   only); they close with the placeholder changeset instead.
 
-- **Wire beside a toggled signal source loses its power in the replay
-  harness (lever fixture, wave 3).** A powered-state swap of a lever next to
-  an isolated wire tile: the oracle keeps the wire's connection shape and
-  raises power to 15 (id 5306); our replay recomputes the shape to the
-  four-side cross and reverts power to 0 (id 4591) — the wire's
-  `on_neighbor_changed` (power) and `on_shape_update` (connections) run in an
-  order where the shape recompute overwrites the freshly written power digit
-  and no longer sees the lever as connectable. The real-connection path
-  (`on_use` toggle through the server) reads 15, so either the harness's
-  scripted state swap and the server's `set_block` fan-out differ, or the
-  engine is wrong and the server test only checks the power digit. The
-  agent scoped the committed fixture to the lever's own transition instead
-  of fixing it. Open: an instrumented diagnosis restores a
-  `lever_toggle_powers_adjacent_wire` fixture, finds the real order/visibility
-  defect, and fixes engine or harness — never the fixture.
-
-## C. Blueprint corrections already applied (planning reconciliation may be needed)
+- **RESOLVED — wire beside a toggled lever lost its power only in the
+  replay harness.** `rc_gametest::replay::tier1_registry` hand-mirrors the
+  composition root's registration order and had never registered the lever,
+  so every lever id resolved to the no-op defaults (`is_signal_source`
+  false): the wire computed power 0 and a four-side cross. The harness now
+  registers `LeverBehavior` in the production slot; fixture
+  `lever_toggle_powers_adjacent_wire` (oracle 4873) is green and
+  `play_lever_field_report.rs` asserts full wire state ids. Rule for the
+  harness: `tier1_registry` must call `register_tier1_redstone` itself or a
+  test must assert both registries cover the same id ranges — the next
+  component added to the composition root would drift again. Two residual
+  engine/harness divergences the diagnosis measured but did not change:
+  (1) `WireBehavior::on_shape_update` always recomputes all four sides plus
+  the straight-line post-processing, while `RedStoneWireBlock.updateShape`
+  has a horizontal single-property fast path, a separate `UP` branch and the
+  "a dot stays a dot" short-circuit of `getConnectionState` — a dot wire that
+  receives any shape update becomes a cross here; no committed fixture
+  reaches it (next corpus wave adds one, then the engine follows vanilla);
+  (2) the harness's `place_and_settle` applies scripted blocks with flag-3
+  order (neighbour-changed, then shapes) whereas the oracle capture's
+  `/setblock` uses flag `2|256` (shapes, then `updateNeighboursOnBlockSet`)
+  and skips `updateFromNeighbourShapes`; no fixture distinguishes the orders
+  today — the harness should mirror `/setblock` exactly once a fixture does.
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
   all corrected in the blueprints; planning documents may still carry the
