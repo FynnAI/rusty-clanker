@@ -1,5 +1,7 @@
 use rc_core::{BlockPos, ChunkKey, RcEntityId};
 
+use crate::address::RegionId;
+
 /// `serde`'s own derive only implements `Serialize`/`Deserialize` for fixed-size
 /// arrays up to a small bound (well under 128) -- this hand-written `#[serde(with =
 /// "...")]` module is `LightBorderUpdate`'s own workaround, going through
@@ -115,7 +117,20 @@ pub struct LightBorderUpdate {
     pub block: Option<[u8; 128]>,
 }
 
-/// The three native cross-region payload variants ARCH-D25/WORLD-D10 ship.
+/// MECH-D35's per-region snapshot, gossiped every 20 ticks to every other known live
+/// region (M4-B04 Context: "MECH-D35 cluster-safe census"). `counts` is indexed by
+/// `rc-mechanics::spawn::MobCategory::ALL`'s own declaration order — this crate cannot
+/// depend on `rc-mechanics` (WS-D3), so the index convention is a plain doc comment
+/// here, restated identically on the `rc-mechanics` side.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MobCensusReport {
+    pub region: RegionId,
+    /// Index 0=Monster, 1=Creature, 2=Ambient, 3=Axolotls, 4=UndergroundWaterCreature,
+    /// 5=WaterCreature, 6=WaterAmbient.
+    pub counts: [u32; 7],
+}
+
+/// The four native cross-region payload variants ARCH-D25/WORLD-D10/MECH-D35 ship.
 /// `13-cluster-architecture.md` may add cluster-only variants later without
 /// changing this envelope (ARCH-D25's stated extension point) — not done by this
 /// blueprint.
@@ -132,4 +147,8 @@ pub enum RegionMessage {
     /// `LightBorderUpdate` is itself roughly 260 bytes unboxed, comfortably past
     /// that budget on its own.
     LightBorderUpdate(Box<LightBorderUpdate>),
+    /// M4-B04: embedded inline (not boxed) — `size_of::<MobCensusReport>()` (an 8-byte
+    /// `RegionId` plus a 28-byte `[u32; 7]`, 36 bytes) stays comfortably inside the same
+    /// ≤128-byte inline budget `region_message_size_bound` asserts.
+    MobCensusReport(MobCensusReport),
 }
