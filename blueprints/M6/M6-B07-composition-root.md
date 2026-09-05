@@ -521,6 +521,13 @@ pub struct SchedulerConfig {
 
 ARCH-D10/D11's own "border-tick injection" mechanism — replicating a thin halo of a neighboring region's own chunks so a player near a boundary sees consistent simulation on both sides — is **not** implemented by this blueprint. Each region's own `TicketManager`/`ChunkLifecycleManager` pair (§L, one per region) computes ticket demand and loads chunks only from **its own** players, and only within **its own owned cells**; a player positioned near a region boundary may observe un-ticked neighbor-owned chunks at the edge of their own simulation distance until a future blueprint implements real border-halo replication. This is a genuine, named scope boundary — not silently absorbed — consistent with `01-server-architecture.md`'s own Open Questions never having pinned this mechanism's exact shape in the first place.
 
+### Claims to verify (TEST-D57)
+
+- Vanilla's server tick rate is 20 ticks per second, i.e. a fixed 50ms per tick — restated as ARCH-D20's admission-deadline formula "each region's deadline = `last_tick_start + 50ms`" (§E) and as the `tick_budget_ms: 50.0` value the composition root's `MetricsRegistry` is constructed with (§C step 5).
+- Vanilla's Anvil on-disk region-file save format groups chunks into 32×32-chunk regions — "Anvil's own on-disk region-file granularity (32×32 chunks)" (§C.2), independent of this project's own 16×16-chunk scheduling grid-cell size.
+- The vanilla dimension registry identifier for the overworld is the string `"minecraft:overworld"` — the one dimension name this blueprint's `--region-layout` parser and startup dimension resolution accept (§C step 2, §J.1).
+- Vanilla's Java Edition server listens by default on TCP port 25565 — the `--bind` flag's own default value `"0.0.0.0:25565"` this blueprint fixes as the process's own default bind address (§C step 14, §J).
+
 ## Deliverables
 
 ### `crates/scheduler/src/pool/tick_clock.rs` (modify — one new method, §E.1)

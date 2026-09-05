@@ -131,6 +131,10 @@ Collected here for the implementer's convenience — each is independently low-r
 5. **`RaftStateMachine::apply`'s exact handling of non-`Normal` (`Membership`/`Blank`) log entries.** This blueprint's own design (Implementation steps §5) pushes a placeholder `DirectoryCommandResponse` (sentinel `region: RegionId(0)`, `new_epoch: None`) for any entry whose `EntryPayload` is not `Normal(DirectoryCommand)`, on the understanding that no real caller ever reads the `R` value openraft returns for a membership-change entry (that path's own response comes from `openraft`'s internal `ClientWriteResponse` construction for `add_learner`/`change_membership`, not from this crate's `apply`'s return value) — confirm this against `openraft` 0.9.25's own `apply` contract (whether `Vec<Self::R>` must have exactly one entry per input entry regardless of payload kind, which this design already assumes) before finalizing.
 6. **openraft's exact `RaftSnapshotBuilder`/snapshot-installation flow field names** (`SnapshotMeta`'s exact field list, `Snapshot<C>`'s exact shape) — this blueprint's Implementation steps describe the *content* this crate serializes into a snapshot (§D's `SNAPSHOT_TABLE` row) precisely; the exact `openraft`-side struct field names wrapping that content should be cross-checked against `openraft` 0.9.25's own `openraft::Snapshot`/`openraft::SnapshotMeta` docs at implementation time.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/cluster/Cargo.toml` (new)

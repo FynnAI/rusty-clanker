@@ -104,6 +104,10 @@ ARCH-D19's actual quiet-region single-work-item coalescing is not implemented by
 
 Every non-`None` `LifecycleOutcome` `RegionManager::execute_merge`/`execute_split` already produces (M0-B06) is journaled, when metrics are attached, as one `LifecycleEvent` in a bounded ring buffer (`DEFAULT_LIFECYCLE_JOURNAL_CAPACITY = 4096` — a seed default, oldest-evicted-first, sized generously above any plausible single M6 load-test run's merge/split event count; a production server's own harness pulls via `drain_lifecycle_events()` on its own polling cadence rather than requiring an unbounded buffer). Each event records both regions'/fragments' cell counts and the triggering EWMA value(s) — exactly the inputs `11-roadmap-milestones.md`'s M6 goal ("replace `01`'s seed threshold defaults with calibrated values") needs to analyze after a real load run: how close to the 90%/10%-of-budget thresholds a real trigger actually fired, and how balanced real splits actually came out.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/scheduler/Cargo.toml` (modify — one new normal dependency; promote `serde_json` from dev-only)

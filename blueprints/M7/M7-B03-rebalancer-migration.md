@@ -439,6 +439,10 @@ pub trait RegionPrewarmHint: Send + Sync + 'static {
 
 ARCH-D6's own merge/split runs **unconditionally**, on every node, in every mode (CLUSTER-D6/D26 already establish cluster mode changes nothing about how ARCH-D6 fires — restated here only for this blueprint's own precedence statement, not re-derived). **Binding precedence rule, this blueprint's own resolution, stated plainly:** ARCH-D6 always wins; this blueprint's own rebalancer never competes with it, only defers to it or reacts to its aftermath. Concretely, two consequences already threaded through §C/§D/§E above, restated together here for clarity: (1) `evaluate_placement` (§C.3) excludes any `lifecycle_pinned` region from candidacy entirely (`RegionLoadSample.lifecycle_pinned`, §C.2) — a region currently mid-ARCH-D6-split-or-merge is never selected as a migration source, full stop, not merely deprioritized; (2) CLUSTER-D3's own ceiling fallback (§D) *is* this blueprint's one deliberate point of cooperation with ARCH-D6 — rather than inventing a second splitting mechanism, an oversized-and-hot region is handed to ARCH-D6's own existing split machinery via `request_split`, and only re-considered for migration on a later window once ARCH-D6 has already produced smaller fragments (CLUSTER-D3's own text, restated). The reverse direction — a region this blueprint has just frozen (§E.1) or is actively migrating — is likewise excluded from ARCH-D6's own eligibility, but that exclusion is enforced entirely *inside* `RegionFreezeController::freeze`'s own binding contract (a region that is not ticking cannot trigger ARCH-D6's own EWMA-based hysteresis check at all, since that check only ever runs as part of `tick_region_concurrent`'s own after-dispatch hook, `M6-B07` §D — a frozen region structurally never reaches that hook) — restated as a consequence of `freeze`'s own contract, not a second, independent enforcement mechanism this blueprint adds.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/cluster/src/rebalancer/mod.rs` (new)

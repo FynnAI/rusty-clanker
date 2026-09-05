@@ -141,6 +141,10 @@ pub trait NetworkTransportMetricsSink: Send + Sync + 'static {
 
 This blueprint does **not** implement: `rc-cluster`'s raft-backed `NodeDirectory` (a future M7 blueprint — this crate only defines and consumes the trait, §H); the proxy role, CLUSTER-D20–D24's connection-termination/handoff/pre-warming machinery, or CLUSTER-D23's *proxy*↔node control channel (a different channel from this blueprint's own node↔node control stream, §D — the two must never be confused: CLUSTER-D23 governs player-connection routing state, this crate's control stream governs only `NotOwner` staleness signaling between two `NetworkTransport` peers); raft's own RPC/heartbeat transport (`openraft`'s network trait — CLUSTER-D15's failure detection rides on whatever `rc-cluster` wires it to, not necessarily this crate's QUIC connections, and this blueprint does not decide that); an `EntitySnapshotPool`-equivalent slot pool (ARCH-D28's `SegQueue` pooling is specifically an in-process, zero-copy optimization; a `RegionTransferRequest` crossing this transport is serialized to bytes regardless, so pooling the pre-serialization `Box<EntitySnapshot>` buys nothing here); TLS certificate issuance, distribution, or rotation (13's own stated Open Question, consumed as opaque bytes only, §F); installing a process-wide `rustls::CryptoProvider` (the composition root's job, §F). Building placeholder versions of any of these is out of scope, not a shortcut to take.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/transport-net/Cargo.toml` (modify)

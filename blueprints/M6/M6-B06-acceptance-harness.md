@@ -59,7 +59,7 @@ From `11-roadmap-milestones.md`, quoted in full:
 
 **§C.2 — The PR-tier smoke companion, a genuinely separate, smaller worked example.** A runtime override of `eight_region_mixed.ron`'s own `duration_ticks` (rather than authoring a second file) was considered and rejected: `FaultInjectionEntry.tick_start`/`tick_end` are absolute tick numbers fixed *inside* the scenario's own real 18,000-tick run; truncating `duration_ticks` alone (without also rescaling the fault window) would silently make the fault injection never fire in a compressed run, and proportionally rescaling every tick-bearing field generically is exactly the kind of "clever runtime scaling of hand-authored data" this corpus's own established convention avoids (M6-B01 §C: "one file, hand-authored or code-generated, versioned"). This blueprint instead ships a genuinely separate, independently-authored, proportionally-smaller worked example, `crates/testing/paritybot/scenarios/loadtest/m6_acceptance_smoke.ron` (new): 8 `RegionCellGroup`s (identical non-adjacent 1-cell layout discipline to `eight_region_mixed.ron`), `bot_groups` summing to **35** bots across the identical five-`HotnessProfile` mix as `eight_region_mixed.ron` (one `IdleStandaround` group at `bot_count: 0` — the same AC2 shape, at smaller scale; the other seven groups at `bot_count: 5` each), `merge_split_enabled: false`, one `FaultInjectionEntry` naming one `BuildBreakChurn`- or `CombatCluster`-hosting region with `tick_start: 600, tick_end: 1100, load_multiplier: 8.0`, `duration_ticks: 1_200` (60 real seconds). This is a **plumbing** smoke fixture only — Context §G restates precisely why a smaller bot count/duration proves the harness's own scenario-derivation/fanout/report-aggregation machinery works end to end, but can never, by itself, stand in for AC1's own literal 200-bot/15-minute/8-region claim.
 
-**§C.3 — One additive field this blueprint adds to `MultiRegionScenarioConfig` (M6-B01 §H): the declared client view distance.** AC1's own "at view distance 10" clause is realized, per the vanilla protocol itself, entirely client-side: `ClientInformation.view_distance: i8` (M1-B04, server-bound Configuration packet `0x00`) is the field a connecting client declares, and is what the composition root's own chunk-send radius is computed from — there is no separate server-side "view distance" CLI surface this blueprint needs to invent. `MultiRegionScenarioConfig` (M6-B01 §H) gains one new field, `pub client_view_distance: u8` (no default — every caller states it explicitly, since a silently-wrong view distance would silently invalidate AC1's own literal wording); this blueprint's own `m6_report::run` always passes `10` for both scenarios (Context §B/§G). **Moderate-confidence flag, honestly stated, per this corpus's own established convention for exactly this class of uncertainty (mirroring M1-B06's repeated azalea-event-name caveat):** the exact azalea `ClientBuilder`/`Account` API surface for setting an outgoing `ClientInformation.view_distance` value before/at Configuration handshake time is not independently re-verified against azalea's own current documentation by this blueprint — confirm the exact call shape at implementation time; M6-B01's own `runner.rs` internal bot-task body (Implementation step 7 there) is the one call site this blueprint's own implementation changeset touches to thread the new field through.
+**§C.3 — One additive field this blueprint adds to `MultiRegionScenarioConfig` (M6-B01 §H): the declared client view distance — plus the server-side view-distance surface AC1's literal wording also requires.** AC1's own "at view distance 10" clause is decided server-side, not by the client's own request alone: a connecting client's `ClientInformation.view_distance: i8` (M1-B04, server-bound Configuration packet `0x00`) states a REQUEST; the server clamps that request to `[2, min(its own configured view-distance setting, 32)]`, sends chunks at the clamped radius, gates entity-tracking range by that same clamped value, and echoes the clamped radius back to the client in its own Login packet. A bot that never transmits `ClientInformation` is pinned at the floor of 2 regardless of intent, and a bot requesting 10 against a server configured below 10 is silently clamped below 10 as well — either gap would invalidate AC1's own literal "at view distance 10" wording without failing loudly. `MultiRegionScenarioConfig` (M6-B01 §H) gains one new field, `pub client_view_distance: u8` (no default — every caller states it explicitly); this blueprint's own `m6_report::run` always passes `10` for both scenarios (Context §B/§G), and the per-bot task body always actually transmits `ClientInformation` rather than leaving it unsent. A matching server-side surface is required for the real run: `ManagedServerConfig` (Deliverables) gains `pub server_view_distance: Option<u16>`, threaded to the spawned `rusty-clanker-server`'s own view-distance configuration surface, and `m6_report::run` always sets it to `10` for the real-run path — the clamp's upper bound is satisfied by construction rather than left to whatever the binary's own default happens to be. The run's own completion report records the actually-achieved, clamped radius (never assumed equal to the raw request) as `effective_view_distance` (Context §H), alongside `client_view_distance: 10`, so AC1's own literal wording is checked, not merely intended. **Moderate-confidence flag, honestly stated, per this corpus's own established convention for exactly this class of uncertainty (mirroring M1-B06's repeated azalea-event-name caveat):** the exact azalea `ClientBuilder`/`Account` API surface for setting an outgoing `ClientInformation.view_distance` value before/at Configuration handshake time is not independently re-verified against azalea's own current documentation by this blueprint — confirm the exact call shape at implementation time; M6-B01's own `runner.rs` internal bot-task body (Implementation step 7 there) is the one call site this blueprint's own implementation changeset touches to thread the new field through.
 
 ### §D — Extending the M6-B01 §B contract: `--metrics-snapshot-log` and the `last_tick_task_count` field
 
@@ -236,6 +236,7 @@ A single manual dispatch now runs exactly the job an operator selected via `job`
     "region_count": 8,
     "bot_count": 200,
     "client_view_distance": 10,
+    "effective_view_distance": 10,
     "run_duration_ticks": 18000,
     "per_region_tps": [ "...": "Vec<RegionTpsResult>, diagnostic" ],
     "zero_player_region_label": "spawn-quiet",
@@ -246,6 +247,11 @@ A single manual dispatch now runs exactly the job an operator selected via `job`
 ```
 
 `M6ReportResult` (below) wraps `xtask::tier_result::TierResult` exactly as `M1ReportResult`/`M2ReportResult`/`M3ReportResult`/`M4ReportResult`/`M5ReportResult` already do — `status: Fail` the instant any one case is `Fail` (`TierResult::finalize`'s own already-established fail-on-any rule, unmodified). **The one deliberate lineage evolution this blueprint introduces, restated and justified, not merely asserted:** the real run's own final artifact is always `xtask::reference_host::AuthoritativeRunReport<M6ReportResult>` (M6-B04), never a bare `M6ReportResult` — M6 is the first milestone whose own acceptance-criterion text literally requires "the milestone's documented reference host" (AC1), so it is the first milestone whose own completion report must be gated by M6-B04's `gate` function rather than merely written; this discharges M6-B04's own Context obligation verbatim ("whichever future blueprint first assembles that real report must call `reference_host::gate`... and write the wrapped value — never the bare report"). The scenario-only path (no `--server-bin`) writes a bare, ungated `M6ReportResult`-wrapped `TierResult` instead — there is no real run to gate in that mode.
+
+### Claims to verify (TEST-D57)
+
+- The client declares its own view distance via `ClientInformation.view_distance: i8`, a field carried in the server-bound Configuration-phase packet with id `0x00`.
+- A server's chunk-send radius for a connected client is decided server-side: the client's declared `ClientInformation.view_distance` states a request, and the server clamps that request to [2, min(its own configured view-distance setting, 32)], sends chunks at the clamped radius, gates entity-tracking range by the same value, and echoes the clamped radius back to the client in the Login packet.
 
 ## Deliverables
 
@@ -270,10 +276,14 @@ pub struct ManagedServerConfig {
     pub fault_injection_schedule: Option<std::path::PathBuf>,
     /// New (M6-B06): passed as `--metrics-snapshot-log <path>` when `Some` (Context §D item 5).
     pub metrics_snapshot_log: Option<std::path::PathBuf>,
+    /// New (M6-B06, Context §C.3): passed to the spawned server's own
+    /// view-distance configuration surface when `Some` — the server-side
+    /// half of the clamp AC1's "at view distance 10" wording depends on.
+    pub server_view_distance: Option<u16>,
 }
 ```
 
-`spawn_server`'s own body gains three more conditional `["--flag", path]` argument pushes, identical shape to M3-B08's/M5-B10's own additions. `capture_stdout: true` (already an existing field, M3-B08) is reused, never re-added, so `RC_REGION_LAYOUT`'s stdout line (M6-B01 §B item 2) is observable exactly the way M3-B08's own `RC_REGION_COUNT` line already is.
+`spawn_server`'s own body gains four more conditional argument pushes: the three `["--flag", path]` pushes above, identical shape to M3-B08's/M5-B10's own additions, plus one `["--view-distance", value]` push when `server_view_distance` is `Some`. `capture_stdout: true` (already an existing field, M3-B08) is reused, never re-added, so `RC_REGION_LAYOUT`'s stdout line (M6-B01 §B item 2) is observable exactly the way M3-B08's own `RC_REGION_COUNT` line already is.
 
 ### `crates/testing/paritybot/src/loadtest/runner.rs` (modify — one new field on `MultiRegionScenarioConfig`, additive)
 
@@ -281,8 +291,10 @@ pub struct ManagedServerConfig {
 pub struct MultiRegionScenarioConfig {
     // ...every existing field from M6-B01 unchanged (scenario, server_host, server_port, out_dir, resource_limits)...
     /// New (M6-B06, Context §C.3): the value every bot's own `ClientInformation.view_distance`
-    /// field (M1-B04) declares at Configuration handshake time. No default —
-    /// every caller states it explicitly.
+    /// field (M1-B04) declares at Configuration handshake time — a REQUEST,
+    /// clamped server-side against the spawned server's own
+    /// `ManagedServerConfig::server_view_distance`. No default — every
+    /// caller states it explicitly.
     pub client_view_distance: u8,
 }
 ```
@@ -411,6 +423,9 @@ pub struct M6ReportResult {
     pub region_count: usize,
     pub bot_count: u32,
     pub client_view_distance: u8,
+    /// The actually-achieved, clamped chunk-send radius (Context §C.3) —
+    /// never assumed equal to `client_view_distance`.
+    pub effective_view_distance: u8,
     pub run_duration_ticks: u64,
     pub per_region_tps: Vec<RegionTpsResult>,
     pub zero_player_region_label: String,
@@ -431,6 +446,7 @@ pub fn build_report(
     region_count: usize,
     bot_count: u32,
     client_view_distance: u8,
+    effective_view_distance: u8,
     run_duration_ticks: u64,
     ac1: &Ac1Outcome,
     ac2: &Ac2Outcome,
@@ -473,7 +489,8 @@ pub struct M6ReportArgs {
 /// `false` fails closed with `M6ReportError::RegionLayoutOrMetricsSnapshotContractMissing`
 /// before spawning anything further. `true`: spawns the real server via
 /// `rc_test_harness::process::spawn_server` with `region_layout`/
-/// `fault_injection_schedule`/`metrics_snapshot_log` all `Some`,
+/// `fault_injection_schedule`/`metrics_snapshot_log`/`server_view_distance`
+/// (the last always `Some(10)`, Context §C.3) all `Some`,
 /// `client_view_distance: 10` threaded into
 /// `rc_paritybot::loadtest::MultiRegionScenarioConfig`, runs
 /// `run_multi_region_scenario` for the scenario's own `duration_ticks`
@@ -489,8 +506,12 @@ pub struct M6ReportArgs {
 /// logical-tick period — an approximate, coarse windowing scheme, honestly
 /// flagged: real network/scheduling jitter means this is not exact to the
 /// millisecond, adequate given AC3's own generous, well-separated
-/// tolerance/threshold margins, Context §B.3), calls `evaluate_ac1`/
-/// `evaluate_ac2`/`evaluate_ac3`, reads+scans the real
+/// tolerance/threshold margins, Context §B.3), computes `effective_view_distance`
+/// as the clamp of `client_view_distance` against `server_view_distance`
+/// (Context §C.3's own `[2, min(server_view_distance, 32)]` formula — a pure
+/// computation from the two values this run itself set, never a value read
+/// back from a not-yet-existing server-emitted telemetry field), calls
+/// `evaluate_ac1`/`evaluate_ac2`/`evaluate_ac3`, reads+scans the real
 /// `docs/planning/01-server-architecture.md` via `calibration_values_landed`,
 /// calls `build_report`, then — always for the real-run path — wraps via
 /// `xtask::reference_host::gate(report, xtask::reference_host::probe_host(),
@@ -625,7 +646,7 @@ Add, to the workflow's existing top-level `on.workflow_dispatch.inputs` block (a
 
 ### `xtask/tests/m6_report_build_report.rs`
 
-27. `build_report_aggregates_all_seven_cases_and_serializes_with_flattened_fields` — every `evaluate_ac*` input passing, `calibration_landed: true`; serialize to `serde_json::Value` → top-level object has `tier`, `status`, `cases` (7 entries, exact names from Context §H) **and** `scenario_path`, `region_count`, `bot_count`, `client_view_distance`, `run_duration_ticks`, `per_region_tps`, `zero_player_region_label`, `overloaded_region_label`, `calibration_report_paths` as sibling keys, `status == "pass"`.
+27. `build_report_aggregates_all_seven_cases_and_serializes_with_flattened_fields` — every `evaluate_ac*` input passing, `calibration_landed: true`; serialize to `serde_json::Value` → top-level object has `tier`, `status`, `cases` (7 entries, exact names from Context §H) **and** `scenario_path`, `region_count`, `bot_count`, `client_view_distance`, `effective_view_distance`, `run_duration_ticks`, `per_region_tps`, `zero_player_region_label`, `overloaded_region_label`, `calibration_report_paths` as sibling keys, `status == "pass"`.
 28. `build_report_status_is_fail_the_instant_any_case_fails` — every input passing except `ac2.passed == false` → `automated.status == Status::Fail`, and specifically the two `AC2*` cases (by name) are `Fail` while every `AC1*`/`AC3*` case is `Pass` (proving the failure is correctly attributed, not smeared).
 
 ### `xtask/tests/m6_report_path_guard_coverage.rs`
@@ -635,7 +656,7 @@ Add, to the workflow's existing top-level `on.workflow_dispatch.inputs` block (a
 ## Implementation steps
 
 1. **`crates/testing/test-harness/src/metrics_snapshot_log.rs`.** Implement the mirror types and `parse_metrics_snapshot_log`/`distinct_region_ids`/`analyze_region_tps` exactly per Context §E. Observable: `metrics_snapshot_log_parsing.rs` and `metrics_snapshot_log_tps_analysis.rs` pass.
-2. **`process.rs`.** Add the three new `ManagedServerConfig` fields and `spawn_server`'s three conditional argument pushes. Observable: `cargo build -p rc-test-harness` still succeeds; existing call sites unaffected.
+2. **`process.rs`.** Add the four new `ManagedServerConfig` fields and `spawn_server`'s four conditional argument pushes. Observable: `cargo build -p rc-test-harness` still succeeds; existing call sites unaffected.
 3. **`runner.rs`.** Add `client_view_distance` to `MultiRegionScenarioConfig` and thread it through the per-bot azalea task body (Context §C.3's own moderate-confidence flag — confirm the exact azalea call shape at this step). Observable: `cargo build -p rc-paritybot` still succeeds.
 4. **`m6_acceptance_smoke.ron`.** Author exactly per Context §C.2/Deliverables. Observable: `m6_acceptance_smoke_scenario_validates_and_has_eight_regions_with_one_zero_bot_group` passes.
 5. **`xtask/src/m6_report.rs` — pure pieces first.** `detect_m6_composition_root_support`, `evaluate_ac1_pool`, `evaluate_ac1`, `evaluate_ac2`, `evaluate_ac3`, `parse_region_layout_stdout_line`, `calibration_values_landed`, `build_report`. Observable: tests 8–21, 27–28 pass.

@@ -466,6 +466,10 @@ pub fn run(args: &LoadtestArgs) -> std::process::ExitCode;
 
 `xtask/src/main.rs` gains one `Command::Loadtest { scenario: PathBuf, out_dir: PathBuf, #[arg(long)] host: Option<String>, #[arg(long)] port: Option<u16> }` variant, dispatched to `loadtest::run` — the same additive-variant shape every prior blueprint's own `Command` extension already established (M0-B08, M1-B06, M3-B08, M5-B10).
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/testing/paritybot/Cargo.toml` (modify — one new dependency line, Windows-only)

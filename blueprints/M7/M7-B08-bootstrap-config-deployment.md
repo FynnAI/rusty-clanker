@@ -381,6 +381,12 @@ CLUSTER-D28, restated exactly: "the `tracing` crate ecosystem... with OpenTeleme
 
 Every `ClusterConfigError`/`ClusterCompositionError` variant (§B/§E) carries, in its `Display` text, the specific field or path that failed and — where the failure is a contradiction between two fields rather than one bad value — both fields' names, exactly as `BootstrapWithSeeds`'s own message does above. None of this blueprint's own error paths ever panics (`unwrap`/`expect`/`panic!` do not appear in any Deliverable's real implementation — Constraints) and none ever leaves the process in a state where **some** but not all of `[cluster]`'s intended startup has happened and the process nonetheless proceeds to accept player-facing or cluster-facing traffic — restated as the binding "no partial serving" rule the startup-failure-path acceptance tests (§ Acceptance tests) exist specifically to prove. **The zero-touch-monolithic promise, re-asserted as a test, restated:** every one of these new validation/error paths is reachable **only** through `ClusterConfig::load`/`ClusterNodeComposition::start`/`decommission` — none of them is on any code path a monolithic deployment (no `[cluster]` table) ever executes, which is the same claim §B's "activation semantics" paragraph already makes, proven concretely by `absent_cluster_config_leaves_monolithic_path_byte_identical`.
 
+### Claims to verify (TEST-D57)
+
+- The port/firewall matrix (Context §F) names TCP port `25565` (operator-configurable via `--bind`) as carrying "Player connections (Java protocol, NET-D1)", inherited from monolithic mode's own default (M6-B07 §C step 14).
+- The comment on `default_cluster_save_interval_ticks() -> u64 { 600 } // CLUSTER-D17: 30s @ 20 TPS` (Context §B) treats 600 ticks as equal to 30 real-time seconds at Minecraft's tick rate of 20 ticks per second.
+- Context §C step 4's storage-attach probe treats chunk coordinate `x = i32::MIN, z = i32::MIN` as one no real chunk in vanilla 26.2 ever occupies, since vanilla's own world-border-bounded chunk-coordinate range never reaches the `i32` extremes.
+
 ## Deliverables
 
 ### `crates/server/src/config.rs` (modify — additive)

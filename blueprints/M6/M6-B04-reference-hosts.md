@@ -143,6 +143,10 @@ No function in this blueprint's Deliverables converts, rescales, or compares a n
 
 Because this blueprint's implementation changeset touches `xtask/src/path_guard.rs` (to add this new row) — a file **already** matched by row 7 — the **entire rest of this blueprint's implementation changeset** (every other file under `xtask/`, plus `reference-hosts.toml` itself, plus `CONTRIBUTING.md`'s protected-path table) is, by the exact same reasoning, also touching a now-or-newly protected path. `M0-B08`'s own binding rule applies verbatim, restated here rather than re-derived: *"Future blueprints that need to touch `xtask/**` again... must do the same — label that specific changeset `governance`, never bundle a protected-path edit into an `implementation`-labeled changeset."* **This blueprint's implementation changeset is therefore labeled `Changeset-Type: governance`, never `implementation`, in full — not only the `path_guard.rs` hunk.** Its test-authoring changeset (the `xtask/tests/**` files below, plus `todo!()`-stubbed new-signature bodies) is labeled `test-authoring`, per TEST-D45/D46's ordinary two-changeset split — a `test-authoring` changeset is, per `M0-B08`'s own table, already permitted to touch a protected path.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `reference-hosts.toml` (new, repository root)

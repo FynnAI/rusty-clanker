@@ -265,6 +265,12 @@ pub enum ReleaseError {
 
 `run` (the `Command::Release` handler) checks this immediately after building the plain (`Plain`-profile) candidate binary and before attempting any instrumented build — a real-target invocation against a not-yet-updated `rusty-clanker-server` fails fast, with this exact actionable message, rather than burning a multi-hour Tier-3 CI budget only to fail at the workload-spawn step. **This is this blueprint's own concrete, testable proof that it depends on M6-B01 §B honestly** — Acceptance tests below drive `detect_region_layout_support` and the resulting `Err(ReleaseError::RegionLayoutContractMissing)` path directly against a stub help-text fixture, with no real `rusty-clanker-server` build required to exercise it.
 
+### Claims to verify (TEST-D57)
+
+- Minecraft Java Edition 26.2's network protocol version number is 776.
+- Vanilla's default Minecraft server port is 25565.
+- A vanilla hopper clock's item-transfer cadence is approximately 8 ticks.
+
 ## Deliverables
 
 ### Root `Cargo.toml` (modify — one new table; `[profile.release]` itself is untouched, already present per M0-B01/§B)

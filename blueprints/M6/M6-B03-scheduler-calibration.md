@@ -362,6 +362,10 @@ Never a fixed calendar cadence — mirrors `12`'s WS-D4 toolchain-bump disciplin
 5. A Tier-3 SLO regression (`09`'s TEST-D32, `14`'s PERF-D60) whose root cause traces to scheduler thrash or a missed admission deadline — on-demand, from monitoring, never scheduled.
 6. `13-cluster-architecture.md`'s cluster mode (M7) reuses these thresholds under `NetworkTransport`'s different latency profile — cluster mode may need its own calibration pass, explicitly out of this blueprint's monolithic-only scope (M6's own boundary note).
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/scheduler/src/pool/worker_pool.rs` (modify — additive; `ResizeThresholds`, `with_resize_thresholds`; every existing item's shape unchanged)

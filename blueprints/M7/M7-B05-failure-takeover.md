@@ -269,6 +269,10 @@ Two overlapping failure scenarios, both handled correctly by the same mechanism 
 2. **CLUSTER-D7's ≤30ms figure as a raft-commit-latency proxy (§C).** CLUSTER-D7 is scoped to `RegionMessage`/data-plane traffic; this blueprint reuses it as the best available stand-in for "one raft round trip in a co-located topology" because no other pinned figure exists for that specific quantity — flagged explicitly as a reuse, not a literal re-derivation, so a future revision that measures raft's own commit latency separately can correct this without this blueprint having silently asserted a false precision.
 3. **`tokio::sync::mpsc::UnboundedReceiver`'s ownership by `TakeoverOrchestrator::spawn`.** `ClusterNode::take_health_events()` is callable exactly once (M7-B02 Deliverables) — this blueprint's own `spawn` signature (Deliverables) takes the receiver by value, consistent with that one-shot contract; the implementer should confirm no other code path in a future composition-root blueprint also expects to call `take_health_events()` itself (it cannot — the second call returns `None` by M7-B02's own design), a note worth restating explicitly in that future blueprint's own Prerequisites rather than silently discovered.
 
+### Claims to verify (TEST-D57)
+
+- Vanilla's default autosave interval for persisting a dirty region to disk is 5 minutes (6000 ticks).
+
 ## Deliverables
 
 ### `crates/cluster/src/takeover.rs` (new)

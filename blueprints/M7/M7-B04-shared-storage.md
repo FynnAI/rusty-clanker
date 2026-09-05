@@ -221,6 +221,10 @@ Mirroring M7-B02 §I's own established convention — each independently low-ris
 6. **`object_store`'s exact `[features]` table** (Deliverables, `Cargo.toml`) names `"aws"` with high but not certain confidence as the feature gating the S3-compatible builder module — a one-line, build-time-caught verification against the pinned `0.14.1` manifest, not a design-level risk.
 7. **`rc-chunk-storage` compiling `object_store` unconditionally**, never behind a Cargo feature the way `rc-cluster`/`rc-transport-net`/`rc-proxy` sit behind WS-D5(a)'s `cluster` gate — a genuinely minimal, from-source monolithic-only build (`--no-default-features --features monolithic`, WS-D5(a)) still links `object_store` even though it never constructs `ObjectStoreBackend`. This is not a defect this blueprint introduces (WORLD-D17 itself describes `ObjectStoreBackend` as runtime-selected, never naming a compile-time gate the way CLUSTER-D26 does for `NetworkTransport`) — whether `rc-chunk-storage` deserves its own optional feature mirroring WS-D5(d)'s already-established `io_uring` precedent is a question for a future revision of `12-workspace-structure.md`, not a change this blueprint makes unilaterally to a fixed planning document.
 
+### Claims to verify (TEST-D57)
+
+- A vanilla Anvil chunk record's decompressed payload is byte-identical to the chunk's own NBT tag content, with no additional framing beyond the container's compression layer.
+
 ## Deliverables
 
 ### `crates/chunk-storage/Cargo.toml` (modify — add one new normal dependency; every existing line from M0-B01/M2-B01/M2-B03/M2-B04/M2-B05 unchanged)

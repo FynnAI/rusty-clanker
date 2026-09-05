@@ -297,6 +297,10 @@ impl NetworkTransport {
 
 This blueprint does not implement: `rc-proxy`'s ordinary connection forwarding table, NET-D6's cluster-mode execution, or any join-flow/first-assignment logic (M7-B06's own crate, unmodified beyond Finding F5); CLUSTER-D2/D16's rebalancer or takeover *decision* logic (M7-B05's own crate); a NET-D8 ingress adapter consuming `NodeAcceptor::try_recv`'s output, or any change to `rc-scheduler`/`rc-mechanics`'s Stage-11 encode path to call `NodeAcceptor::relay_sink` (both explicitly named by M7-B06 §N's own Needs-from list as unclaimed — this blueprint does **not** claim them either: they are a materially larger scope, "wire the entire node's normal packet flow to the proxy relay," than this task's own six-step-handoff-and-pre-warm brief, and would require touching `rc-scheduler`/`rc-mechanics`, which PLAN-D3 forbids for a cluster-mode blueprint without an extraordinarily well-justified finding this blueprint does not attempt to manufacture); any change to `rc-messaging`'s `EntitySnapshot` or any entity component schema; Bedrock-specific handoff branching. Building placeholder versions of any of these is out of scope, not a shortcut to take.
 
+### Claims to verify (TEST-D57)
+
+- None.
+
 ## Deliverables
 
 ### `crates/core/src/connection_id.rs` (NEW — Finding F3)
