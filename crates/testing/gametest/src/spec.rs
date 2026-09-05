@@ -99,32 +99,6 @@ pub enum SpecError {
     },
 }
 
-/// M3 field-report test-authoring (PLAN-D10 Task A3, fixture-support lint): every fixture
-/// that once shipped a floating support-losing block cost a real diagnosis session before the
-/// oracle simply popped it one tick after setup (Task A3's own doc comment) — this closed,
-/// hand-authored allowlist names the one already-committed exception this pass found
-/// (`comparator_container_fullness_chest`, a comparator/chest pair with no floor at all,
-/// already tracked as "being fixed elsewhere" rather than this wave's own concern) so a
-/// legitimate future addition never has to touch this file to add itself to a growing list.
-const SUPPORT_LINT_ALLOWLIST: &[&str] = &[
-    "redstone/comparator/comparator_container_fullness_chest",
-    // M3 field-report test-authoring (PLAN-D10 Task A3, fixture-support lint) — the following
-    // five were NOT already known before this lint (unlike the entry above): every one is an
-    // already-committed comparator-family fixture whose own comparator/torch has no floor at
-    // all at setup, discovered by this same pass and reported to the manager/ledger rather
-    // than silently re-geometried here (Task A3's own "do not change existing fixtures'
-    // geometry" instruction) — a real oracle pops each of these one tick after setup per this
-    // wave's own established "the oracle pops floating blocks" rule, so whether the captured
-    // trace still parity-checks clean depends on whether each fixture's own later actions
-    // happen to re-destroy the same position in both engines regardless; unverified here,
-    // flagged for planning to resolve.
-    "redstone/comparator/comparator_2tick_fixed_delay",
-    "redstone/comparator/comparator_compare_vs_subtract",
-    "redstone/comparator/comparator_priority_diode_behind",
-    "redstone/comparator/comparator_tie_no_turn_on",
-    "redstone/comparator/comparator_wire_signal_read",
-];
-
 /// blocks.json's own six horizontal-facing property values, each paired with the `(dx, dy,
 /// dz)` offset FROM a block facing that direction TO the block immediately behind it (the
 /// direction the facing value points AWAY from) — shared by the wall-torch and wall-lever
@@ -182,15 +156,18 @@ fn support_offset(vanilla_state: &str) -> Option<(i32, i32, i32)> {
     }
 }
 
-/// Every support violation `spec` has, in `blocks` order — `spec.id` allowlisted
-/// (`SUPPORT_LINT_ALLOWLIST`) skips the check entirely. A block's own required support cell
-/// (`support_offset`'s own doc comment) is a violation when no `PlacedBlock` at that exact
-/// position exists in `spec.blocks` at all, or the one that does is itself air — `actions`
-/// never count, only the setup-time `blocks` list (Task A3's own "at setup" wording).
+/// Every support violation `spec` has, in `blocks` order (M3.5-B03 follow-up,
+/// deliverable 5, `docs/findings-for-planning.md`: the six comparator-family
+/// fixtures a hand-authored allowlist used to exempt from this check entirely — one
+/// already known, five discovered by the lint itself and left unresolved pending
+/// planning review — are now re-geometried with the missing floor cell every other
+/// comparator-family fixture already carries, so the allowlist has no remaining
+/// member and is removed; this check now runs unconditionally on every fixture). A
+/// block's own required support cell (`support_offset`'s own doc comment) is a
+/// violation when no `PlacedBlock` at that exact position exists in `spec.blocks` at
+/// all, or the one that does is itself air — `actions` never count, only the
+/// setup-time `blocks` list (Task A3's own "at setup" wording).
 pub fn check_support(spec: &ContraptionSpec) -> Vec<SpecError> {
-    if SUPPORT_LINT_ALLOWLIST.contains(&spec.id.as_str()) {
-        return Vec::new();
-    }
     let mut violations = Vec::new();
     for block in &spec.blocks {
         let Some((dx, dy, dz)) = support_offset(&block.vanilla_state) else {

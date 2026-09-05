@@ -4,13 +4,35 @@
 
 use std::path::Path;
 
-pub const TRACE_FORMAT_VERSION: u32 = 1;
+/// Bumped from `1` in M3.5-B03's own follow-up governance changeset (deliverable 7,
+/// `docs/findings-for-planning.md`): `RedstoneTrace` gained `spec_sha256`. Postcard is
+/// not self-describing (no field tags), so a struct-shape change is not itself safely
+/// detectable by attempting the full decode against a cached file the OLD shape wrote
+/// — `read_trace_if_current` therefore probes this leading field first (mirrors
+/// `protocol_capture::PROTOCOL_CAPTURE_FORMAT_VERSION`'s own identical bump and
+/// rationale, restated here since this module has no dependency on that one) and
+/// rejects a mismatch before ever attempting the full decode.
+pub const TRACE_FORMAT_VERSION: u32 = 2;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct RedstoneTrace {
     pub format_version: u32,
     pub contraption_id: String,
     pub source_jar_sha1: String,
+    /// M3.5-B03 follow-up (deliverable 7): SHA-256 (lowercase hex, `xtask::
+    /// fixture_manifest::compute_sha256_hex`'s own identical format — this crate
+    /// never depends on `xtask` in production code, so the hash is computed
+    /// independently at each writer's own call site, never imported) of the exact
+    /// committed `.ron` fixture bytes this trace was captured from — `fetch-corpus`'s
+    /// own cache-currency check (`corpus_capture.rs`) used to treat a matching
+    /// `source_jar_sha1` alone as "this cached trace is still current," which stayed
+    /// true forever for an edited fixture (nothing about the *jar* changes when only
+    /// the fixture's own geometry does) and silently kept serving a stale capture. A
+    /// trace this field is not meaningful for (`replay_contraption`'s own in-process
+    /// "ours" side, produced fresh every run, never cached to disk) leaves this empty
+    /// — mirrors `source_jar_sha1`'s own identical "Replay has no jar provenance"
+    /// convention.
+    pub spec_sha256: String,
     pub tool_version: String,
     pub bounds_min: (i32, i32, i32),
     pub bounds_max: (i32, i32, i32),
@@ -108,11 +130,42 @@ pub fn read_trace(path: &Path) -> Result<RedstoneTrace, TraceReadError> {
     })
 }
 
+/// The leading-field-only probe `read_trace_if_current` decodes first (mirrors
+/// `protocol_capture::FormatVersionProbe`'s own identical rationale, restated here:
+/// postcard reads a struct's fields strictly in declaration order with no look-ahead,
+/// so deserializing this single-field prefix of the real `RedstoneTrace` shape
+/// correctly consumes only `format_version`'s own bytes regardless of what — if
+/// anything, on any trace format version old or new — follows).
+#[derive(serde::Deserialize)]
+struct TraceFormatVersionProbe {
+    format_version: u32,
+}
+
 /// `Ok(None)` for "absent, or a `format_version` mismatch" (both are legitimate,
 /// silent "must regenerate" signals for `fetch-corpus`'s own cache-hit logic);
-/// `Err` only for a genuine I/O or decode failure.
+/// `Err` only for a genuine I/O or decode failure. The version check itself reads
+/// only `TraceFormatVersionProbe`'s own leading field first, never the full
+/// `RedstoneTrace` shape (M3.5-B03 follow-up, deliverable 7): postcard's own lack of
+/// field tags means attempting the full decode against an old-format cache file
+/// (predating a `RedstoneTrace` shape change such as `spec_sha256`'s own addition)
+/// risks silently misaligned garbage rather than a clean parse failure, since
+/// `format_version` sits at a fixed leading position in every shape version this
+/// module has ever shipped — the exact same risk `protocol_capture`'s own module
+/// doc comment documents in full for its own identical-shaped problem.
 pub fn read_trace_if_current(path: &Path) -> Result<Option<RedstoneTrace>, TraceReadError> {
     if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path).map_err(|source| TraceReadError::Io {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let (probe, _rest): (TraceFormatVersionProbe, &[u8]) = postcard::take_from_bytes(&bytes)
+        .map_err(|source| TraceReadError::Decode {
+            path: path.display().to_string(),
+            source,
+        })?;
+    if probe.format_version != TRACE_FORMAT_VERSION {
         return Ok(None);
     }
     match read_trace(path)? {

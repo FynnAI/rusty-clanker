@@ -15,6 +15,19 @@ use std::time::{Duration, Instant};
 
 use crate::spec::PlacedBlock;
 
+/// Our own fixed chunk-send radius, restated here (`crates/server/src/play/chunk.rs::
+/// PLACEHOLDER_RADIUS_CHUNKS` / `crates/server/src/play/connection.rs`'s own
+/// `LoginPlay.view_distance`, both `5` — this crate never depends on `crates/server`,
+/// the same black-box posture every other restated constant in this harness already
+/// holds) — `launch_oracle_server`'s own `server.properties` writes this as the
+/// oracle's own `view-distance` too (M3.5-B03 follow-up, deliverable 2,
+/// `docs/findings-for-planning.md`): a real vanilla server only streams (and
+/// eventually forgets) chunks within the *advertised* view distance around a player,
+/// so a mismatched oracle setting produced spurious chunk-streaming/`block_update`
+/// divergence noise from the two servers simply disagreeing on how much world to
+/// track — never a genuine behavioral difference worth reporting.
+const ORACLE_VIEW_DISTANCE: u32 = 5;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
     #[error("io error: {0}")]
@@ -201,7 +214,8 @@ pub fn launch_oracle_server(
          spawn-protection=0\n\
          difficulty=peaceful\n\
          gamemode=creative\n\
-         server-port={port}\n"
+         server-port={port}\n\
+         view-distance={ORACLE_VIEW_DISTANCE}\n"
     );
     std::fs::write(work_dir.join("server.properties"), properties)?;
 

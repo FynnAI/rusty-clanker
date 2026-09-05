@@ -37,6 +37,22 @@ impl PacketRecorder {
         self.0.lock().unwrap().clear();
     }
 
+    /// The count of packets recorded so far, without cloning them — M3.5-B03 follow-up
+    /// (deliverable 1, `docs/findings-for-planning.md`): `redstone_wire_capture::
+    /// capture_contraption_over_wire` reads this right at `apply_actions`'s own call
+    /// site to record `StepCapture::observe_from`'s own index (that field's doc
+    /// comment has the full rationale) — cheaper than `snapshot().len()` for a call
+    /// site that only ever needs the count, never the packets themselves.
+    pub fn len(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+
+    /// `clippy::len_without_is_empty` companion — not otherwise used by this crate,
+    /// present only so `len` doesn't trip that lint under `-D warnings`.
+    pub fn is_empty(&self) -> bool {
+        self.0.lock().unwrap().is_empty()
+    }
+
     /// `pub(crate)`, called only from `vanilla_registry_defaults::pump_and_rewrite`
     /// (the sole writer) — never part of this type's own public surface.
     pub(crate) fn record(&self, packet_id: i32, body: &[u8]) {

@@ -41,6 +41,16 @@ rc-gametest = { path = "../gametest" }
 # azalea itself already depends on transitively, so this adds no new version to the
 # dependency graph).
 simdnbt = { workspace = true }
+# M3.5-B03 follow-up (deliverable 7, `docs/findings-for-planning.md`):
+# `fetch_corpus_runner`'s own `spec_sha256` computation — the exact same hashing
+# `xtask::fixture_manifest::compute_sha256_hex` performs, recomputed independently
+# here rather than imported (`rc-paritybot` must never gain a dependency edge on
+# `xtask`, WS-D4) — over each committed `.ron` fixture's own raw bytes at load time,
+# so `run_full_corpus_capture`'s own cache-currency check can tell an edited fixture
+# from an unchanged one. Already a pinned workspace dependency (root `Cargo.toml`'s
+# own "TEST-D47; xtask's fixture-manifest SHA-256 hashing" comment) — this crate adds
+# no new version to the dependency graph.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # M3 field-report fix (DEFECT 3): `restart_persistence_self_tests.rs`'s own aim-geometry

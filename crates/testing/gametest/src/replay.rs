@@ -420,6 +420,10 @@ pub fn replay_contraption(
         // Replay has no jar provenance — only a captured trace's `source_jar_sha1`
         // is meaningful (Deliverables doc comment).
         source_jar_sha1: String::new(),
+        // M3.5-B03 follow-up (deliverable 7): same reasoning as `source_jar_sha1`
+        // above — this trace is never written to a cache file `fetch-corpus`'s own
+        // currency check reads, so `spec_sha256` has nothing to be current against.
+        spec_sha256: String::new(),
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         bounds_min,
         bounds_max,

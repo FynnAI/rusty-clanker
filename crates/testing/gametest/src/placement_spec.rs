@@ -21,12 +21,14 @@
 //! (`rc_paritybot::placement_capture`'s own module doc comment is the azalea-backed
 //! counterpart that turns this module's pure descriptions into real wire traffic).
 
-/// The 12 placeable block kinds this milestone's server understands (`crates/server/src/
+/// The 13 placeable block kinds this milestone's server understands (`crates/server/src/
 /// play/mining.rs::PlaceableBlockKind` restated here as an independent, intentionally
 /// decoupled enum — this crate never depends on `rusty-clanker-server`, the same
 /// black-box-from-the-wire posture `spec`/`trace`/`capture` already hold for the
 /// redstone corpus, so a defect in the production enum's own shape can never silently
-/// narrow what this harness is able to describe).
+/// narrow what this harness is able to describe). `Lever` (M3.5-B03 follow-up,
+/// deliverable 6) was the last of the 13 added here — `PlaceableBlockKind` itself
+/// gained it earlier, PLAN-D10/MECH-D13 (M3 field-report wave 3).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BlockKind {
     Stone,
@@ -41,10 +43,17 @@ pub enum BlockKind {
     BlastFurnace,
     Smoker,
     Hopper,
+    /// M3.5-B03 follow-up (deliverable 6, `docs/findings-for-planning.md`): PLAN-D10/
+    /// MECH-D13 (M3 field-report wave 3) added the lever to `crates/server/src/play/
+    /// mining.rs::PlaceableBlockKind` after this mirror enum was first written —
+    /// `placement-diff` never covered its own face-attached placement rule
+    /// (`resolve_orientation`'s own `Lever` arm: `AttachFace::Floor`/`Wall`/`Ceiling`,
+    /// each with its own `facing`) until now.
+    Lever,
 }
 
 impl BlockKind {
-    pub const ALL: [BlockKind; 12] = [
+    pub const ALL: [BlockKind; 13] = [
         BlockKind::Stone,
         BlockKind::RedstoneWire,
         BlockKind::RedstoneTorch,
@@ -57,6 +66,7 @@ impl BlockKind {
         BlockKind::BlastFurnace,
         BlockKind::Smoker,
         BlockKind::Hopper,
+        BlockKind::Lever,
     ];
 
     /// Stable, filesystem/id-safe snake_case identifier — used to build every
@@ -75,6 +85,7 @@ impl BlockKind {
             BlockKind::BlastFurnace => "blast_furnace",
             BlockKind::Smoker => "smoker",
             BlockKind::Hopper => "hopper",
+            BlockKind::Lever => "lever",
         }
     }
 
@@ -284,16 +295,46 @@ pub const fn face_cursor(face: Direction6) -> (f32, f32, f32) {
     }
 }
 
-/// The fixed side `SideOfWall` always clicks — East, arbitrarily but consistently
-/// (`ClickedFace::SideOfWall`'s own doc comment).
+/// The fixed side `SideOfWall` clicks for every kind except `Lever` — East,
+/// arbitrarily but consistently (`ClickedFace::SideOfWall`'s own doc comment).
 const SIDE_OF_WALL_FACE: Direction6 = Direction6::East;
+
+/// The physical wall face a `SideOfWall` scenario clicks — ignored for every other
+/// `ClickedFace` variant. `SIDE_OF_WALL_FACE` (East) for every kind except `Lever`,
+/// unchanged from before this follow-up (M3.5-B03, deliverable 6): every one of those
+/// kinds' own `resolve_orientation` wall-variant rule reads only the clicked face's
+/// own opposite (front-inserted into the candidate loop and immediately accepted,
+/// this test rig's own solid single-cell rig sturdy on every side), never which
+/// *specific* compass face was clicked, so one arbitrary, consistent choice already
+/// exercises the wall branch fully. The lever's own identical candidate loop (`crates/
+/// server/src/play/mining.rs::resolve_orientation`'s `Lever` arm) sets `facing` to
+/// that exact clicked face — a real behavioral difference across all four compass
+/// directions this harness's own coverage bar (task Context: "four wall faces") asks
+/// for by name — so `enumerate_scenarios` reuses `ApproachDirection`'s own four
+/// values as the wall-face selector for `Lever`'s `SideOfWall` scenarios specifically
+/// (`approach` has no other effect on this rig's own wall-branch outcome regardless,
+/// since the front-inserted candidate always wins before the look vector `approach`
+/// feeds into is ever consulted — reusing it here costs no new type and no new
+/// `PlacementScenario` field).
+pub fn wall_face_for(kind: BlockKind, approach: ApproachDirection) -> Direction6 {
+    if kind != BlockKind::Lever {
+        return SIDE_OF_WALL_FACE;
+    }
+    match approach {
+        ApproachDirection::North => Direction6::North,
+        ApproachDirection::South => Direction6::South,
+        ApproachDirection::East => Direction6::East,
+        ApproachDirection::West => Direction6::West,
+    }
+}
 
 /// Pure geometry for one `ClickedFace`, relative to a scenario's own slot origin
 /// (`(0, 0, 0)` is the natural floor's own top surface — the exact position a real
 /// client's `Up`-face click against the world's superflat floor targets, matching
 /// `play_creative_hotbar_held_item.rs`'s own established `(1, -61, 0)` grass-column
-/// convention up to the fixed vertical shift every slot applies uniformly).
-pub fn face_geometry(face: ClickedFace) -> FaceGeometry {
+/// convention up to the fixed vertical shift every slot applies uniformly). `wall_face`
+/// (`wall_face_for`'s own doc comment) is read only for `SideOfWall`.
+pub fn face_geometry(face: ClickedFace, wall_face: Direction6) -> FaceGeometry {
     match face {
         ClickedFace::TopOfFloor => FaceGeometry {
             rig: None,
@@ -303,11 +344,11 @@ pub fn face_geometry(face: ClickedFace) -> FaceGeometry {
         },
         ClickedFace::SideOfWall => {
             let rig = (0, 1, 0);
-            let (dx, dy, dz) = SIDE_OF_WALL_FACE.offset();
+            let (dx, dy, dz) = wall_face.offset();
             FaceGeometry {
                 rig: Some(rig),
                 clicked: rig,
-                clicked_face: SIDE_OF_WALL_FACE,
+                clicked_face: wall_face,
                 target: (rig.0 + dx, rig.1 + dy, rig.2 + dz),
             }
         }
@@ -463,28 +504,35 @@ pub fn interaction_slot_origin(local_index: usize) -> (i32, i32, i32) {
 pub const STANCE_OFFSET: (i32, i32, i32) = (0, 1, -3);
 
 /// Deterministic, baseline-anchored enumeration of every single-step
-/// `PlacementScenario` (task Context: "for each of the 12 `PlaceableBlockKind`s ×
-/// approach direction × clicked face × bot pitch"). A full blind cross product would
-/// be `12 * 4 * 3 * 3 = 432` scenarios — most combinations differ from a baseline
+/// `PlacementScenario` (task Context, at the time this module first shipped: "for each
+/// of the 12 `PlaceableBlockKind`s × approach direction × clicked face × bot pitch" —
+/// a full blind cross product over that original 12-kind population would be
+/// `12 * 4 * 3 * 3 = 432` scenarios). Most combinations differ from a baseline
 /// scenario in only one axis at a time from the production orientation rule's own
 /// perspective (`resolve_orientation`'s per-kind dispatch reads at most one of
-/// {clicked face} or {yaw, pitch}, never both, and 10 of the 12 kinds never read pitch
-/// at all — `BlockKind::pitch_sensitive`'s own doc comment). This function still
-/// varies every axis independently from a fixed baseline
+/// {clicked face} or {yaw, pitch}, never both, and 11 of the current 13 kinds never
+/// read pitch at all — `BlockKind::pitch_sensitive`'s own doc comment). This function
+/// still varies every axis independently from a fixed baseline
 /// (`approach=North, face=TopOfFloor, pitch=Level`) rather than assuming that
 /// production fact and pruning to it — a kind whose *real* orientation rule
 /// surprisingly depends on more than the matrix above predicts would still be
 /// exercised on whichever single axis actually moved, since every scenario is
 /// captured against a real server either way — but stops short of the full blind
-/// cross product, which would cost 432 real placements against a real oracle process
-/// per run for a combinatorial completeness this harness's own deliverable bar does
-/// not ask for. Recorded as a documented, bounded gap (never silent, `CLAUDE.md`'s own
-/// "Vanilla parity is bit-identical by default... any deviation must be explicitly
-/// documented, bounded, justified" applies here to this harness's own coverage, not to
-/// production behavior) in this harness's own implementation report's "what this
-/// harness cannot yet cover honestly" section: an interaction between two *non*-
-/// baseline axis values at once (e.g. `approach=East` together with
-/// `face=SideOfWall`) is never its own scenario.
+/// cross product (now `13 * 4 * 3 * 3 = 468`), which would cost that many real
+/// placements against a real oracle process per run for a combinatorial completeness
+/// this harness's own deliverable bar does not ask for. Recorded as a documented,
+/// bounded gap (never silent, `CLAUDE.md`'s own "Vanilla parity is bit-identical by
+/// default... any deviation must be explicitly documented, bounded, justified"
+/// applies here to this harness's own coverage, not to production behavior) in this
+/// harness's own implementation report's "what this harness cannot yet cover
+/// honestly" section: an interaction between two *non*-baseline axis values at once
+/// (e.g. `approach=East` together with `face=SideOfWall`) is never its own scenario —
+/// `Lever`'s own four `SideOfWall` scenarios (M3.5-B03 follow-up, deliverable 6,
+/// `wall_face_for`'s own doc comment) are the one deliberate, narrowly-scoped
+/// exception: `approach` there selects which physical wall face gets clicked, not the
+/// bot's own look direction, since that kind's own wall-variant rule reads the
+/// clicked face directly and every other axis stays at its own baseline value
+/// throughout.
 pub fn enumerate_scenarios() -> Vec<PlacementScenario> {
     let mut out = Vec::new();
 
@@ -518,12 +566,29 @@ pub fn enumerate_scenarios() -> Vec<PlacementScenario> {
             push(approach, BASELINE_FACE, BASELINE_PITCH);
         }
 
-        // Vary clicked face alone.
-        for face in ClickedFace::ALL {
-            if face == BASELINE_FACE {
-                continue;
+        // Vary clicked face alone — `Lever` gets all four wall faces instead of one
+        // (task Context: "floor for four yaws, four wall faces, ceiling"), since its
+        // own `resolve_orientation` wall-variant rule sets `facing` to the exact
+        // clicked face (`wall_face_for`'s own doc comment) — a real behavioral
+        // difference across all four compass directions, unlike every other kind's
+        // own direction-insensitive wall branch, which one arbitrary face (`East`)
+        // already exercises fully.
+        if kind == BlockKind::Lever {
+            for approach in ApproachDirection::ALL {
+                push(approach, ClickedFace::SideOfWall, BASELINE_PITCH);
             }
-            push(BASELINE_APPROACH, face, BASELINE_PITCH);
+            push(
+                BASELINE_APPROACH,
+                ClickedFace::BottomOfCeiling,
+                BASELINE_PITCH,
+            );
+        } else {
+            for face in ClickedFace::ALL {
+                if face == BASELINE_FACE {
+                    continue;
+                }
+                push(BASELINE_APPROACH, face, BASELINE_PITCH);
+            }
         }
 
         // Vary pitch alone — only for the 2 piston kinds (`pitch_sensitive`'s own doc
@@ -541,13 +606,19 @@ pub fn enumerate_scenarios() -> Vec<PlacementScenario> {
     out
 }
 
-/// Every relative cell a scenario at `(kind, face)` will ever place a block into or
-/// read state from — the rig cell (if any) plus the target cell, in that order. Pure
-/// restatement of `face_geometry(face)`'s own two fields, named for callers that only
-/// care about "which cells does this scenario ever touch" (world-slot padding/
-/// isolation reasoning) rather than the placement geometry itself.
-pub fn scenario_cells(face: ClickedFace) -> Vec<(i32, i32, i32)> {
-    let geometry = face_geometry(face);
+/// Every relative cell `scenario` will ever place a block into or read state from —
+/// the rig cell (if any) plus the target cell, in that order. Pure restatement of
+/// `face_geometry`'s own two fields (`wall_face_for(scenario.kind, scenario.approach)`
+/// resolves its own `wall_face` parameter), named for callers that only care about
+/// "which cells does this scenario ever touch" (world-slot padding/isolation
+/// reasoning, and — since a `Lever` `SideOfWall` scenario's own target cell differs
+/// per wall face — per-scenario collision detection) rather than the placement
+/// geometry itself.
+pub fn scenario_cells(scenario: &PlacementScenario) -> Vec<(i32, i32, i32)> {
+    let geometry = face_geometry(
+        scenario.face,
+        wall_face_for(scenario.kind, scenario.approach),
+    );
     let mut cells = Vec::new();
     if let Some(rig) = geometry.rig {
         cells.push(rig);
@@ -649,7 +720,7 @@ mod tests {
         let mut occupied: HashSet<(i32, i32, i32)> = HashSet::new();
         for scenario in &scenarios {
             let origin = slot_origin(scenario.kind, scenario.slot_index);
-            for cell in scenario_cells(scenario.face) {
+            for cell in scenario_cells(scenario) {
                 let world = (origin.0 + cell.0, origin.1 + cell.1, origin.2 + cell.2);
                 assert!(
                     occupied.insert(world),
@@ -663,7 +734,7 @@ mod tests {
     #[test]
     fn face_geometry_target_matches_click_and_offset() {
         for face in ClickedFace::ALL {
-            let geometry = face_geometry(face);
+            let geometry = face_geometry(face, SIDE_OF_WALL_FACE);
             let (dx, dy, dz) = geometry.clicked_face.offset();
             assert_eq!(
                 geometry.target,
@@ -678,13 +749,101 @@ mod tests {
 
     #[test]
     fn top_of_floor_needs_no_rig() {
-        assert_eq!(face_geometry(ClickedFace::TopOfFloor).rig, None);
+        assert_eq!(
+            face_geometry(ClickedFace::TopOfFloor, SIDE_OF_WALL_FACE).rig,
+            None
+        );
     }
 
     #[test]
     fn side_of_wall_and_bottom_of_ceiling_need_a_rig() {
-        assert!(face_geometry(ClickedFace::SideOfWall).rig.is_some());
-        assert!(face_geometry(ClickedFace::BottomOfCeiling).rig.is_some());
+        assert!(
+            face_geometry(ClickedFace::SideOfWall, SIDE_OF_WALL_FACE)
+                .rig
+                .is_some()
+        );
+        assert!(
+            face_geometry(ClickedFace::BottomOfCeiling, SIDE_OF_WALL_FACE)
+                .rig
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn wall_face_for_is_fixed_for_every_kind_except_lever() {
+        for kind in BlockKind::ALL {
+            if kind == BlockKind::Lever {
+                continue;
+            }
+            for approach in ApproachDirection::ALL {
+                assert_eq!(
+                    wall_face_for(kind, approach),
+                    SIDE_OF_WALL_FACE,
+                    "{kind:?} must always click the fixed wall face regardless of approach"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wall_face_for_lever_matches_approach_bearing() {
+        assert_eq!(
+            wall_face_for(BlockKind::Lever, ApproachDirection::North),
+            Direction6::North
+        );
+        assert_eq!(
+            wall_face_for(BlockKind::Lever, ApproachDirection::South),
+            Direction6::South
+        );
+        assert_eq!(
+            wall_face_for(BlockKind::Lever, ApproachDirection::East),
+            Direction6::East
+        );
+        assert_eq!(
+            wall_face_for(BlockKind::Lever, ApproachDirection::West),
+            Direction6::West
+        );
+    }
+
+    #[test]
+    fn lever_gets_four_wall_faces_four_yaws_and_one_ceiling() {
+        let scenarios = enumerate_scenarios();
+        let lever: Vec<&PlacementScenario> = scenarios
+            .iter()
+            .filter(|s| s.kind == BlockKind::Lever)
+            .collect();
+        assert_eq!(
+            lever.len(),
+            9,
+            "expected 4 floor yaws + 4 wall faces + 1 ceiling == 9 lever scenarios, got {}",
+            lever.len()
+        );
+        let floor_count = lever
+            .iter()
+            .filter(|s| s.face == ClickedFace::TopOfFloor)
+            .count();
+        assert_eq!(floor_count, 4, "expected all 4 yaws at the floor face");
+        let wall_count = lever
+            .iter()
+            .filter(|s| s.face == ClickedFace::SideOfWall)
+            .count();
+        assert_eq!(wall_count, 4, "expected all 4 wall faces");
+        let ceiling_count = lever
+            .iter()
+            .filter(|s| s.face == ClickedFace::BottomOfCeiling)
+            .count();
+        assert_eq!(ceiling_count, 1, "expected exactly 1 ceiling scenario");
+        // Every one of the 4 wall-face scenarios must resolve to a distinct physical
+        // face (`wall_face_for`'s own doc comment) — otherwise two "different" wall
+        // scenarios would silently exercise the identical production candidate.
+        let mut wall_faces: Vec<Direction6> = lever
+            .iter()
+            .filter(|s| s.face == ClickedFace::SideOfWall)
+            .map(|s| wall_face_for(s.kind, s.approach))
+            .collect();
+        wall_faces.sort_by_key(|d| d.wire_id());
+        wall_faces.dedup();
+        assert_eq!(wall_faces.len(), 4, "expected 4 distinct wall faces");
     }
 
     #[test]

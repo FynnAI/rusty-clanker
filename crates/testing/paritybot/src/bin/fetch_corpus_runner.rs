@@ -32,9 +32,28 @@ use std::path::PathBuf;
 
 use rc_gametest::spec::load_spec;
 use rc_paritybot::corpus_capture::run_full_corpus_capture;
+use sha2::{Digest, Sha256};
 
 fn single_line(text: impl std::fmt::Display) -> String {
     text.to_string().replace('\n', " ")
+}
+
+/// M3.5-B03 follow-up (deliverable 7, `docs/findings-for-planning.md`): SHA-256
+/// (lowercase hex) of a `.ron` fixture's own raw bytes — the identical hash
+/// `xtask::fixture_manifest::compute_sha256_hex` computes for the same file's own
+/// manifest entry, recomputed independently here since this binary must never gain a
+/// dependency edge on `xtask` (WS-D4). `run_full_corpus_capture`'s own cache-currency
+/// check compares this against each cached trace's own `spec_sha256`, so an edited
+/// fixture (unchanged oracle jar) is always re-captured rather than silently served
+/// from a stale cache.
+fn spec_sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[tokio::main]
@@ -87,12 +106,17 @@ async fn main() -> std::process::ExitCode {
     // with whatever full-run index-0 slot (`world_origin_for(0)`) held, including
     // that slot's own real occupant's un-fillable-by-bounding-box residue (see
     // `corpus_capture::capture_contraption`'s own pre-settle-wait wipe, this same
-    // changeset). `specs` below is `(real_index, spec)` pairs, never a bare `Vec
-    // <ContraptionSpec>` re-enumerated from zero.
+    // changeset). `specs` below is `(real_index, spec, spec_sha256)` triples, never a
+    // bare `Vec<ContraptionSpec>` re-enumerated from zero.
+    //
+    // M3.5-B03 follow-up (deliverable 7): each spec's own raw `.ron` bytes are read a
+    // second time here (`load_spec` only ever returns the parsed struct) purely to
+    // hash them — `spec_sha256_hex`'s own doc comment has the full cache-currency
+    // rationale.
     let mut all_specs = Vec::with_capacity(ron_paths.len());
     for path in &ron_paths {
-        match load_spec(path) {
-            Ok(spec) => all_specs.push(spec),
+        let spec = match load_spec(path) {
+            Ok(spec) => spec,
             Err(err) => {
                 println!("RESULT=ERROR");
                 println!(
@@ -101,12 +125,25 @@ async fn main() -> std::process::ExitCode {
                 );
                 return std::process::ExitCode::FAILURE;
             }
-        }
+        };
+        let raw_bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                println!("RESULT=ERROR");
+                println!(
+                    "MESSAGE={}",
+                    single_line(format!("failed to read {}: {err}", path.display()))
+                );
+                return std::process::ExitCode::FAILURE;
+            }
+        };
+        all_specs.push((spec, spec_sha256_hex(&raw_bytes)));
     }
-    let specs: Vec<(usize, rc_gametest::spec::ContraptionSpec)> = all_specs
+    let specs: Vec<(usize, rc_gametest::spec::ContraptionSpec, String)> = all_specs
         .into_iter()
         .enumerate()
-        .filter(|(_, spec)| only.as_deref().is_none_or(|id| id == spec.id))
+        .filter(|(_, (spec, _))| only.as_deref().is_none_or(|id| id == spec.id))
+        .map(|(index, (spec, spec_sha256))| (index, spec, spec_sha256))
         .collect();
 
     // Every azalea-driven task this run spawns (`corpus_capture::run_full_corpus_

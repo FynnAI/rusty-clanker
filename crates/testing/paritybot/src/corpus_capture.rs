@@ -412,6 +412,7 @@ async fn capture_contraption_body(
     work_dir: &Path,
     spec: &ContraptionSpec,
     source_jar_sha1: &str,
+    spec_sha256: &str,
     origin: (i32, i32, i32),
     bounds_min: (i32, i32, i32),
     bounds_max: (i32, i32, i32),
@@ -641,6 +642,7 @@ async fn capture_contraption_body(
         format_version: rc_gametest::trace::TRACE_FORMAT_VERSION,
         contraption_id: spec.id.clone(),
         source_jar_sha1: source_jar_sha1.to_string(),
+        spec_sha256: spec_sha256.to_string(),
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         bounds_min,
         bounds_max,
@@ -653,8 +655,11 @@ async fn capture_contraption_body(
 /// capture pipeline steps 3–10, restated across this function and
 /// `capture_contraption_body` as their exact algorithm — freeze, gamerules,
 /// teleport, settle wait, place-with-validation, snapshot tick 0, scripted-action +
-/// step loop, snapshot per tick, `fill air` cleanup). `source_jar_sha1` is threaded
-/// straight into the resulting `RedstoneTrace`. `work_dir` is threaded through only
+/// step loop, snapshot per tick, `fill air` cleanup). `source_jar_sha1`/`spec_sha256`
+/// (M3.5-B03 follow-up, deliverable 7 — the fixture's own committed-bytes hash,
+/// `run_full_corpus_capture`'s own doc comment has the full cache-currency
+/// rationale) are threaded straight into the resulting `RedstoneTrace`. `work_dir`
+/// is threaded through only
 /// for `capture_contraption_body`'s own server-log-based barrier half
 /// (`wait_for_game_time_past`) — the same directory `launch_oracle_server` already
 /// wrote the oracle's log into. Step 3 (freeze) and step 4 (gamerules) are
@@ -675,6 +680,7 @@ async fn capture_contraption_body(
 /// invocations) to find dirty instead of clean, which `wait_for_site_settled` above
 /// would then correctly — but confusingly, on a contraption that was never actually
 /// the site of a genuine capture defect — refuse to proceed past.
+#[allow(clippy::too_many_arguments)]
 pub async fn capture_contraption(
     handle: &mut OracleServerHandle,
     view: &BlockSnapshotView,
@@ -682,6 +688,7 @@ pub async fn capture_contraption(
     spec: &ContraptionSpec,
     index: usize,
     source_jar_sha1: &str,
+    spec_sha256: &str,
 ) -> Result<RedstoneTrace, CaptureError> {
     let origin = world_origin_for(index);
     let (bounds_min, bounds_max) = bounding_box(spec);
@@ -692,6 +699,7 @@ pub async fn capture_contraption(
         work_dir,
         spec,
         source_jar_sha1,
+        spec_sha256,
         origin,
         bounds_min,
         bounds_max,
@@ -744,8 +752,8 @@ pub async fn capture_contraption(
 /// this (possibly `--only`-narrowed) slice — writing each result via
 /// `rc_gametest::trace::write_trace` to `corpus_dir.join(&spec.id).join("trace.
 /// postcard")` — skipping (not re-capturing) any contraption whose cached trace's
-/// `source_jar_sha1` already matches `source_jar_sha1` (blueprint Context, "Fixture
-/// custody").
+/// `source_jar_sha1` *and* `spec_sha256` both already match this run's own values
+/// (blueprint Context, "Fixture custody").
 ///
 /// Governance fix: this used to take a bare `&[ContraptionSpec]` and derive each
 /// spec's origin index via `.enumerate()` — correct for a full-corpus run (whose
@@ -754,11 +762,26 @@ pub async fn capture_contraption(
 /// supplied `(usize, ContraptionSpec)` pairs directly removes that assumption: the
 /// index is now always the contraption's own stable full-run position, however the
 /// caller filtered `specs` to build this slice.
+///
+/// M3.5-B03 follow-up (deliverable 7, `docs/findings-for-planning.md`): the cache
+/// check used to trust a matching `source_jar_sha1` alone as "still current," which
+/// stays true forever for an edited fixture — nothing about the *oracle jar* changes
+/// when only the committed `.ron` file's own geometry does, so an edited fixture kept
+/// silently serving its stale pre-edit capture. Each `specs` entry's own third
+/// element is that fixture's own committed-bytes SHA-256 (lowercase hex, the exact
+/// hash the corpus manifest already carries per fixture, TEST-D47 — this crate
+/// recomputes it independently at the caller's own load site rather than importing
+/// `xtask::fixture_manifest::compute_sha256_hex`, since `rc-paritybot` must never gain
+/// a dependency edge on `xtask`, WS-D4) — a cache hit now additionally requires the
+/// cached trace's own `spec_sha256` to match this run's, so editing a fixture's
+/// geometry (this exact governance changeset's own six re-geometried comparator
+/// fixtures) always forces a fresh capture regardless of how unrelated the oracle jar
+/// itself stayed.
 pub async fn run_full_corpus_capture(
     jar_path: &Path,
     work_dir: &Path,
     corpus_dir: &Path,
-    specs: &[(usize, ContraptionSpec)],
+    specs: &[(usize, ContraptionSpec, String)],
     source_jar_sha1: &str,
 ) -> Result<Vec<(String, Result<(), CaptureError>)>, CaptureError> {
     let mut handle = rc_gametest::capture::launch_oracle_server(
@@ -817,18 +840,26 @@ pub async fn run_full_corpus_capture(
     .map_err(|err| CaptureError::BotConnect(err.to_string()))?;
 
     let mut results = Vec::with_capacity(specs.len());
-    for (index, spec) in specs.iter() {
+    for (index, spec, spec_sha256) in specs.iter() {
         let index = *index;
         let trace_path = corpus_dir.join(&spec.id).join("trace.postcard");
         if let Ok(Some(cached)) = read_trace_if_current(&trace_path)
-            && cached.source_jar_sha1 == source_jar_sha1
+            && cache_is_current(&cached, source_jar_sha1, spec_sha256)
         {
             results.push((spec.id.clone(), Ok(())));
             continue;
         }
 
-        let outcome =
-            capture_contraption(&mut handle, &view, work_dir, spec, index, source_jar_sha1).await;
+        let outcome = capture_contraption(
+            &mut handle,
+            &view,
+            work_dir,
+            spec,
+            index,
+            source_jar_sha1,
+            spec_sha256,
+        )
+        .await;
         let outcome = match outcome {
             Ok(trace) => write_trace(&trace_path, &trace).map_err(CaptureError::Io),
             Err(err) => Err(err),
@@ -837,4 +868,62 @@ pub async fn run_full_corpus_capture(
     }
 
     Ok(results)
+}
+
+/// M3.5-B03 follow-up (deliverable 7, `docs/findings-for-planning.md`): a cached
+/// `RedstoneTrace` is reusable only when BOTH the oracle jar's own hash AND the
+/// fixture's own committed-bytes hash match this run's values — `source_jar_sha1`
+/// alone (the only check before this follow-up) stayed true forever for an edited
+/// fixture, since nothing about the *jar* changes when only the committed `.ron`
+/// file's own geometry does, so an edited fixture kept silently serving its stale
+/// pre-edit capture. Factored out of `run_full_corpus_capture`'s own loop as its own
+/// pure, `async`-free function precisely so it is unit-testable directly, with no
+/// real oracle process, bot connection, or filesystem I/O at all.
+fn cache_is_current(cached: &RedstoneTrace, source_jar_sha1: &str, spec_sha256: &str) -> bool {
+    cached.source_jar_sha1 == source_jar_sha1 && cached.spec_sha256 == spec_sha256
+}
+
+#[cfg(test)]
+mod cache_currency_tests {
+    use super::*;
+
+    fn trace_with(source_jar_sha1: &str, spec_sha256: &str) -> RedstoneTrace {
+        RedstoneTrace {
+            format_version: rc_gametest::trace::TRACE_FORMAT_VERSION,
+            contraption_id: "redstone/pulse/torch_inverter_basic".to_string(),
+            source_jar_sha1: source_jar_sha1.to_string(),
+            spec_sha256: spec_sha256.to_string(),
+            tool_version: "0.1.0".to_string(),
+            bounds_min: (0, 0, 0),
+            bounds_max: (0, 2, 0),
+            ticks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn current_when_both_hashes_match() {
+        let cached = trace_with("jar-abc", "spec-111");
+        assert!(cache_is_current(&cached, "jar-abc", "spec-111"));
+    }
+
+    #[test]
+    fn stale_when_only_the_spec_hash_changed() {
+        // The exact regression this follow-up fixes: an edited fixture (a new
+        // `spec_sha256`) against the identical, unchanged oracle jar must never be
+        // treated as current.
+        let cached = trace_with("jar-abc", "spec-111");
+        assert!(!cache_is_current(&cached, "jar-abc", "spec-222"));
+    }
+
+    #[test]
+    fn stale_when_only_the_jar_hash_changed() {
+        let cached = trace_with("jar-abc", "spec-111");
+        assert!(!cache_is_current(&cached, "jar-xyz", "spec-111"));
+    }
+
+    #[test]
+    fn stale_when_both_hashes_changed() {
+        let cached = trace_with("jar-abc", "spec-111");
+        assert!(!cache_is_current(&cached, "jar-xyz", "spec-222"));
+    }
 }

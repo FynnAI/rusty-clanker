@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use rc_gametest::spec::{
-    Category, ContraptionSpec, PlacedBlock, ScriptedAction, bounding_box, load_spec,
+    Category, ContraptionSpec, PlacedBlock, ScriptedAction, SpecError, bounding_box, load_spec,
     world_origin_for,
 };
 use xtask::fixture_manifest::verify_manifest;
@@ -255,9 +255,15 @@ fn accepts_a_floor_lever_with_a_real_floor_below() {
 }
 
 #[test]
-fn allowlisted_ids_skip_the_support_lint_entirely() {
+fn the_former_allowlist_ids_now_get_the_support_lint_like_every_other_fixture() {
+    // M3.5-B03 follow-up (deliverable 5): the hand-authored `SUPPORT_LINT_ALLOWLIST`
+    // this test used to prove skipped `comparator_container_fullness_chest` entirely
+    // is gone (`check_support`'s own doc comment) — every real fixture that id ever
+    // named was re-geometried with the missing floor cell, so a synthetic spec using
+    // that exact same id, still floating, must now fail the support check exactly
+    // like any other id would.
     let path = write_synthetic(
-        "allowlisted_floating_comparator.ron",
+        "formerly_allowlisted_floating_comparator.ron",
         r#"ContraptionSpec(
             id: "redstone/comparator/comparator_container_fullness_chest",
             category: ComparatorCircuit,
@@ -269,7 +275,12 @@ fn allowlisted_ids_skip_the_support_lint_entirely() {
         )"#,
     );
 
-    load_spec(&path).expect("an id on SUPPORT_LINT_ALLOWLIST must skip the support check entirely");
+    let err = load_spec(&path)
+        .expect_err("a floating comparator must fail the support check regardless of id, now that the allowlist is gone");
+    assert!(
+        matches!(err, SpecError::MissingSupport { .. }),
+        "expected MissingSupport, got {err:?}"
+    );
 }
 
 #[test]

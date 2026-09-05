@@ -157,10 +157,30 @@ impl BlockSnapshotView {
 /// clean-disconnect discipline).
 pub struct ObserverHandle {
     client: ClientSlot,
+    /// M3.5-B03 follow-up (`docs/findings-for-planning.md` has the full writeup):
+    /// the `tokio::task::spawn_local` task driving `ClientBuilder::start` below —
+    /// this module's own `handle`/`Progress` doc comment already documents that
+    /// azalea's own `ClientBuilder::start` retries the connection FOREVER on its
+    /// own, entirely independent of `client.disconnect()` below, which only closes
+    /// the CURRENT protocol-level connection, never this supervising task. A real
+    /// run showed exactly this: `protocol_session::run_protocol_session`'s own
+    /// explicit disconnect-then-reconnect (`session/disconnect_reconnect`) leaked
+    /// the FIRST connection's own supervising task, which kept silently
+    /// reconnecting under the same offline account name in the background,
+    /// colliding with the SECOND (real) connection and repeatedly kicking one of
+    /// the two with a genuine vanilla `multiplayer.disconnect.duplicate_login` —
+    /// contaminating `session/observe_chunk`'s own capture with an unbounded
+    /// number of phantom join/config/spawn cycles recorded through the same
+    /// shared `PacketRecorder`. Aborting this task on drop, in addition to the
+    /// explicit `client.disconnect()` below, is the only way to actually stop
+    /// azalea's own retry loop rather than merely closing the TCP socket it would
+    /// otherwise immediately reopen.
+    join_handle: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for ObserverHandle {
     fn drop(&mut self) {
+        self.join_handle.abort();
         if let Some(client) = self.client.lock().unwrap().take() {
             client.disconnect();
         }
@@ -326,7 +346,7 @@ pub async fn connect_and_observe_with_recorder(
         .map_err(|err| PacketCaptureError::Azalea(err.to_string()))?;
     let address = relay.local_addr.to_string();
 
-    tokio::task::spawn_local(async move {
+    let join_handle = tokio::task::spawn_local(async move {
         let _ = ClientBuilder::new()
             .set_handler(handle)
             .set_state(state)
@@ -344,16 +364,25 @@ pub async fn connect_and_observe_with_recorder(
                     view,
                     ObserverHandle {
                         client: client_slot,
+                        join_handle,
                     },
                 ));
             }
             if progress.disconnected {
+                // `join_handle`'s own doc comment: azalea's `ClientBuilder::start`
+                // retries forever on its own — a disconnect observed before
+                // `Event::Spawn` is never handed an `ObserverHandle` to abort it
+                // later, so this path must abort it itself or leak a
+                // reconnect-forever task tied to nothing this caller can reach.
+                join_handle.abort();
                 return Err(PacketCaptureError::DisconnectedBeforeSpawn {
                     reason: progress.disconnect_reason.clone(),
                 });
             }
         }
         if Instant::now() >= deadline {
+            // Same leak concern as the `disconnected` branch above.
+            join_handle.abort();
             return Err(PacketCaptureError::LoginTimeout(login_timeout));
         }
         tokio::time::sleep(POLL_INTERVAL).await;

@@ -46,6 +46,7 @@ pub const SESSION_STEPS: &[&str] = &[
     "session/place/blast_furnace",
     "session/place/smoker",
     "session/place/hopper",
+    "session/place/lever",
     "session/break/stone",
     "session/break/redstone_wire",
     "session/break/redstone_torch",
@@ -58,6 +59,7 @@ pub const SESSION_STEPS: &[&str] = &[
     "session/break/blast_furnace",
     "session/break/smoker",
     "session/break/hopper",
+    "session/break/lever",
     "session/disconnect_reconnect",
     "session/observe_chunk",
 ];
@@ -155,28 +157,116 @@ fn split_handshake_phases(
     (login, configuration, play)
 }
 
-/// `azalea`'s own pinned revision exposes a public dispatch entry point for a raw
-/// `(packet_id, body)` pair to its own `ClientboundGamePacket` variant's resource
-/// name (TEST-D57 pass, `M3.5-B03-CLAIMS.md` row 3, CONFIRMED) — used here, for the
-/// Play-state slice only (Login/Configuration-state ids are never even attempted:
-/// `ClientboundGamePacket::read` would simply fail to resolve them, which this
-/// function's own `None` fallback already handles gracefully either way).
-fn resolve_packet_name(packet_id: i32, body: &[u8]) -> Option<String> {
-    use azalea::protocol::packets::ProtocolPacket;
-    use azalea::protocol::packets::game::ClientboundGamePacket;
-    let mut cursor = std::io::Cursor::new(body);
-    let packet = ClientboundGamePacket::read(packet_id as u32, &mut cursor).ok()?;
-    Some(packet.name().to_string())
+/// M3.5-B03 follow-up (deliverable 3, `docs/findings-for-planning.md`): the same raw
+/// `(packet_id, body)` numeric id means a *different* packet depending on which
+/// protocol state it was received in (login/configuration/play each have their own
+/// independent clientbound id space) — run 33789270683 showed every `session/login`/
+/// `session/configuration` packet resolving to no name at all because the old
+/// single-table lookup below only ever tried the Play-state table. `push_step`'s own
+/// `conn_state_for_step` picks the right variant per step id; every one of the three
+/// states resolves through the analogous `azalea::protocol::packets::<state>::
+/// Clientbound<State>Packet` type `ProtocolPacket` dispatch entry point (TEST-D57
+/// pass, `M3.5-B03-CLAIMS.md` row 3, CONFIRMED — that pass covered the Play-state
+/// type only; the Login/Configuration types are the identical `declare_state_packets!`
+/// macro shape, restated here).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ConnState {
+    Login,
+    Configuration,
+    Play,
 }
 
-fn to_captured(raw: Vec<(i32, Vec<u8>)>) -> Vec<CapturedPacket> {
+/// `step_id`'s own protocol state — `session/login`/`session/configuration` are the
+/// two handshake steps this harness ever captures outside Play state (`SESSION_STEPS`'s
+/// own fixed list); every other step (including a step this table has never heard of)
+/// is Play, the safe default this function already returned unconditionally before
+/// this follow-up.
+fn conn_state_for_step(step_id: &str) -> ConnState {
+    match step_id {
+        "session/login" => ConnState::Login,
+        "session/configuration" => ConnState::Configuration,
+        _ => ConnState::Play,
+    }
+}
+
+fn resolve_packet_name(state: ConnState, packet_id: i32, body: &[u8]) -> Option<String> {
+    use azalea::protocol::packets::ProtocolPacket;
+    let mut cursor = std::io::Cursor::new(body);
+    match state {
+        ConnState::Login => {
+            use azalea::protocol::packets::login::ClientboundLoginPacket;
+            let packet = ClientboundLoginPacket::read(packet_id as u32, &mut cursor).ok()?;
+            Some(packet.name().to_string())
+        }
+        ConnState::Configuration => {
+            use azalea::protocol::packets::config::ClientboundConfigPacket;
+            let packet = ClientboundConfigPacket::read(packet_id as u32, &mut cursor).ok()?;
+            Some(packet.name().to_string())
+        }
+        ConnState::Play => {
+            use azalea::protocol::packets::game::ClientboundGamePacket;
+            let packet = ClientboundGamePacket::read(packet_id as u32, &mut cursor).ok()?;
+            Some(packet.name().to_string())
+        }
+    }
+}
+
+fn to_captured(state: ConnState, raw: Vec<(i32, Vec<u8>)>) -> Vec<CapturedPacket> {
     raw.into_iter()
         .enumerate()
         .map(|(index, (packet_id, body))| CapturedPacket {
             index: index as u32,
-            packet_name: resolve_packet_name(packet_id, &body),
+            packet_name: resolve_packet_name(state, packet_id, &body),
             packet_id,
             body,
+        })
+        .collect()
+}
+
+/// Resolves every packet's own name across a raw `(packet_id, body)` stream that may
+/// cross MORE than the one Login->Configuration->Play boundary `split_handshake_
+/// phases`/`conn_state_for_step` ever assume for a scripted-session step — walks
+/// `packets` in receipt order carrying one live `ConnState`, exactly like `split_
+/// handshake_phases`' own `Phase` state machine for the Login->Configuration and
+/// Configuration->Play edges (`LoginSuccess`/`FinishConfiguration`, `RcPacket::ID`,
+/// this project's own protocol crate, never azalea's — the raw ids these edges
+/// compare against are this connection's own, unambiguous within their own state),
+/// plus the one edge that state machine never needed: Play->Configuration on
+/// `minecraft:start_configuration` (server-initiated mid-play resync, a real
+/// Play-state clientbound packet already in `protocol_packet_catalog`'s own Play
+/// table). Every packet, including the boundary packet itself, is resolved using the
+/// state IN EFFECT WHEN IT ARRIVED; the state for the packet immediately after a
+/// recognized boundary packet is the new state.
+fn resolve_multi_phase(packets: &[(i32, Vec<u8>)]) -> Vec<CapturedPacket> {
+    let mut state = ConnState::Login;
+    packets
+        .iter()
+        .enumerate()
+        .map(|(index, (packet_id, body))| {
+            let packet_name = resolve_packet_name(state, *packet_id, body);
+            match state {
+                ConnState::Login => {
+                    if *packet_id == LoginSuccess::ID {
+                        state = ConnState::Configuration;
+                    }
+                }
+                ConnState::Configuration => {
+                    if *packet_id == FinishConfiguration::ID {
+                        state = ConnState::Play;
+                    }
+                }
+                ConnState::Play => {
+                    if packet_name.as_deref() == Some("start_configuration") {
+                        state = ConnState::Configuration;
+                    }
+                }
+            }
+            CapturedPacket {
+                index: index as u32,
+                packet_id: *packet_id,
+                body: body.clone(),
+                packet_name,
+            }
         })
         .collect()
 }
@@ -209,7 +299,44 @@ fn push_step(
     }
     out.steps.push(StepCapture {
         step_id: step_id.to_string(),
-        packets: to_captured(raw),
+        // Every scripted-session step's own actions ARE the step, from its very
+        // first packet (`StepCapture::observe_from`'s own doc comment) — `0` is
+        // also `apply_observation_window`'s own no-op value for a step id that
+        // never matches `is_contraption_step` (every `session/*` id), so this
+        // never actually gates anything here.
+        observe_from: 0,
+        packets: to_captured(conn_state_for_step(step_id), raw),
+    });
+}
+
+/// Identical to `push_step` in every respect (elapsed-ms reporting, `only`
+/// filtering, `observe_from: 0`) except that `packets` is already a fully resolved
+/// `CapturedPacket` list rather than a raw `(packet_id, body)` list `to_captured`
+/// would still need to resolve here — used by the one connection boundary
+/// (`session/disconnect_reconnect` + `session/observe_chunk`) whose own capture can
+/// cross a real protocol-state transition more than once, where per-step-in-
+/// isolation resolution (`conn_state_for_step`'s fixed one-state-per-step model)
+/// would be wrong; `resolve_multi_phase` already resolved every packet's own name
+/// across the whole boundary-spanning stream before either half reaches here.
+fn push_resolved_step(
+    out: &mut ProtocolCaptureFile,
+    only: Option<&str>,
+    step_id: &str,
+    packets: Vec<CapturedPacket>,
+    clock: &mut Instant,
+) {
+    let elapsed_ms = clock.elapsed().as_millis();
+    eprintln!("protocol-diff-runner: done {step_id} in {elapsed_ms} ms");
+    let _ = std::io::stderr().flush();
+    *clock = Instant::now();
+
+    if only.is_some_and(|only| only != step_id) {
+        return;
+    }
+    out.steps.push(StepCapture {
+        step_id: step_id.to_string(),
+        observe_from: 0,
+        packets,
     });
 }
 
@@ -484,14 +611,24 @@ pub async fn run_protocol_session(
                 .client()
                 .expect("connect_and_observe_with_recorder only returns after Event::Spawn");
             reconnect_client.wait_ticks(SETTLE_TICKS).await;
-            push_step(
-                &mut out,
-                only,
-                "session/disconnect_reconnect",
-                recorder.snapshot(),
-                &mut step_clock,
-            );
-            recorder.clear();
+            // M3.5-B03 follow-up (second correction, `docs/findings-for-planning.md`):
+            // a real run showed `session/observe_chunk`'s own capture containing a
+            // byte-for-byte duplicate of every one of `session/disconnect_reconnect`'s
+            // own packets even though `recorder.clear()` runs, in program order with
+            // no intervening `.await`, immediately after a step's own `recorder.
+            // snapshot()` call — `baseline` (this connection's own packet count right
+            // here, at the moment `session/disconnect_reconnect`'s own window ends)
+            // is recorded as a position watermark instead, and BOTH steps below read
+            // their own packets as a slice of the ONE snapshot taken after the walk
+            // completes: `[0..baseline]` and `[baseline..]` respectively. A growing
+            // recorder can only ever attribute each packet to at most one of two
+            // disjoint index ranges, so nothing either step captures can ever
+            // reappear in the other's own list, regardless of whatever late/duplicate
+            // write caused the original symptom. `recorder.clear()` remains exactly
+            // as before for every *other* step boundary in this function — none of
+            // them ever showed this symptom — this fix is scoped to the one boundary
+            // a real run proved unsafe.
+            let baseline = recorder.len();
 
             // `session/observe_chunk`: walk far enough to force a genuinely new chunk
             // column to load (never observed by this session before).
@@ -500,11 +637,51 @@ pub async fn run_protocol_session(
                 eprintln!("protocol_session: session/observe_chunk walk failed: {err}");
             }
             reconnect_client.wait_ticks(SETTLE_TICKS).await;
-            push_step(
+
+            // M3.5-B03 follow-up (third correction, `docs/findings-for-planning.md`):
+            // a real run showed the pinned oracle re-entering Configuration state
+            // MID-PLAY during this walk (`minecraft:start_configuration`, a real
+            // Play-state clientbound packet already in `protocol_packet_catalog`'s own
+            // Play table — a mid-play registry/tag resync this project's own server
+            // does not implement yet, M4/M5) — `conn_state_for_step`'s own
+            // fixed-one-state-per-step model cannot resolve packet names correctly
+            // for a stream that crosses a real protocol-state boundary more than
+            // once, so `resolve_multi_phase` (own doc comment has the full mechanism)
+            // resolves every packet's own name across the WHOLE reconnect+walk
+            // stream in one continuous, state-tracking pass BEFORE this split — never
+            // per-step-in-isolation, which would wrongly assume `session/observe_
+            // chunk`'s own slice starts fresh in Login state.
+            let full_stream = recorder.snapshot();
+            let resolved = resolve_multi_phase(&full_stream);
+            let split_at = baseline.min(resolved.len());
+            let (disconnect_reconnect_packets, observe_chunk_packets) = resolved.split_at(split_at);
+            push_resolved_step(
+                &mut out,
+                only,
+                "session/disconnect_reconnect",
+                disconnect_reconnect_packets.to_vec(),
+                &mut step_clock,
+            );
+            // Re-indexed from 0 (every other `StepCapture`'s own packets index from 0
+            // — `to_captured`'s own `.enumerate()`) rather than carrying `full_stream`'s
+            // own absolute position forward: `apply_observation_window` never reads
+            // `index` for a `session/*` step (it returns immediately for anything
+            // `is_contraption_step` does not match), so this is cosmetic/report-only
+            // consistency, not a behavior fix.
+            let observe_chunk_packets: Vec<CapturedPacket> = observe_chunk_packets
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, mut packet)| {
+                    packet.index = index as u32;
+                    packet
+                })
+                .collect();
+            push_resolved_step(
                 &mut out,
                 only,
                 "session/observe_chunk",
-                recorder.snapshot(),
+                observe_chunk_packets,
                 &mut step_clock,
             );
 

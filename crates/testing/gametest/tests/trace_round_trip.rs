@@ -12,6 +12,7 @@ fn sample_trace() -> RedstoneTrace {
         format_version: TRACE_FORMAT_VERSION,
         contraption_id: "redstone/pulse/torch_inverter_basic".to_string(),
         source_jar_sha1: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        spec_sha256: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
         tool_version: "0.1.0".to_string(),
         bounds_min: (0, -1, -1),
         bounds_max: (0, 1, 0),

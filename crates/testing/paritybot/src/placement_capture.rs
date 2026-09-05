@@ -100,9 +100,10 @@ const AIM_TARGET_DISTANCE: f64 = 100.0;
 
 /// `kind`'s own real `minecraft:item` registry entry, for `ServerboundSetCreativeModeSlot
 /// ` (mirrors `crates/server/src/play/mining.rs::placeable_kind_for_item_id`'s own
-/// reverse mapping — same 12-entry closed set, restated here against azalea's own
-/// independently-generated `ItemKind`, both pinned to the identical protocol-776
-/// registry snapshot, cross-checked live in this harness's own implementation report).
+/// reverse mapping — same 13-entry closed set (`Lever` added, M3.5-B03 follow-up
+/// deliverable 6), restated here against azalea's own independently-generated
+/// `ItemKind`, both pinned to the identical protocol-776 registry snapshot,
+/// cross-checked live in this harness's own implementation report).
 pub(crate) fn item_kind_for(kind: BlockKind) -> ItemKind {
     match kind {
         BlockKind::Stone => ItemKind::Stone,
@@ -117,6 +118,7 @@ pub(crate) fn item_kind_for(kind: BlockKind) -> ItemKind {
         BlockKind::BlastFurnace => ItemKind::BlastFurnace,
         BlockKind::Smoker => ItemKind::Smoker,
         BlockKind::Hopper => ItemKind::Hopper,
+        BlockKind::Lever => ItemKind::Lever,
     }
 }
 
@@ -398,7 +400,10 @@ async fn capture_single_step(
     scenario: &PlacementScenario,
 ) -> Result<ScenarioCapture, PlacementCaptureError> {
     let origin = placement_spec::slot_origin(scenario.kind, scenario.slot_index);
-    let geometry = placement_spec::face_geometry(scenario.face);
+    let geometry = placement_spec::face_geometry(
+        scenario.face,
+        placement_spec::wall_face_for(scenario.kind, scenario.approach),
+    );
     let stance = stance_for(floor_y, origin);
     walk_to(client, stance).await?;
 
@@ -487,7 +492,7 @@ async fn capture_single_step(
     )
     .await?;
 
-    let cells = placement_spec::scenario_cells(scenario.face);
+    let cells = placement_spec::scenario_cells(scenario);
     Ok(ScenarioCapture {
         scenario_id: scenario.id.clone(),
         cells: snapshot_cells(view, floor_y, origin, &cells),

@@ -471,6 +471,14 @@ where
 
     recorder.clear();
     place_contraption(client, seq, origin, spec, &setblock).await?;
+
+    // M3.5-B03 follow-up (deliverable 1, `docs/findings-for-planning.md`): the packet
+    // count right at the moment this contraption's own scripted actions begin —
+    // `StepCapture::observe_from`'s own doc comment has the full rationale for why
+    // this exact call site (never wall-clock time or any other side-specific signal)
+    // is where the setup phase ends and the observed window begins, identically on
+    // both sides.
+    let observe_from = recorder.len() as u32;
     apply_actions(origin, spec, &setblock).await;
 
     // The remainder of `spec.max_ticks`' own real-time budget, so any settling
@@ -514,6 +522,7 @@ where
 
     Ok(StepCapture {
         step_id: spec.id.clone(),
+        observe_from,
         packets,
     })
 }

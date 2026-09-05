@@ -87,7 +87,7 @@ use std::time::Duration;
 
 use rc_gametest::known_divergences::{self, DivergenceClass, KnownDivergence};
 use rc_gametest::protocol_capture::{
-    PacketTypeDiff, ProtocolCaptureFile, diff_captures, read_capture,
+    ContraptionBounds, PacketTypeDiff, ProtocolCaptureFile, diff_captures, read_capture,
 };
 
 use crate::corpus::placement_diff::Side;
@@ -340,8 +340,15 @@ pub fn parse_progress_lines(stderr: &str) -> ProgressSummary {
 /// from this constant is a known risk (recorded in `docs/findings-for-planning.md`,
 /// M3.5-B03) that would only ever weaken the rare "the child's own `begin` line
 /// was never captured at all" fallback below, never the common case (which
-/// always reads the real count straight from that `begin` line).
-const EXPECTED_SESSION_STEPS_FALLBACK: u64 = 32;
+/// always reads the real count straight from that `begin` line). Bumped from
+/// `32` to `34` (this session's own fix, `docs/findings-for-planning.md`):
+/// `SESSION_STEPS` itself was missing `session/place/lever`/`session/break/lever`
+/// — the exact drift this constant's own doc comment already warned about, added
+/// to `BlockKind::ALL` (13 kinds) by an earlier changeset without updating this
+/// list — `run_protocol_session`'s own `BlockKind::ALL` loop already captured
+/// both lever steps correctly regardless; only this list (and this fallback) had
+/// drifted.
+const EXPECTED_SESSION_STEPS_FALLBACK: u64 = 34;
 
 /// Real fallback source of truth for "how many contraptions this run should have
 /// attempted" when the child's own `begin` line was never captured at all (a
@@ -979,9 +986,47 @@ pub fn diff_into_result(
     register: &[KnownDivergence],
     repo_root: &Path,
 ) {
-    let report_by_step = diff_captures(oracle, ours);
+    let bounds = build_contraption_bounds(repo_root);
+    let report_by_step = diff_captures(oracle, ours, &bounds);
     push_diff_cases(result, &report_by_step, register);
     write_bodies_dump(repo_root, &report_by_step);
+}
+
+/// § deliverable 1's own `ContraptionBounds` source: every committed redstone-corpus
+/// `.ron` fixture (`corpus_contraption_count`'s own directory), each keyed by
+/// `spec.id` against its own `rc_gametest::spec::bounding_box`, widened by one block
+/// on every axis (the blueprint's own "expanded by one block" text —
+/// `protocol_capture::apply_observation_window`'s own `bbox` parameter doc comment has
+/// the full margin rationale: keeps a contraption's own edge blocks, captured exactly
+/// on their own boundary cell, inside the window). A fixture this function cannot
+/// read or parse is skipped rather than failing the whole diff run — `parity-check`/
+/// `lint-tests` already own reporting a broken fixture; this function's own caller
+/// degrades gracefully to `apply_observation_window`'s own `bbox: None` for that one
+/// contraption id (position filtering off, the observe-from truncation still
+/// applies), the same safe-default posture that function's own doc comment already
+/// establishes for an unresolved id.
+fn build_contraption_bounds(repo_root: &Path) -> ContraptionBounds {
+    let dir = repo_root.join("crates/testing/gametest/corpus/redstone");
+    let mut bounds = ContraptionBounds::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return bounds;
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let path = entry.path();
+        if !path.extension().is_some_and(|ext| ext == "ron") {
+            continue;
+        }
+        let Ok(spec) = rc_gametest::spec::load_spec(&path) else {
+            continue;
+        };
+        let (min, max) = rc_gametest::spec::bounding_box(&spec);
+        let widened = (
+            (min.0 - 1, min.1 - 1, min.2 - 1),
+            (max.0 + 1, max.1 + 1, max.2 + 1),
+        );
+        bounds.insert(spec.id.clone(), widened);
+    }
+    bounds
 }
 
 /// TEST-D59: verifies the register's own TEST-D47 manifest (mirrors

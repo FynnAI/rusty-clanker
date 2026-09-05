@@ -27,7 +27,7 @@ use std::path::Path;
 use crate::protocol_capture::{PacketTypeDiff, ProtocolDiffReport};
 
 /// TEST-D59's own three-way class taxonomy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub enum DivergenceClass {
     /// A packet type one side never sends yet — a `missing_in_oracle`/
     /// `missing_in_ours` divergence.
@@ -58,15 +58,23 @@ pub struct KnownDivergence {
 }
 
 impl KnownDivergence {
-    /// TEST-D59: `"<step id or glob such as session/place/*>"` — an exact match
-    /// against `step_id`, or (only when `steps` ends in the literal two characters
-    /// `/*`) a prefix match against everything up to and including that `/`. A
-    /// `steps` value ending in `*` with no immediately preceding `/` (not a glob
-    /// this schema defines at all) is compared as a plain exact string instead of
-    /// ever being treated as a wildcard — `step_id` can never itself contain a
+    /// TEST-D59 register v2: `"<step id or glob such as session/place/*, or the bare
+    /// wildcard *>"` — the bare literal `"*"` matches every step id (every
+    /// scripted-session step **and** every `redstone/<category>/<name>` contraption
+    /// id — the register's own `Timer` entries need exactly this, since a timer-
+    /// driven packet like `keep_alive` diverges on both kinds of step and
+    /// `"session/*"` never matches a contraption id at all); `"<prefix ending in
+    /// '/'>*"` is a prefix match against everything up to and including that `/`;
+    /// anything else is an exact match against `step_id`. A `steps` value ending in
+    /// `*` with no immediately preceding `/` and not equal to the bare `"*"` (not a
+    /// glob this schema defines at all) is compared as a plain exact string instead
+    /// of ever being treated as a wildcard — `step_id` can never itself contain a
     /// literal `*`, so this can only ever under-match, never accidentally match
     /// everything.
     pub fn matches_step(&self, step_id: &str) -> bool {
+        if self.steps == "*" {
+            return true;
+        }
         if let Some(prefix) = self.steps.strip_suffix('*')
             && prefix.ends_with('/')
         {
@@ -88,39 +96,64 @@ impl KnownDivergence {
     }
 }
 
-fn state_catalog(steps: &str) -> &'static [&'static str] {
-    match steps {
-        "session/login" => crate::protocol_packet_catalog::LOGIN_CLIENTBOUND_PACKET_NAMES,
-        "session/configuration" => {
-            crate::protocol_packet_catalog::CONFIGURATION_CLIENTBOUND_PACKET_NAMES
-        }
-        _ => crate::protocol_packet_catalog::PLAY_CLIENTBOUND_PACKET_NAMES,
-    }
-}
-
 /// TEST-D59: "packet name must resolve in the packets mapping the normalizer uses
-/// (state-aware...)". State is decided by `steps`'s own *exact* text — only the two
-/// literal step ids `"session/login"`/`"session/configuration"` select their own
-/// table; every other exact id, every glob (`"session/place/*"`, `"session/*"`, ...),
-/// and every redstone-corpus contraption id resolves against the play-state table —
-/// the only table a step whose own identity isn't pinned to one specific handshake
-/// state could ever be safely validated against.
+/// (state-aware...)". State is decided by `steps`'s own *exact* text: the two literal
+/// step ids `"session/login"`/`"session/configuration"` select their own single
+/// table; `"session/disconnect_reconnect"`/`"session/observe_chunk"` (M3.5-B03
+/// follow-up, `docs/findings-for-planning.md`) can each legitimately carry packets
+/// from ALL THREE protocol states within the one capture (`protocol_session::
+/// resolve_multi_phase`'s own doc comment: a real reconnect crosses Login->
+/// Configuration->Play, and the pinned oracle's own mid-play `start_configuration`
+/// resync crosses back again) — validated against the union of all three catalogs
+/// rather than any single one, since a register entry naming a genuine
+/// Login/Configuration-state packet for either of these two steps is exactly as
+/// valid as one naming a Play-state packet; every other exact id, every glob
+/// (`"session/place/*"`, `"session/*"`, ...), and every redstone-corpus contraption id
+/// resolves against the play-state table alone — the only table a step whose own
+/// identity isn't pinned to one specific handshake state (and isn't one of the two
+/// mixed-state steps above) could ever be safely validated against.
 fn packet_name_known(steps: &str, packet: &str) -> bool {
-    state_catalog(steps).contains(&packet)
+    use crate::protocol_packet_catalog::{
+        CONFIGURATION_CLIENTBOUND_PACKET_NAMES, LOGIN_CLIENTBOUND_PACKET_NAMES,
+        PLAY_CLIENTBOUND_PACKET_NAMES,
+    };
+    match steps {
+        "session/login" => LOGIN_CLIENTBOUND_PACKET_NAMES.contains(&packet),
+        "session/configuration" => CONFIGURATION_CLIENTBOUND_PACKET_NAMES.contains(&packet),
+        "session/disconnect_reconnect" | "session/observe_chunk" => {
+            LOGIN_CLIENTBOUND_PACKET_NAMES.contains(&packet)
+                || CONFIGURATION_CLIENTBOUND_PACKET_NAMES.contains(&packet)
+                || PLAY_CLIENTBOUND_PACKET_NAMES.contains(&packet)
+        }
+        _ => PLAY_CLIENTBOUND_PACKET_NAMES.contains(&packet),
+    }
 }
 
 /// Reads and validates `path` as the TEST-D59 register: `Missing`/`Body` entries
 /// require both `closes_with` and `expires`; `Timer` entries require neither; every
 /// entry's `packet` must resolve in the state-appropriate `protocol_packet_catalog`
-/// table; no two entries may share the same `(steps, packet)` pair. Any violation is
-/// `Err` naming the offending entry — never a partial/best-effort register.
+/// table; no two entries may share the same `(steps, packet, class)` triple. Any
+/// violation is `Err` naming the offending entry — never a partial/best-effort
+/// register.
+///
+/// Register v2 deviation from v1's `(steps, packet)`-only key (recorded in
+/// `docs/findings-for-planning.md`): `Missing` covers only a presence-set divergence
+/// and `Body` covers only a body/count divergence (`resolve_step`'s own
+/// `PRESENCE_CLASSES`/`BODY_CLASSES` split) — a packet type can genuinely need both
+/// kinds of coverage across the different concrete step ids one glob matches (e.g.
+/// `chunk_batch_start` is missing entirely on some `session/*`-matching steps but
+/// present-with-a-differing-body on others), so one `Missing` entry and one `Body`
+/// entry for the identical `(steps, packet)` pair are two independent, non-redundant
+/// rows, not a duplicate — only a literal repeat of the same `(steps, packet, class)`
+/// triple is ever a copy/paste mistake this check exists to catch.
 pub fn load_register(path: &Path) -> Result<Vec<KnownDivergence>, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let entries: Vec<KnownDivergence> = ron::from_str(&text)
         .map_err(|err| format!("failed to parse {} as RON: {err}", path.display()))?;
 
-    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeSet<(String, String, DivergenceClass)> =
+        std::collections::BTreeSet::new();
     for entry in &entries {
         match entry.class {
             DivergenceClass::Timer => {
@@ -158,12 +191,13 @@ pub fn load_register(path: &Path) -> Result<Vec<KnownDivergence>, String> {
             ));
         }
 
-        if !seen.insert((entry.steps.clone(), entry.packet.clone())) {
+        if !seen.insert((entry.steps.clone(), entry.packet.clone(), entry.class)) {
             return Err(format!(
-                "{}: duplicate register entry for (steps={:?}, packet={:?})",
+                "{}: duplicate register entry for (steps={:?}, packet={:?}, class={:?})",
                 path.display(),
                 entry.steps,
-                entry.packet
+                entry.packet,
+                entry.class
             ));
         }
     }
@@ -304,7 +338,9 @@ pub fn expired_entries(
 mod tests {
     use super::*;
     use crate::protocol_capture::{CapturedPacket, PROTOCOL_CAPTURE_FORMAT_VERSION};
-    use crate::protocol_capture::{ProtocolCaptureFile, StepCapture, diff_captures};
+    use crate::protocol_capture::{
+        ContraptionBounds, ProtocolCaptureFile, StepCapture, diff_captures,
+    };
 
     fn write_temp_ron(name: &str, contents: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -461,6 +497,7 @@ mod tests {
             source_label: "oracle:abc".to_string(),
             steps: vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: oracle,
             }],
         };
@@ -469,10 +506,11 @@ mod tests {
             source_label: "ours".to_string(),
             steps: vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: ours,
             }],
         };
-        diff_captures(&oracle_file, &ours_file)
+        diff_captures(&oracle_file, &ours_file, &ContraptionBounds::new())
             .remove("session/spawn")
             .expect("session/spawn present")
     }

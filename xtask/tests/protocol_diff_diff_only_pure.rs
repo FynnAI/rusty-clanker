@@ -56,10 +56,12 @@ fn two_identical_captures_diff_to_an_all_pass_result() {
     let steps = vec![
         StepCapture {
             step_id: "session/spawn".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 9, vec![1, 2, 3])],
         },
         StepCapture {
             step_id: "session/move".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 11, vec![7, 7, 7])],
         },
     ];
@@ -97,22 +99,26 @@ fn a_differing_packet_body_produces_exactly_that_steps_own_fail_case() {
     let oracle_steps = vec![
         StepCapture {
             step_id: "session/spawn".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 9, vec![1, 2, 3])],
         },
         StepCapture {
             step_id: "session/move".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 11, vec![7, 7, 7])],
         },
     ];
     let ours_steps = vec![
         StepCapture {
             step_id: "session/spawn".to_string(),
+            observe_from: 0,
             // One byte differs from the oracle side — "block_update" is unmasked,
             // so this must surface as a real diff, not be normalized away.
             packets: vec![packet(0, 9, vec![1, 2, 4])],
         },
         StepCapture {
             step_id: "session/move".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 11, vec![7, 7, 7])],
         },
     ];
@@ -151,6 +157,7 @@ fn diff_into_result_only_ever_adds_diff_cases_never_replacing_existing_ones() {
     // never clears or otherwise disturbs whatever the caller already pushed.
     let steps = vec![StepCapture {
         step_id: "session/spawn".to_string(),
+        observe_from: 0,
         packets: vec![packet(0, 9, vec![1, 2, 3])],
     }];
     let oracle = capture("oracle:deadbeef", steps.clone());
@@ -189,6 +196,7 @@ fn a_registered_divergence_passes_with_a_known_detail_and_an_unregistered_one_st
         vec![
             StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![CapturedPacket {
                     index: 0,
                     packet_id: 55,
@@ -198,6 +206,7 @@ fn a_registered_divergence_passes_with_a_known_detail_and_an_unregistered_one_st
             },
             StepCapture {
                 step_id: "session/move".to_string(),
+                observe_from: 0,
                 packets: vec![packet(0, 200, vec![9, 9, 9])],
             },
         ],
@@ -207,10 +216,12 @@ fn a_registered_divergence_passes_with_a_known_detail_and_an_unregistered_one_st
         vec![
             StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![],
             },
             StepCapture {
                 step_id: "session/move".to_string(),
+                observe_from: 0,
                 packets: vec![packet(0, 200, vec![9, 9, 8])],
             },
         ],
@@ -265,6 +276,7 @@ fn a_body_mismatch_detail_never_carries_the_full_body_bytes() {
         "oracle:deadbeef",
         vec![StepCapture {
             step_id: "session/spawn".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 9, big_oracle_body.clone())],
         }],
     );
@@ -272,6 +284,7 @@ fn a_body_mismatch_detail_never_carries_the_full_body_bytes() {
         "ours",
         vec![StepCapture {
             step_id: "session/spawn".to_string(),
+            observe_from: 0,
             packets: vec![packet(0, 9, big_ours_body.clone())],
         }],
     );

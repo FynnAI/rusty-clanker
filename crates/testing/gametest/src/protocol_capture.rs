@@ -29,7 +29,14 @@
 
 use std::path::Path;
 
-pub const PROTOCOL_CAPTURE_FORMAT_VERSION: u32 = 1;
+/// Bumped from `1` in M3.5-B03's own follow-up governance changeset (deliverable 1,
+/// `docs/findings-for-planning.md`): `StepCapture` gained `observe_from`. Postcard is
+/// not self-describing (no field tags), so a struct-shape change is not itself
+/// safely detectable by attempting the full decode — `read_capture` therefore probes
+/// this leading field first and rejects anything that does not match with a clear,
+/// dedicated error (`CaptureReadError::UnsupportedVersion`) before ever attempting
+/// the full decode.
+pub const PROTOCOL_CAPTURE_FORMAT_VERSION: u32 = 2;
 
 /// One raw clientbound packet, captured pre-any-typed-decode (§3.7).
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -48,6 +55,20 @@ pub struct CapturedPacket {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct StepCapture {
     pub step_id: String,
+    /// M3.5-B03 follow-up (deliverable 1): the packet index (within this step's own
+    /// `packets`, matching each `CapturedPacket::index`) at which this step's own
+    /// setup — pre-clear, real placement, setblock prelude, tick barrier — ends and
+    /// the observed window begins. Meaningful only for a contraption step (`step_id`
+    /// starting with `"redstone/"`, `is_contraption_step`'s own doc comment); every
+    /// scripted-session step carries `0` here (§3.5's own scripted actions ARE the
+    /// step, from its very first packet — there is no separate setup phase to skip),
+    /// which is also `apply_observation_window`'s own no-op value for a step it
+    /// leaves untouched. Set by `protocol_diff_runner`/`redstone_wire_capture` at the
+    /// moment each contraption's own scripted actions begin (`apply_actions`'s own
+    /// call site), identically on both sides — never read from wall-clock time or
+    /// any other side-specific signal, so the same conceptual moment is captured
+    /// regardless of how many setup packets each side's own server happened to emit.
+    pub observe_from: u32,
     pub packets: Vec<CapturedPacket>,
 }
 
@@ -71,6 +92,34 @@ pub enum CaptureReadError {
         path: String,
         source: postcard::Error,
     },
+    /// M3.5-B03 follow-up (deliverable 1/6): `path`'s own leading `format_version`
+    /// field does not match `PROTOCOL_CAPTURE_FORMAT_VERSION` — this capture predates
+    /// (or postdates) a `StepCapture` shape this build understands, and must be
+    /// re-captured rather than decoded, since postcard's own lack of field tags means
+    /// attempting the full decode against a mismatched shape risks silent
+    /// misalignment rather than a clean parse failure (this module's own doc comment
+    /// has the full rationale).
+    #[error(
+        "{path}: capture format version {found} is not supported by this build \
+         (expected {expected}) — this capture predates the observation-window field \
+         and must be re-captured, never decoded as-is"
+    )]
+    UnsupportedVersion {
+        path: String,
+        found: u32,
+        expected: u32,
+    },
+}
+
+/// The leading-field-only probe `read_capture` decodes first (module doc comment's
+/// own rationale) — postcard reads a struct's fields strictly in declaration order
+/// with no look-ahead, so deserializing this single-field prefix of the real
+/// `ProtocolCaptureFile` shape correctly consumes only `format_version`'s own bytes
+/// regardless of what (if anything) follows, on any capture format version old or
+/// new.
+#[derive(serde::Deserialize)]
+struct FormatVersionProbe {
+    format_version: u32,
 }
 
 pub fn write_capture(path: &Path, capture: &ProtocolCaptureFile) -> std::io::Result<()> {
@@ -87,6 +136,21 @@ pub fn read_capture(path: &Path) -> Result<ProtocolCaptureFile, CaptureReadError
         path: path.display().to_string(),
         source,
     })?;
+
+    let probe: FormatVersionProbe = postcard::take_from_bytes(&bytes)
+        .map(|(probe, _rest)| probe)
+        .map_err(|source| CaptureReadError::Decode {
+            path: path.display().to_string(),
+            source,
+        })?;
+    if probe.format_version != PROTOCOL_CAPTURE_FORMAT_VERSION {
+        return Err(CaptureReadError::UnsupportedVersion {
+            path: path.display().to_string(),
+            found: probe.format_version,
+            expected: PROTOCOL_CAPTURE_FORMAT_VERSION,
+        });
+    }
+
     postcard::from_bytes(&bytes).map_err(|source| CaptureReadError::Decode {
         path: path.display().to_string(),
         source,
@@ -562,6 +626,162 @@ pub fn normalize_chunk_batch_order(packets: &mut [CapturedPacket]) {
     }
 }
 
+/// `true` iff `step_id` is a redstone-corpus contraption id (`redstone/<category>/
+/// <name>`, `rc_gametest::spec::ContraptionSpec::id`'s own doc comment) rather than a
+/// `SESSION_STEPS` scripted-session step (every one of which is namespaced
+/// `session/...`) — `apply_observation_window`'s own gate: session steps keep
+/// today's full comparison unconditionally (§ deliverable 1).
+pub fn is_contraption_step(step_id: &str) -> bool {
+    step_id.starts_with("redstone/")
+}
+
+/// A `value` is an unsigned `bits`-wide field already isolated by the caller (masked,
+/// no stray high bits). Returns its two's-complement signed interpretation — restated
+/// locally from `crates/server/src/play/packets.rs::sign_extend` (`rc-gametest` never
+/// depends on `crates/server`, this module's own doc comment).
+fn sign_extend(value: i64, bits: u32) -> i64 {
+    let sign_bit = 1i64 << (bits - 1);
+    if value >= sign_bit {
+        value - (sign_bit << 1)
+    } else {
+        value
+    }
+}
+
+/// The single-block position long `block_update`/`block_event` both carry (§
+/// deliverable 1's own spec: x 26 bits, z 26 bits, y 12 bits) — `crates/server/src/
+/// play/packets.rs::unpack_position`'s own packing, TEST-D57 CONFIRMED there,
+/// restated here.
+fn unpack_block_position(packed: i64) -> (i32, i32, i32) {
+    let raw_x = (packed >> 38) & 0x3FF_FFFF;
+    let raw_z = (packed >> 12) & 0x3FF_FFFF;
+    let raw_y = packed & 0xFFF;
+    (
+        sign_extend(raw_x, 26) as i32,
+        sign_extend(raw_y, 12) as i32,
+        sign_extend(raw_z, 26) as i32,
+    )
+}
+
+/// § deliverable 1's own shared coordinate shapes — `clippy::type_complexity`'s own
+/// threshold flags the bare nested-tuple form once it appears in enough signatures
+/// (`apply_observation_window`'s own `bbox` parameter, first), so every function
+/// below that used to spell out `(i32, i32, i32)`/`((i32, i32, i32), (i32, i32, i32))`
+/// inline now names these instead — purely a readability alias, never a new runtime
+/// shape (`BlockBounds` is still exactly the `(min, max)` pair `ContraptionBounds`'s
+/// own doc comment already describes).
+type BlockPos = (i32, i32, i32);
+type BlockBounds = (BlockPos, BlockPos);
+
+/// `section_blocks_update`'s own leading `section_pos` field, decoded to the
+/// section's own absolute block-coordinate range (inclusive, 16 blocks per axis) —
+/// `crates/server/src/play/packets.rs::pack_section_position`'s own packing (22-bit
+/// `chunk_x`, 20-bit `section_y`, 22-bit `chunk_z`), TEST-D57 CONFIRMED there,
+/// restated here (this module's own doc comment: `rc-gametest` never depends on
+/// `crates/server`). Only the section's own address is needed for the deliverable-1
+/// bounding-box filter (a whole-packet keep/drop decision, module doc comment on
+/// `block_change_in_bounds`) — the per-block `states` entries are never decoded here.
+fn section_block_range(packed: i64) -> BlockBounds {
+    let raw_x = (packed >> 42) & 0x3F_FFFF;
+    let raw_y = packed & 0xF_FFFF;
+    let raw_z = (packed >> 20) & 0x3F_FFFF;
+    let section_x = sign_extend(raw_x, 22) as i32;
+    let section_y = sign_extend(raw_y, 20) as i32;
+    let section_z = sign_extend(raw_z, 22) as i32;
+    let min = (section_x * 16, section_y * 16, section_z * 16);
+    let max = (min.0 + 15, min.1 + 15, min.2 + 15);
+    (min, max)
+}
+
+fn pos_in_bounds(pos: BlockPos, min: BlockPos, max: BlockPos) -> bool {
+    pos.0 >= min.0
+        && pos.0 <= max.0
+        && pos.1 >= min.1
+        && pos.1 <= max.1
+        && pos.2 >= min.2
+        && pos.2 <= max.2
+}
+
+fn ranges_overlap(a: BlockBounds, b: BlockBounds) -> bool {
+    let (a_min, a_max) = a;
+    let (b_min, b_max) = b;
+    a_min.0 <= b_max.0
+        && a_max.0 >= b_min.0
+        && a_min.1 <= b_max.1
+        && a_max.1 >= b_min.1
+        && a_min.2 <= b_max.2
+        && a_max.2 >= b_min.2
+}
+
+/// § deliverable 1: `true` keeps `packet` in the comparison, `false` drops it.
+/// `block_update`/`block_event` each carry exactly one absolute block position
+/// (`unpack_block_position`) — kept iff that position falls inside `[min, max]`.
+/// `section_blocks_update` carries one *section* covering up to 16³ blocks
+/// (`section_block_range`) — kept iff that section's own range overlaps `[min, max]`
+/// at all (a whole-packet decision, never a per-entry re-encode: every real
+/// contraption's own committed footprint is far smaller than one 16-block section,
+/// per `WIRE_SLOT_A`'s own measured range in `redstone_wire_capture.rs`, so a section
+/// overlapping the bounding box at all is itself already strong evidence the batch is
+/// about this contraption, not a coincidentally-adjacent one — `xtask`'s own 64-block
+/// `world_origin_for` spacing/`WIRE_SLOT_A`/`WIRE_SLOT_B`'s own margins keep every
+/// other contraption's own footprint out of the same section entirely). Any other
+/// packet name (including one this module cannot resolve, `packet_name: None`) is
+/// never position-filtered at all — `apply_observation_window`'s own caller only
+/// invokes this for the three block-change names; a body this function's own decoder
+/// cannot walk to its own end (a truncated or otherwise malformed body) is kept
+/// unconditionally, the same "safe direction to fail" every other decoder in this
+/// module establishes — never silently dropped on a decode failure that might be
+/// hiding a genuine divergence.
+fn block_change_in_bounds(packet: &CapturedPacket, min: BlockPos, max: BlockPos) -> bool {
+    match packet.packet_name.as_deref() {
+        Some("block_update") | Some("block_event") => {
+            let mut cur = Cur::new(&packet.body);
+            match cur.i64_be() {
+                Some(packed) => pos_in_bounds(unpack_block_position(packed), min, max),
+                None => true,
+            }
+        }
+        Some("section_blocks_update") => {
+            let mut cur = Cur::new(&packet.body);
+            match cur.i64_be() {
+                Some(packed) => ranges_overlap(section_block_range(packed), (min, max)),
+                None => true,
+            }
+        }
+        _ => true,
+    }
+}
+
+/// § deliverable 1: the contraption observation window, applied in place —
+/// `is_contraption_step(step_id)` gates the whole function (every scripted-session
+/// step returns immediately, unmodified: "session steps keep today's full
+/// comparison"). For a contraption step: first drops every packet whose own `index`
+/// is `< observe_from` (the setup phase — pre-clear, real placement, setblock
+/// prelude, tick barrier — this step's own capture recorded before its scripted
+/// actions began, §`StepCapture::observe_from`'s own doc comment); then, only when
+/// `bbox` is `Some` (the caller could not resolve this step id back to a committed
+/// `ContraptionSpec` — an unknown/renamed contraption id — leaves the position filter
+/// off entirely rather than guessing, this module's own safe-default posture),
+/// applies `block_change_in_bounds` to every remaining `block_update`/`block_event`/
+/// `section_blocks_update` packet. `bbox` is the caller's own already-expanded box
+/// (`rc_gametest::spec::bounding_box(spec)` widened by one block on every axis, per
+/// the blueprint's own "expanded by one block" text) — this module never resolves a
+/// step id back to a spec file itself (`xtask` alone reads the corpus RON files).
+pub fn apply_observation_window(
+    step_id: &str,
+    observe_from: u32,
+    packets: &mut Vec<CapturedPacket>,
+    bbox: Option<BlockBounds>,
+) {
+    if !is_contraption_step(step_id) {
+        return;
+    }
+    packets.retain(|p| p.index >= observe_from);
+    if let Some((min, max)) = bbox {
+        packets.retain(|p| block_change_in_bounds(p, min, max));
+    }
+}
+
 pub struct PacketTypeDiff {
     pub packet_id: i32,
     /// The first `Some` name any captured instance of this `packet_id` carried, on
@@ -667,9 +887,27 @@ pub fn diff_step(oracle: &[CapturedPacket], ours: &[CapturedPacket]) -> Protocol
 /// `PlacementDiffReport`'s own discipline): every step's own two packet lists are
 /// first passed through `normalize_chunk_batch_order`, then every packet's `body` is
 /// replaced by `normalize_body`'s result, before `diff_step` ever compares them.
+/// `step_id -> ((min_x,min_y,min_z),(max_x,max_y,max_z))`, already expanded by one
+/// block on every axis — `diff_captures`'s own bounding-box source for § deliverable
+/// 1's `apply_observation_window` (only `xtask`, which alone reads the corpus RON
+/// files via `rc_gametest::spec::load_spec`/`bounding_box`, ever populates this; a
+/// step id absent from the map (every scripted-session step, and a contraption id
+/// this map's own builder could not resolve) gets `apply_observation_window`'s own
+/// `bbox: None` — the observe-from truncation still applies, the position filter
+/// does not).
+pub type ContraptionBounds = std::collections::BTreeMap<String, BlockBounds>;
+
+/// Runs `diff_step` per `step_id` present in either file (a step missing on one side
+/// entirely is its own reported case, never silently skipped — mirrors
+/// `PlacementDiffReport`'s own discipline): every step's own two packet lists are
+/// first passed through `apply_observation_window` (§ deliverable 1 — a no-op for
+/// every scripted-session step), then `normalize_chunk_batch_order`, then every
+/// packet's `body` is replaced by `normalize_body`'s result, before `diff_step` ever
+/// compares them.
 pub fn diff_captures(
     oracle: &ProtocolCaptureFile,
     ours: &ProtocolCaptureFile,
+    contraption_bounds: &ContraptionBounds,
 ) -> std::collections::BTreeMap<String, ProtocolDiffReport> {
     use std::collections::BTreeMap;
 
@@ -696,6 +934,12 @@ pub fn diff_captures(
             .get(step_id)
             .map(|s| s.packets.clone())
             .unwrap_or_default();
+        let oracle_observe_from = oracle_by_step.get(step_id).map_or(0, |s| s.observe_from);
+        let ours_observe_from = ours_by_step.get(step_id).map_or(0, |s| s.observe_from);
+        let bbox = contraption_bounds.get(step_id).copied();
+
+        apply_observation_window(step_id, oracle_observe_from, &mut oracle_packets, bbox);
+        apply_observation_window(step_id, ours_observe_from, &mut ours_packets, bbox);
 
         normalize_chunk_batch_order(&mut oracle_packets);
         normalize_chunk_batch_order(&mut ours_packets);
@@ -744,6 +988,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![
                     pkt(0, 33, vec![1, 2, 3, 4, 5, 6, 7, 8], Some("keep_alive")),
                     pkt(1, 9, vec![10, 20, 30], Some("block_update")),
@@ -754,13 +999,14 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![
                     pkt(0, 33, vec![9, 9, 9, 9, 9, 9, 9, 9], Some("keep_alive")),
                     pkt(1, 9, vec![10, 20, 30], Some("block_update")),
                 ],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert!(step.mismatches.is_empty());
         assert!(step.missing_in_oracle.is_empty());
@@ -773,6 +1019,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 9, vec![10, 20, 30], Some("block_update"))],
             }],
         );
@@ -780,10 +1027,11 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 9, vec![10, 20, 31], Some("block_update"))],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert_eq!(step.mismatches.len(), 1);
         let diff = &step.mismatches[0];
@@ -798,6 +1046,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(
                     0,
                     33,
@@ -810,10 +1059,11 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 33, vec![0xBB; 40], Some("keep_alive"))],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert!(step.mismatches.is_empty());
     }
@@ -824,6 +1074,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 200, vec![1, 2, 3], Some("totally_custom_packet"))],
             }],
         );
@@ -831,10 +1082,11 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 200, vec![1, 2, 4], Some("totally_custom_packet"))],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert_eq!(step.mismatches.len(), 1);
     }
@@ -845,6 +1097,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![],
             }],
         );
@@ -852,10 +1105,11 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 77, vec![1], Some("some_packet"))],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert_eq!(step.missing_in_oracle, vec![77]);
         assert!(step.missing_in_ours.is_empty());
@@ -868,6 +1122,7 @@ mod tests {
             "oracle:abc",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![
                     pkt(0, 42, vec![7, 7, 7], Some("some_packet")),
                     pkt(1, 42, vec![7, 7, 7], Some("some_packet")),
@@ -878,10 +1133,11 @@ mod tests {
             "ours",
             vec![StepCapture {
                 step_id: "session/spawn".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 42, vec![7, 7, 7], Some("some_packet"))],
             }],
         );
-        let report = diff_captures(&oracle, &ours);
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
         assert_eq!(step.mismatches.len(), 1);
         let diff = &step.mismatches[0];
@@ -932,6 +1188,7 @@ mod tests {
             "oracle:deadbeef",
             vec![StepCapture {
                 step_id: "session/login".to_string(),
+                observe_from: 0,
                 packets: vec![pkt(0, 1, vec![1, 2, 3], Some("login"))],
             }],
         );
