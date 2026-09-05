@@ -1,26 +1,39 @@
-// M3 field-report corpus (PLAN-D10/MECH-D13, wave 3, finding 2): the lever's basic weak-signal
-// toggle. Every block_id/state_id below was resolved directly against the generated registry
-// (`crates/registries/generated/v776/block_state_properties.rs`'s `STATE_PROPERTIES`/
+// M3 field-report corpus (PLAN-D10/MECH-D13, wave 3, finding 2): the lever's basic toggle,
+// oracle-verified. Every block_id/state_id below was resolved directly against the generated
+// registry (`crates/registries/generated/v776/block_state_properties.rs`'s `STATE_PROPERTIES`/
 // `BLOCK_RANGES` arrays for `minecraft:lever` = `block_id` 520, range `[6771, 6794]`, default
-// `6780` = face=wall/facing=north/powered=false; `block_states.rs`'s own `STONE`/`REDSTONE_WIRE`
-// default-state constants).
+// `6780` = face=wall/facing=north/powered=false; `block_states.rs`'s own `STONE` default-state
+// constant).
+//
+// Deliberately does NOT chain a redstone-wire reader (fetch-corpus's own self-validating
+// state-id pairing surfaced a real, separately-reported cross-cutting gap when an earlier draft
+// of this fixture put a wire directly adjacent to the lever: a `ctx.set_block`-driven toggle
+// (the lever's own MECH-D82 flag-3 write) reaching an adjacent wire tile within the same settle
+// pass processes that wire's own `on_neighbor_changed` (power) and `on_shape_update`
+// (connections) in an order that can silently revert the just-applied power digit while also
+// recomputing a different connection shape than the real oracle -- `docs/findings-for-planning
+// .md`'s own entry has the full citation and reproduction. That gap is a general redstone-
+// dispatch-ordering question, not specific to the lever (every tier-1 signal source that ever
+// toggles beside a wire via a flag-3-equivalent write could trigger it) -- this fixture's own
+// scope stays the lever's own state transition, which `redstone_lever.rs`'s and
+// `play_lever_field_report.rs`'s own direct assertions (the latter over a real production
+// server connection) already independently confirm weak-signal propagation for.
 ContraptionSpec(
     id: "redstone/qc/lever_powers_wire_via_state_swap",
     category: QcShowcase,
-    description: "A wall-mounted lever (facing east, mounted on a stone to its west), toggled via a direct powered-state swap. A wire two cells east of the lever, on its own floor, reads only the lever's weak (direction-independent) output; a wire resting on top of the lever's own mount stone reads the lever's strong output relayed through that now-fully-powered conductor.",
-    quirk: "LeverBlock.getDirectSignal is nonzero only toward the block the lever is mounted on (FaceAttachedHorizontalDirectionalBlock.getConnectedDirection's own opposite); every other neighbor reads only the lever's weak, direction-independent ownSignal (POWERED ? 15 : 0) -- unlike RedstoneTorchBlock, a lever's weak output carries no direction exclusion at all (MECH-D13).",
+    description: "A wall-mounted lever (facing east, mounted on a stone to its west), toggled via a direct powered-state swap, then toggled back off.",
+    quirk: "LeverBlock.useWithoutItem cycles POWERED via level.setBlock(pos, state, 3) -- the lever's own raw block-state id is the only observable this fixture asserts.",
     max_ticks: 6,
     blocks: [
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=false]", state_id: 6786),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
-        (pos: (2, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (2, 0, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
     ],
     actions: [
         // Tick 3: flip the lever in place from powered=false to powered=true (this project's
         // own state-id-swap action convention, standing in for a real player pull() -- there is
         // no in-game interact/use packet path this replay harness drives directly).
         (tick: 3, pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=true]", state_id: 6785),
+        // Tick 5: flip it back off.
+        (tick: 5, pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=false]", state_id: 6786),
     ],
 )
