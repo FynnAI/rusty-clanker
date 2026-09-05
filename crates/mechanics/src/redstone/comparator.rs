@@ -431,8 +431,10 @@ impl BlockBehavior for ComparatorBehavior {
     /// identical relocated check and `WireBehavior::should_pop`'s original shape.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
         // M3 field-report fix (MECH-D84): a comparator's own floor support check is `Rigid`-
-        // sturdiness on the block below's top face, never the redstone-conductor test (a chest
-        // is not a conductor but is `Rigid`-sturdy, and a comparator does survive on one).
+        // sturdiness on the block below's top face, never the redstone-conductor test (a
+        // hopper is not a conductor but is `Rigid`-sturdy, and a comparator does survive on
+        // one; a chest never reaches its own top boundary at all, so it is `Rigid`-sturdy on
+        // neither block, and a comparator pops off one just as a wire does).
         if !signal::is_face_sturdy(
             ctx.world,
             Direction::Down.apply(pos),

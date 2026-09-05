@@ -48,45 +48,37 @@ impl VoxelShape {
         self.boxes.is_empty()
     }
 
-    /// MECH-D84's per-face sturdiness predicate. `kind` names the in-plane square (Context:
-    /// `SupportKind`'s own doc comment has the exact bounds) a face's cross-section must
-    /// contain to count as sturdy for that kind.
+    /// MECH-D84's per-face sturdiness predicate -- a literal port of vanilla's `SupportType`
+    /// enum (`SupportType.FULL`/`CENTER`/`RIGID`, each an `isSupporting` override) together
+    /// with the `VoxelShape.getFaceShape`/`calculateFace`/`SliceShape` machinery every one of
+    /// those three reads through first.
     ///
-    /// `Full` requires an actual box edge sitting exactly on `face`'s own literal block
-    /// boundary (`0.0`/`1.0` on the face's axis) -- e.g. an extended piston base's recessed
-    /// end (Context table: the missing 4/16 slab) never touches that boundary at all, so its
-    /// own `Full` reads `false` there regardless of how full the rest of the block is
-    /// (vanilla: nothing can rest on an open gap). `Center`/`Rigid` instead use the shape's
-    /// own *extremal* cross-section toward `face` -- the box(es) reaching closest to it,
-    /// whichever coordinate that turns out to be -- since vanilla still lets a torch/diode
-    /// attach to a block whose own hitbox merely falls a little short of the full 16px
-    /// height (a chest's 14/16-tall body) rather than genuinely leaving open air the way a
-    /// retracted-facing piston base does; MECH-D84's own worked chest example (`Full` false,
-    /// `Center`/`Rigid` true) only resolves this way, matching `SupportType`'s own three
-    /// vanilla kinds (`Block.isFaceFull`/`getFaceShape`) close enough to reproduce every
-    /// vanilla-observable case this milestone's own tier-1 table actually reaches.
+    /// The face shape for `face` is the union, over every box of `self` whose extent on
+    /// `face`'s own axis reaches that axis's literal boundary coordinate (`1.0` for `Up`/
+    /// `South`/`East`, `0.0` for `Down`/`West`/`North`, within `crate::SHAPE_EPSILON`), of that
+    /// box's rectangle projected onto the other two axes -- `calculateFace`'s own slice taken
+    /// at the grid layer immediately adjacent to the boundary. A box that stops short of the
+    /// boundary contributes nothing, and if no box reaches it at all the face shape is empty
+    /// (`calculateFace`'s own `slice.isEmpty()` early return) -- e.g. an extended piston
+    /// base's recessed end (the missing 4/16 slab) or a chest's own top (its hitbox tops out
+    /// at 14/16, never touching `y = 1`) never touch the boundary at all, so nothing can rest,
+    /// stand, or attach there regardless of `kind`. This is the SAME face shape for every
+    /// `kind` -- vanilla computes `getFaceShape` once per `isSupporting` call, always from the
+    /// block's own unmodified support shape, never a kind-dependent "closest surface"
+    /// substitute.
+    ///
+    /// `kind` then asks whether that one face shape covers a required in-plane region
+    /// (`Shapes.joinIsNotEmpty(faceShape, requiredShape, ONLY_SECOND)` being empty, i.e. no
+    /// point of the required region lies outside the face shape) -- `SupportKind::
+    /// face_shape_covers`'s own doc comment has the exact three regions.
     pub fn face_sturdy(&self, face: Face, kind: SupportKind) -> bool {
         let (axis, positive) = face.axis_and_sign();
-        let touching: Vec<&Aabb> = if kind == SupportKind::Full {
-            let boundary = if positive { 1.0 } else { 0.0 };
-            self.boxes
-                .iter()
-                .filter(|b| (face_extent(b, axis, positive) - boundary).abs() < 1e-9)
-                .collect()
-        } else {
-            let Some(extreme) = self
-                .boxes
-                .iter()
-                .map(|b| face_extent(b, axis, positive))
-                .reduce(|a, b| if positive { a.max(b) } else { a.min(b) })
-            else {
-                return false;
-            };
-            self.boxes
-                .iter()
-                .filter(|b| (face_extent(b, axis, positive) - extreme).abs() < 1e-9)
-                .collect()
-        };
+        let boundary = if positive { 1.0 } else { 0.0 };
+        let touching: Vec<&Aabb> = self
+            .boxes
+            .iter()
+            .filter(|b| (face_extent(b, axis, positive) - boundary).abs() < crate::SHAPE_EPSILON)
+            .collect();
         if touching.is_empty() {
             return false;
         }
@@ -95,8 +87,7 @@ impl VoxelShape {
             .iter()
             .map(|b| (b.min(a1), b.max(a1), b.min(a2), b.max(a2)))
             .collect();
-        let (lo, hi) = kind.required_square();
-        rects_cover_square(&rects, lo, hi)
+        kind.face_shape_covers(&rects)
     }
 }
 
@@ -106,29 +97,37 @@ fn face_extent(b: &Aabb, axis: Axis, positive: bool) -> f64 {
     if positive { b.max(axis) } else { b.min(axis) }
 }
 
-/// `true` iff the union of `rects` (each `(min_a, max_a, min_b, max_b)` on the face's own two
-/// in-plane axes) fully covers the `[lo, hi] x [lo, hi]` square -- an exact check (not a
-/// sampled approximation): every rectangle's own boundary coordinate that falls strictly
-/// inside `[lo, hi]` becomes a grid line, so testing one interior point per resulting grid
-/// cell against every rectangle is equivalent to testing the whole cell (no rectangle edge
-/// ever crosses a cell's interior).
-fn rects_cover_square(rects: &[(f64, f64, f64, f64)], lo: f64, hi: f64) -> bool {
+/// `true` iff every point `required` selects (as `(a, b)` coordinates on the face's own two
+/// in-plane axes, each in `[0, 1]`) is covered by the union of `rects` (each `(min_a, max_a,
+/// min_b, max_b)`) -- an exact check, not a sampled approximation: `anchors` (the required
+/// region's own breakpoints) plus every rectangle's own boundary coordinate become grid
+/// lines, so testing one interior point per resulting grid cell against both `required` and
+/// every rectangle is equivalent to testing the whole cell (no rectangle edge, and no
+/// `required`-region breakpoint, ever crosses a cell's interior -- every tier-1 shape and
+/// every `SupportKind` breakpoint used here is pixel-aligned, a multiple of 1/16, so this grid
+/// construction is exact for every case this table can actually produce).
+fn region_is_covered(
+    rects: &[(f64, f64, f64, f64)],
+    anchors: &[f64],
+    required: impl Fn(f64, f64) -> bool,
+) -> bool {
     let collect_lines = |pick_lo: fn(&(f64, f64, f64, f64)) -> f64,
                          pick_hi: fn(&(f64, f64, f64, f64)) -> f64|
      -> Vec<f64> {
-        let mut lines = vec![lo, hi];
+        let mut lines: Vec<f64> = vec![0.0, 1.0];
+        lines.extend_from_slice(anchors);
         for r in rects {
             let a = pick_lo(r);
             let b = pick_hi(r);
-            if a > lo && a < hi {
+            if a > 0.0 && a < 1.0 {
                 lines.push(a);
             }
-            if b > lo && b < hi {
+            if b > 0.0 && b < 1.0 {
                 lines.push(b);
             }
         }
         lines.sort_by(|x, y| x.partial_cmp(y).unwrap());
-        lines.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+        lines.dedup_by(|x, y| (*x - *y).abs() < crate::SHAPE_EPSILON);
         lines
     };
     let a_lines = collect_lines(|r| r.0, |r| r.1);
@@ -137,6 +136,9 @@ fn rects_cover_square(rects: &[(f64, f64, f64, f64)], lo: f64, hi: f64) -> bool 
         for b_win in b_lines.windows(2) {
             let ca = (a_win[0] + a_win[1]) / 2.0;
             let cb = (b_win[0] + b_win[1]) / 2.0;
+            if !required(ca, cb) {
+                continue;
+            }
             let covered = rects
                 .iter()
                 .any(|&(a0, a1, b0, b1)| a0 <= ca && ca <= a1 && b0 <= cb && cb <= b1);
@@ -179,10 +181,10 @@ impl Face {
     }
 }
 
-/// Vanilla's three face-sturdiness kinds (Context/MECH-D84), each naming the minimum in-plane
-/// square a shape's cross-section at a face plane must contain (`VoxelShape::face_sturdy`'s
-/// own doc comment has the exact algorithm) -- `SupportType.FULL`/`CENTER`/`RIGID` in the
-/// reference (`Block.isFaceFull`, `CENTER_SUPPORT_SHAPE`, `RIGID_SUPPORT_SHAPE`).
+/// Vanilla's three face-sturdiness kinds (Context/MECH-D84), each naming the in-plane region
+/// a face shape must cover (`VoxelShape::face_sturdy`'s own doc comment has the exact
+/// algorithm) -- `SupportType.FULL`/`CENTER`/`RIGID` in the reference (`Block.isFaceFull`,
+/// `CENTER_SUPPORT_SHAPE`, `RIGID_SUPPORT_SHAPE`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SupportKind {
     Full,
@@ -191,15 +193,33 @@ pub enum SupportKind {
 }
 
 impl SupportKind {
-    /// The `[lo, hi]` bounds, on both in-plane axes, of the square this kind requires the
-    /// cross-section to contain: the whole unit square for `Full`; the centre 2x2-pixel
-    /// square (7/16..9/16) for `Center`; the inner 12x12-pixel square (2/16..14/16) for
-    /// `Rigid`.
-    fn required_square(self) -> (f64, f64) {
+    /// `true` iff the union of `rects` (a face shape's in-plane footprint, `VoxelShape::
+    /// face_sturdy`'s own doc comment) covers every point this kind requires: the whole unit
+    /// square for `Full` (`Block.isFaceFull`/`isShapeFullBlock` -- the face shape must equal
+    /// the full `[0,1]x[0,1]` square); the centred 2x2-pixel square, 7/16..9/16 on both
+    /// in-plane axes, for `Center` (`CENTER_SUPPORT_SHAPE` = `Block.column(2, 0, 10)`);
+    /// everything *outside* the centred 12x12-pixel square, 2/16..14/16 on both axes -- the
+    /// outer 2px border frame -- for `Rigid` (`RIGID_SUPPORT_SHAPE` = the full block minus
+    /// `Block.column(12, 0, 16)`, i.e. `Shapes.join(Shapes.block(), ..., ONLY_FIRST)`). All
+    /// three reduce to `region_is_covered` below, each with its own `required` predicate and
+    /// the breakpoints that predicate needs as extra grid anchors.
+    fn face_shape_covers(self, rects: &[(f64, f64, f64, f64)]) -> bool {
         match self {
-            SupportKind::Full => (0.0, 1.0),
-            SupportKind::Center => (7.0 / 16.0, 9.0 / 16.0),
-            SupportKind::Rigid => (2.0 / 16.0, 14.0 / 16.0),
+            SupportKind::Full => region_is_covered(rects, &[], |_, _| true),
+            SupportKind::Center => {
+                const LO: f64 = 7.0 / 16.0;
+                const HI: f64 = 9.0 / 16.0;
+                region_is_covered(rects, &[LO, HI], |a, b| {
+                    (LO..=HI).contains(&a) && (LO..=HI).contains(&b)
+                })
+            }
+            SupportKind::Rigid => {
+                const LO: f64 = 2.0 / 16.0;
+                const HI: f64 = 14.0 / 16.0;
+                region_is_covered(rects, &[LO, HI], |a, b| {
+                    !(LO..=HI).contains(&a) || !(LO..=HI).contains(&b)
+                })
+            }
         }
     }
 }

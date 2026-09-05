@@ -64,7 +64,8 @@ const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 /// MECH-D84): a wire tile survives only on a block whose own top face is `Full`-sturdy, plus
 /// vanilla's own hard-coded hopper exception (`RedStoneWireBlock`'s own extra `instanceof
 /// HopperBlock` allowance — a hopper's real top face is never `Full`-sturdy by shape alone,
-/// `crates/physics/tests/face_sturdy.rs`'s own `hopper_top_face_is_not_full` case). Mirrors
+/// `crates/physics/tests/face_sturdy.rs`'s own `hopper_top_face_full_false_center_false_rigid_true`
+/// case). Mirrors
 /// `TorchBehavior::should_pop`'s identical role/shape.
 fn should_pop(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
     let below = Direction::Down.apply(pos);
