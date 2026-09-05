@@ -188,8 +188,7 @@ fn use_context(may_build: bool) -> UseContext {
 }
 
 #[test]
-fn delay_cycles_1_through_4_and_wraps_with_the_side_table_in_sync_and_a_fan_out_nondefault_case()
- {
+fn delay_cycles_1_through_4_and_wraps_with_the_side_table_in_sync_and_a_fan_out_nondefault_case() {
     let mut h = Harness::new();
     let pos = BlockPos::new(0, 0, 0);
     let below = Direction::Down.apply(pos);
