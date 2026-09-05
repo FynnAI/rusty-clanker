@@ -37,6 +37,7 @@ use rc_mechanics::{stage4, stage7};
 use rc_messaging::{Address, RegionId, RegionMessage};
 use rc_registries::block_state_properties::range_of;
 use rc_registries::generated_v776::block_state_properties::{BlockId, block_id};
+use rc_registries::generated_v776::block_states::default_state;
 
 use crate::spec::{ContraptionSpec, bounding_box};
 use crate::trace::{BlockObservation, RedstoneTrace, TRACE_FORMAT_VERSION, TickSnapshot};
@@ -262,10 +263,21 @@ pub fn replay_contraption(
         seed_container_if_present(&mut block_entities, pos, state, &block.vanilla_state);
     }
 
+    // M3 field-report test-authoring fix (PLAN-D10, moving_piston placeholder): the
+    // client-observability cache `snapshot_volume` now threads across every tick of this
+    // one replay — `snapshot_volume`'s own doc comment has the full citation.
+    let mut visible_cache: HashMap<BlockPos, BlockStateId> = HashMap::new();
+
     let mut ticks = Vec::with_capacity(spec.max_ticks as usize + 1);
     ticks.push(TickSnapshot {
         tick: 0,
-        blocks: snapshot_volume(&world, bounds_min, bounds_max, analog_reader),
+        blocks: snapshot_volume(
+            &world,
+            bounds_min,
+            bounds_max,
+            analog_reader,
+            &mut visible_cache,
+        ),
     });
 
     for t in 1..=spec.max_ticks as u64 {
@@ -386,7 +398,13 @@ pub fn replay_contraption(
 
         ticks.push(TickSnapshot {
             tick: t,
-            blocks: snapshot_volume(&world, bounds_min, bounds_max, analog_reader),
+            blocks: snapshot_volume(
+                &world,
+                bounds_min,
+                bounds_max,
+                analog_reader,
+                &mut visible_cache,
+            ),
         });
     }
 
@@ -414,21 +432,58 @@ pub fn replay_contraption(
 /// blocks`'s own documented `(y, z, x)` ascending order — the nested loop order
 /// below (`y` outer, `z` middle, `x` inner) already produces exactly that order, so
 /// no separate sort step is needed.
+///
+/// M3 field-report test-authoring fix (PLAN-D10, moving_piston placeholder — client-
+/// observability parity): mirrors `crates/server/src/play/world.rs`'s own moving_piston-
+/// ranged broadcast filter for THIS replay's own recorded trace. A `moving_piston` id is
+/// genuinely, permanently held by this engine's own stored world for the whole
+/// `COMMIT_DELAY_TICKS` window (`crates/mechanics/src/redstone/piston.rs`'s own top-of-file
+/// doc comment has the full citation), but a real client is never told about it — every
+/// real vanilla write of this placeholder lacks `UPDATE_CLIENTS` — so a real oracle
+/// capture (inherently client-side, a real bot connection over a real loopback
+/// connection) never shows it either, at any position, for any tick. Without this
+/// substitution, a raw `world.get_block` read here would record the placeholder
+/// directly, diverging from every such oracle trace even though the underlying
+/// server-side behavior this replay drives is bit-identical to vanilla's own (this
+/// engine's own stored `BlockWorldAccess` is exactly what a hypothetical *server-side*
+/// debug probe would see — `crates/server/src/play/mining.rs`'s `debug_query_block`, this
+/// project's own established equivalent, and every server-side assertion in `crates/
+/// server/tests/*_field_report.rs` reads it directly, unfiltered). `visible_cache` carries
+/// each position's own last CLIENT-VISIBLE value across ticks — seeded implicitly by
+/// whichever call first observes each position (tick 0's own snapshot, ordinarily, exactly
+/// mirroring the oracle capture's own placement-time observation); updated in place here so
+/// the caller's own next call sees this tick's own contribution. A position never yet
+/// observed (not `moving_piston`-ranged, and not yet cached) has no meaningful prior value
+/// to substitute — this can only happen for a `moving_piston` id present already at tick 0
+/// (a fixture directly `/setblock`-ing one via `blocks:`, never done by this corpus), so the
+/// `unwrap_or`-to-air fallback (vanilla's own ordinary "untouched = air" default,
+/// `default_state::AIR`) is defensive only.
 fn snapshot_volume(
     world: &dyn BlockWorldAccess,
     bounds_min: (i32, i32, i32),
     bounds_max: (i32, i32, i32),
     analog_reader: Option<&dyn Fn(BlockPos) -> Option<u8>>,
+    visible_cache: &mut HashMap<BlockPos, BlockStateId>,
 ) -> Vec<BlockObservation> {
     let mut out = Vec::new();
     for y in bounds_min.1..=bounds_max.1 {
         for z in bounds_min.2..=bounds_max.2 {
             for x in bounds_min.0..=bounds_max.0 {
                 let pos = BlockPos::new(x, y, z);
-                // `BlockStateId(0)` is vanilla's own air default (M0-B07's
+                // `default_state::AIR` is vanilla's own air default (M0-B07's
                 // `block_states.rs` codegen) — an untouched position reads as air
                 // exactly as it should (Implementation step 5).
-                let state = world.get_block(pos).unwrap_or(BlockStateId(0));
+                let raw = world
+                    .get_block(pos)
+                    .unwrap_or(BlockStateId(default_state::AIR.0));
+                let state = if in_range(raw.0, block_id::MOVING_PISTON) {
+                    *visible_cache
+                        .get(&pos)
+                        .unwrap_or(&BlockStateId(default_state::AIR.0))
+                } else {
+                    visible_cache.insert(pos, raw);
+                    raw
+                };
                 let analog = analog_reader.and_then(|read| read(pos));
                 out.push(BlockObservation {
                     pos: (x, y, z),
@@ -860,6 +915,19 @@ pub fn tier1_registry(
     let (lo, hi) = exclusive(block_id::PISTON);
     behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
     let (lo, hi) = exclusive(block_id::STICKY_PISTON);
+    behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
+    // M3 field-report test-authoring fix (PLAN-D10, moving_piston placeholder): mirrors
+    // `register_piston`'s own production registration (`crates/mechanics/src/redstone/
+    // piston.rs`'s own `PistonStateIds` doc comment has the full "why" citation) — a
+    // retract's own deferred commit fires at the piston's own BASE position, which now
+    // genuinely, permanently holds the `moving_piston` placeholder for the whole 2-tick
+    // window (server-side persistence fix, this wave); `dispatch_scheduled_tick` resolves
+    // the behavior to call from that position's own LIVE block state, so without this
+    // registration the deferred commit silently dispatches to `NoOpBehavior` and never
+    // fires at all — a pre-existing gap in this harness never previously exercised, since
+    // the withdrawn revert draft this wave replaces always restored the base's own real id
+    // before any later tick's own dispatch could ever observe the placeholder there.
+    let (lo, hi) = exclusive(block_id::MOVING_PISTON);
     behaviors.register_range(lo, hi, Arc::clone(&piston) as Arc<dyn BlockBehavior>);
 
     (behaviors, container_signals)

@@ -18,8 +18,35 @@ use rc_mechanics::{
     UpdateContext, stage4,
 };
 use rc_messaging::{Address, RegionMessage};
+use rc_registries::block_state_properties::state_id;
+use rc_registries::generated_v776::block_state_properties::block_id;
 
 use support::{FakeWorld, TestSignalSource};
+
+/// The exact same name-based lookup `piston.rs`'s own private `moving_piston_id` uses —
+/// restated here since that helper is crate-private (`piston_moving_placeholder.rs`'s own
+/// identical restatement, same rationale).
+fn moving_piston_id(facing: Direction, sticky: bool) -> BlockStateId {
+    let facing_str = match facing {
+        Direction::North => "north",
+        Direction::East => "east",
+        Direction::South => "south",
+        Direction::West => "west",
+        Direction::Up => "up",
+        Direction::Down => "down",
+    };
+    BlockStateId(
+        state_id(
+            block_id::MOVING_PISTON,
+            &[
+                ("facing", facing_str),
+                ("type", if sticky { "sticky" } else { "normal" }),
+            ],
+        )
+        .expect("every (facing, sticky) pair is a legal moving_piston state")
+        .0,
+    )
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum FanoutKind {
@@ -85,14 +112,6 @@ impl BlockBehavior for EventLoggingWrapper {
     fn on_block_event(&self, ctx: &mut UpdateContext, pos: BlockPos, event: &BlockEvent) {
         self.event_ids.lock().unwrap().push(event.event_id);
         self.inner.on_block_event(ctx, pos, event);
-    }
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): forwards to
-    // `self.inner` -- without this override, the trait's own default no-op would silently
-    // swallow `PistonBehavior::on_after_drain`'s own placeholder-revert step, since dispatch
-    // resolves THIS wrapper (never `self.inner` directly) for every id this suite registers it
-    // under.
-    fn on_after_drain(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        self.inner.on_after_drain(ctx, pos);
     }
 }
 
@@ -267,32 +286,27 @@ fn simple_extension() {
         "the base's own EXTENDED id flips immediately, at block-event time"
     );
     assert!(!piston.is_extended(piston_pos));
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — updates this test's
-    // former "nothing written at front_pos/watch_pos until the commit" expectation, now WRONG in
-    // a more precise way: vanilla's own `moveBlocks` writes the `moving_piston` placeholder at
-    // every destination cell immediately, at accept time -- `front_pos` (one cell out,
-    // `push_direction.apply(piston_pos)`) genuinely, momentarily holds it, and its own immediate
-    // fan-out already reaches `watch_pos` (two cells out, `front_pos`'s own East neighbor) --
-    // BUT (real-oracle-verified, `xtask parity-check redstone`) the placeholder is never
-    // independently visible at `front_pos` itself: `PistonBehavior::on_after_drain` restores
-    // `front_pos` to its own true pre-write content (air -- it was never explicitly set) before
-    // this same `run_block_events(0)` call even returns. The fan-out to `watch_pos` already
-    // happened and is NOT undone by that restoration (`write_block_state`'s own revert never
-    // fans out a second time) -- one `NeighborChanged`/`ShapeUpdate` pair is already logged.
-    // source: blocks.json
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — server-side
+    // persistence fix): `front_pos` (one cell out, `push_direction.apply(piston_pos)`, this
+    // chain's own sole destination since `to_push` is empty here) now holds the REAL
+    // `moving_piston` placeholder PERMANENTLY, for the whole window — no revert. Its own
+    // immediate write-time fan-out already reaches `watch_pos` (two cells out, `front_pos`'s
+    // own East neighbor); this is a full fan-out (`write_extend_placeholders`'s own doc comment:
+    // a sole destination with an empty `to_push`, `n == 0`, is `armPos` itself, which always
+    // gets both signals).
+    let placeholder_id = moving_piston_id(Direction::East, false);
+    // source: blocks.json (generated_v776) — the twelve real `minecraft:moving_piston` states
     assert_eq!(
         h.world.get_block(front_pos),
-        Some(BlockStateId(0)),
-        "front_pos already reads back its own true (untouched, i.e. air) content once the \
-         accept tick's own dispatch has settled -- the placeholder it held transiently is never \
-         independently visible"
+        Some(placeholder_id),
+        "front_pos genuinely, permanently holds the moving_piston placeholder for the whole \
+         window between accept and commit"
     );
     assert_eq!(
         log.lock().unwrap().len(),
         2,
-        "the placeholder's own immediate fan-out already reached watch_pos once (one \
-         NeighborChanged/ShapeUpdate pair, two entries) -- this happened for real, before the \
-         placeholder was restored"
+        "the placeholder's own immediate fan-out reached watch_pos once (one \
+         NeighborChanged/ShapeUpdate pair, two entries)"
     );
     assert!(log.lock().unwrap().contains(&(
         watch_pos,
@@ -305,19 +319,19 @@ fn simple_extension() {
     // collector at this exact point, one full tick before the structural (head) commit below.
     // This is the collector's own proof that a scheduled/block-event-driven state change (no
     // concurrent direct player action) reaches the mechanism `crates/server/src/play/world.rs`
-    // drains once per tick to broadcast a `Block Update` to every connected client.
+    // drains once per tick to broadcast a `Block Update` to every connected client — that same
+    // mechanism's own moving_piston-ranged filter (`world.rs`'s own doc comment) is what keeps
+    // `front_pos`'s own entry here from ever reaching an actual client, not a server-side
+    // revert: the collector itself records the real, permanent placeholder id.
     //
     // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): `front_pos`'s own
-    // SECOND entry now shows `AIR` (not the placeholder) -- `record_changed`'s own "dedup by
-    // position, keep the LAST state" rule means `on_after_drain`'s own restoring write updates
-    // this same entry in place, so the collector (and hence the client) never sees the
-    // placeholder's own id at all, consistent with the real oracle.
+    // entry now shows the placeholder id, not air.
     // source: blocks.json
     assert_eq!(
         h.changed,
         vec![
             (piston_pos, BlockStateId(2258)),
-            (front_pos, BlockStateId(0)),
+            (front_pos, placeholder_id),
         ],
         "the base's own EXTENDED write and the front_pos placeholder must both be recorded into \
          the changed-positions collector immediately at block-event time, before the head's own \
@@ -332,12 +346,17 @@ fn simple_extension() {
         2,
         "still just the placeholder's own one fan-out pair"
     );
+    assert_eq!(
+        h.world.get_block(front_pos),
+        Some(placeholder_id),
+        "the placeholder is still there, one tick before the commit"
+    );
     // source: blocks.json
     assert_eq!(
         h.changed,
         vec![
             (piston_pos, BlockStateId(2258)),
-            (front_pos, BlockStateId(0)),
+            (front_pos, placeholder_id),
         ],
         "no further block-state change until the commit fires"
     );
@@ -633,18 +652,17 @@ fn piston_door_element() {
     // pulled block's own *source* position (the door) clears right here, synchronously with
     // tick 10's own triggering block event.
     //
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — this test's former
-    // "the old head is left untouched -- still its own pre-retract content" expectation is
-    // actually still correct, just for a subtly different reason than before this changeset):
-    // vanilla's own `moveBlocks` push loop, run for the retract/pull direction too, DOES write
-    // the `moving_piston` placeholder at the old head's own position immediately, at accept
-    // time -- `apply_retract_content`'s own doc comment has the full reference citation -- but
-    // (real-oracle-verified, `xtask parity-check redstone`) that placeholder is never
-    // independently visible there: `PistonBehavior::on_after_drain` restores the old head to its
-    // own true pre-retract content (the settled sticky piston_head) before this same
-    // `run_block_events(10)` call even returns. The pulled block's own real content (the door's
-    // own STONE) still only lands at the deferred commit, alongside the base's own `EXTENDED`
-    // flip.
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — server-side
+    // persistence fix): vanilla's own `moveBlocks` push loop, run for the retract/pull direction
+    // too, writes the `moving_piston` placeholder at the old head's own position immediately, at
+    // accept time -- `apply_retract_content`'s own doc comment has the full reference citation --
+    // and this server keeps that write PERMANENTLY for the whole window: the old head no longer
+    // reads back its own pre-retract `STICKY_PISTON_HEAD_EAST` here (that was the withdrawn
+    // revert draft's own behavior); it genuinely, permanently holds the placeholder until the
+    // deferred commit settles the pulled block's own real content in. The pulled block's own
+    // real content (the door's own STONE) still only lands at the deferred commit, alongside the
+    // base's own `EXTENDED` flip.
+    let sticky_placeholder_id = moving_piston_id(Direction::East, true);
     // source: blocks.json
     assert_eq!(
         h.world.get_block(door_pos),
@@ -653,9 +671,9 @@ fn piston_door_element() {
     );
     assert_eq!(
         h.world.get_block(head_pos),
-        Some(STICKY_PISTON_HEAD_EAST),
-        "the old head already reads back its own true, still-settled piston_head content once \
-         the accept tick's own dispatch has settled"
+        Some(sticky_placeholder_id),
+        "the old head genuinely, permanently holds the moving_piston placeholder for the whole \
+         window between accept and commit"
     );
     assert!(
         piston.is_extended(piston_pos),
@@ -670,7 +688,7 @@ fn piston_door_element() {
     );
     assert_eq!(
         h.world.get_block(head_pos),
-        Some(STICKY_PISTON_HEAD_EAST),
+        Some(sticky_placeholder_id),
         "still unchanged -- the deferred commit is not due until tick 12"
     );
 
@@ -823,22 +841,25 @@ fn commit_reads_live_state_and_skips_a_changed_position() {
         Some(INJECTED),
         "the changed position's own write is skipped -- it retains the test-injected value"
     );
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): `far_pos` received
-    // the moving_piston placeholder immediately, at accept time (`write_extend_placeholders`),
-    // but (real-oracle-verified) `PistonBehavior::on_after_drain` already restored it to its own
-    // true (untouched, i.e. air) content before `run_block_events(0)` above even returned --
-    // well before this test's own `INJECTED` tamper, which targets `pushed_pos` only. Context
-    // §G case 2's per-position distrust still works exactly as before -- the commit still skips
-    // writing the shifted-forward STONE at `far_pos`, since its own SOURCE (`pushed_pos`) no
-    // longer matches the snapshot -- it just means `far_pos` stays at the same air it already
-    // settled back to, never at the placeholder (which was never independently observable here
-    // either) and never at the shifted STONE.
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — server-side
+    // persistence fix): `far_pos` received the moving_piston placeholder immediately, at accept
+    // time (`write_extend_placeholders`), and this server keeps that write PERMANENTLY -- no
+    // revert. Context §G case 2's per-position distrust still works exactly as before -- the
+    // commit still skips writing the shifted-forward STONE at `far_pos`, since its own SOURCE
+    // (`pushed_pos`) no longer matches the (now placeholder-valued) snapshot -- it just means
+    // `far_pos` stays at the placeholder it has held since accept time, forever (this
+    // `MovingPistonState` entry is consumed by `finalize_moving` either way, so nothing will
+    // ever revisit `far_pos` again): a genuine, reference-matched `moving_piston` orphan with no
+    // side-table entry, exactly the case this module's own top-of-file doc comment's
+    // "persistence" paragraph documents (verified against `MovingPistonBlock.newBlockEntity`
+    // returning `null` — real vanilla has no self-heal for this either).
+    let placeholder_id = moving_piston_id(Direction::East, false);
     // source: blocks.json
     assert_eq!(
         h.world.get_block(far_pos),
-        Some(BlockStateId(0)),
-        "nothing was shifted forward from a distrusted source -- far_pos stays at its own true, \
-         settled-back-to-air content"
+        Some(placeholder_id),
+        "nothing was shifted forward from a distrusted source -- far_pos stays at the real \
+         moving_piston placeholder it has held since accept time"
     );
 }
 
@@ -922,21 +943,22 @@ fn breaking_the_base_mid_flight_aborts_the_whole_commit() {
         Some(BROKEN_ID),
         "nothing further written, not even a re-affirmed base -- Context §G case 1's whole-abort"
     );
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): the head cell
-    // genuinely, momentarily received the moving_piston placeholder immediately, at accept
-    // time (`write_extend_placeholders`) -- but (real-oracle-verified) `PistonBehavior::
-    // on_after_drain` already restored it to its own true (untouched, i.e. air) content before
-    // `run_block_events(0)` above even returned, well before the base was broken mid-flight
-    // below. Context §G case 1's own whole-abort still holds exactly as before -- the REAL
-    // piston_head content never lands, since the whole commit is skipped once the base itself
-    // no longer matches its own snapshot -- it just means the head cell stays at the same air
-    // it already settled back to, never at the placeholder and never at the real piston_head.
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — server-side
+    // persistence fix): the head cell genuinely received the moving_piston placeholder
+    // immediately, at accept time (`write_extend_placeholders`), and this server keeps that
+    // write PERMANENTLY -- no revert. Context §G case 1's own whole-abort still holds exactly as
+    // before -- the REAL piston_head content never lands, since the whole commit is skipped once
+    // the base itself no longer matches its own snapshot -- it just means the head cell stays at
+    // the placeholder it has held since accept time, forever (this `MovingPistonState` entry is
+    // consumed by `finalize_moving`'s own whole-abort path either way): a genuine, reference-
+    // matched `moving_piston` orphan with no side-table entry, the same case `commit_reads_live_
+    // state_and_skips_a_changed_position`'s own identical citation documents.
     // source: blocks.json
     assert_eq!(
         h.world.get_block(facing.apply(piston_pos)),
-        Some(BlockStateId(0)),
-        "the head cell stays at its own true, settled-back-to-air content -- the real \
-         piston_head never lands"
+        Some(moving_piston_id(Direction::East, false)),
+        "the head cell stays at the real moving_piston placeholder it has held since accept \
+         time -- the real piston_head never lands"
     );
     assert!(!piston.has_pending_move(piston_pos));
     assert_eq!(

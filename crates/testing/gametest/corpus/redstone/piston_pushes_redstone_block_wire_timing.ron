@@ -1,0 +1,47 @@
+// M3 field-report corpus (PLAN-D10, moving_piston placeholder — discriminating fixture): a
+// sticky piston pushes a redstone block one cell forward. A wire beside the redstone block's
+// own SOURCE cell must lose power the SAME tick the extend accepts (the source cell becomes
+// `moving_piston` — MECH-D84's own empty shape, never a redstone conductor or signal source —
+// immediately, not two ticks later); a second wire beside the block's own DESTINATION cell must
+// gain power only once the deferred commit actually lands, two ticks after the block_event.
+// This is the ONE scenario in this corpus that discriminates the withdrawn revert draft (which
+// left the source cell reading back as the still-present redstone_block for the whole window,
+// so the first wire never lost power on time) from this changeset's own fix (the placeholder is
+// kept, permanently, server-side, for the whole window — never independently visible to a
+// client, `crates/mechanics/src/redstone/piston.rs`'s own top-of-file doc comment has the full
+// citation).
+ContraptionSpec(
+    id: "redstone/piston/piston_pushes_redstone_block_wire_timing",
+    category: PulseGenerator,
+    description: "A sticky piston (facing=east) pushes a redstone block one cell forward. A redstone wire beside the block's own source cell must lose power the same tick the extend accepts; a second wire beside the block's own destination cell must gain power only once the deferred commit lands, two ticks later. Every block in this build sits on its own real floor.",
+    quirk: "Discriminating regression lock for the moving_piston placeholder's own server-side persistence (PLAN-D10, M3 field-report wave 3 fix): a withdrawn revert draft left the source cell's own placeholder invisible even server-side, so the redstone block it displaced kept powering its own old neighbor for two extra ticks after being pushed — this fixture fails against that draft and passes only once the placeholder genuinely, permanently occupies the source cell for the whole 2-tick window.",
+    max_ticks: 8,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:sticky_piston[facing=east,extended=false]", state_id: 2242),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[east=side,north=side,power=0,south=side,west=side]", state_id: 4726),
+        (pos: (2, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 1), vanilla_state: "minecraft:redstone_wire[east=side,north=side,power=0,south=side,west=side]", state_id: 4864),
+    ],
+    actions: [
+        (tick: 3, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        // The actual discriminator: a neutral (non-signal-source) block placed beside the
+        // first wire, one tick into the window (well before the deferred commit lands) --
+        // purely to force a SECOND, independent `on_neighbor_changed` recompute at the first
+        // wire, from a trigger that has nothing to do with the piston's own accept-time
+        // cascade. Real vanilla's own placeholder is still genuinely there at this point, so
+        // the wire recomputes 0 power again, unchanged; the withdrawn revert draft had
+        // already restored the real redstone_block by the time THIS action's own cascade
+        // runs (`on_after_drain` fires within the SAME synchronous dispatch as the accept
+        // tick, strictly before any later tick's own action), so this second, independent
+        // recompute would incorrectly read the reverted-back redstone_block and re-power the
+        // wire to 15 -- the exact "kept powering its own old neighbors for two extra ticks"
+        // regression this fixture exists to lock against.
+        (tick: 4, pos: (0, 1, 1), vanilla_state: "minecraft:stone", state_id: 1),
+    ],
+)

@@ -65,14 +65,6 @@ impl BlockBehavior for EventLoggingWrapper {
         self.event_ids.lock().unwrap().push(event.event_id);
         self.inner.on_block_event(ctx, pos, event);
     }
-    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): forwards to
-    // `self.inner` -- without this override, the trait's own default no-op would silently
-    // swallow `PistonBehavior::on_after_drain`'s own placeholder-revert step, since dispatch
-    // resolves THIS wrapper (never `self.inner` directly) for every id this suite registers it
-    // under.
-    fn on_after_drain(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        self.inner.on_after_drain(ctx, pos);
-    }
 }
 
 struct Harness {

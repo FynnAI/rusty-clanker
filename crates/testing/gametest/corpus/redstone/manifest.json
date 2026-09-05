@@ -141,6 +141,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "piston_pushes_redstone_block_wire_timing.ron",
+      "sha256": "c3d4ac04eef9c4ba458746920d8a5843e496a338ad7f4241cdffca04d828d61f",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "piston_quasi_connectivity_trigger.ron",
       "sha256": "5d3a9731f78df6b0c1e9590c32f3eaeeb0a2dbcd0fd2f2a006844131afd89631",
       "generator_tool_version": "manual/M3-corpus-wave",

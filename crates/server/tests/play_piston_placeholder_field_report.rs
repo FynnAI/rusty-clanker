@@ -19,7 +19,8 @@ use rc_registries::generated_v776::block_state_properties::block_id;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockEvent, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
-    KeepAliveServerbound, SectionBlocksUpdate, UseItemOn, pack_position, unpack_position,
+    KeepAliveServerbound, PlayerAction, SectionBlocksUpdate, UseItemOn, pack_position,
+    unpack_position,
 };
 use rusty_clanker_server::play::{
     HardcodedWorld, HeldItemStub, PlaceableBlockKind, PlayerProfile, enter_play,
@@ -390,6 +391,154 @@ async fn extending_piston_broadcasts_block_event_then_final_content_never_the_pl
         // unrelated coincidence.
         let range = range_of(block_id::MOVING_PISTON);
         assert!((range.first.0..=range.last.0).contains(&(placeholder_id as u32)));
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — server-side
+/// persistence fix, real-connection field report): the retract-side proof this file's own
+/// extend test above does not cover at all -- a vacated source (here, a bare retraction's own
+/// old head, since this piston is non-sticky and nothing is in front of it to pull) becomes
+/// real, client-visible `air`, synchronously with the SAME tick's own triggering `block_event`
+/// -- and (this changeset's own `crates/server/src/play/world.rs` drain-order fix) strictly
+/// AFTER that block_event in packet arrival order, never before: verified directly against the
+/// decompiled reference (`ServerLevel.runBlockEvents` sends the block_event packet immediately,
+/// synchronously, while `PistonBaseBlock.triggerEvent`'s own resulting world mutation --
+/// `moveBlocks`'s own `deleteAfterMove` air write in vanilla's real analogue -- is only picked
+/// up by the NEXT tick's own `ChunkHolder.broadcastChanges` flush; `world.rs`'s own doc comment
+/// at its drain-order fix has the full citation). The `moving_piston` placeholder this same
+/// retract writes at the base cell, immediately, is -- like the extend test above -- never
+/// independently visible to a client at all.
+#[tokio::test]
+async fn retracting_piston_broadcasts_block_event_then_the_vacated_air_never_the_placeholder() {
+    tokio::time::timeout(Duration::from_secs(300), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let (mut b, mut b_acc) = spawn_actor(&world, "b", 2).await;
+
+        let mut seq = 0;
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Piston))
+            .await;
+        // Default spawn rotation -> a North-facing piston (`play_block_event_field_report.rs`'s
+        // own identical derivation).
+        place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
+        let piston_pos = BlockPos::new(2, -60, 0);
+        let front_pos = BlockPos::new(2, -60, -1); // North -- the piston's own push direction.
+
+        // The driver: a floor torch at the piston's own East neighbor (a valid QC-activation
+        // side, never the push direction) -- mirrors `play_block_event_field_report.rs`'s own
+        // identical activation geometry.
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::RedstoneTorch))
+            .await;
+        let torch_pos = BlockPos::new(3, -61, 0);
+        place_and_read_id(&mut a, &mut a_acc, &mut seq, torch_pos, 1).await;
+
+        // Let the extend fully settle (its own block_event, then the real content two ticks
+        // later) before this test's own retract timeline capture starts -- this test is about
+        // the SUBSEQUENT retract, not the extend (`play_block_event_field_report.rs`'s own
+        // `breaking_the_torch_triggers_a_contract_block_event`'s identical "drain the extend
+        // event first" framing).
+        collect_timeline_at(
+            &mut b,
+            &mut b_acc,
+            &[piston_pos, front_pos],
+            Duration::from_millis(2500),
+        )
+        .await;
+
+        // Creative -> instant finalize (mirrors this crate's own established "instant break"
+        // pattern, `play_block_event_field_report.rs`'s own identical `PlayerAction` call).
+        seq += 1;
+        send_packet(
+            &mut a,
+            &PlayerAction {
+                status: 0,
+                location: pack_position(torch_pos),
+                direction: 1,
+                sequence: seq,
+            },
+        )
+        .await;
+        recv_packet_of_type(&mut a, &mut a_acc, AcknowledgeBlockChange::ID).await;
+
+        let timeline = collect_timeline_at(
+            &mut b,
+            &mut b_acc,
+            &[piston_pos, front_pos],
+            Duration::from_millis(3000),
+        )
+        .await;
+
+        // 1. The block_event (TRIGGER_CONTRACT) at the piston's own position.
+        let block_event_index = timeline
+            .iter()
+            .position(|e| {
+                matches!(e, TimelineEvent::BlockEvent { pos, action_id } if *pos == piston_pos && *action_id == 1)
+            })
+            .unwrap_or_else(|| panic!("no TRIGGER_CONTRACT block_event seen -- timeline: {timeline:?}"));
+
+        // 2. The vacated source's own air update -- real, client-visible, and (per this
+        // changeset's own drain-order fix) arrives strictly AFTER the block_event that
+        // triggered it, never before.
+        let air_index = timeline
+            .iter()
+            .enumerate()
+            .position(|(i, e)| {
+                i > block_event_index
+                    && matches!(e, TimelineEvent::BlockUpdate { pos, state_id } if *pos == front_pos && *state_id == 0)
+            })
+            .unwrap_or_else(|| {
+                panic!("no air Block Update ever arrived at front_pos after the block_event -- timeline: {timeline:?}")
+            });
+
+        // 3. The moving_piston placeholder itself -- written at the base cell, momentarily,
+        // transiently, server-side -- must never reach a client as its own Block Update, at any
+        // point.
+        let placeholder_id = moving_piston_id("north", false);
+        assert!(
+            !timeline.iter().any(|e| matches!(
+                e,
+                TimelineEvent::BlockUpdate { state_id, .. } if *state_id == placeholder_id
+            )),
+            "the moving_piston placeholder must never reach a client as its own Block Update -- \
+             timeline: {timeline:?}"
+        );
+
+        // 4. The base's own real retracted content settles at the deferred commit, two ticks
+        // after the block_event, strictly after the vacated-source air update above.
+        let base_final_index = timeline
+            .iter()
+            .enumerate()
+            .position(|(i, e)| {
+                i > air_index && matches!(e, TimelineEvent::BlockUpdate { pos, .. } if *pos == piston_pos)
+            })
+            .unwrap_or_else(|| {
+                panic!("no Block Update ever arrived at piston_pos after the vacated-source air update -- timeline: {timeline:?}")
+            });
+        let base_final = match timeline[base_final_index] {
+            TimelineEvent::BlockUpdate { state_id, .. } => state_id,
+            _ => unreachable!(),
+        };
+        let retracted_base_id = state_id(
+            block_id::PISTON,
+            &[("extended", "false"), ("facing", "north")],
+        )
+        .expect("every (extended, facing) pair is a legal piston state")
+        .0 as i32;
+        assert_eq!(
+            base_final, retracted_base_id,
+            "piston facing=north, extended=false -- the real retracted base id -- got timeline: \
+             {timeline:?}"
+        );
+
+        // Server-side too, once everything has settled.
+        let piston_state = world.debug_query_block(piston_pos).await.unwrap();
+        assert_eq!(piston_state.raw_state, retracted_base_id as u32);
+        let front_state = world.debug_query_block(front_pos).await.unwrap();
+        assert_eq!(front_state.raw_state, 0);
     })
     .await
     .unwrap();
