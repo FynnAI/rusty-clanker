@@ -358,7 +358,7 @@ M4-B07 (already shipped) documents its own chunk-load trust-vs-recompute policy 
 
 ### I. Spawn-stage initial mob placement — named, bounded, deferred
 
-`04-worldgen-parity.md` does not mention the `spawn` rung or `spawnOriginalMobs` anywhere in its own scope text. `M4-B04` (natural mob spawning, already shipped) explicitly excludes it from its own scope: "chunk-generation-time spawning (a structurally different algorithm per the research doc's own Hazard 3 — GEN-owned, M5), ... deferred to named future work." This blueprint is the actual `M5` generation-pipeline blueprint that text anticipates, and it explicitly declines to close that gap here, for two independent, sufficient reasons: (1) vanilla's own `spawnOriginalMobs` is, per the research doc's own table, "seeded via `setDecorationSeed` + a fresh unique-seed RNG (not reproducible from the world seed alone; explicitly non-deterministic by design)" — so it can never be part of GEN-D1's bit-identical block-state-hash acceptance criterion, meaning nothing about M5's own CI gate (GEN-D27) depends on it; (2) placing a real mob requires spawning a `bevy_ecs::Entity` into a live region `World` — a live-World mutation this pipeline structurally cannot perform before `full` (GEN-D25's own "generation never touches ECS `World` state... until the single Stage-1 structural command"), and `rc-worldgen` has no dependency edge on `rc-mechanics` (the crate that owns entity bundles, M4-B01) to construct one even if it could. The `spawn` rung (§G.10) is therefore a documented, bounded no-op; a future mechanics-owned blueprint that wants real initial mob population must do so as an ordinary post-spawn, tick-time system (reading `ChunkStatus`/a "just generated" marker this blueprint does not itself add), not as a body change to `advance_to_spawn`.
+`04-worldgen-parity.md` does not mention the `spawn` rung or `spawnOriginalMobs` anywhere in its own scope text. `M4-B04` (natural mob spawning, already shipped) explicitly excludes it from its own scope: "chunk-generation-time spawning (a structurally different algorithm per the research doc's own Hazard 3 — GEN-owned, M5), ... deferred to named future work." This blueprint is the actual `M5` generation-pipeline blueprint that text anticipates, and it explicitly declines to close that gap here, for two independent, sufficient reasons: (1) vanilla's own `spawnOriginalMobs` seeds its placement stream via `setDecorationSeed`, which fully overwrites the fresh unique-seed RNG's state with a value derived from the world seed and the chunk's own minimum block coordinates — so which species spawn, how many, where, their group/baby data, and their variant/gene/colour/attribute rolls are all reproducible from the world seed alone, and could in principle be brought under GEN-D1 parity later, but implementing that rung today would require the full entity subsystem this crate does not own — `EntityType::create`, the `SpawnPlacements` heightmap/collision checks, the active difficulty instance, per-biome mob-spawn settings, and group-data threading across the placement loop — plus honoring the two config gates vanilla itself checks (the `disable_mob_generation` noise-settings flag and the `SPAWN_MOBS` gamerule) and accepting that each spawned entity's UUID and private RNG remain genuinely non-reproducible regardless, so nothing about M5's own CI gate (GEN-D27) can depend on it yet; (2) placing a real mob requires spawning a `bevy_ecs::Entity` into a live region `World` — a live-World mutation this pipeline structurally cannot perform before `full` (GEN-D25's own "generation never touches ECS `World` state... until the single Stage-1 structural command"), and `rc-worldgen` has no dependency edge on `rc-mechanics` (the crate that owns entity bundles, M4-B01) to construct one even if it could. The `spawn` rung (§G.10) is therefore a documented, bounded no-op; a future mechanics-owned blueprint that wants real initial mob population must do so as an ordinary post-spawn, tick-time system (reading `ChunkStatus`/a "just generated" marker this blueprint does not itself add), not as a body change to `advance_to_spawn`.
 
 ### J. `GenerationContext` — per-`(world_seed, dimension)` immutable wiring
 
@@ -662,6 +662,31 @@ use crate::pipeline::stages::*;
 /// harness.
 pub fn generate_chunk_sync(chunk_x: i32, chunk_z: i32, ctx: &GenerationContext) -> ProtoChunk;
 ```
+
+### Claims to verify (TEST-D57)
+
+- The pinned target's real ChunkStatus ladder has 12 rungs in this exact ascending order: empty, structure_starts, structure_references, biomes, noise, surface, carvers, features, initialize_light, light, spawn, full.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID (addRequirement(status, radius)) assigns the structure_starts rung no neighbor-chunk requirement at all.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the structure_references rung to have structure_starts completed at radius 8 (an up to 17x17 chunk neighborhood).
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the biomes rung to have structure_starts completed at radius 8.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the noise rung to have structure_starts completed at radius 8.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the noise rung to have biomes completed at radius 1.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the surface rung to have structure_starts completed at radius 8.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the surface rung to have biomes completed at radius 1.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the carvers rung to have structure_starts completed at radius 8.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the features rung to have structure_starts completed at radius 8.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the features rung to have carvers completed at radius 1.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the light rung to have initialize_light completed at radius 1.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID requires the spawn rung to have biomes completed at radius 1.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID assigns the initialize_light rung no neighbor-chunk requirement at all.
+- Vanilla's ChunkPyramid.GENERATION_PYRAMID assigns the full rung no neighbor-chunk requirement at all.
+- Vanilla's own FEATURES-status write margin is a 3x3-chunk window: a chunk's features rung reads and writes live block state across its own 3x3 neighborhood.
+- In vanilla, one chunk's feature-placement outcome can depend on another overlapping chunk's already-placed blocks within their shared decoration window, since feature placement reads and writes live cross-chunk block state.
+- Vanilla's noise router exposes six climate axes as density-function fields named temperature, vegetation, continents, erosion, depth, and ridges.
+- Vanilla's Climate.Sampler samples climate by wrapping the same FlatCache-marked density-function graph nodes the noise router itself marks for caching.
+- The fixed axis order for one climate sample is temperature, humidity, continentalness, erosion, depth, weirdness.
+- Vanilla's spawnOriginalMobs (initial mob population performed at chunk-generation time) seeds via setDecorationSeed, which fully overwrites the fresh unique-seed RNG's state with a value derived from the world seed and the chunk's coordinates, so the mob-placement stream is reproducible from the world seed alone; only each entity's UUID and private RNG are non-reproducible.
+- Vanilla's initial mob population performed at chunk-generation time (spawnOriginalMobs) uses a structurally different algorithm from vanilla's tick-time natural mob spawning system.
 
 ## Deliverables
 

@@ -131,7 +131,7 @@ for i in 0..amplitudes.len():
 ```
 `from_hash_of` is stateless (M5-B01 §G), so octave construction order among present octaves does not affect parity.
 
-*Legacy/sequential construction* (`PerlinNoise::create_legacy`, used **only** by `BlendedNoise`'s three internal fields — always, regardless of which backend seeds them, §C's BlendedNoise entry below) — consumes `random` **directly**, no fork, strictly sequential:
+*Legacy/sequential construction* (`PerlinNoise::create_legacy`, used by `BlendedNoise`'s three internal fields — always, regardless of which backend seeds them, §C's BlendedNoise entry below — **and** by `NormalNoise::create_legacy_nether`'s two `PerlinNoise` fields, §C's `NormalNoise` entry below, wired by `NoiseGraphState` for the nether-only `temperature`/`vegetation` noises, §I) — consumes `random` **directly**, no fork, strictly sequential:
 ```text
 zero_octave_index = -first_octave
 zero_octave = ImprovedNoise::new(random)          // ALWAYS built first, unconditionally, even if discarded
@@ -145,7 +145,7 @@ for i in (zero_octave_index - 1) down to 0:        // descending toward first_oc
 ```
 (`random.consume_count` is M5-B01's own `RcRandomSource::consume_count` — reused verbatim, no reimplementation.)
 
-Derived scalars (both paths):
+Derived scalars (both paths) — vanilla derives these via three `Math.pow(2.0, ...)` calls (`Math.pow(2.0, -zero_octave_index)`, `Math.pow(2.0, octaves-1)`, `Math.pow(2.0, octaves)`); this blueprint substitutes `powi` since every exponent here is integral — an explicit construction-time equivalence argued in §L, never assumed:
 ```text
 lowest_freq_input_factor = 2.0_f64.powi(first_octave)
 lowest_freq_value_factor = 2.0_f64.powi(amplitudes.len() as i32 - 1) / (2.0_f64.powi(amplitudes.len() as i32) - 1.0)
@@ -177,7 +177,7 @@ expected_deviation(span) = 0.1 * (1.0 + 1.0 / (span as f64 + 1.0))
 value_factor = (1.0/6.0) / expected_deviation(max_octave - min_octave)     // 1.0/6.0, NOT the dead TARGET_DEVIATION=1/3 constant
 max_value() = (first.max_value() + second.max_value()) * value_factor
 ```
-`min_value()` — same policy as `PerlinNoise`: `f64::NEG_INFINITY` (§H). `create_modern(random, first_octave, amplitudes)` calls `PerlinNoise::create_modern` twice sequentially on the same `random`; `create_legacy_nether(random, ...)` calls `PerlinNoise::create_legacy` twice sequentially (provided for API completeness — out of this blueprint's own consumption scope, `Noises.TEMPERATURE_NETHER`/`VEGETATION_NETHER` are not sampled by anything else this blueprint builds).
+`min_value()` — same policy as `PerlinNoise`: `f64::NEG_INFINITY` (§H). `create_modern(random, first_octave, amplitudes)` calls `PerlinNoise::create_modern` twice sequentially on the same `random`; `create_legacy_nether(random, ...)` calls `PerlinNoise::create_legacy` twice sequentially — **in this blueprint's own consumption scope after all**: `NoiseGraphState` (§I) wires it for exactly two registry keys, the nether-only `temperature`/`vegetation` noises, each seeded by a fresh `RcLegacyRandom` offset directly from the world seed, never through the root positional factory.
 
 **`SimplexNoise`** — construction is **structurally identical** to `ImprovedNoise::new` (same 3×`next_double()`+256-step Fisher–Yates shuffle, same 262-step cost), sharing the `GRADIENT` table above.
 
@@ -247,22 +247,26 @@ fn new(world_seed) -> Self:
     simplex = SimplexNoise::new(&mut random)
     EndIslands { simplex }
 ```
-**Compute — moderate-confidence reconstruction, flagged for reconciliation** (the research corpus gives this algorithm's *shape* in prose, not literal pseudocode — §M item 3):
+**Compute** (confirmed via TEST-D57 against `DensityFunctions.java:517-562`):
 ```text
 fn compute(&self, block_x, block_z) -> f64:
-    section_x = block_x >> 3;  section_z = block_z >> 3       // sectionX = blockX/8 (floor division; moderate-confidence rounding mode)
-    height: f32 = -100.0                                       // running max accumulator
+    section_x = block_x / 8;  section_z = block_z / 8          // Java integer division, truncating toward zero (Rust's `/` on signed integers matches) — NOT floor division or an arithmetic shift; section_x for block_x = -1 is 0, not -1
+    chunk_x = section_x / 2;  chunk_z = section_z / 2           // truncating int division again
+    sub_section_x = section_x % 2;  sub_section_z = section_z % 2   // Java `%`: sign-of-dividend remainder, so these are -1, 0 or 1
+    height: f32 = (100.0_f32 - ((section_x*section_x + section_z*section_z) as f32).sqrt() * 8.0).clamp(-100.0, 80.0)   // running-max accumulator's initial value: a distance-from-origin falloff with a FIXED island size of 8.0, never a bare -100.0
     for dx in -12..=12:
         for dz in -12..=12:
-            total_x = section_x + dx;  total_z = section_z + dz
-            v = self.simplex.get_value_2d(total_x as f64, total_z as f64)
-            if v < -0.9:
-                island_size = ((total_x.abs() as f32)*3439.0 + (total_z.abs() as f32)*147.0).rem_euclid(13.0) + 9.0
-                falloff = 100.0_f32 - ((dx as f32).powi(2) + (dz as f32).powi(2)).sqrt() * island_size
+            total_chunk_x = (chunk_x + dx) as i64;  total_chunk_z = (chunk_z + dz) as i64   // offsets are added to the CHUNK coordinates, not the section coordinates
+            if total_chunk_x*total_chunk_x + total_chunk_z*total_chunk_z > 4096
+                && self.simplex.get_value_2d(total_chunk_x as f64, total_chunk_z as f64) < -0.9 {
+                // the squared-radius test (> 4096, i.e. more than 64 chunks from the origin) is evaluated FIRST and short-circuits the simplex call entirely when it fails
+                island_size = ((total_chunk_x.abs() as f32)*3439.0 + (total_chunk_z.abs() as f32)*147.0).rem_euclid(13.0) + 9.0   // operands are the CHUNK coordinates chunk_x+dx / chunk_z+dz, not the section coordinates
+                xd = sub_section_x as f32 - dx as f32 * 2.0;  zd = sub_section_z as f32 - dz as f32 * 2.0   // distance is over (sub-section parity - 2*offset), never over the raw loop offsets dx/dz
+                falloff = 100.0_f32 - (xd*xd + zd*zd).sqrt() * island_size
                 height = height.max(falloff.clamp(-100.0, 80.0))
     (height as f64 - 8.0) / 128.0
 ```
-`min_value()`/`max_value()`: `f64::NEG_INFINITY`/`f64::INFINITY` (§H — this reconstruction is not certain enough to trust for a short-circuit-affecting bound).
+`min_value()`/`max_value()`: the exact constants `-0.84375`/`0.5625` (`(-100.0-8.0)/128.0` and `(80.0-8.0)/128.0`) — not a conservative fallback (§H).
 
 ### D. `Mth`-equivalent helpers (source: `docs/research/mc-26.2/17-noise-math.md` §3.8; `docs/research/mc-26.2/18-float-determinism.md` §3.5)
 
@@ -343,13 +347,13 @@ Max: if v1 > bounds(argument2).1 { v1 } else { v1.max(sample(argument2, ctx)) } 
 | `Mul{a1,a2}` | see Ap2 above | 4 products of `{min1,max1}×{min2,max2}`; bound = `(min of the 4, max of the 4)` — exact interval product |
 | `Min{a1,a2}` | see Ap2 above | `(min(min1,min2), min(max1,max2))` |
 | `Max{a1,a2}` | see Ap2 above | `(max(min1,min2), max(max1,max2))` |
-| `Abs{a}` | `v.abs()` | if `min≤0≤max` then `0.0` else `min1.abs().min(max1.abs())`; upper = `min1.abs().max(max1.abs())` |
-| `Square{a}` | `v*v` | same straddle rule as `Abs`, squared |
+| `Abs{a}` | `v.abs()` | `(max(0.0, min1), max(\|min1\|, \|max1\|))` — lower bound is the child's own `min_value` clamped up to zero, **not** a zero-straddle test |
+| `Square{a}` | `v*v` | `(max(0.0, min1), max(min1², max1²))` — lower bound uses the **unsquared** child minimum clamped to zero, sharing `Abs`'s bound branch |
 | `Cube{a}` | `v*v*v` | monotonic increasing: `(min³, max³)` |
 | `HalfNegative{a}` | `if v<0.0 {v*0.5} else {v}` | monotonic non-decreasing: `(f(min), f(max))` using this same formula |
 | `QuarterNegative{a}` | `if v<0.0 {v*0.25} else {v}` | same pattern, `*0.25` |
-| `Invert{a}` | **moderate-confidence** (§M item 1): `if v==0.0 {0.0} else {1.0/v}` | `(NEG_INFINITY, INFINITY)` — conservative, §H |
-| `Squeeze{a}` | `let c = v.clamp(-1.0,1.0); c*0.5 - c*c*c/24.0` | **exact, constant regardless of input range** (the hard clamp bounds the whole output unconditionally): `(-11.0/24.0, 11.0/24.0)` |
+| `Invert{a}` | `1.0/v` — **no zero guard** (`invert(0.0) = +INFINITY`, `invert(-0.0) = -INFINITY`) | special-cased: `(NEG_INFINITY, INFINITY)` when `min1<0.0 && max1>0.0` (the child straddles zero — exact, not conservative, since `1/x` genuinely diverges there), otherwise the swapped pair `(1.0/max1, 1.0/min1)` |
+| `Squeeze{a}` | `let c = v.clamp(-1.0,1.0); c*0.5 - c*c*c/24.0` | generic branch, **depends on the child's own range**: `(squeeze(min1), squeeze(max1))` — the constant `(-11.0/24.0, 11.0/24.0)` arises only when the child's range is itself unbounded; it is not this node's own rule |
 | `Clamp{input,min,max}` | `input_v.clamp(min,max)` | `(min, max)` exact — does **not** depend on `input`'s own bound |
 | `Noise{noise,xz_scale,y_scale}` | `state.noise(noise).get_value(bx*xz_scale, by*y_scale, bz*xz_scale)` | `(NEG_INFINITY, state.noise(noise).max_value())` |
 | `ShiftedNoise{noise,xz_scale,y_scale,shift_x,shift_y,shift_z}` | `state.noise(noise).get_value(bx*xz_scale + sample(shift_x,ctx), by*y_scale + sample(shift_y,ctx), bz*xz_scale + sample(shift_z,ctx))` | `(NEG_INFINITY, state.noise(noise).max_value())` |
@@ -371,7 +375,7 @@ Max: if v1 > bounds(argument2).1 { v1 } else { v1.max(sample(argument2, ctx)) } 
 | `BlendAlpha{}` | `1.0` — permanent fresh-generation default | `(1.0, 1.0)` |
 | `BlendOffset{}` | `0.0` — permanent fresh-generation default | `(0.0, 0.0)` |
 | `Beardifier{}` | `0.0` — fresh-generation default **pending a future structures blueprint** (unlike `BlendAlpha`/`BlendOffset`/`BlendDensity`, this one genuinely needs updating once nearby-structure-piece data exists, §A) | `(0.0, 0.0)` |
-| `EndIslands{}` | `state.end_islands(id).compute(bx, bz)` (§C, moderate-confidence) | `(NEG_INFINITY, INFINITY)` — conservative, §H |
+| `EndIslands{}` | `state.end_islands(id).compute(bx, bz)` (§C) | `(-0.84375, 0.5625)` — exact, §H |
 
 (`bx`/`by`/`bz` above abbreviate `ctx.block_x as f64` / `ctx.block_y as f64` / `ctx.block_z as f64`; `sample`/`sample_child` abbreviate "recurse through the caller's own evaluation entry point," §J/§K.)
 
@@ -379,7 +383,7 @@ Max: if v1 > bounds(argument2).1 { v1 } else { v1.max(sample(argument2, ctx)) } 
 
 Every Ap2 (`Min`/`Max`) short-circuit test in §G reads a STATIC (position-independent) bound pair `(min_value, max_value)` per node. This blueprint's `NodeBoundsTable` computes these once per graph (not per sample call — bounds are a pure function of graph structure, never of position) via a memoized post-order recursion (the graph is guaranteed acyclic among named entries by M5-B02's own compile-time cycle check; anonymous inline nodes form a strict child-of-parent DAG by construction, so any single-pass recursion terminates).
 
-**Why using `(f64::NEG_INFINITY, f64::INFINITY)` wherever the exact formula is not confidently known from the research corpus is always safe, never a parity risk — stated once, in full, here rather than per node:** a `Min` node skips evaluating `argument2` only when `v1 < argument2.min_value()`; substituting `NEG_INFINITY` for an uncertain `min_value()` makes that test `v1 < -∞`, which is **always false** — the skip never fires, `argument2` is always fully evaluated instead. Symmetrically for `Max` with `INFINITY`. The *returned value* of `Min`/`Max` is unaffected either way (both branches compute the mathematically identical `v1.min(sample(argument2,ctx))` — the bound only decides whether the FAST PATH's redundant-avoidance fires). The only cost of an overly-conservative bound is CPU time (an extra, otherwise-avoidable evaluation of `argument2`'s subtree); it can **never** produce a wrong output, and — because every marker/cache node's own memoization is keyed by position/epoch/cell rather than by "was this visited," §K — it cannot even desync a nested cache's state. This is why §G's table freely uses `NEG_INFINITY`/`INFINITY` for `Invert`, `Spline`, `EndIslands`, and every `Noise`/`ShiftedNoise`/`ShiftA`/`ShiftB`/`Shift`/`PerlinNoise`/`NormalNoise` node's own `min_value()`: those are exactly the spots where the corpus gives an exact `max_value()` formula but not a confidently-exact `min_value()` one (or, for `Invert`/`Spline`/`EndIslands`, neither). A future revision MAY tighten any of these once independently reconciled — doing so is a pure performance improvement, never a correctness requirement.
+**Why using `(f64::NEG_INFINITY, f64::INFINITY)` wherever the exact formula is not confidently known from the research corpus is always safe, never a parity risk — stated once, in full, here rather than per node:** a `Min` node skips evaluating `argument2` only when `v1 < argument2.min_value()`; substituting `NEG_INFINITY` for an uncertain `min_value()` makes that test `v1 < -∞`, which is **always false** — the skip never fires, `argument2` is always fully evaluated instead. Symmetrically for `Max` with `INFINITY`. The *returned value* of `Min`/`Max` is unaffected either way (both branches compute the mathematically identical `v1.min(sample(argument2,ctx))` — the bound only decides whether the FAST PATH's redundant-avoidance fires). The only cost of an overly-conservative bound is CPU time (an extra, otherwise-avoidable evaluation of `argument2`'s subtree); it can **never** produce a wrong output, and — because every marker/cache node's own memoization is keyed by position/epoch/cell rather than by "was this visited," §K — it cannot even desync a nested cache's state. This is why §G's table freely uses `NEG_INFINITY`/`INFINITY` for `Invert`, `Spline`, and every `Noise`/`ShiftedNoise`/`ShiftA`/`ShiftB`/`Shift`/`PerlinNoise`/`NormalNoise` node's own `min_value()`: those are exactly the spots where the corpus gives an exact `max_value()` formula but not a confidently-exact `min_value()` one (or, for `Invert`/`Spline`, neither). `EndIslands`'s bounds, by contrast, are the exact constants `-0.84375`/`0.5625` (§C) — its algorithm is confirmed by TEST-D57 against `DensityFunctions.java:517-562`, so no conservative fallback is needed there. A future revision MAY tighten any of these once independently reconciled — doing so is a pure performance improvement, never a correctness requirement.
 
 ```rust
 pub struct NodeBoundsTable(Vec<(f64, f64)>);   // indexed by DensityFunctionId.0
@@ -394,7 +398,7 @@ impl NodeBoundsTable {
 Every noise/blended-noise/end-islands instance a graph's density functions reference must be constructed exactly once, up front, per `(world_seed, dimension)` pair — never lazily re-constructed per sample (that would silently re-consume RNG state and desync). `NoiseGraphState::build` does this in three independent, order-free steps (construction across DIFFERENT named noises never interacts — each `from_hash_of` call is itself stateless, M5-B01 §G):
 
 1. **Root positional factory**: `legacy_random_source ? AnyRandom::Legacy(RcLegacyRandom::new(world_seed)) : AnyRandom::Xoroshiro(RcXoroshiroRandom::new(world_seed))`, then `.fork_positional()` once → the root `AnyPositionalFactory`.
-2. **Every named entry in `noise_params.names`** gets its own `NormalNoise` via `root.from_hash_of(name)` (a fresh, independent `AnyRandom`) → `NormalNoise::create_modern(&mut that_source, params.first_octave, &params.amplitudes)`. Stored densely, indexed by `NoiseParamId.0`.
+2. **Every named entry in `noise_params.names`, with two exceptions,** gets its own `NormalNoise` via `root.from_hash_of(name.identifier())` — the hash input is the noise's full namespaced identifier (e.g. `"minecraft:temperature"`), never a bare name — (a fresh, independent `AnyRandom`) → `NormalNoise::create_modern(&mut that_source, params.first_octave, &params.amplitudes)`. Stored densely, indexed by `NoiseParamId.0`. **The two exceptions**: the nether-only `temperature`/`vegetation` noise entries instead get `NormalNoise::create_legacy_nether(&mut RcLegacyRandom::new(world_seed + offset), params.first_octave, &params.amplitudes)` with `offset = 0` for temperature and `offset = 1` for vegetation — a fresh, directly-seeded legacy source with **no** positional factory involved at all, never `root.from_hash_of`.
 3. **Every `OldBlendedNoise` node instance found by scanning `graph.nodes`** gets its own `BlendedNoise`: if `legacy_random_source`, seed is a fresh `RcLegacyRandom::new(world_seed)` directly (no positional factory at all); otherwise, `root.from_hash_of("terrain")` (17-noise-math.md §5's BlendedNoise row — this is the authoritative, precise statement; it supersedes 05-worldgen.md §3.2's vaguer "a legacy offset-seed scheme for legacy mode" phrasing, which this blueprint treats as informally describing the same "fresh direct `LegacyRandomSource(seed)`" mechanism). Stored in a `BTreeMap<DensityFunctionId, BlendedNoise>`.
 4. **Every `EndIslands{}` node instance found the same way** gets its own `EndIslands::new(world_seed)` — always, unconditionally, ignoring `legacy_random_source` entirely (§C). Stored in a `BTreeMap<DensityFunctionId, EndIslands>`.
 
@@ -453,11 +457,11 @@ pub struct NoiseChunk<'a> {
 }
 ```
 
-**`interpolated` → `Interpolator`** (vanilla's `NoiseInterpolator`): two "slices," each a `(cell_count_xz+1) × (cell_count_y+1)` grid of raw corner values, one per adjacent X-column. `NoiseChunk::initialize_for_first_cell_x()` fills slice 0 (evaluates the wrapped child at every `(cellX=0, cellZ, cellY)` corner across the whole slice, via Tier-1-equivalent direct evaluation of the child — no caching at THIS level, since these ARE the raw corner samples); `advance_cell_x()` rotates slice 1 into slice 0's role and fills a fresh slice 1 for the next X-cell (call `cell_count_xz` times total per chunk). `select_cell_yz(cell_y, cell_z)` reads the 8 corner values (`n000..n111`) for the current `(cellX, cell_y, cell_z)` cell out of the two slices. `update_for_y(ty)` / `update_for_x(tx)` / `update_for_z(tz)` progressively interpolate using `progressive_trilinear_yxz`'s own per-axis steps (§D) — **Y first** (four Y-lerped XZ-corner-pair values), **then X** (two X-lerped Z-edge values), **then Z** (final value, returned by `get_interpolated_value()`) — call in exactly this order as the fill loop's in-cell block offsets advance.
+**`interpolated` → `Interpolator`** (vanilla's `NoiseInterpolator`): two "slices," each a `(cell_count_xz+1) × (cell_count_y+1)` grid of raw corner values, one per adjacent X-column. `NoiseChunk::initialize_for_first_cell_x()` fills slice 0 (evaluates the wrapped child at every `(cellX=0, cellZ, cellY)` corner across the whole slice, via Tier-1-equivalent direct evaluation of the child — no caching at THIS level, since these ARE the raw corner samples); `advance_cell_x()` (called `cell_count_xz` times total per chunk) only fills a fresh slice 1 for the NEXT X-cell and updates `cell_start_block_x` — it does **not** rotate the slices. The rotation is a separate `swap_slices()` call the fill driver makes once per X-cell iteration, after `advance_cell_x()`, never performed by `advance_cell_x()` itself. `select_cell_yz(cell_y, cell_z)` reads the 8 corner values (`n000..n111`) for the current `(cellX, cell_y, cell_z)` cell out of the two slices. `update_for_y(ty)` / `update_for_x(tx)` / `update_for_z(tz)` progressively interpolate using `progressive_trilinear_yxz`'s own per-axis steps (§D) — **Y first** (four Y-lerped XZ-corner-pair values), **then X** (two X-lerped Z-edge values), **then Z** (final value, returned by `get_interpolated_value()`) — call in exactly this order as the fill loop's in-cell block offsets advance.
 
 **Two interpolation entry points exist and are NOT bit-identical to each other — this is deliberate, matches vanilla exactly, and must never be "unified":**
 - The **progressive** per-block chain above (`update_for_y/x/z`, `progressive_trilinear_yxz`'s Y→X→Z nesting) — used for the ordinary sequential per-block fill walk.
-- The **direct** `fill_all_directly` path (`lerp3`'s X→Y→Z nesting, §D) — a single one-shot `lerp3` call per point, used when filling every point of a cell at once (`fillingCell=true`, triggered by `CacheAllInCell`'s own eager fill, below).
+- The **direct** `fill_all_directly` path (`lerp3`'s X→Y→Z nesting, §D) — a single one-shot `lerp3` call per point, used when filling every point of a cell at once; `fill_all_directly` itself never touches `filling_cell` — it is `select_cell_yz`'s own unconditional refill of every registered `cache_all_in_cell` slot, below, that sets `filling_cell=true` around the calls that reach this path.
 
 **Concretely verified, not merely asserted**: for corner values `[-83.38012745465886, -489.83083054293166, 325.2065092537432, -201.36014480040723, -131.5883105115243, -306.33865095492575, 66.00816872886128, -338.31217607063184]` (as `n000,n100,n010,n110,n001,n101,n011,n111` respectively) and `(tx,ty,tz) = (0.12426688428353017, 0.4329362680099159, 0.5620784880758429)`, `lerp3` gives `-29.024819080624454` while `progressive_trilinear_yxz` gives `-29.024819080624432` — the last bit differs (over half of randomly-sampled corner/fraction combinations diverge at the last bit; this blueprint's own derivation pass confirmed the divergence rate empirically). A Rust port that "simplifies" by routing both entry points through one shared `lerp3` call (or vice versa) will match vanilla for roughly half of all cell-interior positions and silently diverge for the other half.
 
@@ -467,15 +471,18 @@ pub struct NoiseChunk<'a> {
 
 **`cache_once` → `CacheOnceSlot`**: `Option<(u64, f64)>` (last-seen epoch, last value) — memoized until `NoiseChunk::advance_interpolation_counter()` is called (vanilla's own `interpolationCounter`/`arrayInterpolationCounter`). Valid for exactly one "current sample" (however the caller defines that boundary — a future GenStage fill-driver blueprint owns exactly WHEN to call `advance_interpolation_counter`, matching vanilla's own per-Z-column/per-array-fill cadence; this blueprint specifies only the memoization CONTRACT, not the driving cadence).
 
-**`cache_all_in_cell` → `CacheAllInCellSlot`**: `Option<((i32,i32,i32), Vec<f64>)>` keyed by the current cell's `(cellX,cellY,cellZ)` — recomputed (the whole `cell_width × cell_width × cell_height` array, one entry per in-cell block position) every time `select_cell_yz` moves to a NEW cell. The fill itself sets `self.filling_cell = true`, evaluates the wrapped child via `self.sample(child_id, ctx)` (recursing normally — a nested `interpolated` node inside this subtree therefore takes the **direct** `fill_all_directly`/`lerp3` path, not the progressive chain, per `filling_cell`'s own meaning above) at every in-cell block position, then restores `filling_cell = false`. Reads within the SAME cell (any of its `cell_width²×cell_height` positions) are NOT stale relative to each other — every position gets its own freshly-filled array entry, contrasting with `Cache2D`/`CacheOnce`'s deliberate staleness.
+**`cache_all_in_cell` → `CacheAllInCellSlot`**: `Vec<f64>` — **no key at all** (no stored cell coordinate, no dirty flag or epoch counter), just the raw `cell_width × cell_width × cell_height` array of values. `select_cell_yz` refills **every registered** `cache_all_in_cell` slot **unconditionally on every call**, whether or not the cell actually changed — it sets `self.filling_cell = true` around that whole refill pass (evaluating each slot's wrapped child via `self.sample(child_id, ctx)`, recursing normally — a nested `interpolated` node inside any of those subtrees therefore takes the **direct** `fill_all_directly`/`lerp3` path, not the progressive chain, per `filling_cell`'s own meaning above), then restores `filling_cell = false` once every registered slot is refilled. Reads within the SAME cell (any of its `cell_width²×cell_height` positions) are NOT stale relative to each other — every position gets its own freshly-filled array entry, contrasting with `Cache2D`/`CacheOnce`'s deliberate staleness. (A keyed, refill-only-on-cell-change model would be observationally equivalent — same values, fewer redundant refills — but is not vanilla's own shape; this blueprint follows vanilla's unconditional-refill shape rather than the tighter alternative.)
 
-**`fill_all_directly(id, cell_x, cell_y, cell_z) -> Vec<f64>`**: evaluates `id` at every block position inside the named cell using the direct `lerp3` path for any nested `Interpolated` node (i.e. runs with `filling_cell = true` for its own duration) — this is the batch/"column fill" contract (GEN-D12) `CacheAllInCell`'s own fill uses internally, and is exposed publicly as the entry point a future GenStage driver uses for any other batch-fill need.
+**`fill_all_directly(id) -> Vec<f64>`**: evaluates `id` at every position of whatever cell is **already selected** (by a prior `select_cell_yz` call), walking Y descending then X then Z ascending — it does **not** itself read or write `filling_cell` (that flag is owned solely by `select_cell_yz`, above); a nested `Interpolated` node takes the direct `lerp3` path only because `filling_cell` was already set true by the caller (`select_cell_yz`'s own refill pass), never because `fill_all_directly` sets it. This is the batch/"column fill" contract (GEN-D12) the `cache_all_in_cell` refill pass uses internally, and is exposed publicly as the entry point a future GenStage driver uses for any other batch-fill need. (Vanilla additionally has a second, distinct fill-all-directly-shaped routine used during slice fills, which runs with `filling_cell` always false — a reminder that "fill_all_directly" does not by itself imply the direct `lerp3` path; only `select_cell_yz`'s own refill pass does.)
 
 ```rust
 impl<'a> NoiseChunk<'a> {
     pub fn new(graph: &'a data::DensityFunctionGraph, state: &'a NoiseGraphState, bounds: &'a NodeBoundsTable, dims: &data::NoiseDimensions, chunk_min_x: i32, chunk_min_z: i32) -> Self;
     pub fn initialize_for_first_cell_x(&mut self);
     pub fn advance_cell_x(&mut self);
+    /// Rotates slice 1 into slice 0's role — a separate step from `advance_cell_x`,
+    /// called once per X-cell iteration by the fill driver, after `advance_cell_x` (Context §K).
+    pub fn swap_slices(&mut self);
     pub fn select_cell_yz(&mut self, cell_y: i32, cell_z: i32);
     pub fn update_for_y(&mut self, ty: f64);
     pub fn update_for_x(&mut self, tx: f64);
@@ -483,21 +490,161 @@ impl<'a> NoiseChunk<'a> {
     pub fn get_interpolated_value(&self) -> f64;
     pub fn advance_interpolation_counter(&mut self);
     pub fn sample(&mut self, id: data::DensityFunctionId, ctx: EvalContext) -> f64;
-    pub fn fill_all_directly(&mut self, id: data::DensityFunctionId, cell_x: i32, cell_y: i32, cell_z: i32) -> Vec<f64>;
+    /// Evaluates `id` at every position of the currently-selected cell (via a prior
+    /// `select_cell_yz` call) — does NOT itself read or write `filling_cell` (Context §K).
+    pub fn fill_all_directly(&mut self, id: data::DensityFunctionId) -> Vec<f64>;
 }
 ```
 
 ### L. Cross-platform float determinism — this blueprint's own scope is entirely safe (docs/research/mc-26.2/18-float-determinism.md §3.7)
 
-`Math.sin`/`cos`/`pow`/`exp`/`log`/`asin`/`atan`/`atan2` are the ONE genuinely unresolvable-by-specification cross-platform hazard in the whole codebase (18-float-determinism.md's #1-ranked hazard) — but **none of them appear anywhere in this blueprint's own scope**. Every noise primitive (§C) uses only `+ - * / floor` and exactly one `sqrt` call (`SimplexNoise`'s `F2`/`G2` constants, §C), and `Math.sqrt`/`f64::sqrt` IS specified to be correctly-rounded (18-float-determinism.md §3.2 — "one of the few genuinely low-risk spots in this whole document"), so it is safe to treat as bit-identical across platforms. This is why every golden vector in this blueprint's Acceptance tests is an **exact-equality** assertion, with zero tolerance-based tests anywhere (a genuine, load-bearing difference from M5-B01's `nextGaussian` tests, which needed `1e-9` tolerance specifically because `Math.sqrt`/`Math.log` — wait, `sqrt` is safe, `log`/`ln` is the unsafe one there — `nextGaussian`'s `ln` call is exactly the kind of transcendental this blueprint's own scope never touches). Any FUTURE blueprint whose density-function node needs `Math.sin`/`cos`/`atan2` (none of the 34 kinds in §G's table do, per the corpus) would need to re-open this question; this blueprint does not.
+`Math.sin`/`cos`/`pow`/`exp`/`log`/`asin`/`atan`/`atan2` are the ONE genuinely unresolvable-by-specification cross-platform hazard in the whole codebase (18-float-determinism.md's #1-ranked hazard) — but **none of them appear on any density-function node's compute path in this blueprint's own scope** (a sweep for every `Math.{sin,cos,tan,asin,acos,atan,exp,log,log10,pow,hypot,cbrt,sqrt}` call over the levelgen tree turns up nothing outside `EndIslands`'s two `Mth.sqrt` calls (§C) and `SimplexNoise`'s `F2`/`G2` static initializer; `NoiseUtils.biasTowardsExtreme`, the only `Math.sin` in the worldgen synth package, has no callers anywhere in 26.2). The one exception is at **construction time, not compute time**: `PerlinNoise`'s constructor calls `Math.pow` three times (deriving `lowest_freq_input_factor` and `lowest_freq_value_factor`, §C) — this blueprint substitutes `2.0_f64.powi(...)` for all three, which is a different function than the reference calls (`Math.pow` is only 'should'-exact for integral exponents per the Java SE spec, while `powi` is a multiply chain), so the equivalence is asserted here explicitly rather than assumed. `Math.sqrt`/`f64::sqrt` IS specified to be correctly-rounded (18-float-determinism.md §3.2 — "one of the few genuinely low-risk spots in this whole document"), so it is safe to treat as bit-identical across platforms — this blueprint's own scope makes exactly three `sqrt` calls: `SimplexNoise`'s `F2`/`G2` constants (§C) and `EndIslands`'s two per-evaluation `Mth.sqrt` calls (the running-maximum accumulator's initial value and the per-offset falloff distance, §C). This is why every golden vector in this blueprint's Acceptance tests is an **exact-equality** assertion, with zero tolerance-based tests anywhere (a genuine, load-bearing difference from M5-B01's `nextGaussian` tests, which needed `1e-9` tolerance specifically because `nextGaussian`'s `ln` call is exactly the kind of transcendental this blueprint's own scope never touches on a compute path). Any FUTURE blueprint whose density-function node needs `Math.sin`/`cos`/`atan2` (none of the 34 kinds in §G's table do, per the corpus) would need to re-open this question; this blueprint does not.
 
 ### M. Explicit moderate-confidence gaps — flagged for reconciliation, not silently assumed
 
-1. **`Invert` node's exact formula** (§G) is not given literally anywhere in the research corpus (only its NAME, alongside `abs`/`square`/`cube`/`half_negative`/`quarter_negative`/`squeeze` — of which only `squeeze`'s body is given verbatim). This blueprint implements the mathematically-obvious reciprocal (`1.0/v`, zero-guarded) as a best-effort placeholder. **`half_negative`/`quarter_negative`'s formulas are similarly name-inferred, not verbatim-sourced** (moderate, not low, confidence — the naming pattern strongly suggests "halve/quarter the value when negative, identity otherwise," and this blueprint implements exactly that). A future black-box reconciliation pass (GEN-D27's harness, once available) should confirm all three against real vanilla output before they are trusted for anything beyond this blueprint's own structural tests.
+1. **`Invert` node's exact formula** (§G) is confirmed by TEST-D57 against `DensityFunctions.java:776`: a bare `1.0/v`, with **no zero guard at all** (`invert(0.0)` is `+INFINITY`, `invert(-0.0)` is `-INFINITY`, never `0.0`) — its bounds, by contrast, ARE special-cased (§G), exact rather than conservative in the non-straddling case. **`half_negative`/`quarter_negative`'s formulas remain name-inferred, not verbatim-sourced** (moderate, not low, confidence — the naming pattern strongly suggests "halve/quarter the value when negative, identity otherwise," and this blueprint implements exactly that; TEST-D57 confirms this is value-identical to the reference, which writes the branch the other way round, `v > 0.0 ? v : v*0.5`/`v*0.25`). A future black-box reconciliation pass (GEN-D27's harness, once available) should confirm `half_negative`/`quarter_negative` against real vanilla output before they are trusted for anything beyond this blueprint's own structural tests.
 2. **`FindTopSurface`'s field shape** was already flagged unresolved by M5-B02 itself (new in 26.2, zero-field marker in the compiled schema, no confirmed child-function wiring). This blueprint's interpreter deliberately panics on encountering it rather than guessing at a wrong implementation — any graph containing a live `FindTopSurface` node cannot be evaluated by this blueprint's interpreter until a future revision resolves the field shape (via GEN-D7's actual extraction) and this blueprint (or a follow-up) adds the real implementation.
-3. **`EndIslands::compute`'s exact algorithm** (§C) is a reconstruction from compressed research-corpus prose, not literal pseudocode — the `>>3` section-coordinate rounding mode, the `height` accumulator's initial value, and the precise `(dx,dz)`-vs-`(total_x,total_z)` roles in the falloff distance formula are this blueprint's own best-effort, internally-consistent interpretation of that prose, not independently confirmed. Its acceptance tests (Acceptance tests, `end_islands_smoke.rs`) are deliberately property-based (determinism, boundedness) rather than golden-value-based, precisely because of this uncertainty. `min_value()`/`max_value()` use the conservative `±∞` fallback (§H) specifically because of this uncertainty, not merely as a blanket default.
+3. **`EndIslands::compute`'s exact algorithm** (§C) is confirmed by TEST-D57 against `DensityFunctions.java:517-562`: the block-to-section conversion is Java integer division (truncating toward zero, not floor division or a shift), the `-12..=12` loop offsets are added to the CHUNK coordinates (`section_x/2`, `section_z/2`) rather than the section coordinates, the squared-radius short-circuit (`> 4096`, i.e. more than 64 chunks from the origin) is evaluated before the simplex call, the island-size formula's operands are those same chunk coordinates, the falloff distance is over the sub-section parity offset by `2*(dx,dz)` rather than the raw loop offsets, and the running-maximum accumulator's initial value is a distance-from-origin falloff with a fixed island size of `8.0`, never a bare `-100.0`. `min_value()`/`max_value()` are therefore the exact constants `-0.84375`/`0.5625` (§H), not the conservative `±∞` fallback. Its acceptance tests (Acceptance tests, `end_islands_smoke.rs`) remain property-based (determinism, boundedness) rather than golden-value-based; deriving golden vectors for this now-confirmed algorithm is left to a future revision, tracked via `docs/findings-for-planning.md`.
 4. **`CubicSpline`'s exact static-bound formula** (§E) is described in shape but not given as literal pseudocode precise enough to trust for the Ap2 short-circuit test; §H's conservative `±∞` fallback is used instead, which is always safe (§H's own argument) — this is a permanent, deliberate engineering choice (favoring guaranteed correctness over a performance optimization this blueprint cannot fully verify), not merely a placeholder awaiting reconciliation like items 1–3.
 5. **`Cache2D`'s memoization key resolution and `CacheOnce`'s exact epoch-advance cadence** are contracts this blueprint specifies precisely (§K) but whose real vanilla call-site TIMING (exactly when the real `doFill` loop advances `interpolationCounter`, or whether any real 26.2 graph's `cache_2d` node is ever queried at genuinely different Y for the same XZ in a way that would expose the staleness) is not independently confirmed by this blueprint's own research pass — the CONTRACT (§K) is binding; the future GenStage fill-driver blueprint that actually walks a chunk must confirm its own call cadence matches vanilla's `doFill` loop structure (05-worldgen.md §3.6) when it is written.
+
+### Claims to verify (TEST-D57)
+
+- ImprovedNoise construction draws xo, yo, zo in that order, each computed as random.next_double() * 256.0.
+- ImprovedNoise's permutation table p[256] is initialized p[i]=i then shuffled by a forward Fisher-Yates pass for i=0..255 ascending, where j = random.next_int_bounded(256-i) and p[i] is swapped with p[i+j] (the "shuffle the remaining suffix into position i" variant, not swapping p[i] with p[j]).
+- ImprovedNoise construction consumes exactly 3 next_double() calls followed by 256 next_int_bounded() calls, an exact total of 262 raw single-step draws when backed by a Legacy random source.
+- ImprovedNoise::sample(x,y,z) is equivalent to sample_y_clamped(x,y,z, y_scale=0, y_fudge=0), which adds the noise's own xo/yo/zo offsets to x/y/z before flooring via floor-then-cast (Mth.floor) semantics.
+- When y_scale != 0.0 in sample_y_clamped, fudge_limit = y_fudge if 0.0 <= y_fudge < yr else yr, and yr_fudge = (fudge_limit / y_scale + 1.0e-7).floor() * y_scale; when y_scale == 0.0, yr_fudge is 0.0.
+- In sample_y_clamped's epsilon term, the 1.0e-7 literal is an f32 literal widened to f64, not a fresh f64 literal.
+- In ImprovedNoise's corner blend, yr - yr_fudge feeds both the gradient dot products and the corner-position offsets, while the un-fudged yr is used only for the Y smoothstep fade weight (y_alpha).
+- ImprovedNoise's permutation lookup is p_lookup(x) = (p[(x & 0xFF) as usize] as i32) & 0xFF.
+- ImprovedNoise's 8-corner trilinear blend hashes each corner via chained p_lookup calls over the integer x/y/z coordinates as specified, then masks each corner's hash to 4 bits (hash & 15) to index the 16-entry GRADIENT table for that corner's dot product.
+- ImprovedNoise's fade weights use the quintic smoothstep on xr, y_alpha_source, and zr, and the final 8-corner blend uses lerp3 with X innermost, then Y, then Z outer.
+- The GRADIENT table shared by ImprovedNoise and SimplexNoise has these exact 16 entries in order: (1,1,0),(-1,1,0),(1,-1,0),(-1,-1,0),(1,0,1),(-1,0,1),(1,0,-1),(-1,0,-1),(0,1,1),(0,-1,1),(0,1,-1),(0,-1,-1),(1,1,0),(0,-1,1),(-1,1,0),(0,-1,-1) - indices 12-15 duplicate indices 0, 9, 1, and 11 respectively, so only 12 gradients are geometrically distinct.
+- ImprovedNoise::sample_with_derivative always uses the plain fractional position (no y-fudge smear) and accumulates its result into the caller's derivative_out array rather than overwriting it, while returning the same value plain sample() would give.
+- In sample_with_derivative, dX = d1x + smoothstep_derivative(xr) * d2x, and the analogous dY term uses the un-fudged yr (not y_alpha_source) while dZ uses zr.
+- PerlinNoise's modern/positional construction path forks the positional factory exactly once (consuming 2 raw steps from the underlying random source) before constructing any octaves.
+- In PerlinNoise's modern construction, for each amplitude index i with amplitudes[i] != 0.0 the octave (first_octave + i) is constructed via positional.from_hash_of(format!("octave_{octave}")); when amplitudes[i] == 0.0, no draw at all is made for that octave.
+- PerlinNoise's legacy/sequential construction path is used by BlendedNoise's three internal fields and by NormalNoise::create_legacy_nether's two PerlinNoise fields (wired by NoiseGraphState for the nether-only temperature/vegetation noises), consumes the random source directly with no fork, and is strictly sequential.
+- In PerlinNoise's legacy construction, the zero-octave (index = -first_octave) is always constructed first and unconditionally, even when it will be discarded because its own amplitude is zero or its index is out of range.
+- In PerlinNoise's legacy construction, remaining octaves are constructed in descending order from (zero_octave_index - 1) down to 0 toward first_octave; an octave whose amplitude is zero or index out of range is skipped by calling random.consume_count(262) rather than by constructing and discarding an ImprovedNoise.
+- PerlinNoise's skip-octave consumption constant is exactly 262 raw draws, matching ImprovedNoise's own total construction cost.
+- PerlinNoise's lowest_freq_input_factor is 2.0 raised to the power first_octave.
+- PerlinNoise's lowest_freq_value_factor is 2.0^(amplitudes.len()-1) divided by (2.0^amplitudes.len() - 1.0).
+- PerlinNoise's edge_value(v) sums, over every present octave, amplitudes[i] * v * value_factor_i where value_factor starts at lowest_freq_value_factor and halves per octave; max_value() = edge_value(2.0) and max_broken_value(y_scale) = edge_value(y_scale + 2.0).
+- PerlinNoise::get_value scales x/y/z per octave by a factor starting at lowest_freq_input_factor and doubling each octave, applies PerlinNoise's own wrap() function to each already-scaled coordinate before sampling that octave, and accumulates amplitudes[i] * sample * value_factor with value_factor starting at lowest_freq_value_factor and halving each octave.
+- PerlinNoise's wrap(v) function is v - (v / 3.3554432e7 + 0.5).floor() * 3.3554432e7, where 3.3554432e7 equals 2^25, re-centering into [-2^24, 2^24); wrap is applied to the already-scaled coordinate at every octave, never to the raw input.
+- PerlinNoise::get_octave(i) returns noise_levels[len-1-i], reversed indexing relative to construction order, and this reversed accessor is what BlendedNoise consumes.
+- NormalNoise holds two independent PerlinNoise fields (first, second) built from the identical (first_octave, amplitudes) pair, constructed strictly sequentially from the same source so that first's entire construction (including any internal fork) completes before second's construction begins.
+- NormalNoise::INPUT_FACTOR is exactly 1.0181268882175227.
+- NormalNoise::get_value(x,y,z) equals (first.get_value(x,y,z) + second.get_value(x*INPUT_FACTOR, y*INPUT_FACTOR, z*INPUT_FACTOR)) * value_factor.
+- NormalNoise's value_factor is (1.0/6.0) divided by expected_deviation(max_octave - min_octave), where expected_deviation(span) = 0.1 * (1.0 + 1.0/(span+1.0)) and min_octave/max_octave are the lowest/highest amplitude indices with a nonzero amplitude - the divisor is 1.0/6.0, not the dead TARGET_DEVIATION=1/3 constant.
+- NormalNoise::create_modern calls PerlinNoise::create_modern twice sequentially on the same random source; create_legacy_nether calls PerlinNoise::create_legacy twice sequentially.
+- SimplexNoise's construction is structurally identical to ImprovedNoise::new: the same 3x next_double() plus 256-step Fisher-Yates shuffle, the same 262-step draw cost, and it shares ImprovedNoise's own GRADIENT table.
+- SimplexNoise::get_value_2d uses F2 = 0.5 * (sqrt(3.0) - 1.0) and G2 = (3.0 - sqrt(3.0)) / 6.0.
+- SimplexNoise's 2D skew/unskew and corner-selection steps are: s=(xin+yin)*F2; i=floor(xin+s), j=floor(yin+s); t=(i+j)*G2; X0=i-t, Y0=j-t; x0=xin-X0, y0=yin-Y0; the middle corner offset (i1,j1) is (1,0) if x0>y0 else (0,1); x1=x0-i1+G2, y1=y0-j1+G2; x2=x0-1.0+2.0*G2, y2=y0-1.0+2.0*G2.
+- SimplexNoise's per-corner gradient index is gi(a,b) = (p_lookup((a&0xFF) + p_lookup(b&0xFF))) % 12.
+- SimplexNoise's per-corner contribution uses a base radius of 0.5 minus the squared distance (t = base - x*x - y*y - z*z), returns 0.0 when t<0.0, otherwise squares t twice (a quartic t*t*t*t falloff, not ImprovedNoise's quintic fade) and multiplies by the gradient dot product.
+- SimplexNoise::get_value_2d's final result is 70.0 times the sum of the three corner contributions.
+- SimplexNoise's 3D variant (get_value_3d) uses F3=1.0/3.0, G3=1.0/6.0, a base radius of 0.6, and an output scale of 32.0.
+- BlendedNoise always uses legacy-sequential PerlinNoise construction for its three internal fields, regardless of which RNG backend seeds it.
+- BlendedNoise's three internal fields are constructed in this exact order, draining one shared source: min_limit (16 octaves, octave range [-15,0], all amplitudes 1.0), then max_limit (16 octaves, same range and amplitudes), then main (8 octaves, range [-7,0], all amplitudes 1.0).
+- BlendedNoise::create computes xz_multiplier = 684.412 * xz_scale and y_multiplier = 684.412 * y_scale.
+- The overworld's old_blended_noise parameters are xz_scale=0.25, y_scale=0.125, xz_factor=80.0, y_factor=160.0, smear_scale_multiplier=8.0.
+- BlendedNoise::compute derives limitX/limitY/limitZ by multiplying the block position by xz_multiplier/y_multiplier/xz_multiplier respectively, mainX/mainY/mainZ by dividing those by xz_factor/y_factor/xz_factor, limit_smear = y_multiplier * smear_scale_multiplier, and main_smear = limit_smear / y_factor.
+- BlendedNoise's main-noise accumulation loop runs for 8 octaves accessed via main.get_octave(i) (reversed indexing), each octave sampled via sample_y_clamped with y_scale = main_smear*pow and y_fudge = mainY*pow and its result divided by pow, with pow starting at 1.0 and halving each iteration.
+- BlendedNoise's factor is (main_value/10.0 + 1.0) / 2.0, with is_max = factor>=1.0 and is_min = factor<=0.0.
+- BlendedNoise's min_limit/max_limit accumulation loop runs for 16 octaves; min_limit's contribution is accumulated only when !is_max and max_limit's only when !is_min, each octave sampled with y_scale = limit_smear*pow and y_fudge = limitY*pow.
+- BlendedNoise::compute's final result is clamped_lerp(factor, blend_min/512.0, blend_max/512.0) / 128.0.
+- BlendedNoise::max_value() equals min_limit.max_broken_value(y_multiplier), and BlendedNoise::min_value() equals the negation of that same max_value() - this exact min = -max relationship is stated in the reference specifically for BlendedNoise, unlike PerlinNoise or NormalNoise.
+- EndIslands is seeded once per world as a fresh RcLegacyRandom::new(world_seed), always, regardless of the legacy_random_source setting.
+- EndIslands construction consumes exactly 17292 raw draws (random.consume_count(17292)) before constructing its own SimplexNoise instance.
+- EndIslands::compute(block_x, block_z) converts block coordinates to section coordinates via Java integer division (truncation toward zero) by 8: section_x = block_x / 8, section_z = block_z / 8 - not floor division or an arithmetic shift, so section_x for block_x = -1 is 0, not -1.
+- EndIslands::compute scans a 25x25 window of offsets, with dx and dz each ranging -12..=12, added to the CHUNK coordinates chunk_x = section_x/2 and chunk_z = section_z/2 (not the section coordinates), evaluating simplex.get_value_2d(chunk_x+dx, chunk_z+dz) only where the squared-radius short-circuit below does not skip it.
+- EndIslands::compute only contributes an island at an offset where total_chunk_x^2 + total_chunk_z^2 is greater than 4096 (more than 64 chunks from the origin) AND the sampled simplex value is less than -0.9; the squared-radius test is evaluated first and short-circuits the simplex call entirely when it fails.
+- At a contributing offset, island_size = ((absolute value of total_chunk_x as f32)*3439.0 + (absolute value of total_chunk_z as f32)*147.0) modulo 13.0, plus 9.0, where total_chunk_x/total_chunk_z are chunk_x+dx/chunk_z+dz.
+- At a contributing offset, falloff = 100.0 minus sqrt(xd^2+zd^2)*island_size, clamped to the range [-100.0, 80.0], where xd/zd are the sub-section parity (section_x%2, section_z%2) minus 2*(dx,dz) - not the raw loop offsets dx/dz.
+- EndIslands::compute keeps a running maximum of each contributing offset's falloff value, starting from an initial height equal to a distance-from-origin falloff with a fixed island size of 8.0 (clamp(100.0 - sqrt(section_x^2+section_z^2)*8.0, -100.0, 80.0)), never a bare -100.0, and returns (height - 8.0) / 128.0 as the final result.
+- Mth's floor-to-int conversion must be computed as v.floor() cast to i32 (floor-then-cast), never a bare truncating cast - e.g. floor(-0.5) equals -1, not 0.
+- Mth's lerp(t,a,b) is a + t*(b-a), not the algebraically-equivalent a*(1-t)+b*t, since the two round differently.
+- lerp2(tx,ty,x00,x10,x01,x11) interpolates X first, then Y: lerp(ty, lerp(tx,x00,x10), lerp(tx,x01,x11)).
+- lerp3(tx,ty,tz,...) interpolates X, then Y, then Z: lerp(tz, lerp2(tx,ty,x000,x100,x010,x110), lerp2(tx,ty,x001,x101,x011,x111)).
+- progressive_trilinear_yxz interpolates Y first (across four Y-lerped XZ-corner-pair values), then X, then Z - a different axis-nesting order from lerp3, and the two are not bit-identical to each other in general.
+- clamped_lerp(t,min,max) branches: returns min when t<0.0, max when t>1.0, otherwise lerp(t,min,max) - it does not clamp then multiply.
+- inverse_lerp(v,min,max) equals (v-min)/(max-min), unclamped.
+- clamped_map(v,from_min,from_max,to_min,to_max) equals clamped_lerp(inverse_lerp(v,from_min,from_max), to_min, to_max).
+- smoothstep(x) equals x*x*x*(x*(x*6.0-15.0)+10.0) - the quintic fade, not the classic cubic 3x^2-2x^3.
+- smoothstep_derivative(x) equals 30.0*x*x*(x-1.0)*(x-1.0), the analytic derivative of smoothstep, used only by sample_with_derivative.
+- Java floating-point arithmetic never fuses a multiply and an add into one rounding step (no FMA) - every a*b+c-shaped expression is two separately-rounded operations, and this must be preserved bit-for-bit in the reimplementation.
+- CubicSpline evaluation is performed entirely in f32, not f64.
+- A Multipoint spline narrows its driving coordinate from f64 to f32 exactly at the point it is sampled (input = sample_child(coordinate) as f32), never earlier and never deferred.
+- Multipoint spline evaluation locates the bracketing interval via a lower-bound binary search on point locations minus one; if that index is less than 0 it linearly extends from the first point's own value, and if it equals the last point's index it linearly extends from that point's own value.
+- For an interior interval, the spline computes t = (input-x1)/(x2-x1) in f32, recursively samples the two bracketing points' own values (y1,y2) and reads their derivatives (d1,d2), then a = d1*(x2-x1)-(y2-y1) and b = -d2*(x2-x1)+(y2-y1), and returns lerp(t,y1,y2) + t*(1.0-t)*lerp(t,a,b), all computed in f32.
+- Spline's linear-extension step returns the endpoint's own value unchanged when that endpoint's derivative is exactly 0.0, otherwise value + derivative*(input - that endpoint's location).
+- Only the outer density-function Spline node widens the final f32 spline result back to f64; every intermediate value inside spline evaluation itself stays f32.
+- An Ap2 Add node always evaluates both of its arguments, with no short-circuit skip ever.
+- An Ap2 Mul node skips evaluating its second argument entirely, returning 0.0, when the first argument's own value is exactly 0.0.
+- An Ap2 Min node skips evaluating its second argument, returning the first value unchanged, when that first value is already less than the second argument's statically known min_value bound.
+- An Ap2 Max node skips evaluating its second argument, returning the first value unchanged, when that first value is already greater than the second argument's statically known max_value bound.
+- The Constant node's compute returns its own literal value, and both its min_value and max_value bounds equal that same value.
+- The Add node's bounds are the exact interval sum (min1+min2, max1+max2) of its two arguments' own bounds.
+- The Mul node's bounds are computed as the min and max of the four pairwise products of {min1,max1} x {min2,max2} - an exact interval product.
+- The Min node's bounds are (min(min1,min2), min(max1,max2)); the Max node's bounds are (max(min1,min2), max(max1,max2)).
+- The Abs node computes v.abs(); its lower bound is the child's own min_value clamped up to zero, max(0.0, min1) - not a zero-straddle test - and its upper bound is max(abs(min1),abs(max1)).
+- The Square node computes v*v; it shares Abs's bound branch, so its lower bound is the UNSQUARED child minimum clamped to zero, max(0.0, min1), and its upper bound is max(min1^2, max1^2).
+- The Cube node computes v*v*v and is monotonic increasing, so its bounds are (min1 cubed, max1 cubed).
+- The HalfNegative node computes v*0.5 when v is less than 0.0 and v unchanged otherwise, and is monotonic non-decreasing so its bounds are this same formula applied to (min1,max1).
+- The QuarterNegative node computes v*0.25 when v is less than 0.0 and v unchanged otherwise, with the same monotonic-bound pattern as HalfNegative.
+- The Invert node computes 1.0/v with no zero guard at all - invert(0.0) is +Infinity and invert(-0.0) is -Infinity, never 0.0 - though its bounds ARE special-cased: (NEG_INFINITY, INFINITY) when the child straddles zero, otherwise the swapped pair (1.0/max1, 1.0/min1).
+- The Squeeze node clamps its child's value to [-1.0,1.0] then computes c*0.5 minus c*c*c/24.0; its bounds are the generic branch's (squeeze(min1), squeeze(max1)) and DO depend on the child's own range - the constant (-11.0/24.0, 11.0/24.0) arises only when the child's range is itself unbounded.
+- The Clamp node computes input_v.clamp(min,max); its bounds are exactly (min,max), independent of the input's own bound.
+- The Noise node samples the named noise at (block_x*xz_scale, block_y*y_scale, block_z*xz_scale).
+- The ShiftedNoise node samples the named noise at (block_x*xz_scale plus shift_x's sampled value, block_y*y_scale plus shift_y's sampled value, block_z*xz_scale plus shift_z's sampled value).
+- The ShiftA node samples the named noise at (block_x*0.25, 0.0, block_z*0.25) and multiplies the result by 4.0.
+- The ShiftB node samples the named noise at (block_z*0.25, block_x*0.25, 0.0) with its axes permuted so the first sampled coordinate is Z, and multiplies the result by 4.0.
+- The Shift node samples the named noise at (block_x*0.25, block_y*0.25, block_z*0.25) and multiplies the result by 4.0.
+- The OldBlendedNoise node delegates directly to that graph's own BlendedNoise::compute(block_x,block_y,block_z).
+- The RangeChoice node evaluates its input once, then evaluates exactly one of when_in_range (when min_inclusive <= v < max_exclusive) or when_out_of_range - never both.
+- The IntervalSelect node does a linear scan of its thresholds and evaluates the branch at the first index whose threshold exceeds the input value, or the last branch if the input exceeds every threshold.
+- The Spline node evaluates via the CubicSpline evaluator and widens the final f32 result to f64 on return.
+- The YClampedGradient node computes clamped_map(block_y as f64, from_y as f64, to_y as f64, from_value, to_value), and its bounds are (min(from_value,to_value), max(from_value,to_value)).
+- Vanilla's own default Marker.compute body - which is what runs for a caching/marker node whenever no NoiseChunk has wrapped it - is plain pass-through to that node's own child, for every one of the five caching/marker node kinds (Interpolated, FlatCache, Cache2d, CacheOnce, CacheAllInCell).
+- The BlendDensity node's correct, permanent behavior for a freshly generated world is a plain pass-through to its own argument, since no old/new-chunk version-blending scenario ever exists for a freshly generated world.
+- The BlendAlpha node's value is the constant 1.0 for fresh world generation.
+- The BlendOffset node's value is the constant 0.0 for fresh world generation.
+- The EndIslands node delegates to that graph's own EndIslands::compute(block_x, block_z) instance.
+- Every named noise, blended-noise, and end-islands instance a graph references must be constructed exactly once, up front, per (world_seed, dimension) pair, never lazily re-constructed per sample, since re-constructing it would silently re-consume RNG state and desync.
+- The root positional factory is built by constructing AnyRandom::Legacy(RcLegacyRandom::new(world_seed)) when legacy_random_source is set, or AnyRandom::Xoroshiro(RcXoroshiroRandom::new(world_seed)) otherwise, then calling fork_positional() exactly once.
+- Every named entry in the noise-parameter table, with two exceptions, gets its own NormalNoise built via root.from_hash_of(name's full namespaced identifier, e.g. "minecraft:temperature") feeding NormalNoise::create_modern with that entry's own first_octave and amplitudes; the two exceptions, the nether-only temperature/vegetation noises, instead get NormalNoise::create_legacy_nether seeded by a fresh, directly-offset legacy source with no positional factory involved at all.
+- For each OldBlendedNoise node instance, if legacy_random_source is set its BlendedNoise is seeded by a fresh RcLegacyRandom::new(world_seed) directly with no positional factory at all; otherwise it is seeded via root.from_hash_of("terrain").
+- Every EndIslands node instance is always seeded via EndIslands::new(world_seed), ignoring the legacy_random_source setting entirely - unlike OldBlendedNoise's seeding, which does depend on that setting.
+- Vanilla never evaluates the full density-function graph at every block; expensive functions are evaluated only at the corners of a coarse 3-D grid of cells and interpolated between them.
+- A cell's horizontal width in blocks is cell_width = size_horizontal << 2, and its vertical height in blocks is cell_height = size_vertical << 2 (a QuartPos-to-block conversion, i.e. multiply by 4).
+- A chunk is always 16 blocks wide and 16 blocks deep, so the number of cells spanning one chunk horizontally is cell_count_xz = 16 / cell_width.
+- The Interpolator maintains two "slices," each a (cell_count_xz+1) by (cell_count_y+1) grid of raw corner values, one slice per adjacent X-column; initialize_for_first_cell_x fills slice 0 by evaluating the wrapped child at every corner across the whole slice with no caching at that level, and advance_cell_x (called cell_count_xz times total per chunk) only fills a fresh slice 1 for the NEXT X-cell and updates cell_start_block_x - the slice-1-into-slice-0 rotation is a separate swap_slices() call the fill driver makes once per X-cell iteration, after advance_cell_x, never performed by advance_cell_x itself.
+- The per-block progressive interpolation chain is called in exactly this axis order as the in-cell block offsets advance: update_for_y first, then update_for_x, then update_for_z, using progressive_trilinear_yxz's own per-axis steps.
+- Two interpolation entry points exist that are deliberately not bit-identical to each other: the progressive per-block chain (Y then X then Z nesting) used for ordinary sequential per-block fill, and the direct fill_all_directly path (a single lerp3 call, X then Y then Z nesting) used when filling every point of a cell at once.
+- For the concrete corner values -83.38012745465886, -489.83083054293166, 325.2065092537432, -201.36014480040723, -131.5883105115243, -306.33865095492575, 66.00816872886128, -338.31217607063184 (as n000,n100,n010,n110,n001,n101,n011,n111 respectively) and fractions (tx,ty,tz) = (0.12426688428353017, 0.4329362680099159, 0.5620784880758429), lerp3 gives -29.024819080624454 while progressive_trilinear_yxz gives -29.024819080624432 - the two differ in the last bit.
+- Over half of randomly-sampled corner/fraction combinations produce a last-bit divergence between lerp3 and progressive_trilinear_yxz.
+- flat_cache eagerly computes, on first touch, a (quart_count+1) by (quart_count+1) 2-D grid where quart_count is a fixed constant of 4 (distinct from cell_width, which can be 4 or 8 depending on preset), indexed by (quartX,quartZ) offset from the chunk origin.
+- Real vanilla 26.2 flat_cache-wrapped subtrees (shift fields, offset/factor/jaggedness splines) never depend on Y, so subsequent accesses at any Y within the same (quartX,quartZ) cell return the same first-computed value.
+- cache_2d is a lazy single-slot memo keyed by the exact (blockX,blockZ) pair at block resolution, narrower than flat_cache's quart granularity; a different (blockX,blockZ) invalidates and recomputes, while the same (blockX,blockZ) at a different blockY returns the stale cached value because Y is ignored entirely by this cache's own key.
+- cache_once is memoized until NoiseChunk::advance_interpolation_counter() is called (vanilla's own interpolationCounter/arrayInterpolationCounter), valid for exactly one "current sample" as bounded by the caller's own fill cadence.
+- cache_all_in_cell holds no key at all (a bare array of length cell_width by cell_width by cell_height, no stored cell coordinate); select_cell_yz refills EVERY registered cell cache unconditionally on every call, whether or not the cell actually changed; reads within the same cell are not stale relative to each other since every in-cell position gets its own freshly-filled array entry.
+- cache_all_in_cell's fill sets filling_cell=true for its own duration while evaluating the wrapped child at every in-cell block position, so any nested Interpolated node inside that subtree takes the direct fill_all_directly/lerp3 path rather than the progressive per-block chain, then restores filling_cell=false afterward.
+- fill_all_directly never touches filling_cell itself - it only walks yInCell descending then xInCell/zInCell ascending, evaluating its target node at every block position inside the currently-selected cell and writing the results in order; the flag is owned solely by select_cell_yz, which sets it true around ALL registered cell-cache fills (so a nested Interpolated node takes the direct lerp3 path only because select_cell_yz put it there) and restores it false afterward; a second, distinct fill_all_directly-shaped routine runs during slice fills with filling_cell always false.
+- Java's Math.sin, cos, pow, exp, log, asin, atan, and atan2 are cross-platform-nondeterministic; none of the 34 density-function node kinds' own compute paths call any of them, but PerlinNoise's own construction calls Math.pow three times (to derive lowest_freq_input_factor and lowest_freq_value_factor), which this blueprint substitutes with 2.0_f64.powi(...) as an explicit construction-time equivalence, separate from the compute-path claim.
+- Java's Math.sqrt (and f64::sqrt) is specified to be correctly-rounded and is therefore bit-identical across platforms.
+- This blueprint's own noise-primitive scope makes exactly three sqrt calls: SimplexNoise's F2/G2 constant computation, plus EndIslands's two per-evaluation sqrt calls (the running-maximum accumulator's initial value and the per-offset falloff distance).
+- NoiseChunk's vertical cell count is cell_count_y = height / cell_height, analogous to cell_count_xz's horizontal formula, where height is the dimension's own full vertical block range.
+- binary_search_lower_bound performs a standard lower-bound binary search that halves the search range, keeping the lower bound advancing only while the predicate is false, and returns the first index where the predicate holds, or len if it never holds.
+- In ImprovedNoise::sample_with_derivative, d1x/d1y/d1z are each computed via lerp3 (using the same xa,ya,za fade weights as the value blend) over the eight corners' gradient x/y/z components respectively, and d2x/d2y/d2z are each computed via lerp2 over four corner-value differences along the other two axes: d2x = lerp2(ya,za, d100-d000, d110-d010, d101-d001, d111-d011), d2y = lerp2(za,xa, d010-d000, d011-d001, d110-d100, d111-d101), d2z = lerp2(xa,ya, d001-d000, d101-d100, d011-d010, d111-d110).
+- The Noise and ShiftedNoise nodes' max_value bound equals exactly the referenced named noise's own max_value(), regardless of the xz_scale/y_scale/shift arguments.
+- The ShiftA, ShiftB, and Shift nodes' bounds are exactly (-4.0*max, 4.0*max), where max is the referenced noise's own max_value().
+- The OldBlendedNoise node's bounds equal exactly the graph's own BlendedNoise instance's min_value() and max_value() - the one Ap2-relevant node whose bound is fully exact rather than a conservative fallback.
+- The RangeChoice node's bounds are the union of its when_in_range and when_out_of_range branches' own bounds: the minimum of both branches' minimums and the maximum of both branches' maximums.
+- The IntervalSelect node's bounds are the union of all of its branches' own bounds.
+- Density-function node bounds (min_value/max_value) are static, position-independent values computed once per graph structure via a memoized post-order recursion, never re-evaluated per sample call.
 
 ## Deliverables
 
@@ -726,8 +873,9 @@ impl BlendedNoise {
 ```rust
 use super::simplex_noise::SimplexNoise;
 
-/// GEN-D11's natively-hardcoded algorithm. Context §C, §M item 3 — moderate-confidence
-/// reconstruction, deliberately property-tested rather than golden-value-tested.
+/// GEN-D11's natively-hardcoded algorithm. Context §C, §M item 3 — confirmed via TEST-D57
+/// against `DensityFunctions.java:517-562`; still property-tested rather than
+/// golden-value-tested (deriving golden vectors is a followup, §M item 3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EndIslands { /* private: simplex: SimplexNoise */ }
 impl EndIslands {
@@ -871,6 +1019,9 @@ impl<'a> NoiseChunk<'a> {
     ) -> Self;
     pub fn initialize_for_first_cell_x(&mut self);
     pub fn advance_cell_x(&mut self);
+    /// Rotates slice 1 into slice 0's role — a separate step from `advance_cell_x`,
+    /// called once per X-cell iteration by the fill driver, after `advance_cell_x` (Context §K).
+    pub fn swap_slices(&mut self);
     pub fn select_cell_yz(&mut self, cell_y: i32, cell_z: i32);
     pub fn update_for_y(&mut self, ty: f64);
     pub fn update_for_x(&mut self, tx: f64);
@@ -879,7 +1030,9 @@ impl<'a> NoiseChunk<'a> {
     pub fn get_interpolated_value(&self) -> f64;
     pub fn advance_interpolation_counter(&mut self);
     pub fn sample(&mut self, id: DensityFunctionId, ctx: EvalContext) -> f64;
-    pub fn fill_all_directly(&mut self, id: DensityFunctionId, cell_x: i32, cell_y: i32, cell_z: i32) -> Vec<f64>;
+    /// Evaluates `id` at every position of the currently-selected cell (via a prior
+    /// `select_cell_yz` call) — does NOT itself read or write `filling_cell` (Context §K).
+    pub fn fill_all_directly(&mut self, id: DensityFunctionId) -> Vec<f64>;
 }
 ```
 
@@ -966,7 +1119,7 @@ Uses a shared test helper: a **poison node** — `DensityFunctionNode::Clamp { i
 6. `max_short_circuits_when_v1_beats_bound` — `Max{argument1: Constant(100.0), argument2: poison(50.0)}`; `sample(..) == 100.0`, no panic.
 7. `range_choice_evaluates_only_the_taken_branch` — `RangeChoice{input: Constant(5.0), min_inclusive: 0.0, max_exclusive: 10.0, when_in_range: Constant(1.0), when_out_of_range: poison(99.0)}`; `sample(..) == 1.0`, no panic. Mirror with `input: Constant(50.0)` selecting `when_out_of_range` and `when_in_range` as the poison this time.
 8. `interval_select_linear_scan_picks_first_matching_threshold` — `IntervalSelect{input: Constant(-5.0), thresholds: [0.0, 10.0], branches: [Constant(-1.0), Constant(0.5), Constant(2.0)]}` → `-1.0`; `input: Constant(5.0)` → `0.5`; `input: Constant(50.0)` (exceeds every threshold) → `2.0` (the last branch).
-9. `squeeze_exact_formula_and_bound` — `Squeeze{Constant(2.0)}` (clamped to `1.0` internally): `sample(..) == (1.0_f64/2.0) - (1.0_f64*1.0*1.0/24.0)` (`≈0.4583333333333333`, computed via the exact formula, not a separately-rounded literal); `NodeBoundsTable::get` for this node equals exactly `(-11.0/24.0, 11.0/24.0)`.
+9. `squeeze_exact_formula_and_bound` — `Squeeze{Constant(2.0)}` (clamped to `1.0` internally): `sample(..) == (1.0_f64/2.0) - (1.0_f64*1.0*1.0/24.0)` (`≈0.4583333333333333`, computed via the exact formula, not a separately-rounded literal); `NodeBoundsTable::get` for this node equals exactly `(11.0/24.0, 11.0/24.0)` — the generic branch's `(squeeze(min1), squeeze(max1))` applied to `Constant(2.0)`'s own degenerate `(2.0, 2.0)` bound, since `squeeze` is evaluated at the child's own (unclamped) bound value, not at an assumed-unbounded range.
 10. `yclamped_gradient_ramp` — `YClampedGradient{from_y:-64, to_y:320, from_value:-1.0, to_value:1.0}`; at `block_y=-64` → `-1.0`; at `block_y=320` → `1.0`; at `block_y=-64+(320-(-64))/2=128` → the exact `clamped_map` value at the midpoint (`0.0`, since the ramp is linear and symmetric here).
 11. `add_and_mul_interval_bounds` — `Add{Constant(2.0), Constant(3.0)}`'s `NodeBoundsTable` bound is `(5.0,5.0)`; `Mul{Constant(-2.0), Constant(3.0)}`'s bound is `(-6.0,-6.0)` (both degenerate since every input here is itself a `Constant`, exercising the interval-arithmetic formula's basic correctness before more elaborate graphs need it).
 
@@ -998,13 +1151,13 @@ Uses `YClampedGradient{from_y: 0, to_y: 100, from_value: 0.0, to_value: 100.0}` 
 6. **`src/noise/perlin_noise.rs`.** `wrap`, `PerlinNoise::create_modern`/`create_legacy`/`get_value`/`octave`/`max_value`/`min_value`/`max_broken_value` per Context §C. Observable: `perlin_noise_octaves.rs` passes.
 7. **`src/noise/normal_noise.rs`.** `NormalNoise` per Context §C. Observable: `normal_noise_vectors.rs` passes.
 8. **`src/noise/blended_noise.rs`.** `BlendedNoise` per Context §C. Observable: `blended_noise_vectors.rs` passes.
-9. **`src/noise/end_islands.rs`.** `EndIslands` per Context §C's moderate-confidence reconstruction. Observable: `end_islands_smoke.rs` passes.
+9. **`src/noise/end_islands.rs`.** `EndIslands` per Context §C's TEST-D57-confirmed algorithm. Observable: `end_islands_smoke.rs` passes.
 10. **`src/noise/mod.rs`.** Module declarations + re-exports per Deliverables.
 11. **`src/density/context.rs`.** `EvalContext`.
 12. **`src/density/noise_state.rs`.** `NoiseGraphState::build` per Context §I's 4 steps, `noise`/`blended`/`end_islands` accessors.
 13. **`src/density/bounds.rs`.** `NodeBoundsTable::build` (memoized post-order recursion over `graph.nodes`) implementing every row of Context §G's bound column exactly, including the `NEG_INFINITY`/`INFINITY` conservative fallbacks per Context §H. Observable: `density_node_goldens.rs` test 9 and 11 pass.
 14. **`src/density/interpreter.rs`.** `evaluate_node` (all 34 arms per Context §G — the 5 marker arms as plain pass-through), `DensityInterpreter`. Observable: `density_node_goldens.rs` passes in full.
-15. **`src/density/noise_chunk.rs`.** `NoiseChunk` per Context §K — `Interpolator`/`FlatCacheSlot`/`Cache2dSlot`/`CacheOnceSlot`/`CacheAllInCellSlot` as private internal types; `sample` intercepts the 5 marker kinds for real caching and calls `evaluate_node` for everything else; `fill_all_directly` sets `filling_cell = true` for its duration. Observable: `density_cache_semantics.rs` passes in full.
+15. **`src/density/noise_chunk.rs`.** `NoiseChunk` per Context §K — `Interpolator`/`FlatCacheSlot`/`Cache2dSlot`/`CacheOnceSlot`/`CacheAllInCellSlot` as private internal types; `sample` intercepts the 5 marker kinds for real caching and calls `evaluate_node` for everything else; `select_cell_yz` sets `filling_cell = true` around its unconditional refill of every registered `cache_all_in_cell` slot (never `fill_all_directly` itself, Context §K). Observable: `density_cache_semantics.rs` passes in full.
 16. **`src/density/mod.rs`, `src/lib.rs`.** Module wiring per Deliverables.
 17. **Full crate pass.** `cargo run -p xtask -- fmt-check && -- lint && -- lint-deps && -- test` all exit 0; `cargo test --doc -p rc-worldgen` exits 0; `float_determinism_guards.rs` passes (this should already be true by construction if steps 1–15 followed Context §F's rule, but this is the step where it is mechanically confirmed).
 

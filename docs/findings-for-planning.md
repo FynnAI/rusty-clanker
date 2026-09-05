@@ -2641,3 +2641,28 @@ Entries name the milestone that surfaced them and the code they concern.
   use-dispatch context carries the sound outbox and the dual-cell resend's
   outcome fields, so a split would have shipped a non-functional
   intermediate state. Accepted; TEST-D45/D46 are satisfied per pair.
+
+- **M5 TEST-D57 research pass (2026-09-05) — 1,242 claims verified, 411
+  wrong, all corrected in the blueprints; eight blueprints need re-authoring
+  (PLAN-D11).** Per blueprint (claims/wrong): B01 99/6, B02 165/21, B03
+  135/17, B04 87/30, B05 47/7, B06 77/30, B07 75/29, B08 117/27, B09 22/1,
+  B10 18/5, B11 77/54, B12a 40/29, B12b 33/28, B12c 53/39, B12d 17/11, B12e
+  17/7, B13a 90/42, B13b 39/9, B13c 34/19. The correction agents recorded 70
+  design consequences (kept verbatim outside the repository for the
+  re-authoring role; the load-bearing ones): `parse_seed_string` returns an
+  option (vanilla substitutes a random seed in the caller); worldgen JSON
+  carries block states as `{Name, Properties}` objects, not bracket strings;
+  configured carvers are `{type, config}` wrappers with a required shared
+  `yScale`; `biome_parameters` reports wrap the array in `{"biomes": [...]}`;
+  concentric-ring placement and pool elements carry fields the
+  deny-unknown-fields schema rejected; `Math.sqrt` is correctly rounded (only
+  `ln` carries a 1-ulp latitude, so Gaussian golden vectors keep the 1e-9
+  tolerance); `seedSlimeChunk` mixes 32-bit wrapping int terms; the spawn-
+  stage mob placement stream is seed-deterministic (only UUIDs are not);
+  desert pyramid, jungle temple and swamp hut are procedural pieces without
+  templates; the ocean-monument room grid, large dripstone, geodes, sculk,
+  every nether-geology kind, the root system and the fossil/template control
+  flow were reconstructed wrongly at the algorithm level. Planning: PLAN-D11
+  gates M5 on re-authoring those eight; the planning documents (`04-worldgen-
+  parity.md`) may still restate superseded facts — reconcile during the
+  re-authoring wave.

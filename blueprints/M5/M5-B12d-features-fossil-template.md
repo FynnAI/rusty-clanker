@@ -17,7 +17,7 @@ Done when:
 
 - [ ] `cargo build -p rc-worldgen` succeeds with zero warnings.
 - [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-worldgen`.
-- [ ] `fossil`'s two-draw-then-zero-further-stream-draws proof and `template`'s zero-shared-stream-draws proof reproduce their stated exact draw counts exactly.
+- [ ] `fossil`'s and `template`'s shared-stream draw sequences (rotation/entry pick, structure-pair or weighted-entry index, depth where applicable, palette picks, and per-block `BlockRotProcessor` draws) reproduce vanilla's own draw count and order exactly, including its template-size dependence.
 - [ ] `cargo run -p xtask -- fmt-check`, `-- lint`, `-- lint-deps` all exit 0 (no new dependency edges beyond what M5-B08 already introduces).
 - [ ] `cargo test --doc -p rc-worldgen` exits 0.
 - [ ] CI tier: Tier 1 (`fmt-check`, `lint`, `lint-deps`, `test`) green on both `ubuntu-24.04` and `windows-2025` (TEST-D34/D37), on a clean checkout (TEST-D50).
@@ -117,68 +117,121 @@ pub struct FossilConfiguration {
 fn place_fossil(origin, config, world, resolver, props, random, data, bridge):
     if bridge.is_none(): return                                          // graceful no-op, M.3
     bridge = bridge.unwrap()
-    idx = random.next_int_bounded(config.fossil_structures.len() as i32)  // 1 draw
+    rotation = Rotation::all()[random.next_int_bounded(4) as usize]       // 1st draw
+    idx = random.next_int_bounded(config.fossil_structures.len() as i32)  // 2nd draw
     fossil_tpl = bridge.template_source.load(&config.fossil_structures[idx])
     overlay_tpl = bridge.template_source.load(&config.overlay_structures[idx])
-    if fossil_tpl.is_none() || overlay_tpl.is_none(): return              // operator has no template on disk, zero further draws
-    rotation = Rotation::all()[random.next_int_bounded(4) as usize]       // 1 draw — 2 total from the shared stream
-    empty_corners = count_empty_corners(fossil_tpl.as_ref().unwrap(), origin, rotation, world, props)   // zero RNG, pure reads
-    if empty_corners > config.max_empty_corners_allowed: return
+    // a template missing on disk resolves to an EMPTY template (size zero, no palettes) rather
+    // than aborting placement — every draw and gate below still runs regardless
+    size = rotated_size(fossil_tpl.as_ref(), rotation)                   // swaps size_x/size_z under Cw90/Ccw90
+    low_corner = origin.offset(-size.x / 2, 0, -size.z / 2)
+    lowest_surface_y = origin.y                                          // seed value; an empty template's zero-size footprint contributes nothing to the scan below
+    for (x, z) in horizontal_footprint(low_corner, size):                // zero RNG, pure heightmap reads
+        lowest_surface_y = min(lowest_surface_y, world.height(OCEAN_FLOOR_WG, x, z))
+    depth = random.next_int_bounded(10)                                  // 3rd draw
+    target_y = max(lowest_surface_y - 15 - depth, world.min_y() + 10)
+    target_pos = zero_position_with_transform(low_corner.at_y(target_y), Mirror::None, rotation)
+    // full 3D rotated bounding box at target_pos — not a horizontal footprint at origin's Y
+    empty_corners = count_empty_corners(fossil_tpl.as_ref(), rotation, target_pos, world)
+    if empty_corners > config.max_empty_corners_allowed: return          // after all 3 draws above, before any block write
     let mut sink = DecorationStructureSink { world, block_names: bridge.block_names };
-    let pos = [origin.x, origin.y, origin.z];
     let settings_fossil = StructurePlaceSettings { rotation, mirror: Mirror::None, offset: [0,0,0],
         processors: data.processor_lists[&config.fossil_processors].processors.clone(), known_shape: false, keep_jigsaws: false };
-    place_in_world(fossil_tpl.as_ref().unwrap(), &settings_fossil, pos, &mut sink, bridge.block_names, air_block_state_spec(), pos);
+    place_in_world(fossil_tpl.as_ref().unwrap(), &settings_fossil, target_pos, &mut sink, bridge.block_names, barrier_block_state_spec(), target_pos);
     let settings_overlay = StructurePlaceSettings { rotation, mirror: Mirror::None, offset: [0,0,0],
         processors: data.processor_lists[&config.overlay_processors].processors.clone(), known_shape: false, keep_jigsaws: false };
-    place_in_world(overlay_tpl.as_ref().unwrap(), &settings_overlay, pos, &mut sink, bridge.block_names, air_block_state_spec(), pos);
-    // EVERY processor-level block-substitution draw from here on (`Rule`/`RandomBlockMatch`-
-    // style probability checks inside `run_processor_list`, called internally by
-    // `place_in_world`) is seeded per-block via `Mth::get_seed(world_pos)` (M5-B01's own
-    // function, M5-B08's own binding note: "the exact per-block seed `RuleProcessor` uses —
-    // never a fresh, ad hoc hash") — ZERO further draws from the shared decoration-feature
-    // RNG stream. `fossil`/`template` therefore consume exactly 2 (fossil) / 0 (template,
-    // M.5) shared-stream draws each, regardless of how large or complex the loaded
-    // template/processor list is — a load-bearing RNG-order fact.
+    place_in_world(overlay_tpl.as_ref().unwrap(), &settings_overlay, target_pos, &mut sink, bridge.block_names, barrier_block_state_spec(), target_pos);
+    // `place_in_world` bails at its own empty-palette guard with zero draws of its own when a
+    // template is empty (missing on disk), so a missing template changes the total shared-stream
+    // draw count only by removing that call's own draws — it never aborts the feature, which
+    // still reports success either way.
+    //
+    // For a template that DOES load, `place_in_world` draws further from the SAME shared stream
+    // `random` (never a fresh source): one unconditional palette pick per call (2 total, fossil
+    // + overlay, taken even for a single-palette template), plus one next_f32() per processed
+    // block for `BlockRotProcessor` — guarded by `(!rottable_blocks.is_some() || state.is(...))
+    // && !(random.next_f32() <= integrity)`, whose left disjunct is always true for every
+    // vanilla fossil processor list since none of them carries a `rottable_blocks` key, so the
+    // draw always happens — plus one next_i64() per placed randomizable container (none in
+    // vanilla fossil templates). Total shared-stream cost of a successful fossil: 3 pre-
+    // placement draws (rotation, index, depth) + 2 palette picks + one next_f32() per processed
+    // base-template block + one next_f32() per processed overlay-template block — it scales
+    // with the loaded templates' size, never a fixed constant.
 ```
 
-`count_empty_corners` (internal helper, LOW confidence on whether this is vanilla's own real gate shape at all): computes the fossil template's own rotated horizontal footprint (`[size_x, size_z]` swapped under `Cw90`/`Ccw90`, per `Rotation`'s own semantics) at `origin`'s own Y, and counts how many of its 4 horizontal corners are currently air in `world` — zero RNG, pure `world.get_block` reads.
+`count_empty_corners` (internal helper — zero RNG, pure `world.get_block` reads): builds the fossil template's own full 3D bounding box under `rotation` (mirror none, pivot zero) anchored at `target_pos` — not a horizontal footprint at `origin`'s own Y — and counts how many of its 8 corners (both Y extremes, visited in the fixed order max-x/max-y/max-z, min-x/max-y/max-z, max-x/min-y/max-z, min-x/min-y/max-z, max-x/max-y/min-z, min-x/max-y/min-z, max-x/min-y/min-z, min-x/min-y/min-z) are currently air, lava, or water in `world`. Both vanilla fossil configured features set `max_empty_corners_allowed` to 4 out of these 8.
 
-### M.5 — `template` (moderate confidence — a single fixed-rotation stamp, zero RNG from the shared stream)
+### M.5 — `template` (moderate confidence — a weighted-entry, randomized-rotation stamp; nonzero, content-dependent shared-stream draws)
 
 ```rust
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct TemplateFeatureConfiguration { pub template: crate::data::ResourceLocation, pub processors: crate::data::ProcessorListId }
+pub struct TemplateFeatureConfiguration { pub templates: crate::data::WeightedList<TemplateEntry> }
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct TemplateEntry {
+    #[serde(rename = "id")]
+    pub template: crate::data::ResourceLocation,
+    #[serde(default = "TemplateEntry::default_rotations")]
+    pub rotations: Vec<crate::structure::jigsaw::Rotation>,
+}
 ```
 
 ```text
 fn place_template(origin, config, world, resolver, props, random, data, bridge):
     if bridge.is_none(): return
     bridge = bridge.unwrap()
-    tpl = bridge.template_source.load(&config.template)
-    if tpl.is_none(): return                                             // zero draws
+    entry = config.templates.get_random_or_throw(random)                 // 1st draw: next_int_bounded(total_weight)
+    rotation = entry.rotations[random.next_int_bounded(entry.rotations.len() as i32) as usize]  // 2nd draw
+    tpl = bridge.template_source.load(&entry.template)
+    // both draws above are already spent even when the template is missing on disk — a missing
+    // template does not abort before them, and `place_in_world` below bails at its own
+    // empty-palette guard with zero draws of its own
+    offset_x = rotated_half_size_offset(rotation, Axis::X, tpl.as_ref())  // rotation.rotate(Axis::X.negative()) scaled by size_x / 2
+    offset_z = rotated_half_size_offset(rotation, Axis::Z, tpl.as_ref())  // rotation.rotate(Axis::Z.negative()) scaled by size_z / 2
+    pos = origin.offset(offset_x).offset(offset_z)                       // centres the template on origin; = origin.offset(-size_x/2, 0, -size_z/2) under Rotation::None
     let mut sink = DecorationStructureSink { world, block_names: bridge.block_names };
-    let pos = [origin.x, origin.y, origin.z];
-    let settings = StructurePlaceSettings { rotation: Rotation::None, mirror: Mirror::None, offset: [0,0,0],
-        processors: data.processor_lists[&config.processors].processors.clone(), known_shape: false, keep_jigsaws: false };
-    place_in_world(tpl.as_ref().unwrap(), &settings, pos, &mut sink, bridge.block_names, air_block_state_spec(), pos);
-    // zero shared-stream draws at all — LOW confidence on whether vanilla's real
-    // TemplateFeature ever randomizes rotation; this blueprint's own choice is Rotation::None.
+    let settings = StructurePlaceSettings { rotation, mirror: Mirror::None, offset: [0,0,0],
+        processors: Vec::new(), known_shape: false, keep_jigsaws: false };  // TemplateFeatureConfiguration carries no processor field; template placement attaches none
+    place_in_world(tpl.as_ref().unwrap(), &settings, pos, &mut sink, bridge.block_names, barrier_block_state_spec(), pos);
+    // consumes at least 2 shared-stream draws (the weighted-entry pick, the rotation-list pick)
+    // even when the resolved template is missing; for a template that loads, `place_in_world`
+    // adds one unconditional palette pick (minimum 3 total) plus one next_i64() per placed
+    // randomizable container. Content-dependent, never zero, never bit-identical.
 ```
 
-`air_block_state_spec()` returns `BlockStateSpec { block: ResourceLocation::parse("minecraft:air").unwrap(), properties: BTreeMap::new() }`.
+`barrier_block_state_spec()` returns `BlockStateSpec { block: ResourceLocation::parse("minecraft:barrier").unwrap(), properties: BTreeMap::new() }` — the placeholder `place_in_world` writes (under its own update flags 820) immediately before the real block state, for every template block that carries NBT; shared by both fossil (§M.4) and template placement.
 
 ### Porting-pitfall checklist (this blueprint's own additions)
 
-1. **`fossil`/`template`'s processor-level RNG is per-block `Mth::get_seed`-seeded, NOT drawn from the shared decoration-feature stream** — the single easiest way to silently desync every OTHER feature placed later in the same chunk if gotten wrong.
+1. **`fossil`/`template`'s processor-level RNG is NOT uniformly `Mth::get_seed`-seeded** — only `RuleProcessor`'s own per-block `RandomBlockMatchTest` checks build a fresh `Mth::get_seed(world_pos)`-based source of their own; `BlockRotProcessor` — the processor every vanilla fossil processor list runs first — instead reads the SAME shared decoration-feature stream handed to it via the settings, drawing one `next_f32()` per processed block. Getting this backwards is the single easiest way to silently desync every OTHER feature placed later in the same chunk.
 2. **`DecorationStructureSink::set_block` silently skips an unresolvable name/property pair rather than panicking** — operator-supplied template NBT is untrusted external content (GEN-D23), a different data-integrity posture from this project's own compiled `WorldgenData`.
-3. **`fossil` draws exactly 2 (index, rotation), in that order, before doing anything else RNG-visible** — the `empty_corners` gate and both `place_in_world` calls are zero-draw from the shared stream's own perspective.
+3. **`fossil` draws THREE values before the empty-corners gate (rotation, then structure-pair index, then depth), in that order**, and neither the gate nor either `place_in_world` call is zero-draw from the shared stream's own perspective for a template that loads: each `place_in_world` call adds its own unconditional palette pick plus one `BlockRotProcessor` draw per processed block, so the total scales with template size.
+
+### Claims to verify (TEST-D57)
+
+- The vanilla fossil feature's configuration data shape has five fields: fossil_structures (a list of structure resource locations), overlay_structures (a list of structure resource locations paired by index with fossil_structures), fossil_processors (a processor list id), overlay_processors (a processor list id), and max_empty_corners_allowed (an integer threshold).
+- Fossil placement draws exactly one random index via next_int_bounded(fossil_structures.len()) to select which fossil/overlay structure pair, matched by index, to place.
+- If either the selected fossil structure or its index-paired overlay structure fails to load from disk, fossil placement does not abort: the heightmap scan is entered but contributes nothing over the empty template's zero-size footprint, the depth draw and the empty-corners gate still run, and if the gate passes both place_in_world calls still run and each returns immediately with zero draws of its own, so fossil placement still reports success.
+- Fossil placement draws a random value via next_int_bounded(4), as the first draw of the function, to select one of the four Rotation values (None, Cw90, Cw180, Ccw90) to apply to both the fossil and overlay structure placements.
+- For a successful fossil placement, the shared decoration-feature RNG stream consumes three pre-placement draws in order (the rotation draw, then the structure-pair index draw, then a depth draw), plus one palette-pick draw per place_in_world call (two total) plus one nextFloat draw per processed base-template block and per processed overlay-template block, so the total shared-stream draw count scales with the loaded templates' size rather than being a fixed constant.
+- The empty-corners validity gate computes the fossil template's own full 3D rotated bounding box at a target position derived from a heightmap scan and a depth draw (swapping size_x and size_z under Cw90/Ccw90 rotation), then counts how many of that box's 8 corners are currently air, lava, or water blocks in the world.
+- Fossil placement aborts, after all three RNG draws (the rotation draw, the structure-pair index draw, and the depth draw) and before any block writes, if the empty-corners count from the validity gate exceeds max_empty_corners_allowed.
+- The empty-corners footprint check performs zero RNG draws - it is pure world-read logic (low confidence: this blueprint's own reconstruction of whether this is vanilla's real gate shape at all).
+- Both the fossil structure and its overlay structure are placed at the same origin position with mirror = None and offset = [0,0,0], using known_shape = false and keep_jigsaws = false, differing only in which processor list (fossil_processors vs overlay_processors) and which template each uses.
+- The fossil structure is placed into the world first, and the overlay structure is placed second at the same origin, so the overlay placement's blocks can overwrite whatever the fossil placement already wrote wherever the two templates overlap.
+- For every place_in_world call this blueprint makes for the fossil placement, the overlay placement, and the template feature placement, the reference_pos argument passed equals the origin argument, i.e. the placement position itself rather than some separately derived reference point.
+- Only the Rule/RandomBlockMatch-style probability checks run by RuleProcessor are seeded per-block via Mth::get_seed(world_pos); the BlockRotProcessor check that every vanilla fossil processor list runs first instead reads the same shared decoration-feature RNG stream handed to place_in_world, drawing one nextFloat per processed block whenever its rottable_blocks filter is absent, as it is in every vanilla fossil processor list.
+- The vanilla template feature's configuration data shape has one field, templates, a weighted list of entries each carrying a structure resource location (key id) and an optional list of allowed Rotation values defaulting to all four; there is no processors field.
+- Template feature placement first draws a weighted entry from config.templates and a rotation from that entry's rotations list, then loads the entry's template; if it fails to load, placement performs zero further draws and zero writes but the two draws already taken are not undone.
+- Template feature placement draws its rotation at random from the selected entry's rotations list (all four values by default) and uses that rotation to both orient and horizontally centre the placement on the origin, with Mirror::None, offset = [0,0,0], known_shape = false, and no keep_jigsaws field existing at all.
+- Template feature placement consumes at least two draws from the shared decoration-feature RNG stream (the weighted entry pick, the rotation pick) even when the resolved template is missing, plus one further unconditional palette-pick draw when the template loads, so the WorldgenRandom's state is never bit-identical before and after a place_template call.
+- The barrier block state place_in_world writes immediately before the real state, for both fossil and template placement, is minecraft:barrier with no block-state properties, written only for template blocks that carry NBT and under its own distinct update flags.
 
 ## Deliverables
 
 ### `crates/worldgen/src/decoration/underground/structure_bridge.rs` (NEW)
 
-`FreezeResolver` is imported from `super::ice` (M5-B12b), not redefined here. `UndergroundFeatureContext`, `DecorationStructureSink` (with its `StructureBlockSink` impl), `FossilConfiguration`, `TemplateFeatureConfiguration`, `air_block_state_spec()`, `block_state_spec_to_mutf8`/`mutf8_to_block_state_spec`, `count_empty_corners`, plus `pub fn place_fossil(...)`/`pub fn place_template(...)` exactly per Context §M.2–§M.5.
+`FreezeResolver` is imported from `super::ice` (M5-B12b), not redefined here. `UndergroundFeatureContext`, `DecorationStructureSink` (with its `StructureBlockSink` impl), `FossilConfiguration`, `TemplateFeatureConfiguration`, `TemplateEntry`, `barrier_block_state_spec()`, `block_state_spec_to_mutf8`/`mutf8_to_block_state_spec`, `count_empty_corners`, plus `pub fn place_fossil(...)`/`pub fn place_template(...)` exactly per Context §M.2–§M.5.
 
 ### `crates/worldgen/src/decoration/underground/mod.rs` (MODIFY — M5-B12a file, one new module line)
 
@@ -194,15 +247,15 @@ pub use structure_bridge::{DecorationStructureSink, UndergroundFeatureContext};
 ### `crates/worldgen/tests/underground_fossil_template.rs`
 
 1. `fossil_no_op_when_bridge_absent` — `bridge: None`; `place_fossil` writes nothing, draws nothing.
-2. `fossil_consumes_exactly_two_shared_stream_draws` — a `bridge` whose `TemplateSource` always returns `Some` for both lists, a config with `max_empty_corners_allowed` high enough to never abort; exactly 2 draws (`next_int_bounded` twice — variant index, rotation index) are consumed from the shared `WorldgenRandom`, regardless of how many blocks the loaded templates contain or how many `Rule` processors their processor lists carry (a synthetic multi-block template/processor-list fixture).
-3. `fossil_aborts_when_template_missing` — `TemplateSource::load` returns `None` for the chosen index; zero `set_block` calls, exactly 1 draw consumed (only the index draw — the rotation draw never happens, since the function returns before reaching it).
-4. `template_zero_shared_stream_draws` — `place_template` with a present template; the `WorldgenRandom`'s own state is bit-identical before and after the call.
-5. `template_no_op_when_template_missing` — `TemplateSource::load` returns `None`; zero writes, zero draws.
+2. `fossil_shared_stream_draw_sequence_matches_vanilla` — a `bridge` whose `TemplateSource` always returns `Some` for both lists, a config with `max_empty_corners_allowed` high enough to never abort; exactly 3 pre-placement draws are consumed from the shared `WorldgenRandom` in order (rotation index via `next_int_bounded(4)`, then structure-pair index, then depth via `next_int_bounded(10)`), followed by one palette-pick draw per `place_in_world` call (2 total) and one further draw per processed block for a synthetic multi-block template/processor-list fixture whose `block_rot` entry carries no `rottable_blocks` key — the total draw count grows with the fixture's block count, never staying fixed.
+3. `fossil_missing_template_resolves_to_empty_placement` — `TemplateSource::load` returns `None` for the chosen index (for the base template, the overlay template, or both); all three pre-placement draws (rotation, index, depth) and the empty-corners gate still occur exactly as in a successful placement, and if the gate passes both `place_in_world` calls still run but perform zero writes and zero draws of their own, since each bails at its own empty-palette guard — `place_fossil` completes normally, without panicking or returning early before the gate.
+4. `template_shared_stream_draw_sequence_matches_vanilla` — `place_template` with a present template; the weighted-entry pick and the rotation-list pick are always drawn (2 draws minimum), and a further unconditional palette-pick draw is consumed once the template's `place_in_world` call runs (3 draws minimum for a template that loads) — the `WorldgenRandom`'s state is never bit-identical before and after the call.
+5. `template_missing_template_resolves_to_empty_placement` — `TemplateSource::load` returns `None`; the weighted-entry pick and the rotation-list pick (2 draws) are still consumed before the load attempt, then zero writes and zero further draws occur.
 6. `decoration_structure_sink_skips_unresolvable_name_silently` — `BlockStateNames::resolve` returns `None` for a given name/property pair; `DecorationStructureSink::set_block` does not panic and performs zero writes to the underlying `DecorationWorldAccess`.
 
 ## Implementation steps
 
-1. **`decoration/underground/structure_bridge.rs`.** `UndergroundFeatureContext`, `DecorationStructureSink` (+ its `StructureBlockSink` impl and the two `Mutf8`-conversion helpers), `air_block_state_spec`, `FossilConfiguration`/`TemplateFeatureConfiguration` + `place_fossil`/`place_template`/`count_empty_corners`, exactly per Context §M.2–§M.5. Observable: `cargo build -p rc-worldgen` compiles against M5-B08's already-specified `structure::template`/`structure::processor`/`structure::generation` types.
+1. **`decoration/underground/structure_bridge.rs`.** `UndergroundFeatureContext`, `DecorationStructureSink` (+ its `StructureBlockSink` impl and the two `Mutf8`-conversion helpers), `barrier_block_state_spec`, `FossilConfiguration`/`TemplateFeatureConfiguration`/`TemplateEntry` + `place_fossil`/`place_template`/`count_empty_corners`, exactly per Context §M.2–§M.5. Observable: `cargo build -p rc-worldgen` compiles against M5-B08's already-specified `structure::template`/`structure::processor`/`structure::generation` types.
 2. **`decoration/underground/mod.rs`.** Add `pub mod structure_bridge;` and the `pub use` line. Observable: `underground_fossil_template.rs` passes; M5-B12a/b's own test suites still pass unmodified.
 3. **Full-workspace gates.** `cargo run -p xtask -- fmt-check`, `-- lint`, `-- lint-deps`, `-- test` all exit 0.
 

@@ -29,22 +29,22 @@ GEN-D8: "Rusty Clanker implements a data-driven interpreter over [vanilla worldg
 
 ### What JSON is consumed, and from where — resolving GEN-D7 precisely
 
-GEN-D7's own text: `xtask fetch-worldgen-data <version>` "unzips the vanilla datapack embedded in the same legally-obtained `server.jar` NET-D9 already downloads (`data/minecraft/worldgen/**`, `data/minecraft/dimension/**`, `data/minecraft/dimension_type/**`...)." This is correct for nine of the ten JSON families this blueprint's schema covers — they are literal jar-resident resource files, extractable by a plain zip read with no Java invocation:
+GEN-D7's own text: `xtask fetch-worldgen-data <version>` "unzips the vanilla datapack embedded in the same legally-obtained `server.jar` NET-D9 already downloads (`data/minecraft/worldgen/**`, `data/minecraft/dimension_type/**`...)." This is correct for nine of the ten JSON families this blueprint's schema covers — they are literal jar-resident resource files, extractable by a plain zip read with no Java invocation:
 
 | Family | Jar-internal path | Files (26.2, per `docs/research/mc-26.2/05-worldgen.md §7` / `06-structures.md §7`) |
 |---|---|---|
-| Density functions | `data/minecraft/worldgen/density_function/**` | 35 (`overworld/`, `overworld_large_biomes/`, `overworld_amplified/`, `nether/`, `end/`, plus `shift_x.json`/`shift_y.json`/`shift_z.json`/`zero.json`) |
-| Noise parameters | `data/minecraft/worldgen/noise/*.json` | 61 |
+| Density functions | `data/minecraft/worldgen/density_function/**` | 35 (`overworld/` — with its own `overworld/caves/` subdirectory —, `overworld_large_biomes/`, `overworld_amplified/`, `nether/`, `end/`, plus `shift_x.json`/`shift_z.json`/`y.json`/`zero.json`) |
+| Noise parameters | `data/minecraft/worldgen/noise/**/*.json` | 63 (61 directly in `noise/`, plus `noise/nether/temperature.json` and `noise/nether/vegetation.json`) |
 | Noise generator settings | `data/minecraft/worldgen/noise_settings/*.json` | 7 (`overworld`, `large_biomes`, `amplified`, `nether`, `end`, `caves`, `floating_islands`) |
 | Configured carvers | `data/minecraft/worldgen/configured_carver/*.json` | 4 (`cave`, `cave_extra_underground`, `nether_cave`, `canyon`) |
 | Configured features | `data/minecraft/worldgen/configured_feature/*.json` | 226 |
 | Placed features | `data/minecraft/worldgen/placed_feature/*.json` | 262 |
 | Structure sets | `data/minecraft/worldgen/structure_set/*.json` | 20 |
-| Structures | `data/minecraft/worldgen/structure/*.json` | 31 |
+| Structures | `data/minecraft/worldgen/structure/*.json` | 34 |
 | Template pools | `data/minecraft/worldgen/template_pool/**/*.json` | 188 |
 | Processor lists | `data/minecraft/worldgen/processor_list/*.json` | — |
 
-`fetch-worldgen-data`'s jar-unzip also extracts `data/minecraft/dimension/**` and `data/minecraft/dimension_type/**` (GEN-D7's own literal path list, restated verbatim in `extract.rs::run`'s Deliverables) into `worldgen_json_dir` alongside the ten families above, but **this blueprint defines no schema for them and `compile()` never reads them** — the task this blueprint was assigned names exactly the ten JSON node families in the table above (density function, noise, noise settings, biome parameter list, surface rules, configured/placed feature, configured carver, structure/structure-set/template-pool, processor list); dimension/dimension-type wiring (which `noise_generator_settings` preset each of overworld/nether/end actually uses) is left for whichever later blueprint owns the `GenStage` execution model (GEN-D25) to parse from this same already-extracted directory, with no re-extraction needed.
+`fetch-worldgen-data`'s jar-unzip also extracts `data/minecraft/dimension_type/**` (4 files: `overworld`, `overworld_caves`, `the_end`, `the_nether` — GEN-D7's own literal path list also names a `data/minecraft/dimension/**` prefix, but that path does not exist anywhere in the jar, so `extract.rs::run`'s Deliverables extracts only the `dimension_type/**` half) into `worldgen_json_dir` alongside the ten families above, but **this blueprint defines no schema for it and `compile()` never reads it** — the task this blueprint was assigned names exactly the ten JSON node families in the table above (density function, noise, noise settings, biome parameter list, surface rules, configured/placed feature, configured carver, structure/structure-set/template-pool, processor list); dimension-type wiring (which `noise_generator_settings` preset each of overworld/nether/end actually uses) is left for whichever later blueprint owns the `GenStage` execution model (GEN-D25) to parse from this same already-extracted directory, with no re-extraction needed.
 
 **One family is not jar-resident and needs a correction to GEN-D7's literal text**: the multi-noise biome **parameter lists**. `data/minecraft/worldgen/multi_noise_biome_source_parameter_list/{overworld,nether}.json` inside the jar contain only `{"preset": "minecraft:overworld"}` — the real 7594-entry overworld point list (and the 5-entry nether one) is Java-code-defined (`OverworldBiomeBuilder`) and only exists as JSON in the **data generator's report output**, `reports/biome_parameters/minecraft/{overworld,nether}.json` (confirmed, `docs/research/mc-26.2/05-worldgen.md §7`). This blueprint's `fetch-worldgen-data` therefore reuses **both** of M0-B08/M0-B07's shared primitives, not just the jar-unzip: `fetch_data::fetch_server_jar` (jar acquisition, shared with M0-B07) for the direct-unzip families above, **and** `fetch_data::run_data_reports` (the same `--reports` invocation M0-B07 already runs for `registries.json`/`blocks.json`) to additionally obtain `reports/biome_parameters/minecraft/*.json` — the same cached `datagen-output/<version>/generated/reports/` directory M0-B07's `codegen` verb already reads from, read a second time by this blueprint's own verb for a different pair of files inside it. No second `--reports` invocation, no second Java process — `run_data_reports` is idempotent (M0-B08's own contract) and this blueprint calls it exactly as M0-B07's `fetch.rs` does.
 
@@ -75,7 +75,7 @@ GEN-D12 lists 30 node kinds and flags itself as needing re-verification ("re-ver
 Two distinct reference mechanisms appear across these JSON families, both resolved by this blueprint's `compile()`:
 
 1. **Density-function/noise named references** (vanilla's `HolderHolder` indirection): a density-function field may be a bare number (→ `Constant`), an inline object (→ nested node), or a `"namespace:path"` string naming another `density_function`/`noise` registry entry. `compile()` resolves every string reference to a `DensityFunctionId`/`NoiseParamId` by looking it up in the interned name table built from every file in the corresponding family (Interning below); an unresolvable name is `CompileError::DanglingReference`.
-2. **Tag references**: any `HolderSet`-typed field (structure `biomes`, placement-modifier `biome` checks) may be a single string starting with `#` (a tag, e.g. `"#minecraft:is_forest"`) instead of an inline list — this blueprint stores tag references **verbatim** as an opaque `BiomeSet::Tag(String)` (the `#`-prefixed name), performing no tag-membership expansion (that requires the `data/minecraft/tags/**` tree, out of this blueprint's ten named JSON families and out of scope — a later blueprint's job once tag data has its own extraction pass).
+2. **Tag references**: any `HolderSet`-typed field (structure `biomes`, `ConcentricRingsStructurePlacement`'s `preferred_biomes`, carver `replaceable`, surface-rule `biome_is`, and the block/biome/fluid predicate fields, among many others — no placement modifier has a `HolderSet` field directly, though `block_predicate_filter`'s nested predicate reaches one) may be a single string starting with `#` (a tag, e.g. `"#minecraft:is_forest"`) instead of an inline list — this blueprint stores tag references **verbatim** as an opaque `BiomeSet::Tag(String)` (the `#`-prefixed name), performing no tag-membership expansion (that requires the `data/minecraft/tags/**` tree, out of this blueprint's ten named JSON families and out of scope — a later blueprint's job once tag data has its own extraction pass).
 
 ### Interning and determinism (mirrors M0-B07's own rules exactly, restated for this blueprint's data shape)
 
@@ -83,11 +83,179 @@ Two distinct reference mechanisms appear across these JSON families, both resolv
 
 ### Why `serde_json::Value` is the opaque-payload type, and where it is used
 
-Three of the ten JSON families carry deeply nested, wide (63-feature-type / 40-config-record / 15-piece-type) per-entry shapes whose full structural enumeration is explicitly this blueprint's *evaluation*-adjacent neighbor's job, not this blueprint's (Scope boundary above): a `configured_feature`'s `config` object (feature-specific parameters — tree shapes, ore-vein configs, …), a non-`jigsaw` `structure`'s type-specific extra fields (`mineshaft_type`, `biome_temp`, `setups`, …), and any placement-modifier field this blueprint does not otherwise name explicitly. Rather than inventing a bespoke recursive value type, this blueprint reuses `serde_json::Value` directly — it already implements `serde::Serialize`/`Deserialize` generically (works with `postcard`'s serializer/deserializer exactly as with `serde_json`'s own, since both are ordinary `serde` backends) and its default `Map` backing is deterministic (Interning above). `rc-worldgen`'s `Cargo.toml` gains a `serde_json` dependency for this reason alone — `WorldgenData` itself contains `serde_json::Value` fields. A later feature-placement blueprint is expected to replace these opaque payloads with fully-typed Rust structs per feature/config kind once it needs to *evaluate* them; until then, generic-but-validated (every payload still round-trips through `serde_json`'s own parser, so malformed JSON is still caught) is the right level of investment for "parsing/validation/graph shape."
+Three of the ten JSON families carry deeply nested, wide (63-feature-type / 40-config-record / 15-placement-modifier-type) per-entry shapes whose full structural enumeration is explicitly this blueprint's *evaluation*-adjacent neighbor's job, not this blueprint's (Scope boundary above): a `configured_feature`'s `config` object (feature-specific parameters — tree shapes, ore-vein configs, …), a non-`jigsaw` `structure`'s type-specific extra fields (`mineshaft_type`, `biome_temp`, `setups`, …), and any placement-modifier field this blueprint does not otherwise name explicitly. Rather than inventing a bespoke recursive value type, this blueprint reuses `serde_json::Value` directly — it already implements `serde::Serialize`/`Deserialize` generically (works with `postcard`'s serializer/deserializer exactly as with `serde_json`'s own, since both are ordinary `serde` backends) and its default `Map` backing is deterministic (Interning above). `rc-worldgen`'s `Cargo.toml` gains a `serde_json` dependency for this reason alone — `WorldgenData` itself contains `serde_json::Value` fields. A later feature-placement blueprint is expected to replace these opaque payloads with fully-typed Rust structs per feature/config kind once it needs to *evaluate* them; until then, generic-but-validated (every payload still round-trips through `serde_json`'s own parser, so malformed JSON is still caught) is the right level of investment for "parsing/validation/graph shape."
 
 ### Error taxonomy (fail-fast, actionable paths — restated as this blueprint's binding policy)
 
 `compile()` collects **every** error rather than stopping at the first (friendlier for a human fixing many mismatches after a version bump at once), but the overall gate is still fail-fast in the sense GEN-D1 requires: **any** non-empty error list blocks `compile-worldgen-data` from writing `data.postcard`/`MANIFEST.json` at all — there is no partial-success output. Every error variant (Deliverables' `CompileError`) carries the offending file's `ResourceLocation` (and, where applicable, the specific field name) so a human can jump straight to the JSON that needs fixing, never a bare "compilation failed."
+
+### Claims to verify (TEST-D57)
+
+- Vanilla's server jar embeds density-function JSON at data/minecraft/worldgen/density_function/**, comprising 35 files across overworld/ (with its own overworld/caves/ subdirectory), overworld_large_biomes/, overworld_amplified/, nether/, end/, plus shift_x.json, shift_z.json, y.json, and zero.json.
+- Vanilla's server jar embeds noise-parameter JSON at data/minecraft/worldgen/noise/**/*.json, comprising 63 files: 61 directly in noise/, plus noise/nether/temperature.json and noise/nether/vegetation.json.
+- Vanilla's server jar embeds noise-generator-settings JSON at data/minecraft/worldgen/noise_settings/*.json, comprising 7 files: overworld, large_biomes, amplified, nether, end, caves, floating_islands.
+- Vanilla's server jar embeds configured-carver JSON at data/minecraft/worldgen/configured_carver/*.json, comprising 4 files: cave, cave_extra_underground, nether_cave, canyon.
+- Vanilla's server jar embeds configured-feature JSON at data/minecraft/worldgen/configured_feature/*.json, comprising 226 files.
+- Vanilla's server jar embeds placed-feature JSON at data/minecraft/worldgen/placed_feature/*.json, comprising 262 files.
+- Vanilla's server jar embeds structure-set JSON at data/minecraft/worldgen/structure_set/*.json, comprising 20 files.
+- Vanilla's server jar embeds structure JSON at data/minecraft/worldgen/structure/*.json, comprising 34 files.
+- Vanilla's server jar embeds template-pool JSON at data/minecraft/worldgen/template_pool/**/*.json, comprising 188 files.
+- Vanilla's server jar embeds processor-list JSON at data/minecraft/worldgen/processor_list/*.json.
+- Vanilla's server jar embeds dimension-type JSON at data/minecraft/dimension_type/**, comprising 4 files (overworld, overworld_caves, the_end, the_nether), alongside the worldgen/** tree; data/minecraft/dimension/** does not exist in the jar.
+- Vanilla's server jar embeds structure NBT templates at data/minecraft/structure/**.nbt, a distinct jar path from the worldgen/structure/*.json structure-definition JSON.
+- Vanilla's server jar's data/minecraft/worldgen/multi_noise_biome_source_parameter_list/{overworld,nether}.json files each contain only a preset reference such as {"preset": "minecraft:overworld"}, not the real climate-point list.
+- Vanilla's real overworld biome climate-point list has 7594 entries and is Java-code-defined (OverworldBiomeBuilder), existing as JSON only in the data generator's report output reports/biome_parameters/minecraft/overworld.json.
+- Vanilla's real nether biome climate-point list has 5 entries and exists as JSON only in reports/biome_parameters/minecraft/nether.json.
+- Vanilla's density-function JSON schema has exactly 34 type discriminators for the pinned 26.2 target, including invert, squeeze, shift, and find_top_surface.
+- invert and squeeze are both Mapped.Type unary transforms in vanilla's density-function codec.
+- shift is vanilla's legacy 3-D shift density-function field, distinct from shift_a/shift_b.
+- find_top_surface is a density-function node kind new in 26.2, used to build vanilla's preliminarySurfaceLevel.
+- MulOrAdd is not a distinct density-function wire-format type in vanilla's codec -> it is a runtime-only decode optimization.
+- Vanilla's density-function/noise named references use a HolderHolder indirection: a density-function field may be a bare number (decoding as a constant), an inline object (a nested node), or a "namespace:path" string naming another density_function/noise registry entry.
+- Vanilla's HolderSet-typed fields (e.g. structure biomes, carver replaceable-block sets, and block/biome/fluid predicate fields — not a placement modifier directly, though block_predicate_filter's nested predicate reaches one) may be a single string starting with # (e.g. "#minecraft:is_forest") naming a tag, instead of an inline list.
+- Vanilla's configured_feature JSON family spans 63 distinct feature types, per this blueprint's own characterization of its per-entry shape.
+- Vanilla's feature-config records referenced from configured_feature JSON span 40 distinct config-record shapes, per this blueprint's own characterization.
+- Vanilla's placement-modifier JSON family spans 15 distinct placement-modifier types, per this blueprint's own characterization.
+- A namespace:path resource-location reference with no colon defaults its namespace to "minecraft" -> vanilla's own shorthand convention used throughout worldgen JSON.
+- A vanilla resource-location string contains at most one colon, separating namespace from path; more than one colon is invalid.
+- Vanilla's block-state JSON shape used in worldgen JSON is an object with a required Name field and an optional Properties field (a map of property name to string value), e.g. {"Name": "minecraft:water", "Properties": {"level": "0"}}, with no Properties key meaning an empty properties map; the namespace:path[key=value] string syntax is BlockStateParser's command/predicate syntax and appears in none of the ten worldgen JSON families.
+- Vanilla's HeightProvider JSON has 6 kinds: Constant, Uniform, BiasedToBottom, VeryBiasedToBottom, Trapezoid, and WeightedList, used by carver Y-distribution and the height_range placement modifier.
+- Vanilla's HeightProvider Constant kind has a single field, value, itself a VerticalAnchor.
+- Vanilla's HeightProvider Uniform kind has fields min_inclusive and max_inclusive, both VerticalAnchors.
+- Vanilla's HeightProvider BiasedToBottom and VeryBiasedToBottom kinds have fields min_inclusive and max_inclusive (VerticalAnchors) plus an optional inner integer.
+- Vanilla's HeightProvider Trapezoid kind has fields min_inclusive and max_inclusive (VerticalAnchors) plus an optional plateau integer.
+- Vanilla's HeightProvider WeightedList kind has a single field, distribution, a weighted list of nested HeightProvider entries.
+- A bare VerticalAnchor value where vanilla expects a HeightProvider decodes as a Constant height provider -> vanilla's own bare-value shorthand.
+- Vanilla's VerticalAnchor JSON shape is one of {"absolute": Y}, {"above_bottom": N}, or {"below_top": N}.
+- A bare int where vanilla expects an IntProvider decodes as a constant IntProvider, and vanilla's uniform IntProvider JSON type string is "minecraft:uniform".
+- Vanilla's uniform IntProvider JSON has fields min_inclusive and max_inclusive.
+- Vanilla's density-function constant node type has JSON field argument.
+- Vanilla's density-function add node type has JSON fields argument1 and argument2.
+- Vanilla's density-function mul node type has JSON fields argument1 and argument2.
+- Vanilla's density-function min node type has JSON fields argument1 and argument2.
+- Vanilla's density-function max node type has JSON fields argument1 and argument2.
+- Vanilla's density-function abs node type has JSON field argument.
+- Vanilla's density-function square node type has JSON field argument.
+- Vanilla's density-function cube node type has JSON field argument.
+- Vanilla's density-function half_negative node type has JSON field argument.
+- Vanilla's density-function quarter_negative node type has JSON field argument.
+- Vanilla's density-function invert node type has JSON field argument.
+- Vanilla's density-function squeeze node type has JSON field argument.
+- Vanilla's density-function clamp node type has JSON fields input, min, and max.
+- Vanilla's density-function noise node type has JSON fields noise, xz_scale, and y_scale.
+- Vanilla's density-function shifted_noise node type has JSON fields noise, xz_scale, y_scale, shift_x, shift_y, and shift_z.
+- Vanilla's density-function shift_a node type has JSON field argument.
+- Vanilla's density-function shift_b node type has JSON field argument.
+- Vanilla's density-function shift node type has JSON field argument.
+- Vanilla's density-function old_blended_noise node type has JSON fields xz_scale, y_scale, xz_factor, y_factor, and smear_scale_multiplier.
+- Vanilla's density-function range_choice node type has JSON fields input, min_inclusive, max_exclusive, when_in_range, and when_out_of_range.
+- Vanilla's density-function interval_select node type has JSON fields input, thresholds, and functions.
+- In vanilla's interval_select density-function node, the number of functions is always exactly one more than the number of thresholds (thresholds.len() + 1 == functions.len()), the list has a minimum length of 2, and the thresholds must be in ascending order.
+- Vanilla's density-function spline node type has a single JSON field, spline.
+- Vanilla's density-function y_clamped_gradient node type has JSON fields from_y, to_y, from_value, and to_value.
+- Vanilla's density-function interpolated node type has JSON field argument.
+- Vanilla's density-function flat_cache node type has JSON field argument.
+- Vanilla's density-function cache_2d node type has JSON field argument, with its JSON discriminator literally "cache_2d", not "cache2d".
+- Vanilla's density-function cache_once node type has JSON field argument.
+- Vanilla's density-function cache_all_in_cell node type has JSON field argument.
+- Vanilla's density-function blend_density node type has JSON field argument and is otherwise runtime-rewired.
+- Vanilla's density-function blend_alpha node type has no fields and is runtime-rewired.
+- Vanilla's density-function blend_offset node type has no fields and is runtime-rewired.
+- Vanilla's density-function beardifier node type has no fields and is runtime-rewired.
+- Vanilla's density-function end_islands node type has no fields and is runtime-rewired.
+- Vanilla's CubicSpline shape is either a bare constant or a multipoint object with a mandatory coordinate field and a points list, each point carrying its own (possibly nested) value spline and a derivative; strict ascending order of the points' locations is enforced only by the Java-side builder, not by the codec itself.
+- Vanilla's NormalNoise.NoiseParameters JSON (worldgen/noise/**/*.json) has exactly two fields: firstOctave (an int, camelCase) and amplitudes (a list of doubles).
+- Vanilla's NoiseSettings JSON has four integer fields: min_y, height, size_horizontal, size_vertical.
+- Vanilla's NoiseRouter has a fixed 15-slot shape: final_density, preliminary_surface_level, barrier, fluid_level_floodedness, fluid_level_spread, lava (feeding Aquifer), temperature, vegetation, continents, erosion, depth, ridges (feeding Climate.Sampler), and vein_toggle, vein_ridged, vein_gap.
+- In vanilla's Java source, exactly four of the fifteen NoiseRouter fields carry an explicit Noise suffix -> barrierNoise, fluidLevelFloodednessNoise, fluidLevelSpreadNoise, lavaNoise -> while the other eleven fields do not.
+- Only 12 of the 105 total NoiseRouter slots across vanilla's 7 noise_settings presets (11.4 percent) are string references to a named entry under data/minecraft/worldgen/density_function/** -> continents, depth, erosion, and ridges in overworld.json, large_biomes.json, and amplified.json; caves.json, end.json, floating_islands.json, and nether.json use zero named references, and even the three overworld variants inline the whole graph for every other slot including final_density and preliminary_surface_level, so a fully inlined router is the common case, not named references.
+- Vanilla's surface-rule sequence node type has JSON field sequence.
+- Vanilla's surface-rule condition node type has JSON fields if_true and then_run.
+- Vanilla's surface-rule block node type has JSON field result_state.
+- Vanilla's surface-rule bandlands node type has no fields.
+- Vanilla's surface-condition biome node type has JSON field biome_is.
+- Vanilla's surface-condition noise_threshold node type has JSON fields noise, min_threshold, max_threshold, and an optional is_3d boolean defaulting to false.
+- Vanilla's surface-condition vertical_gradient node type has JSON fields random_name, true_at_and_below, and false_at_and_above.
+- Vanilla's surface-condition y_above node type has JSON fields anchor, surface_depth_multiplier, and add_stone_depth.
+- Vanilla's surface-condition water node type has JSON fields offset, surface_depth_multiplier, and add_stone_depth.
+- Vanilla's surface-condition temperature node type has no fields.
+- Vanilla's surface-condition steep node type has no fields.
+- Vanilla's surface-condition hole node type has no fields.
+- Vanilla's surface-condition above_preliminary_surface node type has no fields.
+- Vanilla's surface-condition not node type has a single JSON field, invert.
+- Vanilla's surface-condition stone_depth node type has JSON fields offset, add_surface_depth, secondary_depth_range, and surface_type.
+- Vanilla's StoneDepth surface condition's surface_type field is one of exactly two values: floor or ceiling.
+- A vanilla spawn_target climate point is a 7-axis point: the offset axis is a required field, written explicitly (e.g. "offset": 0.0), not an omitted shorthand.
+- Vanilla's NoiseGeneratorSettings JSON has exactly these top-level fields: noise, default_block, default_fluid, noise_router, surface_rule, spawn_target, sea_level, disable_mob_generation, aquifers_enabled, ore_veins_enabled, and legacy_random_source.
+- Vanilla's overworld NoiseGeneratorSettings preset sets sea_level to 63.
+- Vanilla's overworld NoiseGeneratorSettings preset sets aquifers_enabled to true.
+- Vanilla's overworld NoiseGeneratorSettings preset sets ore_veins_enabled to true.
+- Vanilla's overworld NoiseGeneratorSettings preset sets legacy_random_source to false.
+- The top level of vanilla's reports/biome_parameters/minecraft/{overworld,nether}.json is {"biomes": [{"biome": id, "parameters": {...}}]}, and every parameters object carries all 7 climate axes as required fields (temperature, humidity, continentalness, erosion, depth, weirdness, and offset -> none omit it), each axis given as either a scalar point or a [min, max] span.
+- Vanilla's configured-carver JSON (worldgen/configured_carver/*.json) is built from exactly 3 WorldCarver types, minecraft:cave, minecraft:nether_cave, and minecraft:canyon, instantiated as 4 configured-carver entries.
+- Vanilla's configured-carver JSON is a {type, config} wrapper whose config object has shared fields probability, y (a HeightProvider), yScale (a FloatProvider, camelCase, shared by every carver rather than canyon-only), lava_level (a VerticalAnchor), replaceable (a tag or list of blocks the carver may replace), and an optional debug_settings field, plus type-specific extras (horizontal_radius_multiplier, vertical_radius_multiplier, and floor_level on cave carvers; vertical_rotation and shape on the canyon carver).
+- Vanilla's configured_feature JSON (worldgen/configured_feature/*.json) has fields type (the feature type id) and config (feature-specific parameters).
+- Vanilla's placed_feature JSON (worldgen/placed_feature/*.json) names its underlying configured_feature by id in a feature field, plus a placement list of placement modifiers.
+- Vanilla's block_predicate_filter placement-modifier type has JSON field predicate.
+- Vanilla's rarity_filter placement-modifier type has JSON field chance.
+- Vanilla's surface_relative_threshold_filter placement-modifier type has JSON fields heightmap, min_inclusive, and max_inclusive.
+- Vanilla's surface_water_depth_filter placement-modifier type has JSON field max_water_depth.
+- Vanilla's biome placement-modifier type has no fields.
+- Vanilla's count placement-modifier type has JSON field count.
+- Vanilla's noise_based_count placement-modifier type has JSON fields noise_to_count_ratio, noise_factor, and noise_offset.
+- Vanilla's noise_threshold_count placement-modifier type has JSON fields noise_level, below_noise, and above_noise.
+- Vanilla's count_on_every_layer placement-modifier type has JSON field count.
+- Vanilla's environment_scan placement-modifier type has JSON fields direction_of_search, target_condition, allowed_search_condition, and max_steps.
+- Vanilla's heightmap placement-modifier type has JSON field heightmap.
+- Vanilla's height_range placement-modifier type has JSON field height.
+- Vanilla's in_square placement-modifier type has no fields.
+- Vanilla's random_offset placement-modifier type has JSON fields xz_spread and y_spread.
+- Vanilla's fixed_placement placement-modifier type has JSON field positions.
+- Vanilla's GenerationStep.Decoration has exactly these 11 values, in this order: RawGeneration, Lakes, LocalModifications, UndergroundStructures, SurfaceStructures, Strongholds, UndergroundOres, UndergroundDecoration, FluidSprings, VegetalDecoration, TopLayerModification.
+- Vanilla's TerrainAdjustment enum has exactly 5 members: None, Bury, BeardThin, BeardBox, Encapsulate.
+- Vanilla's structure JSON (worldgen/structure/*.json) draws its type field from one of 16 StructureType ids.
+- Vanilla's structure JSON carries common fields biomes, step, terrain_adaptation, and spawn_overrides alongside type-specific extra fields, regardless of structure type.
+- Vanilla's non-jigsaw structure JSON types carry their own type-specific extra fields beyond the common shape, e.g. mineshaft_type, biome_temp, and setups.
+- Vanilla's jigsaw structure JSON carries type-specific fields including start_pool, size, and max_distance_from_center.
+- Vanilla's structure_set JSON (worldgen/structure_set/*.json) has fields placement (a StructurePlacement) and structures (a weighted list of structure selections).
+- Vanilla's random_spread StructurePlacement JSON type has fields salt, spacing, separation, spread_type, frequency_reduction_method, frequency, locate_offset, and exclusion_zone.
+- Vanilla's concentric_rings StructurePlacement JSON type has nine fields: locate_offset, frequency_reduction_method, frequency, salt, exclusion_zone, distance, spread, count, and preferred_biomes -> the same shared placement fields random_spread gets, plus its own distance/spread/count/preferred_biomes.
+- Vanilla's random_spread structure placement's spread_type field is one of exactly two values, linear (the default) or triangular.
+- Vanilla's stronghold concentric_rings structure placement uses a distance of 32.
+- Vanilla's stronghold concentric_rings structure placement uses a spread of 3.
+- Vanilla's stronghold concentric_rings structure placement uses a count of 128.
+- Vanilla's stronghold concentric_rings structure placement uses a salt of 0.
+- Vanilla's template_pool JSON (worldgen/template_pool/**/*.json) has fields fallback (a pool id) and elements (a weighted list of pool elements).
+- Vanilla's single_pool_element StructurePoolElementType has JSON fields location, processors, projection, and an optional override_liquid_settings, present in none of the 188 vanilla template-pool files but still part of the schema under a deny-unknown-field policy.
+- Vanilla's legacy_single_pool_element StructurePoolElementType has JSON fields location, processors, projection, and an optional override_liquid_settings, the same four fields as single_pool_element.
+- Vanilla's feature_pool_element StructurePoolElementType has JSON fields feature and projection.
+- Vanilla's list_pool_element StructurePoolElementType has JSON fields elements and projection.
+- Vanilla's empty_pool_element StructurePoolElementType has no fields.
+- A vanilla pool element's projection field is one of exactly two values, rigid or terrain_matching, and is a required field with no default -> every non-empty pool element writes it explicitly, and only empty_pool_element (which has no fields at all) omits it.
+- Vanilla's processor_list JSON (worldgen/processor_list/*.json) has a single field, processors, a list of structure processors.
+- Vanilla's blackstone_replace StructureProcessor type has no fields.
+- Vanilla's block_age StructureProcessor type has JSON field mossiness.
+- Vanilla's block_ignore StructureProcessor type has JSON field blocks.
+- Vanilla's block_rot StructureProcessor type has JSON fields rottable_blocks and integrity.
+- Vanilla's capped StructureProcessor type has JSON fields delegate and limit.
+- Vanilla's gravity StructureProcessor type has JSON fields heightmap and offset.
+- Vanilla's jigsaw_replacement StructureProcessor type has no fields.
+- Vanilla's lava_submerged_block StructureProcessor type has no fields.
+- Vanilla's nop StructureProcessor type has no fields.
+- Vanilla's protected_blocks StructureProcessor type has JSON field value.
+- Vanilla's rule StructureProcessor type has JSON field rules.
+- A vanilla ProcessorRuleJson has fields input_predicate, location_predicate, an optional position_predicate, output_state, and an optional block_entity_modifier.
+- Vanilla's always_true RuleTest type has no fields.
+- Vanilla's block_match RuleTest type has JSON field block.
+- Vanilla's blockstate_match RuleTest type has JSON field block_state.
+- Vanilla's tag_match RuleTest type has JSON field tag.
+- Vanilla's random_block_match RuleTest type has JSON fields block and probability.
+- Vanilla's random_blockstate_match RuleTest type has JSON fields block_state and probability.
+- Vanilla's always_true PosRuleTest type has no fields.
+- Vanilla's linear_pos PosRuleTest type has JSON fields min_chance, max_chance, min_dist, and max_dist.
+- Vanilla's axis_aligned_linear_pos PosRuleTest type has JSON fields min_chance, max_chance, min_dist, max_dist, and axis.
+- Vanilla's climate-parameter quantization formula (Climate.Parameter-equivalent) is (f32 * 10000.0) as i64, truncating toward zero, with a scalar point quantizing to (v, v) and a [min, max] span quantizing each bound independently.
+- Applying vanilla's climate-parameter quantization formula to -0.12345 yields -1234; to 0.5 yields 5000; and to -0.00001 yields 0 (truncation, not floor, at a negative near-zero value).
 
 ## Deliverables
 
@@ -152,22 +320,22 @@ pub enum TagOrList<T> {
     List(Vec<T>),
 }
 
-/// A parsed-but-unresolved block-state reference (`"minecraft:stone"` or
-/// `"minecraft:oak_door[facing=east,half=lower]"`), used by surface-rule `block` leaves,
-/// structure-processor `RuleTest`/output states, and carver replaceable-block sets.
-/// Numeric `BlockStateId` resolution against `rc_registries::generated_v776` is a later
-/// blueprint's job (Context).
+/// A parsed-but-unresolved block-state reference. Worldgen JSON carries a block state as
+/// an OBJECT, not a string: `{"Name": "minecraft:stone"}` or `{"Name": "minecraft:water",
+/// "Properties": {"level": "0"}}` (no `Properties` key means an empty properties map) —
+/// used by `NoiseGeneratorSettingsJson`'s `default_block`/`default_fluid`, surface-rule
+/// `block` leaves, and structure-processor `RuleTest`/output states. The bracketed
+/// `namespace:path[key=value]` string form is `BlockStateParser`'s command/predicate
+/// syntax and appears in none of the ten worldgen JSON families, so it is not accepted
+/// here. Numeric `BlockStateId` resolution against `rc_registries::generated_v776` is a
+/// later blueprint's job (Context).
 #[derive(serde::Deserialize, Debug, Clone)]
-#[serde(try_from = "String")]
+#[serde(deny_unknown_fields)]
 pub struct BlockStateSpec {
+    #[serde(rename = "Name")]
     pub block: ResourceLocation,
+    #[serde(rename = "Properties", default)]
     pub properties: BTreeMap<String, String>,
-}
-impl TryFrom<String> for BlockStateSpec {
-    type Error = String;
-    /// Splits on the first `[`, block id before it, `key=value` comma list (trailing
-    /// `]` stripped) after it; no `[` at all -> empty `properties`.
-    fn try_from(s: String) -> Result<Self, String>;
 }
 
 /// 6 `HeightProvider` kinds (`docs/research/mc-26.2/05-worldgen.md §2/§4` package table
@@ -260,9 +428,10 @@ pub enum DensityFunctionJson {
     OldBlendedNoise { xz_scale: f64, y_scale: f64, xz_factor: f64, y_factor: f64, smear_scale_multiplier: f64 }, // confirmed field names, 05-worldgen.md §3.6
     // --- interval / mapping ---
     RangeChoice { input: DensityFunctionRef, min_inclusive: f64, max_exclusive: f64, when_in_range: DensityFunctionRef, when_out_of_range: DensityFunctionRef },
-    /// `thresholds.len() + 1 == branches.len()` (GEN-D12's "N+1 functions" — validated
-    /// by `compile()`, Implementation steps). Field names moderate-confidence.
-    IntervalSelect { input: DensityFunctionRef, thresholds: Vec<f64>, branches: Vec<DensityFunctionRef> },
+    /// `thresholds.len() + 1 == functions.len()`, `functions.len() >= 2`, and `thresholds`
+    /// ascending (GEN-D12's "N+1 functions" plus vanilla's own `listOf(2, MAX)`/ordering
+    /// checks — validated by `compile()`, Implementation steps). Confirmed field names.
+    IntervalSelect { input: DensityFunctionRef, thresholds: Vec<f64>, functions: Vec<DensityFunctionRef> },
     Spline { spline: SplineJson },
     YClampedGradient { from_y: i32, to_y: i32, from_value: f64, to_value: f64 },
     FindTopSurface {}, // moderate-confidence zero-field marker, Context
@@ -285,9 +454,12 @@ pub enum DensityFunctionJson {
     EndIslands {},
 }
 
-/// Mirrors `CubicSpline<C>` exactly (`docs/research/mc-26.2/17-noise-math.md §3.7`,
-/// confirmed field shape): a spline is either a bare constant or a strictly-ascending
-/// `locations` list, each with its own (possibly nested) `values` spline and `derivatives`.
+/// Mirrors `CubicSpline<C>` (`docs/research/mc-26.2/17-noise-math.md §3.7`): a spline is
+/// either a bare constant or a multipoint object with a mandatory `coordinate` field (the
+/// density-function reference the spline is sampled over) and a `points` list, each point
+/// carrying its own (possibly nested) `value` spline and a `derivative`. Strict ascending
+/// order of the points' `location`s is enforced only by the Java-side builder, never by
+/// the codec path itself — this blueprint's own `compile()` does not re-derive that check.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SplineJson {
@@ -305,10 +477,13 @@ use super::common::{HeightProviderJson, ResourceLocation};
 use super::density_function::DensityFunctionJson;
 use std::collections::BTreeMap;
 
-/// `worldgen/noise/*.json` — `NormalNoise.NoiseParameters` (61 files).
+/// `worldgen/noise/**/*.json` (walked recursively, never a non-recursive `noise/*.json`
+/// glob — that would silently drop `noise/nether/temperature.json` and
+/// `noise/nether/vegetation.json`) — `NormalNoise.NoiseParameters` (63 files). The key is
+/// camelCase `firstOctave`, not `first_octave`.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct NoiseParamsJson { pub first_octave: i32, pub amplitudes: Vec<f64> }
+pub struct NoiseParamsJson { #[serde(rename = "firstOctave")] pub first_octave: i32, pub amplitudes: Vec<f64> }
 
 /// `NoiseSettings`'s four ints (`05-worldgen.md §3.5`; field names moderate-confidence,
 /// standard public datapack schema).
@@ -332,13 +507,16 @@ pub struct NoiseDimensionsJson {
 /// `fluid_level_spread_noise`/`lava_noise` accordingly). The *set of 15 slots* is
 /// confirmed; exact JSON casing is moderate-confidence, reconciled per Context.
 ///
-/// Every slot is a `DensityFunctionRef`, **not** a bare `DensityFunctionJson`: real
-/// `noise_settings` files overwhelmingly wire each slot to a *named* entry under
-/// `data/minecraft/worldgen/density_function/**` (`NoiseRouterData`'s own "named
-/// intermediate `DensityFunction` registry entries... so multiple presets can reuse the
-/// same field," `05-worldgen.md §3.4`) rather than inlining the whole graph per preset —
-/// this is exactly the string-reference shape `DensityFunctionRef::Reference` exists to
-/// decode.
+/// Every slot is a `DensityFunctionRef`, **not** a bare `DensityFunctionJson`, because a
+/// slot *may* be wired to a *named* entry under `data/minecraft/worldgen/density_function/**`
+/// (`NoiseRouterData`'s own "named intermediate `DensityFunction` registry entries... so
+/// multiple presets can reuse the same field," `05-worldgen.md §3.4`) — but real
+/// `noise_settings` files overwhelmingly do **not**: only 12 of 105 slots across the 7
+/// presets (`continents`/`depth`/`erosion`/`ridges` in `overworld`/`large_biomes`/
+/// `amplified` only) are string references, and every other slot in every preset,
+/// `caves`/`end`/`floating_islands`/`nether` included, inlines the whole sub-graph. A
+/// fully inlined router is the common case; `DensityFunctionRef::Reference` exists for
+/// the 11.4 percent minority that is a named reference, not the rule.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct NoiseRouterJson {
@@ -374,7 +552,7 @@ pub enum SurfaceRuleJson {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SurfaceConditionJson {
     Biome { biome_is: Vec<ResourceLocation> },
-    NoiseThreshold { noise: String, min_threshold: f64, max_threshold: f64 },
+    NoiseThreshold { noise: String, min_threshold: f64, max_threshold: f64, #[serde(default)] is_3d: bool },
     VerticalGradient { random_name: String, true_at_and_below: super::common::VerticalAnchorJson, false_at_and_above: super::common::VerticalAnchorJson },
     YAbove { anchor: super::common::VerticalAnchorJson, surface_depth_multiplier: i32, add_stone_depth: bool },
     Water { offset: i32, surface_depth_multiplier: i32, add_stone_depth: bool },
@@ -389,8 +567,8 @@ pub enum SurfaceConditionJson {
 #[serde(rename_all = "snake_case")]
 pub enum StoneDepthSurfaceTypeJson { Floor, Ceiling }
 
-/// One `spawn_target` entry — a 6-axis (7th "offset" axis omitted, always 0 for a spawn
-/// target per vanilla) climate point, reusing the biome-parameter-list point shape.
+/// One `spawn_target` entry — a 7-axis climate point (`offset` is a required field,
+/// written explicitly, never omitted), reusing the biome-parameter-list point shape.
 pub type SpawnTargetPointJson = super::biome::BiomeParameterPointJson;
 
 /// `worldgen/noise_settings/*.json` — the full per-preset bundle (confirmed exact
@@ -415,9 +593,17 @@ pub struct NoiseGeneratorSettingsJson {
 ### `xtask/src/worldgen_data/schema/biome.rs`
 
 ```rust
-/// One entry of `reports/biome_parameters/minecraft/{overworld,nether}.json`
-/// (confirmed shape, `05-worldgen.md §7`): `parameters` maps each of the 7 climate
-/// axes to either a scalar point or a `[min, max]` span.
+/// The top-level shape of `reports/biome_parameters/minecraft/{overworld,nether}.json`
+/// itself: `{"biomes": [BiomeParameterEntryJson, ...]}`, never a bare top-level array.
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct BiomeParametersFileJson {
+    pub biomes: Vec<BiomeParameterEntryJson>,
+}
+
+/// One entry of that file's `biomes` array (confirmed shape, `05-worldgen.md §7`):
+/// `parameters` maps each of the 7 climate axes to either a scalar point or a
+/// `[min, max]` span.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct BiomeParameterEntryJson {
@@ -425,6 +611,8 @@ pub struct BiomeParameterEntryJson {
     pub parameters: BiomeParameterPointJson,
 }
 
+/// All 7 climate axes are required fields, `offset` included — every real entry
+/// (overworld's 7594 and nether's 5) writes `offset` explicitly; there is no default.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct BiomeParameterPointJson {
@@ -434,8 +622,7 @@ pub struct BiomeParameterPointJson {
     pub erosion: ClimateSpanJson,
     pub depth: ClimateSpanJson,
     pub weirdness: ClimateSpanJson,
-    #[serde(default)]
-    pub offset: Option<f32>,
+    pub offset: f32,
 }
 
 /// A scalar point (`min == max`) or a `[min, max]` span, both in raw `f32` units
@@ -452,23 +639,36 @@ pub enum ClimateSpanJson {
 
 ```rust
 use super::common::{HeightProviderJson, IntProviderJson, ResourceLocation, TagOrList};
+use std::collections::BTreeMap;
 
-/// `worldgen/configured_carver/*.json` (4 files). Fields per `docs/research/mc-26.2/
-/// 05-worldgen.md §3.12`'s described shape; `probability`/`y`/replaceable-block-set
-/// confirmed present, exact key names moderate-confidence.
+/// `worldgen/configured_carver/*.json` (4 files): a `{type, config}` wrapper — the
+/// shared/type-specific fields all live under `config`, per `docs/research/mc-26.2/
+/// 05-worldgen.md §3.12` and confirmed against real data (Context).
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ConfiguredCarverJson {
     #[serde(rename = "type")]
-    pub carver_type: String, // "minecraft:cave" | "minecraft:canyon" (2 WorldCarver types, 4 configured instances)
+    pub carver_type: String, // "minecraft:cave" | "minecraft:nether_cave" | "minecraft:canyon" (3 WorldCarver types, 4 configured instances)
+    pub config: CarverConfigJson,
+}
+
+/// `CarverConfiguration`'s shared fields, present on every configured carver — `yScale`
+/// (camelCase) included, since it is shared, not canyon-only. Every type-specific extra
+/// field (`horizontal_radius_multiplier`/`vertical_radius_multiplier`/`floor_level` on
+/// cave carvers, `vertical_rotation`/`shape` on the canyon carver) lands in `extra`
+/// (Context's opaque-payload rule — same pattern as `StructureJson`'s own `extra`).
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct CarverConfigJson {
     pub probability: f32,
     pub y: HeightProviderJson,
-    #[serde(default)]
-    pub y_scale: Option<serde_json::Value>, // canyon-only field, shape not confirmed — opaque, Context
+    #[serde(rename = "yScale")]
+    pub y_scale: serde_json::Value, // a FloatProvider — opaque, Context
     pub lava_level: super::common::VerticalAnchorJson,
     pub replaceable: TagOrList<ResourceLocation>,
     #[serde(default)]
     pub debug_settings: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// `worldgen/configured_feature/*.json` (226 files). `config`'s inner shape is
@@ -533,7 +733,7 @@ pub enum DecorationStep {
 #[serde(rename_all = "snake_case")]
 pub enum TerrainAdaptation { #[default] None, Bury, BeardThin, BeardBox, Encapsulate }
 
-/// `worldgen/structure/*.json` (31 files). Common `StructureSettings` fields
+/// `worldgen/structure/*.json` (34 files). Common `StructureSettings` fields
 /// (confirmed, `06-structures.md §3.1`) are typed; every type-specific field (jigsaw's
 /// `start_pool`/`size`/… included) lands in `extra` (Context's opaque-payload rule) —
 /// this blueprint validates the common shape and every family's *cross-references*
@@ -543,7 +743,7 @@ pub enum TerrainAdaptation { #[default] None, Bury, BeardThin, BeardBox, Encapsu
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct StructureJson {
     #[serde(rename = "type")]
-    pub structure_type: String, // one of 15 StructureType ids, confirmed list §3.1
+    pub structure_type: String, // one of 16 StructureType ids, confirmed list §3.1
     pub biomes: TagOrList<ResourceLocation>,
     pub step: DecorationStep,
     #[serde(default)]
@@ -591,6 +791,12 @@ pub enum StructurePlacementJson {
         preferred_biomes: TagOrList<ResourceLocation>,
         #[serde(default)]
         locate_offset: Option<[i32; 3]>,
+        #[serde(default)]
+        frequency_reduction_method: Option<String>,
+        #[serde(default)]
+        frequency: Option<f32>,
+        #[serde(default)]
+        exclusion_zone: Option<serde_json::Value>,
     },
 }
 #[derive(serde::Deserialize, Debug, Clone, Default)]
@@ -609,18 +815,38 @@ pub struct TemplatePoolJson {
 pub struct WeightedPoolElementJson { pub element: PoolElementJson, pub weight: u32 }
 
 /// The 5 `StructurePoolElementType`s (confirmed list, `06-structures.md §3.5`).
+/// `projection` is a required field on every variant that has it — it has no default,
+/// and every real non-`empty_pool_element` entry writes it explicitly; only
+/// `EmptyPoolElement`, which has no fields at all, omits it. `single_pool_element`/
+/// `legacy_single_pool_element` also carry an optional `override_liquid_settings`,
+/// present in none of the 188 vanilla template-pool files but still declared here since
+/// this schema denies unknown fields.
 #[derive(serde::Deserialize, Debug, Clone)]
 #[serde(tag = "element_type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PoolElementJson {
-    SinglePoolElement { location: String, #[serde(default)] processors: Option<String>, #[serde(default)] projection: ProjectionJson },
-    LegacySinglePoolElement { location: String, #[serde(default)] processors: Option<String>, #[serde(default)] projection: ProjectionJson },
-    FeaturePoolElement { feature: String, #[serde(default)] projection: ProjectionJson },
-    ListPoolElement { elements: Vec<PoolElementJson>, #[serde(default)] projection: ProjectionJson },
+    SinglePoolElement {
+        location: String,
+        #[serde(default)]
+        processors: Option<String>,
+        projection: ProjectionJson,
+        #[serde(default)]
+        override_liquid_settings: Option<serde_json::Value>,
+    },
+    LegacySinglePoolElement {
+        location: String,
+        #[serde(default)]
+        processors: Option<String>,
+        projection: ProjectionJson,
+        #[serde(default)]
+        override_liquid_settings: Option<serde_json::Value>,
+    },
+    FeaturePoolElement { feature: String, projection: ProjectionJson },
+    ListPoolElement { elements: Vec<PoolElementJson>, projection: ProjectionJson },
     EmptyPoolElement {},
 }
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectionJson { #[default] Rigid, TerrainMatching }
+pub enum ProjectionJson { Rigid, TerrainMatching }
 
 /// `worldgen/processor_list/*.json` (confirmed field/shape, §3.8/§3.9/§7).
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -695,7 +921,8 @@ pub enum CompileError {
     DanglingReference { from: ResourceLocation, field: String, target: String },
     /// A cycle among named density-function/noise references (Context).
     ReferenceCycle { cycle: Vec<ResourceLocation> },
-    /// `IntervalSelect` where `thresholds.len() + 1 != branches.len()`.
+    /// `IntervalSelect` where `thresholds.len() + 1 != functions.len()` (or `functions`
+    /// has fewer than 2 entries).
     ArityMismatch { file: ResourceLocation, message: String },
     Io { path: std::path::PathBuf, message: String },
 }
@@ -743,7 +970,8 @@ pub struct RawWorldgenJson {
     pub noise_params: BTreeMap<ResourceLocation, NoiseParamsJson>,
     pub noise_generator_settings: BTreeMap<ResourceLocation, NoiseGeneratorSettingsJson>,
     /// Keyed by dimension family (`"minecraft:overworld"`, `"minecraft:nether"`), value
-    /// = that file's flat entry list (Context's biome_parameters correction).
+    /// = that file's `BiomeParametersFileJson.biomes` array, unwrapped from the file's
+    /// `{"biomes": [...]}` object (Context's biome_parameters correction).
     pub biome_parameter_lists: BTreeMap<ResourceLocation, Vec<BiomeParameterEntryJson>>,
     pub configured_carvers: BTreeMap<ResourceLocation, ConfiguredCarverJson>,
     pub configured_features: BTreeMap<ResourceLocation, ConfiguredFeatureJson>,
@@ -944,7 +1172,7 @@ pub struct QuantizedClimatePoint {
     pub erosion: QuantizedSpan,
     pub depth: QuantizedSpan,
     pub weirdness: QuantizedSpan,
-    pub offset: i64, // quantize_climate(offset.unwrap_or(0.0))
+    pub offset: i64, // quantize_climate(offset) — offset is a required source field, never defaulted
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -1078,7 +1306,7 @@ step 13's separate, manual, jar-gated step, exactly mirroring M0-B07's own step 
 1. `parses_constant_and_bare_number_shorthand` — `r#"{"type":"minecraft:constant","argument":1.5}"#` parses to `DensityFunctionJson::Constant{argument: 1.5}`; a `DensityFunctionRef` field fed the bare JSON `2.0` parses to `DensityFunctionRef::Number(2.0)`.
 2. `parses_add_with_nested_inline_and_reference_children` — `{"type":"minecraft:add","argument1":{"type":"minecraft:constant","argument":1.0},"argument2":"minecraft:overworld/continents"}` parses; `argument1` is `Inline(Constant{1.0})`, `argument2` is `Reference("minecraft:overworld/continents")`.
 3. `parses_spline_multipoint_recursively` — a 2-point `spline` object with one point's `value` itself a nested `Multipoint`; both levels parse, `points.len() == 2`, the nested level's own `points.len()` matches.
-4. `parses_interval_select_thresholds_and_branches` — a 2-threshold, 3-branch `interval_select` parses with `thresholds.len() == 2`, `branches.len() == 3`.
+4. `parses_interval_select_thresholds_and_functions` — a 2-threshold, 3-function `interval_select` parses with `thresholds.len() == 2`, `functions.len() == 3`.
 5. `unknown_density_function_type_is_a_parse_error` — `{"type":"minecraft:not_a_real_node","argument":1.0}"` fails to deserialize into `DensityFunctionJson` (serde's own tag-not-found error — this is what `read_raw_worldgen_json` turns into `CompileError::UnknownNodeKind`, tested at the `compile` level in a separate test below).
 6. `all_34_variants_round_trip_a_minimal_literal` — table-driven: one minimal, syntactically-valid JSON literal per one of the 34 `DensityFunctionJson` variants (constructed by hand, matching each variant's field list above), asserting each parses without error and matches the expected variant discriminant.
 
@@ -1110,7 +1338,7 @@ step 13's separate, manual, jar-gated step, exactly mirroring M0-B07's own step 
 1. `unknown_node_kind_is_reported_with_file_and_kind` — a `RawWorldgenJson` whose single density-function file fails to parse under `DensityFunctionJson` (constructed via `read_raw_worldgen_json` against a temp-directory fixture containing one malformed file, per test 6 above's item 5) surfaces a `CompileError::ParseError`/`UnknownNodeKind` naming that file's `ResourceLocation`.
 2. `dangling_density_function_reference_is_reported` — a `noise_router` slot referencing `"minecraft:does_not_exist"`; `compile` returns `Err` containing exactly one `CompileError::DanglingReference{target: "minecraft:does_not_exist", ..}`.
 3. `reference_cycle_is_detected` — two named density-function entries, `a` referencing `b` and `b` referencing `a`; `compile` returns `Err` containing a `CompileError::ReferenceCycle` whose `cycle` contains both `a` and `b`.
-4. `interval_select_arity_mismatch_is_reported` — an `interval_select` with 2 thresholds but only 2 branches (should be 3); `compile` returns `Err` containing a `CompileError::ArityMismatch`.
+4. `interval_select_arity_mismatch_is_reported` — an `interval_select` with 2 thresholds but only 2 functions (should be 3); `compile` returns `Err` containing a `CompileError::ArityMismatch`.
 5. `multiple_errors_are_all_collected_not_just_the_first` — a `RawWorldgenJson` containing both a dangling reference and an arity mismatch in unrelated entries; `compile`'s `Err` contains both errors, not just one.
 
 ### `xtask/tests/worldgen_compile_golden_shape.rs`
@@ -1130,14 +1358,14 @@ step 13's separate, manual, jar-gated step, exactly mirroring M0-B07's own step 
 ## Implementation steps
 
 1. **`xtask/Cargo.toml` + `crates/worldgen/Cargo.toml`.** Apply the Deliverables edits exactly.
-2. **`xtask/src/worldgen_data/schema/common.rs`.** Implement `ResourceLocation::parse`/`as_string` and its `serde(try_from/into = "String")` impls; `BlockStateSpec::try_from(String)`; the `HeightProviderJson` bare-shorthand fallback (a custom `Deserialize` impl: try the tagged-enum form first via `serde_json::Value` re-parse, fall back to `VerticalAnchorJson` on failure — mirrors `DensityFunctionRef`'s own untagged pattern but needs a manual impl since the tagged variant isn't itself untaggable alongside a bare value in one `#[serde(untagged)]` block cleanly). Observable: compiles; `worldgen_schema_density_function.rs`'s bare-number test (via `DensityFunctionRef`, which depends on nothing from this file) already passes independent of this step.
+2. **`xtask/src/worldgen_data/schema/common.rs`.** Implement `ResourceLocation::parse`/`as_string` and its `serde(try_from/into = "String")` impls; `BlockStateSpec` deserializes directly via its `#[derive(Deserialize)]` object shape (`Name`/`Properties`, no manual `TryFrom`); the `HeightProviderJson` bare-shorthand fallback (a custom `Deserialize` impl: try the tagged-enum form first via `serde_json::Value` re-parse, fall back to `VerticalAnchorJson` on failure — mirrors `DensityFunctionRef`'s own untagged pattern but needs a manual impl since the tagged variant isn't itself untaggable alongside a bare value in one `#[serde(untagged)]` block cleanly). Observable: compiles; `worldgen_schema_density_function.rs`'s bare-number test (via `DensityFunctionRef`, which depends on nothing from this file) already passes independent of this step.
 3. **`xtask/src/worldgen_data/schema/density_function.rs`.** Exactly the 34-variant enum and `SplineJson`/`DensityFunctionRef` as declared. Observable: `worldgen_schema_density_function.rs` passes.
 4. **`xtask/src/worldgen_data/schema/{noise_settings.rs, biome.rs}`.** As declared; `SpawnTargetPointJson` is a type alias to `biome::BiomeParameterPointJson`, so write `biome.rs` first. Observable: `worldgen_schema_noise_settings.rs`, `worldgen_schema_biome.rs` pass.
 5. **`xtask/src/worldgen_data/schema/{feature.rs, structure.rs}`.** As declared. Observable: `worldgen_schema_structure.rs` passes (`worldgen_schema_feature.rs` is not a named test file in this blueprint's own Acceptance tests — feature/placement schema correctness is exercised indirectly via `worldgen_compile_golden_shape.rs` and the density-function-focused tests above; a dedicated feature-schema test file is not required by this blueprint but is not forbidden if an implementer wants extra coverage).
 6. **`xtask/src/worldgen_data/error.rs`, `intern.rs`.** As declared.
 7. **`crates/worldgen/src/data/types.rs`.** Every compiled type per the substitution table, `derive(Serialize, Deserialize, Clone, Debug)` throughout (plus `PartialEq` — Acceptance tests' note). Observable: `cargo build -p rc-worldgen` compiles.
 8. **`crates/worldgen/src/data/loader.rs`, `mod.rs`, `crates/worldgen/src/lib.rs`.** As declared. Observable: `crates/worldgen/tests/data_loader.rs` passes.
-9. **`xtask/src/worldgen_data/compile.rs` — `compile`.** Algorithm, in order: (a) intern every `density_functions`/`noise_params` entry via two `Interner`s (Deliverables), assigning ids in ascending `ResourceLocation` order (Context rule 2); (b) recursively lower every `DensityFunctionJson`/`DensityFunctionRef` into `DensityFunctionGraph` entries — `Number(v)` and inline objects allocate a fresh anonymous node each time they're encountered (no dedup across structurally-identical-but-separately-written inline nodes — GEN-D12's memoization is an *evaluation-time* concern over this graph's ids, not a compile-time dedup concern), a `DensityFunctionRef::Reference(name)` looks up `name` in the density-function `Interner`, missing -> `CompileError::DanglingReference`; **separately**, every `Noise`/`OldBlendedNoise`-adjacent node's own `noise`/`argument: String` field (`Noise`, `ShiftedNoise`, `ShiftA`, `ShiftB`, `Shift`) is resolved the identical way but against the **`noise_params` `Interner`** instead, producing a `NoiseParamId` stored on the lowered `DensityFunctionNode`, same `DanglingReference` error shape on a miss — two distinct interners, two distinct id types, the same lookup-and-report pattern; (c) after every named entry is lowered, run a cycle check over the *named* subset only (anonymous inline nodes cannot participate in a cycle by construction, since they have no name to be referenced by) via DFS with a recursion-stack set, collecting one `CompileError::ReferenceCycle` per detected cycle; (d) validate `IntervalSelect`'s `thresholds.len() + 1 == branches.len()` per node, `CompileError::ArityMismatch` on mismatch; (e) lower every other family (`noise_generator_settings` — including its own `noise_router`'s 15 `DensityFunctionRef` slots and `surface_rule`'s `noise_threshold` conditions' own `noise: String` field, both resolved exactly as (b)'s two-interner pattern — plus `spawn_target`'s climate points via `quantize_climate`, Deliverables; `configured_carvers`; `configured_features` + their own id interner; `placed_features` resolving `feature: String` against that interner; `structure_sets`; `structures` + interner; `template_pools` + interner resolving `fallback`/`feature`/`processors` references; `processor_lists` + interner), collecting `DanglingReference` for every unresolved cross-family string exactly as step (b) does; (f) if the collected error `Vec` is non-empty, return `Err`; else assemble and return the full `WorldgenData`. Observable: `worldgen_compile_determinism.rs`, `worldgen_compile_errors.rs`, `worldgen_compile_golden_shape.rs` all pass.
+9. **`xtask/src/worldgen_data/compile.rs` — `compile`.** Algorithm, in order: (a) intern every `density_functions`/`noise_params` entry via two `Interner`s (Deliverables), assigning ids in ascending `ResourceLocation` order (Context rule 2); (b) recursively lower every `DensityFunctionJson`/`DensityFunctionRef` into `DensityFunctionGraph` entries — `Number(v)` and inline objects allocate a fresh anonymous node each time they're encountered (no dedup across structurally-identical-but-separately-written inline nodes — GEN-D12's memoization is an *evaluation-time* concern over this graph's ids, not a compile-time dedup concern), a `DensityFunctionRef::Reference(name)` looks up `name` in the density-function `Interner`, missing -> `CompileError::DanglingReference`; **separately**, every `Noise`/`OldBlendedNoise`-adjacent node's own `noise`/`argument: String` field (`Noise`, `ShiftedNoise`, `ShiftA`, `ShiftB`, `Shift`) is resolved the identical way but against the **`noise_params` `Interner`** instead, producing a `NoiseParamId` stored on the lowered `DensityFunctionNode`, same `DanglingReference` error shape on a miss — two distinct interners, two distinct id types, the same lookup-and-report pattern; (c) after every named entry is lowered, run a cycle check over the *named* subset only (anonymous inline nodes cannot participate in a cycle by construction, since they have no name to be referenced by) via DFS with a recursion-stack set, collecting one `CompileError::ReferenceCycle` per detected cycle; (d) validate `IntervalSelect`'s `thresholds.len() + 1 == functions.len()` and `functions.len() >= 2` per node (mirroring vanilla's own `listOf(2, Integer.MAX_VALUE)` and `validate()` size check), `CompileError::ArityMismatch` on any mismatch; (e) lower every other family (`noise_generator_settings` — including its own `noise_router`'s 15 `DensityFunctionRef` slots and `surface_rule`'s `noise_threshold` conditions' own `noise: String` field, both resolved exactly as (b)'s two-interner pattern — plus `spawn_target`'s climate points via `quantize_climate`, Deliverables; `configured_carvers`; `configured_features` + their own id interner; `placed_features` resolving `feature: String` against that interner; `structure_sets`; `structures` + interner; `template_pools` + interner resolving `fallback`/`feature`/`processors` references; `processor_lists` + interner), collecting `DanglingReference` for every unresolved cross-family string exactly as step (b) does; (f) if the collected error `Vec` is non-empty, return `Err`; else assemble and return the full `WorldgenData`. Observable: `worldgen_compile_determinism.rs`, `worldgen_compile_errors.rs`, `worldgen_compile_golden_shape.rs` all pass.
 10. **`xtask/src/worldgen_data/extract.rs` — `read_raw_worldgen_json`.** Walk each family's directory recursively (`walkdir`-free — plain recursive `std::fs::read_dir`, no new dependency), deriving each file's `ResourceLocation` from its path relative to the family root (Deliverables' doc comment gives the exact rule); `serde_json::from_str` each file under its family's schema type, collecting `CompileError::ParseError`/`Io` per failure rather than stopping. Observable: exercised by `worldgen_compile_errors.rs`'s item 1 (via a small temp-directory fixture) and, implicitly, by the manual step below.
 11. **`xtask/src/worldgen_data/extract.rs` — `run`.** Mirrors M0-B07's `fetch.rs::run` exactly for jar acquisition (steps (a)-(e) of that function, reused verbatim in structure — `--offline`/`--server-jar` handling identical): call `crate::fetch_data::fetch_server_jar`/construct a `FetchedJar` under `--offline` exactly as M0-B07 does. Then: (f) call `crate::fetch_data::run_data_reports` (for `biome_parameters/**`, reused, not reinvoked a second time if M0-B07's own `fetch-data` already populated the same cache — `run_data_reports` is idempotent, Context); (g) open the jar via `zip::ZipArchive`, iterate every entry whose name starts with `data/minecraft/worldgen/`, `data/minecraft/dimension/`, or `data/minecraft/dimension_type/`, and extract each to the identical relative path under `worldgen_json_dir` (create parent dirs as needed); never touch any entry under `data/minecraft/structure/` (GEN-D23 — no matching prefix in the extraction filter above, so this is enforced by construction, not a separate check). Observable: exercised only by the manual verification procedure (needs a real jar).
 12. **`xtask/src/main.rs` dispatch + `worldgen_data`/`fixture_manifest` wiring for `CompileWorldgenData`.** `FetchWorldgenData{..}` -> `worldgen_data::extract::run`. `CompileWorldgenData{..}` -> `worldgen_data::extract::read_raw_worldgen_json` then `worldgen_data::compile::compile`; on success, `postcard::to_allocvec(&data)`, write `crates/worldgen/generated/v{protocol_version}/data.postcard`, build the manifest via the **reused** `xtask::fixture_manifest::build_manifest` (M0-B07, unmodified) over `[("data.postcard", bytes)]`, write `MANIFEST.json`, immediately self-verify via `fixture_manifest::verify_manifest` exactly as `codegen::run` does. `VerifyGenerated` (M0-B07's existing verb) is extended to additionally check `crates/worldgen/generated/v776/MANIFEST.json` alongside its existing `crates/registries/generated/v776/MANIFEST.json` check — both are ordinary `verify_manifest` calls against different paths, no new logic. Observable: full automated test suite green.

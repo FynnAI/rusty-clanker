@@ -38,14 +38,15 @@ This tiering is the direct application of the standing project convention ("wher
 
 ### B. Pipeline position and scope boundary
 
-Carving is vanilla's `carvers` `ChunkStatus` stage: `Empty → StructureStarts → StructureReferences → Biomes → Noise → Surface → Carvers → Features → …` — it runs strictly after `Surface` (surface rules have already painted grass/dirt/sand) and strictly before `Features` (GEN-D19's decoration pipeline, which reads `Carvers`' output via the `carving_mask` placement modifier — this blueprint's `CarvingMask`, §F, is that future modifier's input). The `GenStage` scheduling/wiring itself (running this off-tick on `RC-WorkerPool`, ARCH-D18–D20) is a future GenStage-driver blueprint's own scope, restated here only so this blueprint's own inputs/outputs are unambiguous: this blueprint's public entry point (§Deliverables `pass::run_carvers_for_chunk`) is a **pure function** of `(world_seed, target_chunk_x, target_chunk_z, WorldgenData, injected boundaries)` — it performs no I/O, no scheduling, and touches only the one `BlockStateColumn` passed to it (GEN-D18: never reads a neighbor chunk's materialized block state, only re-derives that neighbor's own carve geometry from coordinates).
+Carving is vanilla's `carvers` `ChunkStatus` stage: `Empty → StructureStarts → StructureReferences → Biomes → Noise → Surface → Carvers → Features → …` — it runs strictly after `Surface` (surface rules have already painted grass/dirt/sand) and strictly before `Features` (GEN-D19's decoration pipeline; vanilla 26.2 has no `carving_mask` placement modifier — `PlacementModifierType` registers 15 modifier types and none is a carving-mask filter, and `PlacementContext.getCarvingMask(ChunkPos)` exists but has no caller anywhere in the source, so Features does not consult the carve mask through any placement modifier — this blueprint's `CarvingMask`, §F, is retained as this pass's own per-chunk dedup structure and carve-geometry output, with the exact mechanism a future decoration-pipeline blueprint uses to expose it to Features left an open question for that blueprint). The `GenStage` scheduling/wiring itself (running this off-tick on `RC-WorkerPool`, ARCH-D18–D20) is a future GenStage-driver blueprint's own scope, restated here only so this blueprint's own inputs/outputs are unambiguous: this blueprint's public entry point (§Deliverables `pass::run_carvers_for_chunk`) is a **pure function** of `(world_seed, target_chunk_x, target_chunk_z, WorldgenData, injected boundaries)` — it performs no I/O, no scheduling, and touches only the one `BlockStateColumn` passed to it (GEN-D18: never reads a neighbor chunk's materialized block state, only re-derives that neighbor's own carve geometry from coordinates).
 
 This blueprint does **not** own, and defines only a narrow trait seam for:
 
 - **The aquifer simulation itself** (GEN-D15 — the 4-nearest-neighbor jittered-grid barrier/fluid-level algorithm; not yet blueprinted anywhere in this milestone). §H defines `AquiferSampler`, the exact contract carving consults, plus a vanilla-faithful `DisabledAquifer` default (`Aquifer.createDisabled`'s own fallback behavior, not an approximation of it) usable until the real aquifer blueprint lands.
 - **Surface re-topping** (GEN-D17 — the surface-rule-tree interpreter; not yet blueprinted). §H defines `SurfaceRetopper` plus a no-op default, explicitly flagged **[C-LOW]** until GEN-D17 exists to back it.
 - **Per-biome carver-list resolution.** Neither M5-B02 nor M5-B05 model `data/minecraft/worldgen/biome/*.json`'s own `carvers` field (the per-biome, per-decoration-step ordered list of configured-carver ids) — `WorldgenData` has no such field today. §G defines `BiomeCarverSource`, the seam a future blueprint (most naturally the one that finally parses `worldgen/biome/*.json`'s remaining fields for GEN-D19's own features-list needs) implements concretely.
-- **Feature/decoration placement** (GEN-D19, including the `carving_mask` placement modifier that will read this blueprint's `CarvingMask` output) — a future blueprint.
+- **Feature/decoration placement** (GEN-D19 — vanilla 26.2 has no `carving_mask` placement modifier; how a future decoration pipeline reads this blueprint's `CarvingMask` output is that blueprint's own open question) — a future blueprint.
+- **The `NetherWorldCarver` algorithm** (registry id `nether_cave`, dispatched as configured-carver type `"minecraft:nether_cave"` — a distinct algorithm from `CaveWorldCarver`, not a config-only variant of it: it overrides `getCaveBound`/`getThickness`/`getYScale`/`carveBlock` entirely). This blueprint's `cave`/`canyon` dispatch (§C) does not implement it; a configured carver of that type is out of this blueprint's own scope.
 
 Every one of these is a real, load-bearing gap in the corpus available to this blueprint, not an oversight — each is closed with a trait boundary plus a vanilla-faithful default (never a silent approximation dressed as the real thing) so this blueprint compiles, tests, and is usable standalone today, and slots in exactly as written once its neighbor blueprint lands.
 
@@ -53,11 +54,11 @@ Every one of these is a real, load-bearing gap in the corpus available to this b
 
 `applyCarvers`'s neighborhood is a **fixed, hardcoded 17×17 chunk block** (`dx, dz ∈ [-8, 8]`) around the target chunk — confirmed by direct decompiled-source reading in `docs/research/mc-26.2/24-seed-derivation-map.md` §3.8 ("the loop bound is a literal `range=8`, i.e. `±8` chunks = 17×17"), independently cross-confirmed by `05-worldgen.md`'s own constants table row. **This corrects `04-worldgen-parity.md` GEN-D18's own prose** ("the reach radius itself is read from the extracted carver JSON, never hardcoded") — the neighborhood bound is a fixed engine constant, not a per-carver JSON value, exactly the same style of prose correction M5-B01 Context §I already made to GEN-D6's carver-formula claim. A future revision of `04-worldgen-parity.md` should incorporate this correction; this blueprint follows the source-verified fact as authoritative.
 
-For each of the 289 candidate source chunks, in `dz` outer / `dx` inner order (matching vanilla's own nested-loop iteration — **[C-MED]** on the exact outer/inner axis order; the RNG draws consumed do not depend on scan order since each `(source_chunk, carver)` pair reseeds independently, so this ordering affects only *which order carve calls happen in*, never *what any individual carve call draws* — safe to reorder for parallelism per GEN-D26):
+For each of the 289 candidate source chunks, in `dx` outer / `dz` inner order (matching vanilla's own nested-loop iteration — **[C-HIGH]**, source-confirmed on the exact outer/inner axis order; the RNG draws consumed do not depend on scan order since each `(source_chunk, carver)` pair reseeds independently, so this ordering affects only *which order carve calls happen in*, never *what any individual carve call draws* — safe to reorder for parallelism per GEN-D26):
 
 ```text
-for dz in -8..=8:
-    for dx in -8..=8:
+for dx in -8..=8:
+    for dz in -8..=8:
         source_chunk_x = target_chunk_x + dx
         source_chunk_z = target_chunk_z + dz
         carver_ids = biome_carvers.air_carvers_for_chunk(source_chunk_x, source_chunk_z)
@@ -77,14 +78,14 @@ for dz in -8..=8:
             random.set_large_feature_seed(seed_param, source_chunk_x, source_chunk_z)
                 // seed+index is passed AS the `seed` parameter itself, not added
                 // after — M5-B01 Context §I's own restatement of this exact formula.
-            if random.next_float() < config.probability:   // is_start_chunk — exactly ONE draw
+            if random.next_float() <= config.probability:   // is_start_chunk — exactly ONE draw, LESS-THAN-OR-EQUAL
                 match config.carver_type.as_str():
                     "minecraft:cave"   => cave::carve(ctx, &config, random, source_chunk_x, source_chunk_z, target_chunk_x, target_chunk_z, column, mask, aquifer, retopper, replaceable_of(&config))
                     "minecraft:canyon" => canyon::carve(ctx, &config, random, source_chunk_x, source_chunk_z, target_chunk_x, target_chunk_z, column, mask, aquifer, retopper, replaceable_of(&config))
-                    other => unreachable — only 2 `WorldCarver` types exist in 26.2 (05-worldgen.md §2, `net.minecraft.world.level.levelgen.carver` package: `CaveWorldCarver`, `CanyonWorldCarver`, plus `NetherWorldCarver` — a `CaveWorldCarver` subclass reusing the identical tunnel algorithm with a different replaceable-block/Y-range config, i.e. still dispatched as `"minecraft:cave"` at the `carver_type` level per the 4-configured-instances-of-2-types split B02 already documents).
+                    other => unreachable for this blueprint's own two dispatch arms — vanilla 26.2 registers a THIRD `WorldCarver` type in `BuiltInRegistries.CARVER` (05-worldgen.md §2, `net.minecraft.world.level.levelgen.carver` package): `CaveWorldCarver` (id `cave`), `CanyonWorldCarver` (id `canyon`), and `NetherWorldCarver` (id `nether_cave`, dispatched as its own type `"minecraft:nether_cave"`, never `"minecraft:cave"`) — `NetherWorldCarver` overrides `getCaveBound`/`getThickness`/`getYScale`/`carveBlock` entirely rather than reusing `CaveWorldCarver`'s algorithm unchanged, so it is not a config-only variant of the cave path. Implementing that third dispatch arm is out of this blueprint's own scope (§B); a configured carver of type `"minecraft:nether_cave"` reaching this match falls into `other` today.
 ```
 
-A per-step **`canReach`-style early-exit prune** (checking whether a tunnel's current walk position could still possibly intersect the target chunk given its remaining step budget, so far-away source chunks' walks can bail out before fully simulating) is a **pure performance optimization, never required for correctness** — `ellipsoid::carve_ellipsoid` (§F) already clips every write to the target chunk's own local `[0,16)×[0,16)` bounds, so a walk that continues past the point of no-longer-possibly-reaching the target chunk simply produces zero further writes either way. This blueprint's own reference implementation therefore **omits `canReach` entirely** (always runs every walk to full completion) — correctness-identical to vanilla, slower. Implementing a `canReach`-equivalent prune later is an explicit, welcome, purely-additive performance optimization (consistent with GEN-D26's "safe to discard/recompute" framing) that must not change any bit of output.
+A per-step **`canReach`-style early-exit prune** (checking whether a tunnel's current walk position could still possibly intersect the target chunk given its remaining step budget, so far-away source chunks' walks can bail out before fully simulating) is **not** a pure performance optimization in vanilla: vanilla's own `canReach` is `if (!canReach(...)) return;` — it terminates the tunnel's *entire remaining walk*, not merely the current write. `canReach`'s own circular bound (radius `sqrt(remaining^2 + (thickness+18)^2)`) and `ellipsoid::carve_ellipsoid`'s own square horizontal-reach guard (half-width `16 + 2*horizontal_radius`) are not nested in one direction for every parameter — for large thickness `canReach` is the more permissive of the two — so a walk `canReach` prunes early can still contain later positions `carve_ellipsoid` would have accepted, and (for the cave carver) can suppress a later `currentStep == splitPoint` fork and both of its child tunnels. **Omitting `canReach` is therefore not output-identical to vanilla.** This blueprint's own reference implementation nonetheless omits it, as an explicit, bounded **[C-LOW]** deviation (never a silent approximation) pending a future reconciliation pass that implements the real `canReach` prune bit-exactly — until then, a walk this blueprint runs to full completion may write blocks vanilla's own pruned walk would never have reached, or may fail to suppress a fork vanilla's own prune would have suppressed.
 
 ### D. The carrier RNG is always Legacy, for every dimension — [C-HIGH]
 
@@ -175,7 +176,7 @@ trait BiomeCarverSource:
 
 Vanilla's own call is `sourceBiomeGenerationSettings.getCarvers()` at a representative point of the *source* (neighbor) chunk — i.e. the biome used is the neighbor's own, resolved as a pure function of coordinates (GEN-D14, never a read of the neighbor's own materialized/generated state, consistent with GEN-D13's "no field ever reads another chunk's already-generated block data"). The exact representative sample point (which quart-grid cell within the 4×4-block-resolution biome grid a whole 16×16 chunk collapses to for this purpose) is not pinned by any document available to this blueprint — **[C-LOW]**, left entirely to whichever future blueprint implements `BiomeCarverSource` concretely against M5-B05's `ClimateSampler`/biome-parameter-list search. This blueprint's own test changeset exercises the trait with a synthetic, hand-authored `BiomeCarverSource` (no real biome resolution), which is sufficient to validate everything this blueprint itself owns (seed derivation, dispatch, carve math) without depending on that still-open question.
 
-Only the biome's `air`-step carver list is modeled — vanilla's `GenerationStep.Carving` historically also declared a `liquid` step, but no carver registered against it survives in any 26.2-era configured carver B02 extracted (`cave`/`cave_extra_underground`/`nether_cave`/`canyon`, all four air-step), so this blueprint's `BiomeCarverSource` contract is scoped to `air` only — **[C-MED]**, flagged for reconciliation only if a future data extraction surfaces a real liquid-step carver.
+Vanilla 26.2 has no `GenerationStep.Carving` enum at all — `GenerationStep` declares only `Decoration`, and `BiomeGenerationSettings` stores carvers as a single flat `HolderSet<ConfiguredWorldCarver<?>>` under the JSON key `carvers`, with no per-step (air/liquid) dimension; the datafixer `CarvingStepRemoveFix` migrates the old chunk NBT `CarvingMasks.AIR` compound to a flat `carving_mask` key. This blueprint's `BiomeCarverSource` contract therefore models that single flat carver list directly — there is no separate `air`/`liquid` step for it to be scoped against — **[C-HIGH]**.
 
 ### H. Carvable-block set, aquifer/lava interaction, surface re-topping — `getCarveState`
 
@@ -210,27 +211,32 @@ trait AquiferSampler:
     fn should_schedule_fluid_update(&self) -> bool { false }   // provided default
 
 /// Vanilla `Aquifer.createDisabled(fluidPicker)` — no barrier/noise simulation at all,
-/// always applies a simple below-a-fixed-Y fluid rule. This is NOT an approximation of
-/// the real aquifer (GEN-D15) — it is vanilla's own real, named fallback path, usable as
-/// this trait's default until the real aquifer simulation blueprint lands.
+/// but not unconditional: it declines to override (returns `None`, i.e. no carve)
+/// whenever the `density` argument is greater than 0.0, and otherwise applies a simple
+/// below-a-fixed-Y fluid rule supplied by the picker (`fluid_level_y`/`fluid` below stand
+/// in for vanilla's own caller-injected `Aquifer.FluidPicker`). This is NOT an
+/// approximation of the real aquifer (GEN-D15) — it is vanilla's own real, named
+/// fallback path, usable as this trait's default until the real aquifer simulation
+/// blueprint lands.
 struct DisabledAquifer { fluid_level_y: i32, fluid: CarveFillState }
 impl AquiferSampler for DisabledAquifer:
-    fn compute_substance(&self, _x, world_y, _z, _density) -> Option<CarveFillState>:
-        if world_y < self.fluid_level_y: Some(self.fluid) else: Some(CarveFillState::Air)
+    fn compute_substance(&self, _x, world_y, _z, density) -> Option<CarveFillState>:
+        if density > 0.0: None
+        else if world_y < self.fluid_level_y: Some(self.fluid) else: Some(CarveFillState::Air)
 ```
 
-**Surface re-topping** — [C-MED] on the trigger condition (matches `05-worldgen.md` §3.12's own summary verbatim: "specially re-run the surface-material rule one block above any carved position that used to be grass/mycelium so newly-exposed dirt gets re-topped"), **[C-LOW]** on the exact replacement mechanics (this blueprint takes no position on what the re-topped block state actually becomes, deferring entirely to GEN-D17):
+**Surface re-topping** — [C-MED] on the trigger condition (TEST-D57 corrects `05-worldgen.md` §3.12's own summary: the re-top target is one block BELOW any carved position that used to be grass/mycelium — not one block above — and it fires only when that block below is `Blocks.DIRT`, after which the surface rule replaces it), **[C-LOW]** on the exact replacement mechanics (this blueprint takes no position on what the re-topped block state actually becomes, deferring entirely to GEN-D17):
 
 ```text
 trait SurfaceRetopper:
-    fn retop_above(&mut self, local_x: u8, world_y_above: i32, local_z: u8, column: &mut BlockStateColumn)
+    fn retop_below(&mut self, local_x: u8, world_y_below: i32, local_z: u8, column: &mut BlockStateColumn)
 
 struct NoRetop;
 impl SurfaceRetopper for NoRetop:
-    fn retop_above(&mut self, ..) { }   // explicit no-op — [C-LOW] until GEN-D17 exists
+    fn retop_below(&mut self, ..) { }   // explicit no-op — [C-LOW] until GEN-D17 exists
 ```
 
-The carving pass tracks, per XZ column being scanned by one ellipsoid call, a `reached_surface: bool` flag (`false` at the start of that column's Y scan, set `true` the first time a pre-carve block state at `grass_block`/`mycelium` is observed) and calls `retopper.retop_above(local_x, world_y + 1, local_z, column)` immediately after actually carving a block in a column where `reached_surface` is `true` — matching `05-worldgen.md`'s description precisely; the *consequence* of that call is `NoRetop`'s job to leave a no-op until GEN-D17 lands.
+The carving pass tracks, per XZ column being scanned by one ellipsoid call, a `reached_surface: bool` flag (`false` at the start of that column's Y scan, set `true` the first time a pre-carve block state at `grass_block`/`mycelium` is observed, and never reset for the remainder of that column's downward scan) and, immediately after actually carving a block in a column where `reached_surface` is `true`, checks the block one BELOW that carved position: only when it is `Blocks.DIRT` does it call `retopper.retop_below(local_x, world_y - 1, local_z, column)` — the *consequence* of that call is `NoRetop`'s job to leave a no-op until GEN-D17 lands.
 
 `CarveFillState` (this blueprint's own opaque fill-result enum, resolved to a real `BlockStateId` by the caller — this blueprint does not itself own a `grass_block`/`air`/`cave_air`/`water`/`lava` registry lookup):
 
@@ -238,7 +244,7 @@ The carving pass tracks, per XZ column being scanned by one ellipsoid call, a `r
 enum CarveFillState { Air, CaveAir, Water, Lava, Other(BlockStateId) }
 ```
 
-(`CaveAir` vs `Air`: vanilla distinguishes the two — carved-out underground space becomes `cave_air`, exposed-to-open-sky space becomes plain `air`; the exact "which is which" rule is **[C-LOW]**, deferred to the caller's own `CarveFillState -> BlockStateId` resolution — this blueprint's own carve algorithms always request `CaveAir` for a freshly-carved solid-to-air conversion, matching vanilla's own default carve fill, and never distinguish sky-exposure themselves.)
+(`CaveAir` vs `Air`: only `NetherWorldCarver` (out of this blueprint's own scope, §B) ever writes `CaveAir`, unconditionally above its lava cutoff; the shared `WorldCarver` carve path used by the cave and canyon carvers this blueprint implements always resolves a freshly-carved solid-to-air conversion to plain `Air`, since both the disabled-aquifer and real-aquifer non-fluid cases resolve to `Blocks.AIR` — this blueprint's own carve algorithms therefore always request `CarveFillState::Air`, never `CaveAir`, for a freshly-carved solid-to-air conversion.)
 
 ### I. The shared ellipsoid stamping primitive (`carveEllipsoid`) — [C-MED]
 
@@ -250,14 +256,23 @@ fn carve_ellipsoid(ctx, column, mask, aquifer, retopper, replaceable, config,
                     horizontal_radius: f64, vertical_radius: f64,
                     target_chunk_x: i32, target_chunk_z: i32,
                     skip: impl Fn(x_dist: f64, y_dist: f64, z_dist: f64, world_y: i32) -> bool):
-    if horizontal_radius < 0.5 or vertical_radius < 0.5: return    // [C-LOW] exact degenerate threshold
+    chunk_middle_x = target_chunk_x as f64 * 16.0 + 8.0
+    chunk_middle_z = target_chunk_z as f64 * 16.0 + 8.0
+    max_delta = 16.0 + horizontal_radius * 2.0
+    if (center_x - chunk_middle_x).abs() > max_delta or (center_z - chunk_middle_z).abs() > max_delta: return
+        // [C-MED] vanilla's own early reach guard against the chunk's middle block — NOT a radius
+        // threshold; there is no comparison against 0.5 or any other radius anywhere in this function.
+        // A degenerate small radius is instead handled implicitly by the index-bounds clamp below
+        // collapsing to an empty range.
 
     min_lx = clamp(floor_i32(center_x - horizontal_radius) - target_chunk_x*16 - 1, 0, 16)
     max_lx = clamp(floor_i32(center_x + horizontal_radius) - target_chunk_x*16 + 1, 0, 16)
     min_lz = clamp(floor_i32(center_z - horizontal_radius) - target_chunk_z*16 - 1, 0, 16)
     max_lz = clamp(floor_i32(center_z + horizontal_radius) - target_chunk_z*16 + 1, 0, 16)
-    min_y  = max(floor_i32(center_y - vertical_radius) - 1, ctx.min_y)
-    max_y  = min(floor_i32(center_y + vertical_radius) + 1, ctx.min_y + ctx.height - 1)
+    min_y  = max(floor_i32(center_y - vertical_radius) - 1, ctx.min_y + 1)
+    max_y  = min(floor_i32(center_y + vertical_radius) + 1, ctx.min_y + ctx.height - 1 - 7)
+        // [C-MED] the "- 7" protected-blocks-on-top term is vanilla's own ordinary (non-upgrading)
+        // case; the isUpgrading()-only "- 0" exception is out of this blueprint's own scope.
 
     for lx in min_lx..max_lx:
         world_x = target_chunk_x*16 + lx
@@ -267,8 +282,9 @@ fn carve_ellipsoid(ctx, column, mask, aquifer, retopper, replaceable, config,
             z_dist = ((world_z as f64 + 0.5) - center_z) / horizontal_radius
             if x_dist*x_dist + z_dist*z_dist >= 1.0: continue
             reached_surface = false
-            for world_y in (min_y..=max_y).rev():   // TOP TO BOTTOM — [C-MED] direction
-                y_dist = ((world_y as f64 + 0.5) - center_y) / vertical_radius
+            for world_y in (min_y+1..=max_y).rev():   // TOP TO BOTTOM, EXCLUSIVE of min_y — [C-MED] direction
+                y_dist = ((world_y as f64 - 0.5) - center_y) / vertical_radius   // MINUS 0.5 on Y, unlike
+                                                                                    // the PLUS 0.5 on x_dist/z_dist above
                 if skip(x_dist, y_dist, z_dist, world_y): continue
                 if !mask.set(lx as u8, world_y, lz as u8): continue   // already carved by an earlier
                                                                         // overlapping call — skip (dedup)
@@ -281,8 +297,8 @@ fn carve_ellipsoid(ctx, column, mask, aquifer, retopper, replaceable, config,
                     None => continue   // no bit written
                     Some(fill) => {
                         column.set(lx as u8, world_y, lz as u8, resolve_fill(fill))
-                        if reached_surface:
-                            retopper.retop_above(lx as u8, world_y + 1, lz as u8, column)
+                        if reached_surface and column.get(lx as u8, world_y - 1, lz as u8) is dirt:
+                            retopper.retop_below(lx as u8, world_y - 1, lz as u8, column)
                     }
 ```
 
@@ -290,7 +306,7 @@ fn carve_ellipsoid(ctx, column, mask, aquifer, retopper, replaceable, config,
 
 ### J. Cave carver — `CaveWorldCarver` — origin/count/room, then a branching worm-walk
 
-**`is_start_chunk`** — [C-HIGH]: `random.next_float() < config.probability`, exactly one draw (already folded into §C's dispatch loop; restated here as the carver-local entry point every future call-site table can point at).
+**`is_start_chunk`** — [C-HIGH]: `random.next_float() <= config.probability`, exactly one draw (already folded into §C's dispatch loop; restated here as the carver-local entry point every future call-site table can point at).
 
 **Cave count and per-cave origin** — [C-HIGH] for the count formula and its zero-bias shape; [C-MED] for the exact draw *order* among x/y/z/room:
 
@@ -445,7 +461,7 @@ fn init_width_factors(random, step_count, config) -> Vec<f32>:
 
 | Field (`ConfiguredCarver`, M5-B02) | Cave usage | Canyon usage |
 |---|---|---|
-| `carver_type` | dispatch selector (§C) — `"minecraft:cave"` (all 3 of `cave`/`cave_extra_underground`/`nether_cave`) | `"minecraft:canyon"` |
+| `carver_type` | dispatch selector (§C) — `"minecraft:cave"` (`cave`/`cave_extra_underground`); `nether_cave`'s own registry type is `"minecraft:nether_cave"`, out of this blueprint's scope (§B) | `"minecraft:canyon"` |
 | `probability` | `is_start_chunk` threshold (§J) | `is_start_chunk` threshold (§K) |
 | `y` (`HeightProvider`) | cave-tunnel/room origin Y (§F/§J) | canyon origin Y (§F/§K) |
 | `y_scale` (opaque `Option<serde_json::Value>`) | **[C-LOW]** this blueprint's own re-reading: likely the cave tunnel's own vertical-radius-scaling `FloatProvider` (contrary to B02's own inline comment speculating "canyon-only" — real vanilla `CaveCarverConfiguration` is understood to carry a `yScale` field too); `cave::CaveShapeConfig::from_json` extracts a numeric scale if present, else falls back to a fixed default (§J's `cave_vertical_radius_factor`) | **[C-LOW]** canyon's own `shape` block (`distanceFactor`/`thickness`/`widthSmoothness`/`horizontalRadiusFactor`/vertical-radius factors) — `canyon::CanyonShapeConfig::from_json` extracts whatever numeric sub-fields are present by name, defaulting each independently when absent |
@@ -460,6 +476,86 @@ fn init_width_factors(random, step_count, config) -> Vec<f32>:
 `04-worldgen-parity.md`'s own Open Questions flags carver recomputation as "by construction, redundant across many overlapping source chunks... whether this needs an explicit memoization cache... is a performance question for the blueprint phase, not a correctness one." **This blueprint's reference implementation matches vanilla's own reference behavior: no memoization.** Every target chunk's `run_carvers_for_chunk` call independently re-derives and re-walks all 289 neighbor source chunks' full carve geometry from scratch (§C), exactly as `NoiseBasedChunkGenerator.applyCarvers` itself does — vanilla does not cache a source chunk's tunnel geometry across the (up to 289) different target chunks that source chunk can affect either. This is correctness-neutral by GEN-D26 ("a redundant or superseded generation request is always safe to discard... deduplication... is a pure performance optimization, never a correctness requirement") and this blueprint takes no position on whether a future performance pass adds a `(world_seed, source_chunk_x, source_chunk_z, carver_index)`-keyed geometry cache — doing so must be provably observationally equivalent (PERF-D's own fast-path gate) to this blueprint's own from-scratch recomputation, never assumed safe by construction alone.
 
 Full-chunk, corpus-anchored carve goldens (diffing this blueprint's actual chunk output against the vanilla-server-generated reference corpus) are explicitly **M5-B10's own harness's job**, not this blueprint's. This blueprint's own acceptance tests (below) validate only what is independently, honestly verifiable today: RNG draw order/count for the parts this Context section tags **[C-HIGH]**/**[C-MED]**, carving-mask dedup correctness, neighborhood range-check correctness, and config-mapping plumbing — never asserting bit-exact geometry for the **[C-LOW]**-tagged per-step walk math.
+
+### Claims to verify (TEST-D57)
+
+- Vanilla's chunk-generation stage order is Empty -> StructureStarts -> StructureReferences -> Biomes -> Noise -> Surface -> Carvers -> Features -> ..., i.e. the Carvers stage runs strictly after Surface and strictly before Features.
+- Vanilla 26.2 has no `carving_mask` placement modifier: `PlacementModifierType` registers 15 modifier types, none a carving-mask filter, and `PlacementContext.getCarvingMask(ChunkPos)` exists but has no caller anywhere in the source, so the Features stage does not consult the Carvers stage's output through any placement modifier.
+- `applyCarvers`'s neighborhood is a fixed, hardcoded 17x17 chunk block (dx, dz each ranging -8..=8) around the target chunk, i.e. 289 candidate source chunks; the reach radius is a fixed engine constant, never a per-carver JSON value.
+- The 289-source-chunk scan iterates dx outer / dz inner, matching vanilla's own nested-loop order.
+- The carver list consulted for each source chunk is that source (neighbor) chunk's own biome's own carver list, in JSON/registry declaration order - never globally sorted the way vanilla's FeatureSorter sorts the Features stage's list.
+- The per-source-chunk carver index resets to 0 for every one of the 289 source chunks - never a running total across the whole neighborhood scan.
+- The seed passed to a carver's seed derivation is world_seed.wrapping_add(carver_index), and this sum is passed AS the `seed` parameter of the large-feature-seed derivation itself, not added to the result after derivation.
+- A carver's start-chunk acceptance roll (`is_start_chunk`) is `random.next_float() <= config.probability`, exactly one RNG draw.
+- Three `WorldCarver` types are registered in vanilla 26.2's `BuiltInRegistries.CARVER`: `CaveWorldCarver` (registry id `cave`), `CanyonWorldCarver` (registry id `canyon`), and `NetherWorldCarver` (registry id `nether_cave`, dispatched as its own carver type "minecraft:nether_cave") — `NetherWorldCarver` overrides `getCaveBound` (10), `getThickness` ((next_float()*2+next_float())*2, no widen roll), `getYScale` (5.0), and `carveBlock` entirely (writes lava at or below min_gen_y+31 and cave_air above, never consulting the aquifer), so it is not a config-only variant of `CaveWorldCarver`.
+- Vanilla 26.2 has exactly four configured carver instances: cave and cave_extra_underground (carver_type "minecraft:cave"), nether_cave (carver_type "minecraft:nether_cave"), and canyon (carver_type "minecraft:canyon").
+- Vanilla's `canReach`-style early-exit prune (bailing a tunnel walk out early once it can no longer possibly reach the target chunk) terminates the tunnel's entire remaining walk via a bare `return`, and is not output-identical to omitting it: `canReach`'s circular bound (radius sqrt(remaining^2 + (thickness+18)^2)) and `carveEllipsoid`'s own square reach guard (half-width 16 + 2*horizontal_radius) are not nested in one direction for every parameter — for large thickness `canReach` is the more permissive of the two — but the decisive point stands regardless: since a walk advances at most one block per step, a pruned path could still have turned back toward the chunk, so later positions `carveEllipsoid` would have accepted are lost, plus, for the cave carver, any later splitPoint fork and both of its child tunnels.
+- `applyCarvers` constructs one `WorldgenRandom` wrapping a fresh `LegacyRandomSource(RandomSupport.generateUniqueSeed())`, reused across the whole 289-source-chunk by per-carver-list scan for one target chunk, reseeded per (source_chunk, carver) pair via the large-feature-seed derivation.
+- The carver RNG carrier is always the Legacy random family, for every dimension including the overworld, even though the overworld's own terrain noise is Xoroshiro-backed.
+- Both `CaveWorldCarver` and `CanyonWorldCarver` use `Mth.sin`/`Mth.cos` (a 65536-entry lookup table) for their heading trigonometry, never `Math.sin`/`Math.cos`.
+- `Mth.sin`/`Mth.cos`'s lookup table has exactly 65536 entries (SIN_TABLE_SIZE = 65536, SIN_MASK = 65535).
+- `Mth.cos` reads the same table as `Mth.sin` at a quarter-turn offset of 16384 table units (COS_OFFSET = 16384).
+- The table-index scale constant is SIN_SCALE = 10430.378350470453, equal to 65536 / (2*PI).
+- The table is built once, lazily, as table[i] = (Math.sin(i as f64 / SIN_SCALE)) as f32 for i in 0..65536 - the only place vanilla's carver code calls a real f64 sin, at table-construction time only.
+- `Mth.sin(angle)` computes table[ ((angle * SIN_SCALE) as i64 & SIN_MASK) ], with the f64-to-i64 cast truncating toward zero before the mask is applied.
+- `Mth.cos(angle)` computes table[ (((angle * SIN_SCALE + 16384.0) as i64) & SIN_MASK) ].
+- `VerticalAnchor` resolves against a (min_y, height) context with exactly 3 variants: Absolute(y) resolves to y; AboveBottom(n) resolves to min_y + n; BelowTop(n) resolves to min_y + height - 1 - n.
+- Vanilla's `HeightProvider` has exactly 6 variants: Constant, Uniform, BiasedToBottom, VeryBiasedToBottom, Trapezoid, and WeightedList.
+- A Constant `HeightProvider` resolves its inner `VerticalAnchor` with zero RNG draws.
+- A Uniform `HeightProvider` (min, max) resolves both endpoints via `VerticalAnchor`, then draws exactly one inclusive-both-ends random integer in [lo, hi] via a single next_int_range(lo, hi + 1) call.
+- A WeightedList `HeightProvider` draws exactly one next_int_bounded(total_weight) roll to select among its weighted entries (plus whatever draws the chosen entry's own sampling needs), walking entries in order and selecting the first whose weight exceeds the running roll.
+- Vanilla's own call for a carver's per-biome carver list is `sourceBiomeGenerationSettings.getCarvers()`, evaluated at a representative point of the source (neighbor) chunk, resolved as a pure function of coordinates rather than a read of the neighbor's own already-generated block data.
+- There is no `GenerationStep.Carving` enum in vanilla 26.2 at all — `GenerationStep` declares only `Decoration`, and `BiomeGenerationSettings` stores carvers as a single flat `HolderSet<ConfiguredWorldCarver<?>>` under the JSON key `carvers`, with no per-step (air/liquid) dimension; the datafixer `CarvingStepRemoveFix` migrates the old chunk NBT `CarvingMasks.AIR` compound to a flat `carving_mask` key.
+- A block position is carvable (replaceable by a carve) iff it is a member of the configured carver's own `replaceable` tag-or-list field.
+- Vanilla's carve-state resolution (`getCarveState`) returns Lava whenever the world Y coordinate is at or below the carver's own resolved lava_level Y, without needing to consult the aquifer for that case.
+- When a carved position's world Y is above the resolved lava_level, vanilla's carve-state resolution defers to `Aquifer.computeSubstance` for the resulting fluid/air state; if the aquifer declines to override (returns no result), the position falls back to a debug-barrier state only if the carver's debug settings enable it, and is otherwise left untouched (not carved at all).
+- Vanilla's `Aquifer.createDisabled(fluidPicker)` fallback performs no barrier/noise simulation at all, but is not unconditional: its `computeSubstance` returns null (no carve) whenever the density argument is greater than 0.0, and otherwise returns a fluid state supplied per position by a caller-injected `Aquifer.FluidPicker`, whose `FluidStatus.at(blockY)` returns the fluid type when `blockY < fluidLevel` and air otherwise — the Y level and fluid come from the picker, never from a constant baked into the disabled aquifer.
+- Vanilla specially re-runs its surface-material rule one block below any carved position whose pre-carve block state was grass_block or mycelium, firing only when that block below is dirt, so the newly-exposed dirt gets re-topped.
+- Only `NetherWorldCarver.carveBlock` ever writes cave_air (unconditionally above min_gen_y+31); the shared `WorldCarver` carve path used by the cave and canyon carvers always produces plain air for a freshly-carved solid-to-air conversion, since both aquifer implementations resolve the non-fluid case to `Blocks.AIR`.
+- Vanilla's shared `WorldCarver.carveEllipsoid` primitive contains no radius threshold of any kind; its only early-out is the horizontal reach guard `max_delta = 16.0 + horizontal_radius * 2.0`, returning early unless both the x and z block-center offsets from the ellipsoid center are within `max_delta` — a degenerate small radius is handled implicitly by the index bounds collapsing to an empty range, not by a 0.5 test.
+- `carveEllipsoid`'s local-chunk horizontal bounding box is computed as min_lx = clamp(floor(center_x - horizontal_radius) - target_chunk_x*16 - 1, 0, 16), max_lx = clamp(floor(center_x + horizontal_radius) - target_chunk_x*16 + 1, 0, 16), with min_lz/max_lz computed identically on the Z axis.
+- `carveEllipsoid`'s vertical bounding box is computed as min_y = max(floor(center_y - vertical_radius) - 1, ctx.min_y + 1), max_y = min(floor(center_y + vertical_radius) + 1, ctx.min_y + ctx.height - 1 - protected_blocks_on_top), where protected_blocks_on_top is 7 in the ordinary (non-upgrading) case and 0 while the chunk is upgrading.
+- `carveEllipsoid`'s per-column horizontal test is x_dist*x_dist + z_dist*z_dist >= 1.0, where x_dist and z_dist are the block-center offset from the ellipsoid center divided by the horizontal radius; a column failing this test is skipped entirely.
+- `carveEllipsoid` scans each accepted column's Y range from the computed max_y down to, but EXCLUDING, min_y (the lowest Y actually visited is min_y + 1), and the per-position vertical normalization is y_dist = (world_y - 0.5 - center_y) / vertical_radius — MINUS 0.5, unlike the PLUS 0.5 used on the x and z terms.
+- Within `carveEllipsoid`, the carving-mask dedup check (has this position already been carved by an earlier overlapping call) is applied before the replaceable-block check, which is applied before the carve-state fill resolution.
+- The cave carver's per-target-chunk cave count is drawn as count = next_int_bounded(next_int_bounded(next_int_bounded(15) + 1) + 1): the outermost bound argument is evaluated first (an inner next_int_bounded(15) draw), then a middle next_int_bounded(<result>+1) draw, then the outer next_int_bounded(<result>+1) draw, giving a strongly zero-biased distribution.
+- For each cave, the cave carver draws local_x via next_int_bounded(16), then the origin Y via the height provider's own sample, then local_z via next_int_bounded(16), in that order.
+- The cave carver rolls a 1-in-4 chance (next_int_bounded(4) == 0) to carve a "room" at the cave's origin in addition to its tunnels.
+- A cave carver's room first draws yScale = config.y_scale.sample(random) (an extra draw), then thickness = 1.0 + next_float() * 6.0 (a hardcoded 6.0, not a config field); the room's horizontal_radius is 1.5 + thickness (Mth.sin at a quarter turn is exactly 1.0), its vertical_radius is horizontal_radius * yScale (the sampled yScale, not a fixed 0.5), and the room's ellipsoid is centered at x + 1.0, not x.
+- When a cave carver rolls a room, it adds next_int_bounded(4) extra tunnel branches on top of the base 1.
+- Each cave tunnel's initial yaw is drawn as next_float() * 2 * PI.
+- Each cave tunnel's initial pitch is drawn as (next_float() - 0.5) / 4.0.
+- Each cave tunnel independently rolls a 1-in-6 chance (next_int_bounded(6) == 0) that marks it "steep", decided once per tunnel rather than re-rolled per walk step.
+- Each cave tunnel's base thickness is itself two draws, next_float() * 2.0 + next_float() (not a config constant), and it may roll a "widen" chance gated by a hardcoded next_int_bounded(10) == 0 (not a configurable bound); when it hits, thickness is multiplied by next_float() * next_float() * 3.0 + 1.0.
+- Inside the cave tunnel's per-step worm walk, heading integrates turn-rate as horizontal_rotation += y_rota * 0.1 and vertical_rotation += x_rota * 0.1.
+- Inside the cave tunnel's per-step worm walk, x_rota is damped each step by multiplying by 0.9, and y_rota is damped each step by multiplying by 0.75.
+- Inside the cave tunnel's per-step worm walk, x_rota is perturbed each step by (next_float() - next_float()) * next_float() * 2.0, and y_rota is perturbed each step by (next_float() - next_float()) * next_float() * 4.0 (three RNG draws each).
+- Inside the cave tunnel's per-step worm walk, vertical_rotation is additionally multiplied each step by 0.92 if the tunnel is steep, or 0.7 otherwise.
+- The cave tunnel's per-step radius envelope is h_radius = 1.5 + mth_sin(PI * step / step_count) * thickness (a constant 1.5 base added to the sine taper, so a tunnel never narrows below 1.5), and the value handed to carve_ellipsoid is further scaled by the per-cave sampled horizontal_radius_multiplier, with vertical_radius = h_radius * y_scale * vertical_radius_multiplier.
+- A cave tunnel forks once, at a step index drawn once per tunnel as split_point = next_int_bounded(dist/2) + dist/4, gated on thickness > 1.0 at that step (not a per-step 1-in-4 roll); on a hit it spawns two children at the same position, each with its own freshly-drawn thickness = next_float() * 0.5 + 0.5 (not half the parent's), both headings turned by PI/2 in opposite directions (neither continuing straight), vertical_rotation / 3.0, a forced y_scale of 1.0, each re-seeded from its own next_long() draw, and the parent walk terminates at that step.
+- The canyon carver draws its origin as x = source_chunk_x*16 + next_int_bounded(16), then the origin Y via the height provider's own sample, then z = source_chunk_z*16 + next_int_bounded(16), in that order.
+- The canyon carver's initial yaw is drawn as next_float() * 2 * PI, and its initial pitch is drawn from the configured `vertical_rotation` FloatProvider (a config-driven sample, not a hardcoded formula), which in the shipped canyon configuration spans twice the range a (next_float()-0.5)/4.0 formula would - the same divisor the cave carver itself uses, not a shallower one.
+- The canyon carver's thickness is drawn from the configured `shape.thickness` FloatProvider (a trapezoid distribution in the shipped configuration), with no `3.0 + next_float() * range` expression anywhere; the only constant offset in the per-step radius math is the 1.5 base added to the sine envelope.
+- Inside the canyon's per-step walk, heading integrates turn-rate as pitch += x_rota * 0.05 and yaw += y_rota * 0.05 - an integration constant of 0.05, half the cave carver's own 0.1, not shared with it.
+- Inside the canyon's per-step walk, x_rota is damped each step by multiplying by 0.8 and y_rota by 0.5 (the per-step 0.7 multiplier belongs to vertical_rotation, a different variable), versus the cave carver's own 0.9/0.75 damping constants.
+- Inside the canyon's per-step walk, x_rota and y_rota are perturbed by the same three-draw formulas as the cave walk: (next_float()-next_float())*next_float()*2.0 for x_rota, and (next_float()-next_float())*next_float()*4.0 for y_rota.
+- The canyon's per-step walk applies its x_rota *= 0.8 / y_rota *= 0.5 damping only once, and it runs BEFORE the perturbation step, not after it - there is no second damping pass.
+- The canyon's per-step vertical radius is horizontal_radius * y_scale (y_scale sampled once per carve from the configured `y_scale` FloatProvider), then rewritten per step by an update formula combining `shape.vertical_radius_default_factor` and `shape.vertical_radius_center_factor` with a distance-from-center weight and one further per-step random draw in [0.75, 1.0) - the only division by 6 in the canyon carver lives inside its skip predicate, not in the vertical-radius computation.
+- The canyon carver precomputes one width-scale factor per Y-level across the entire dimension height (a "piecewise-constant random spikiness profile down the entire world height"), not one per walk step.
+- Vanilla's carver JSON's discriminator key is `type` (a plain registry-dispatch key, not `carver_type`), and it selects "minecraft:cave" for cave/cave_extra_underground, "minecraft:nether_cave" for nether_cave, and "minecraft:canyon" for canyon.
+- Vanilla's carve algorithms never cache or memoize a source chunk's tunnel geometry across the different target chunks that same source chunk's carve walks can affect - every target chunk's own carving pass independently re-derives and re-walks the full neighborhood from scratch.
+- Vanilla's carving stage touches only the target chunk's own block data; it never reads a neighbor source chunk's already-materialized block state, only re-derives that neighbor's own carve geometry from the world seed and coordinates.
+- A BiasedToBottom `HeightProvider` (min, max, inner) resolves both endpoints via `VerticalAnchor`, defaults its inner parameter to 1 (codec-constrained to at least 1, never merely non-negative), and - unless the span hi - lo - inner + 1 is non-positive (in which case it returns lo with zero draws) - returns lo + next_int_bounded(limit + inner) where limit = next_int_bounded(hi - lo - inner + 1), two nested next_int_bounded draws with these exact bounds.
+- Vanilla's VeryBiasedToBottom `HeightProvider` is structurally distinct from BiasedToBottom, not the same formula with a steeper exponent: it makes three nested Mth.nextInt(random, lo, hi) calls, and each such call itself performs zero RNG draws (returning lo) whenever lo >= hi, so a reimplementation must reproduce that short-circuit to stay draw-synchronized on narrow ranges.
+- A Trapezoid `HeightProvider` (min, max, plateau) resolves both endpoints via `VerticalAnchor`, defaults its plateau parameter to 0 with no range restriction, and - unless min > max (in which case it returns min with zero draws) - computes range = hi - lo; when plateau >= range it draws a single inclusive next_int_range(lo, hi + 1), and otherwise draws two DIFFERENTLY-bounded inclusive values (next_int_range(0, plateau_end) and next_int_range(0, plateau_start), where plateau_start = (range - plateau) / 2 and plateau_end = range - plateau_start) and SUMS them onto lo - never subtracting or clamping either draw.
+- The carving pass's reached_surface flag, once set true for a column after observing a pre-carve grass_block or mycelium state, stays true for the remainder of that column's Y scan, so every subsequently carved block in that column triggers a surface re-topping call, not only the block immediately below the original grass or mycelium position.
+- Vanilla's carve call site passes a fixed sentinel density value of 0.0 to Aquifer.computeSubstance, rather than a locally sampled density, for a position already known by the ellipsoid geometry to be carved into non-solid space.
+- The cave tunnel's per-tunnel step count (walk length) is a fixed engine constant, max_distance = (get_range()*2-1)*16, minus one RNG draw (next_int_bounded(max_distance/4)) - it does not depend on the tunnel origin's Y or on the dimension's generation depth at all; the canyon carver's own step count is likewise Y-independent, a config-sampled fraction of the same max_distance constant.
+- The cave tunnel's per-step position update is x += mth_cos(vertical_rotation) * mth_cos(horizontal_rotation), z += mth_cos(vertical_rotation) * mth_sin(horizontal_rotation), y += mth_sin(vertical_rotation), using the table-based trig functions for every term.
+- The cave tunnel's per-step "skip roughly 1 in 4 steps" organic-gap behavior IS a probabilistic roll, next_int_bounded(4) != 0, and it consumes one RNG draw on every step from the tunnel-local RNG - a deterministic step % 4 substitute would desynchronize the RNG stream from step 1 onward; the canyon walk uses the identical gate.
+- The canyon's per-step position update uses the same table-based trig shape as the cave tunnel's own update: x += mth_cos(pitch) * mth_cos(yaw), z += mth_cos(pitch) * mth_sin(yaw), y += mth_sin(pitch).
+- The canyon's per-step horizontal radius is (1.5 + mth_sin(step * PI / distance) * thickness) * config.shape.horizontal_radius_factor.sample(random) - a sine envelope with a 1.5 base times a freshly per-step-sampled config factor; the precomputed per-Y width-factor array never scales the radius at all, it is applied only inside the skip predicate to warp the ellipsoid test per Y level.
+- Vanilla's cave carver configuration (not only the canyon carver configuration) is understood to also carry its own y_scale field, correcting an earlier assumption that y_scale was canyon-only.
 
 ## Deliverables
 
@@ -595,13 +691,13 @@ impl AquiferSampler for DisabledAquifer {
 /// The surface-retop seam (Context §H). GEN-D17's surface-rule interpreter is a
 /// future blueprint's own implementor.
 pub trait SurfaceRetopper {
-    fn retop_above(&mut self, local_x: u8, world_y_above: i32, local_z: u8, column: &mut rc_chunk_storage::BlockStateColumn);
+    fn retop_below(&mut self, local_x: u8, world_y_below: i32, local_z: u8, column: &mut rc_chunk_storage::BlockStateColumn);
 }
 
 /// Explicit no-op default (Context §H, `[C-LOW]` until GEN-D17 exists).
 pub struct NoRetop;
 impl SurfaceRetopper for NoRetop {
-    fn retop_above(&mut self, _local_x: u8, _world_y_above: i32, _local_z: u8, _column: &mut rc_chunk_storage::BlockStateColumn) {}
+    fn retop_below(&mut self, _local_x: u8, _world_y_below: i32, _local_z: u8, _column: &mut rc_chunk_storage::BlockStateColumn) {}
 }
 
 /// The per-biome air-carver-list seam (Context §G).
@@ -665,13 +761,15 @@ use crate::data::types::ConfiguredCarver;
 use crate::random::{RcRandomSource, WorldgenRandom};
 use rc_chunk_storage::{BlockStateColumn, BlockStateId};
 
-/// One draw: `random.next_float() < config.probability` (Context §J).
+/// One draw: `random.next_float() <= config.probability` (Context §J).
 pub fn is_start_chunk<R: RcRandomSource>(random: &mut R, probability: f32) -> bool;
 
 /// Vanilla `CaveWorldCarver.carve` (Context §J). Cave and `cave_extra_underground`
-/// and `nether_cave` (all 3 `"minecraft:cave"`-typed configured carvers) all
-/// dispatch here — their difference is entirely in `config`'s own field values,
-/// never a code-path split.
+/// (both `"minecraft:cave"`-typed configured carvers) dispatch here — their
+/// difference is entirely in `config`'s own field values, never a code-path
+/// split. `nether_cave` (`"minecraft:nether_cave"`-typed, its own
+/// `NetherWorldCarver` algorithm) does not dispatch here — out of this
+/// blueprint's own scope (§B).
 #[allow(clippy::too_many_arguments)]
 pub fn carve<R: RcRandomSource>(
     ctx: &GenContext,

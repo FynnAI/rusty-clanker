@@ -68,15 +68,22 @@ This blueprint's own edit (Deliverables) adds `pub mineshaft: &'a dyn StructureG
 ```rust
 // crates/worldgen/src/structure/hand_coded/common.rs — MODIFY (M5-B13a's own file, additive)
 
-/// Shifts every piece in `pieces` vertically so the whole tree's own bounding box sits
-/// below `sea_level` (mirrors vanilla's `BoundingBox.moveBelowSeaLevel`, named in
-/// `06-structures.md`'s own Stronghold row — MODERATE confidence on the exact formula,
-/// HIGH confidence on the overall "sink until below sea level, floor clamped at min_y,
-/// jittered by one final random draw" shape since the corpus names the function and its
-/// own 4-argument signature `(seaLevel, minY, random, 10)` verbatim). Draws exactly one
-/// `next_int_between_inclusive` call. Returns the applied Y delta.
+/// Shifts every piece in `pieces` vertically by the delta this returns, so the whole
+/// tree's own bounding box sits below `sea_level` (mirrors vanilla's
+/// `StructurePiecesBuilder.moveBelowSeaLevel` — a `@Deprecated` method on the piece-list
+/// builder, not on `BoundingBox` — named in `06-structures.md`'s own Stronghold row, which
+/// gives its 4-argument call-site shape `(seaLevel, minY, random, 10)` verbatim). Targets
+/// the tree bounding box's own MAX Y, not a floor clamp: `target` starts at the tree's own
+/// Y span (`pieces_bbox_max_y - pieces_bbox_min_y + 1`) plus `min_y` plus one, is
+/// optionally raised toward the ceiling `sea_level - jitter` by one conditional
+/// `next_int_bounded` draw over the remaining gap (skipped once `target` already reaches
+/// that ceiling — so a tall tree or a low sea level takes zero draws), and the returned
+/// delta is `target - pieces_bbox_max_y`. There is no clamp of any kind: the resulting
+/// tree bottom lands at `min_y + 2`, and the tree top exceeds actual sea level whenever
+/// the tree's own Y span exceeds `sea_level - min_y - 1`. Draws at most one bounded
+/// random call, never a `next_int_between_inclusive` call. Returns the applied Y delta.
 pub fn move_below_sea_level(
-    pieces_bbox_max_y: i32, sea_level: i32, min_y: i32, rng: &mut impl crate::random::RcRandomSource, jitter: i32,
+    pieces_bbox_max_y: i32, pieces_bbox_min_y: i32, sea_level: i32, min_y: i32, rng: &mut impl crate::random::RcRandomSource, jitter: i32,
 ) -> i32;
 ```
 
@@ -91,14 +98,8 @@ fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_
     rng.set_large_feature_seed(world_seed, chunk_x, chunk_z)
     skin = structure.extra["mineshaft_type"]                        # zero RNG — a data read
     origin = [chunk_x*16, NOMINAL_START_Y, chunk_z*16]               # NOMINAL_START_Y = 50, LOW confidence placeholder — shifted away below regardless
-    root = build_room(origin, skin)                                  # 10x10 parlor, 06-structures.md §3.4's own confirmed footprint
-    exits = Vec::new()
-    for dir in [North, South, East, West]:                           # FIXED order, this blueprint's own stated choice
-        has_exit = rng.next_bool()                                   # 1 draw per direction, 4 draws total — "one to four exits in each direction" per minecraft.wiki
-        if has_exit: exits.push((root.wall_center(dir), dir))
-    if exits.is_empty():
-        forced = DIRECTIONS[rng.next_int_bounded(4)]                 # 1 extra draw, only in this rare fallback branch — guarantees at least one exit rather than a dead structure
-        exits.push((root.wall_center(forced), forced))
+    root = build_room(origin, skin)                                  # randomly sized parlor room, not a fixed footprint: three draws give X/Z spans independently 8..13 and a Y span 5..10, floor at NOMINAL_START_Y — this blueprint's own reconstruction of the box formula, no corpus confirmation for any fixed size
+    exits = scan_room_walls(&root, &mut rng)                         # four fixed-order wall scans (north, south, west, east), each a data-dependent number of exits, not one bool roll per direction — Context §B's own wall-scan helper, below
     pieces = vec![root]
     queue: VecDeque<(pos, dir, chain_length)> = exits.into_iter().map(|(p,d)| (p,d,CHAIN_LENGTH_LIMIT)).collect()   # FIFO, this blueprint's own stated choice; CHAIN_LENGTH_LIMIT = 8, MODERATE-LOW confidence (a per-branch decrementing budget, the same general shape vanilla's own nether-fortress/end-city piece code is independently known to use elsewhere — not corpus-confirmed for mineshaft specifically)
     while let Some((pos, dir, chain_length)) = queue.pop_front():
@@ -111,7 +112,7 @@ fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_
         queue.extend(new_exits.into_iter().map(|(p,d)| (p,d,chain_length-1)))
     shift_y = match skin:
         "mesa" => rng.next_int_between_inclusive(sea_level, surface_height_at(origin)) - tree_center_y(&pieces)   # 1 draw
-        _      => move_below_sea_level(tree_max_y(&pieces), sea_level, min_y: 10, &mut rng, jitter: 10)            # common.rs helper (Context §A), 1 draw
+        _      => move_below_sea_level(tree_max_y(&pieces), tree_min_y(&pieces), sea_level, min_y: 10, &mut rng, jitter: 10)   # common.rs helper (Context §A), at most 1 draw
     apply_vertical_shift(&mut pieces, shift_y)
     return StructureGenerationOutcome::Generated(StructureStart { structure: structure.id, chunk_x, chunk_z, pieces, references: 0 })
 ```
@@ -126,21 +127,35 @@ fn build_piece(Corridor, pos, dir, skin, rng) -> (Piece, Vec<Exit>):
     return (piece, exits)
 
 fn build_piece(Crossing, pos, dir, skin, rng) -> (Piece, Vec<Exit>):
-    piece = crossing_box(pos, dir)                                       # fixed 5x5 dual-floor footprint, 06-structures.md §3.4's own confirmed shape; zero extra draws
+    two_floored = rng.next_int_bounded(4) == 0                            # 1 draw, consumed even if the caller later rejects this attempt on collision — one crossing in four is dual-floored
+    piece = crossing_box(pos, dir, two_floored)                           # fixed 5x5 horizontal footprint, 06-structures.md §3.4's own confirmed shape; Y extent 0..6 when two_floored, 0..2 otherwise
     exits = other_three_directions(dir).map(|d| (piece.wall_center(d), d))   # up to 3 new branches, zero extra draws (every non-source wall is always a candidate exit — this blueprint's own simplification; a future reconciliation pass may find vanilla gates some of these probabilistically)
     return (piece, exits)
 
 fn build_piece(Room, pos, dir, skin, rng) -> (Piece, Vec<Exit>):
-    width  = rng.next_int_between_inclusive(1, 2) * ROOM_UNIT             # 1 draw, ROOM_UNIT = 10 (matches the root parlor's own footprint)
+    width  = rng.next_int_between_inclusive(1, 2) * ROOM_UNIT             # 1 draw, ROOM_UNIT = 10, this blueprint's own fixed unit for the Room piece kind (no longer tied to the root parlor's own footprint, which Context §B above draws as a randomly sized box, not a fixed 10x10)
     length = rng.next_int_between_inclusive(1, 2) * ROOM_UNIT             # 1 draw
     piece = room_box(pos, dir, width, length)
-    exits = room_wall_candidates(piece).into_iter().filter(|_| rng.next_bool()).collect()   # 1 draw per wall, up to 4 — same pattern as the root parlor's own exit rule (Context, above), reused rather than a third distinct scheme
+    exits = scan_room_walls(&piece, &mut rng)                             # reuses the same four-wall-scan mechanic as the root parlor's own exits (Context, above), rather than a per-wall next_bool() roll
     return (piece, exits)
+
+fn scan_room_walls(room, rng) -> Vec<Exit>:                                # models a room's own four fixed-order wall scans, shared by the root parlor and by build_piece(Room)
+    height_space = max(room.y_span - 4, 1)                                 # forced to 1 when the room is too short
+    exits = Vec::new()
+    for (dir, span) in [(North, room.x_span), (South, room.x_span), (West, room.z_span), (East, room.z_span)]:   # FIXED order; north/south scan the room's X span, west/east its Z span
+        pos = 0
+        loop:
+            pos += rng.next_int_bounded(span)                              # 1 draw per scan step
+            if pos + 3 > span: break                                       # wall exhausted — the number of exits from one wall is data-dependent, not exactly one
+            y = room.min_y + rng.next_int_bounded(height_space) + 1        # 1 draw per attempted exit
+            exits.push((room.wall_point(dir, pos, y), dir))
+            pos += 4
+    return exits
 ```
 
-**Confidence, stated once for the whole family**: every numeric constant above (`CHAIN_LENGTH_LIMIT`, `MAX_PIECES`, the `0..=4/5..=6/_` kind distribution, `SECTION_LENGTH`, the corridor/room length ranges) is this blueprint's own placeholder, chosen for internal consistency and termination guarantees, not sourced from either the research corpus or `minecraft.wiki` (both independently confirmed, during this blueprint's own drafting pass, that neither documents these numbers). The **shape** of the algorithm (eager generation, corridor/crossing/room kinds, a root parlor with per-direction exits, a chain-length-bounded random walk, a final skin-dependent vertical shift) is MODERATE confidence, synthesized from the corpus's structural description plus general, publicly documented vanilla structure-generation conventions (chain-length-bounded recursive piece trees are not specific to mineshafts). This entire family is flagged for GEN-D27 reconciliation in full; Acceptance tests below prove determinism and termination, never a golden vector this blueprint cannot honestly claim.
+**Confidence, stated once for the whole family**: every numeric constant above (`CHAIN_LENGTH_LIMIT`, `MAX_PIECES`, the `0..=4/5..=6/_` kind distribution, `SECTION_LENGTH`, the corridor/room length ranges) is this blueprint's own placeholder, chosen for internal consistency and termination guarantees, not sourced from either the research corpus or `minecraft.wiki` (both independently confirmed, during this blueprint's own drafting pass, that neither documents these numbers). The **shape** of the algorithm (eager generation, corridor/crossing/room kinds, a root parlor whose exits come from four per-wall scans, a chain-length-bounded random walk, a final skin-dependent vertical shift) is MODERATE confidence, synthesized from the corpus's structural description plus general, publicly documented vanilla structure-generation conventions (chain-length-bounded recursive piece trees are not specific to mineshafts). This entire family is flagged for GEN-D27 reconciliation in full; Acceptance tests below prove determinism and termination, never a golden vector this blueprint cannot honestly claim.
 
-**Hand-derived vectors** (this blueprint's own derivation, faithful 48-bit LCG, cross-checked against M5-B08's own already-published vectors before use): `RcLegacyRandom::new(0).next_bool()` sequence (4 draws) `= [true, true, false, true]` — 3 of 4 directions get an exit, no fallback draw needed. `RcLegacyRandom::new(0).next_int_bounded(8) == 5` — `kind_roll=5` selects `Crossing` under this blueprint's own `0..=4/5..=6/_` partition.
+**Hand-derived vectors** (this blueprint's own derivation, faithful 48-bit LCG, cross-checked against M5-B08's own already-published vectors before use): `RcLegacyRandom::new(0).next_int_bounded(8) == 5` — `kind_roll=5` selects `Crossing` under this blueprint's own `0..=4/5..=6/_` partition. (The root parlor's own wall-scan exit count is data-dependent per `scan_room_walls` above, not a fixed 4-draw `next_bool()` sequence, so no fixed hand-derived exit-count vector applies here.)
 
 ```rust
 // crates/worldgen/src/structure/hand_coded/mineshaft.rs (new)
@@ -198,6 +213,8 @@ pub fn stamp_mineshaft_piece(
 | `Library` | 10 | 2 | `depth > 4` (corpus) / "not within 4 rooms of the start" (wiki) — same gate, independently confirmed |
 | `PortalRoom` | 20 | 1 | `depth > 5` (corpus) / "never within 5 rooms of the start" (wiki) — same gate, independently confirmed |
 
+Every candidate piece box (weighted pick or filler) is additionally rejected by `build()`/`build_filler_corridor()` whenever its own `min_y() <= LOWEST_Y_POSITION` — a per-piece validity floor, not an argument to `move_below_sea_level` below.
+
 ```text
 fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_membership) -> StructureGenerationOutcome:
     for tries in 0.. :                                                    # unbounded in vanilla; this blueprint caps at MAX_RETRY_ATTEMPTS = 20 (Context, below) so generation is guaranteed to terminate
@@ -210,7 +227,7 @@ fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_
         while !pending.is_empty():
             idx = rng.next_int_bounded(pending.len() as i32)                # 1 draw — "drained in random removal order rather than FIFO," 06-structures.md §3.9's own confirmed shape
             child = pending.swap_remove(idx as usize)
-            if child.depth >= MAX_DEPTH (50) or chebyshev_distance(child.pos, start.pos) > 112: continue   # both HIGH confidence (06-structures.md §5)
+            if child.depth > MAX_DEPTH (50) or chebyshev_distance(child.pos, start.pos) > 112: continue   # both HIGH confidence (06-structures.md §5); a pending piece at depth exactly 50 still expands, producing children at depth 51 — the cutoff is strictly greater than, not reaches-or-exceeds
             chosen = None
             for _attempt in 0..5:                                          # "up to 5 weighted draws," 06-structures.md §3.9's own confirmed shape
                 eligible = STRONGHOLD_PIECE_WEIGHTS.iter().filter(|e| e.depth_gate.map_or(true, |g| child.depth > g) && placed_count[e.kind] < e.max_place_count.unwrap_or(u32::MAX))
@@ -219,14 +236,20 @@ fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_
                 candidate_kind = weighted_select(eligible, r)
                 candidate_piece = build(candidate_kind, &child, &mut rng)
                 if !collides(&candidate_piece, &pieces): { chosen = Some((candidate_kind, candidate_piece)); break }
-            (kind, piece) = chosen.unwrap_or_else(|| (FillerCorridor, build(FillerCorridor, &child, &mut rng)))   # zero-draw fallback, dead-ends the branch cleanly
-            placed_count[kind] += 1
-            pieces.push(piece.clone())
-            if kind == PortalRoom: portal_room_placed = true
-            pending.extend(piece.exits().map(|(p,d)| PendingChild { pos: p, dir: d, depth: child.depth + 1 }))
+            outcome = match chosen:
+                Some(kp) => Some(kp)
+                None => build_filler_corridor(&child, &pieces).map(|piece| (FillerCorridor, piece))   # zero extra draws; a filler only exists to plug a gap up to an already-placed piece — None whenever no such piece is adjacent, or the resulting box's own minY is <= 1, so this is a conditional fallback, never a guaranteed FillerCorridor
+            match outcome:
+                None => continue   # neither a weighted pick nor a filler piece could be placed here — the branch dead-ends with no piece placed at all
+                Some((kind, piece)) => {
+                    placed_count[kind] += 1
+                    pieces.push(piece.clone())
+                    if kind == PortalRoom: portal_room_placed = true
+                    pending.extend(piece.exits().map(|(p,d)| PendingChild { pos: p, dir: d, depth: child.depth + 1 }))
+                }
         if portal_room_placed: break
     if !portal_room_placed: return StructureGenerationOutcome::NoValidPoint   # this blueprint's own bounded-retry termination, not a vanilla-documented outcome (vanilla retries unboundedly) — explicitly flagged, Constraints restates it
-    shift_y = move_below_sea_level(tree_max_y(&pieces), sea_level, min_y: LOWEST_Y_POSITION (10), &mut rng, jitter: 10)   # common.rs helper (Context §A), HIGH confidence on the constants (both sources), MODERATE on the exact formula
+    shift_y = move_below_sea_level(tree_max_y(&pieces), tree_min_y(&pieces), sea_level, min_y: world_min_y, &mut rng, jitter: 10)   # common.rs helper (Context §A); min_y is the dimension's own minimum build height (the chunk generator's min Y, e.g. -64 in the overworld), NOT LOWEST_Y_POSITION — LOWEST_Y_POSITION = 10 is instead the per-piece isOkBox rejection floor (below), never passed to this call
     apply_vertical_shift(&mut pieces, shift_y)
     return StructureGenerationOutcome::Generated(StructureStart { structure: structure.id, chunk_x, chunk_z, pieces, references: 0 })
 ```
@@ -238,7 +261,7 @@ fn find_generation_point(structure, world_seed, chunk_x, chunk_z, biome_at, tag_
 ```rust
 // crates/worldgen/src/structure/hand_coded/stronghold.rs (new)
 pub const MAGIC_START_Y: i32 = 64;
-pub const LOWEST_Y_POSITION: i32 = 10;
+pub const LOWEST_Y_POSITION: i32 = 10;   // the per-piece isOkBox rejection floor (Context §C, above), never passed to move_below_sea_level
 pub const MAX_DEPTH: u32 = 50;
 pub const PIECE_SEARCH_RADIUS: i32 = 112;
 pub const MAX_RETRY_ATTEMPTS: u32 = 20;   // this blueprint's own bounded-termination cap, Context §C
@@ -259,6 +282,7 @@ pub struct StrongholdPieceData { pub kind: StrongholdPieceKind }
 pub struct StrongholdGenerator<'a> {
     pub heightmap: &'a dyn crate::structure::hand_coded::common::HeightmapQuery,
     pub sea_level: i32,
+    pub world_min_y: i32,   // the dimension's own minimum build height, passed to move_below_sea_level's min_y argument (Context §C) — not LOWEST_Y_POSITION
 }
 impl<'a> crate::structure::generation::StructureGenerator for StrongholdGenerator<'a> {
     /// Context §C's full retry-until-portal-room algorithm. NOTE: this trait's own
@@ -281,6 +305,48 @@ pub fn stamp_stronghold_piece(
 ```
 
 `ChestCorridor`'s own chest(s) are the one place this family calls `place_loot_container` (Context §A), with `loot_table = "minecraft:chests/stronghold_corridor"` (a public resource-location string, restated as data); `Library`'s own rare "chest on the upper floor" content, per general public knowledge, uses `"minecraft:chests/stronghold_library"` — both restated as plain identifiers, Constraints (c).
+
+### Claims to verify (TEST-D57)
+
+- Vanilla's StructurePiecesBuilder.moveBelowSeaLevel function (not a BoundingBox method) has a 4-argument signature (seaLevel, minY, random, offset=10) and shifts a whole piece tree's bounding box vertically by targeting its own MAX Y (target = tree Y span + minY + 1, optionally raised toward the ceiling seaLevel - offset), with no clamp of any kind — the resulting tree bottom lands at minY + 2.
+- Vanilla's StructurePiecesBuilder.moveBelowSeaLevel jitters its vertical shift by at most one conditional next_int_bounded draw over the remaining gap to the ceiling seaLevel - offset, not a final next_int_between_inclusive call, and takes zero draws for a tall tree or a low sea level.
+- A mineshaft structure's skin ("normal" or "mesa") is selected by reading a structure.extra["mineshaft_type"] field, a confirmed field name per the research corpus's structures document section 7.
+- The mineshaft "normal" skin uses oak planks and fences for its blocks, while the "mesa" skin uses dark oak, per the research corpus's structures document section 3.9.
+- Mineshafts are placed via a legacy_type_3 structure-set placement with spacing=1, separation=0, and frequency=0.004.
+- Both mineshaft skins share one StructureSet that is weighted-picked per successful placement roll.
+- Mineshaft is the one vanilla structure family whose entire piece tree is built eagerly inside its own point-finding function, purely so the final vertical offset can be computed and folded into the returned stub position, per the research corpus's structures document section 3.9.
+- A mineshaft's root structure piece is a randomly sized parlor room, not a fixed 10x10 footprint: three draws size its X/Z spans independently 8 to 13 blocks and its Y span 5 to 10 blocks, floored at MAGIC_START_Y = 50, with no corpus confirmation of any fixed footprint.
+- Vanilla builds a mineshaft's exits via four fixed-order per-wall scans (north, south, west, east), each a data-dependent number of exits rather than one bool roll per direction, with no 1-to-4 cap and no empty-set fallback draw.
+- A mineshaft crossing piece has a fixed 5x5 horizontal footprint but a random dual floor: one next_int_bounded(4) draw, taken before the collision test, makes it two-floored on one draw in four and single-floored otherwise.
+- minecraft.wiki describes mineshaft corridors as 3x3 tunnels.
+- Vanilla mineshaft piece generation is fallible per attempt: a piece placement that would collide with an already-placed piece is simply declined rather than generated, matching vanilla's own generateAndAddPiece behavior per the research corpus's structures document section 3.4's framing of piece generation.
+- A mineshaft's point-finding function seeds its random source via set_large_feature_seed(world_seed, chunk_x, chunk_z) before any piece generation begins.
+- Stronghold ring placement uses a ConcentricRingsPlacement with distance=32, spread=3, count=128, and salt=0, biased toward the #minecraft:stronghold_biased_to tag.
+- The stronghold Straight piece has weight 40, an unlimited maximum placement count, and no depth gate.
+- The stronghold PrisonHall piece has weight 5, a maximum placement count of 5, and no depth gate.
+- The stronghold LeftTurn piece has weight 20, an unlimited maximum placement count, and no depth gate.
+- The stronghold RightTurn piece has weight 20, an unlimited maximum placement count, and no depth gate.
+- The stronghold RoomCrossing piece has weight 10, a maximum placement count of 6, and no depth gate.
+- The stronghold StraightStairsDown piece has weight 5, a maximum placement count of 5, and no depth gate.
+- The stronghold StairsDown piece has weight 5, a maximum placement count of 5, and no depth gate.
+- The stronghold FiveCrossing piece has weight 5, a maximum placement count of 4, and no depth gate.
+- The stronghold ChestCorridor piece has weight 5, a maximum placement count of 4, and no depth gate.
+- The stronghold Library piece has weight 10, a maximum placement count of 2, and is gated to depth > 4 per the research corpus, matching minecraft.wiki's "not within 4 rooms of the start".
+- The stronghold PortalRoom piece has weight 20, a maximum placement count of 1, and is gated to depth > 5 per the research corpus, matching minecraft.wiki's "never within 5 rooms of the start".
+- On each stronghold generation retry, vanilla re-seeds its random source with world_seed + tries, an incrementing-salt-by-tries scheme the research corpus's structures document section 3.9 describes as "re-seeds context.random() with context.seed() + tries".
+- Each stronghold generation retry attempt resets its own placed-piece-count tracking, vanilla's "resetPieces" behavior per the research corpus's structures document section 3.9.
+- The stronghold start piece is placed at y=64, HIGH confidence per both the research corpus and minecraft.wiki.
+- minecraft.wiki describes the stronghold start piece as a spiral staircase flowing into a five-way crossing.
+- Vanilla drains the stronghold's pending-piece queue in random removal order rather than FIFO order, per the research corpus's structures document section 3.9.
+- Stronghold piece expansion stops only once a pending piece's own depth strictly exceeds 50 (MAX_DEPTH), per the research corpus's structures document section 5 — a piece at depth exactly 50 still expands, producing children at depth 51.
+- Stronghold piece expansion stops once a pending piece's Chebyshev distance from the start piece exceeds 112 blocks (the piece search radius), per the research corpus's structures document section 5.
+- At each stronghold pending-piece expansion, vanilla makes up to 5 weighted draws attempting to find a non-colliding piece, a confirmed shape per the research corpus's structures document section 3.9.
+- If all 5 of a stronghold pending-piece expansion's weighted-draw attempts collide, vanilla's filler-piece fallback is conditional, not unconditional: it places a FillerCorridor only when a box can be found plugging the gap to an already-placed piece with min_y() > 1, otherwise the branch dead-ends with no piece placed at all.
+- Vanilla retries stronghold piece-graph generation from scratch, unboundedly, until an attempt successfully places a PortalRoom piece, confirmed independently by both the research corpus and minecraft.wiki.
+- The stronghold's own final vertical-placement call uses the dimension's own minimum build height as min_y (not LOWEST_Y_POSITION = 10) and a jitter value of 10; LOWEST_Y_POSITION = 10 is instead the per-piece isOkBox rejection floor applied when each candidate piece box is created.
+- The ChestCorridor structure's chest(s) use the loot table minecraft:chests/stronghold_corridor.
+- Library structures deterministically include a chest on their upper floor whenever the tall two-storey variant (isTall = boundingBox.getYSpan() > 6) fits — there is no rarity roll of any kind.
+- The Library structure's upper-floor chest uses the loot table minecraft:chests/stronghold_library.
 
 ## Deliverables
 
@@ -311,7 +377,7 @@ Exactly the signatures given in Context §B/§C above.
 
 ### `crates/worldgen/tests/structure_mineshaft.rs`
 
-1. `root_exits_match_hand_derived_seed_0_vector` — `RcLegacyRandom::new(0)`'s first 4 `next_bool()` draws are `[true, true, false, true]` (Context §B) — 3 exits from the root parlor, no fallback draw.
+1. `root_exits_use_wall_scan_not_fixed_draws` — the root parlor's own exit count for a fixed seed is produced by `scan_room_walls`'s four fixed-order wall scans (north, south, west, east), each contributing zero or more exits depending on the room's own span and the drawn cursor advances, asserted against the piece list's own exit count directly rather than a fixed 4-`next_bool()` vector (Context §B).
 2. `generation_terminates_within_max_pieces` — `world_seed=0`, any `(chunk_x, chunk_z)`; `find_generation_point`'s resulting `pieces.len() <= MAX_PIECES`.
 3. `chain_length_strictly_bounds_depth` — every piece's own recorded `chain_length` at the moment it was dequeued is `> 0`; no piece with `chain_length == 0` is ever expanded (an internal-state assertion via a test-only instrumented queue).
 4. `generation_is_deterministic` — `find_generation_point` called twice with identical `(world_seed, chunk_x, chunk_z)` produces bit-identical piece lists (same kinds, same bounding boxes, same order).
@@ -325,8 +391,8 @@ Exactly the signatures given in Context §B/§C above.
 3. `library_and_portal_room_excluded_below_depth_gate` — at `depth=3` (below both gates), a weighted pick's eligible set (exposed as a test-only helper) contains neither `Library` nor `PortalRoom`; at `depth=6`, both are present.
 4. `retry_reseeds_with_incrementing_salt` — a test double `StructureGenerator` wrapper that always reports `portal_room_placed=false` for the first 2 attempts then `true` on the 3rd; asserts `set_large_feature_seed` was called with `world_seed+0`, `world_seed+1`, `world_seed+2` in that order (a counting/recording RNG-seed wrapper).
 5. `retry_gives_up_after_max_retry_attempts` — a test double that never reports a portal room; `find_generation_point` returns `NoValidPoint` after exactly `MAX_RETRY_ATTEMPTS` attempts, never loops forever (a hard proof this blueprint's own bounded-termination deviation actually terminates).
-6. `depth_and_radius_cutoffs_stop_expansion` — a synthetic `pending` queue seeded with one child at `depth=50` and one at `chebyshev_distance=113`; neither is expanded (both cutoffs, Context §C, `06-structures.md` §5).
-7. `fallback_to_filler_corridor_after_five_collisions` — a `collides` mock forced to return `true` for the first 5 attempts at one child; the 6th outcome is `FillerCorridor`, placed unconditionally (Context §C's own "up to 5 tries, then fallback" shape).
+6. `depth_and_radius_cutoffs_stop_expansion` — a synthetic `pending` queue seeded with one child at `depth=51` and one at `chebyshev_distance=113`; neither is expanded, while a child at `depth=50` still is (both cutoffs strictly-greater-than, Context §C, `06-structures.md` §5).
+7. `filler_corridor_fallback_is_conditional_not_guaranteed` — a `collides` mock forced to return `true` for all 5 weighted-draw attempts at one child; when `build_filler_corridor` reports an adjacent already-placed piece with box `min_y() > 1`, the outcome is `FillerCorridor`; when it reports no adjacent piece (or a box `min_y() <= 1`), the branch dead-ends and no piece is placed at all (Context §C's own "up to 5 tries, then a conditional filler, else nothing" shape).
 8. `move_below_sea_level_applied_once` — a placed tree's own recorded max Y before/after the final shift differs by exactly the value `move_below_sea_level` returned (Context §A, reused not re-derived).
 
 ### `crates/worldgen/tests/structure_generator_registry_b13b.rs`

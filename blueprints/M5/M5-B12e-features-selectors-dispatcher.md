@@ -5,7 +5,7 @@
 | ID | M5-B12e |
 | Milestone | M5 — World Generation Parity |
 | Prerequisites | M5-B12a, M5-B12b, M5-B12c, M5-B12d (this family's four sibling blueprints — every kind function this blueprint's own combined dispatcher registers is theirs, restated by reference, never re-derived). Transitively M5-B01, M5-B02, M5-B03, M5-B07, M5-B08. |
-| Implements | GEN-D19 (features & placement — final of five blueprints closing M5-B07's own non-vegetation deferred backlog; this blueprint finishes the registration so the combined dispatcher is real, not partial), GEN-D6 (feature-seed call sites, unchanged mechanism), GEN-D20 (restated non-conflation), GEN-D16 (ore-vein/ore-feature boundary — resolved precisely by `scattered_ore`'s own reuse of M5-B07's `ore::place`, zero duplicated algorithm). |
+| Implements | GEN-D19 (features & placement — final of five blueprints closing M5-B07's own non-vegetation deferred backlog; this blueprint finishes the registration so the combined dispatcher is real, not partial), GEN-D6 (feature-seed call sites, unchanged mechanism), GEN-D20 (restated non-conflation), GEN-D16 (ore-vein/ore-feature boundary — NOT resolved by any reuse of M5-B07's own `ore::place`, which `scattered_ore` never calls; `scattered_ore` shares only the target-rule-plus-air-exposure admissibility check with the `ore` kind, so GEN-D16's boundary needs the planning role's own restatement). |
 | Crates touched | `rc-worldgen` (`crates/worldgen/`) only: creates `src/decoration/underground/selectors.rs`; the final modification to `decoration/underground/mod.rs` (one new `pub mod` line PLUS the full body of `place_configured_feature_all`, which only this blueprint can write, since it is the first family member to have every sibling's kind functions available); one small, additive modification to M5-B07's already-specified `src/decoration/driver.rs` (Context §S). No `Cargo.toml` change. |
 | Estimated scope | L. |
 
@@ -17,7 +17,7 @@ Done when:
 
 - [ ] `cargo build -p rc-worldgen` succeeds with zero warnings.
 - [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-worldgen`.
-- [ ] The dispatcher registration table, `sequence`/`no_op`/the four selector kinds' draw-count-and-order proofs, and `scattered_ore`'s three-call proof reproduce their stated exact values/counts exactly (all HIGH confidence).
+- [ ] The dispatcher registration table, `sequence`/`no_op`/the four selector kinds' draw-count-and-order proofs, and `scattered_ore`'s drawn-try-count-and-jitter proof reproduce their stated exact values/counts exactly (all HIGH confidence).
 - [ ] The full-registry coverage audit accounts for every one of the 64 `Feature` kind names and 14 remaining trunk/foliage placer kinds M5-B07 §M/§N.5 enumerates, with no name appearing in neither an "implemented" nor a "deferred-with-owner" column — restated once, completely, in `blueprints/M5/M5-B00-index.md`, not duplicated here.
 - [ ] `cargo run -p xtask -- fmt-check`, `-- lint`, `-- lint-deps` all exit 0 (no new dependency edges).
 - [ ] `cargo test --doc -p rc-worldgen` exits 0.
@@ -48,9 +48,9 @@ pub fn run_placement_chain(
     place_fn: &mut dyn FnMut(&mut dyn crate::decoration::context::DecorationWorldAccess, rc_core::BlockPos, &mut WorldgenRandom<AnyRandom>),
 );
 ```
-The re-entrant call this blueprint's own `delegate` helper makes (§K below) constructs a **new** `PlacementCtx` identical to the caller's own except `feature_name`, which is rebound to the nested feature's own `ResourceLocation` — this is what makes a `Biome{}` modifier buried inside the nested chain check the CORRECT feature's presence in the current biome's step list, not the outer feature's (M5-B07's own established convention, restated here since this blueprint's `delegate` is the first place in this family that constructs one).
+The re-entrant call this blueprint's own `delegate` helper makes (§K below) constructs a **new** `PlacementCtx` identical to the caller's own except `feature_name`, which is rebound to the nested feature's own `ResourceLocation`. This is a deliberate, documented deviation from vanilla: vanilla's own nested-delegation path never resolves a `Biome{}` placement modifier at all — its re-entrant call leaves the top-feature slot unset, so a `Biome{}` modifier reached through a nested chain would raise vanilla's own unregistered-feature error, and vanilla's own data never places a `Biome{}` modifier inside a nested chain in the first place, only at the top level, where it is the OUTER placed feature's own identity that gets checked. Rebinding `feature_name` to the nested feature here is strictly more permissive than vanilla (it lets a nested `Biome{}` modifier resolve instead of erroring) and is kept as this project's own error-avoiding convention rather than a reproduction of vanilla's throw.
 - **`crate::data::{WorldgenData, ConfiguredFeature, ResourceLocation}`** (M5-B02) — `WorldgenData { configured_features, placed_features, .. }`; a missing `placed_features`/`configured_features` lookup is a loud `panic!`, matching M5-B07's own data-integrity stance.
-- **`crate::decoration::features::ore::place`** (M5-B07) — `scattered_ore`'s own reused-verbatim ore-placement function; restated signature: `pub fn place(config: &OreConfiguration, origin: rc_core::BlockPos, world: &mut dyn DecorationWorldAccess, resolver: &dyn BlockStateResolver, props: &dyn BlockPropertyResolver, random: &mut WorldgenRandom<AnyRandom>)`.
+- **`crate::decoration::features::ore::place`** (M5-B07) — the vanilla `ore` kind's own full blob-placement algorithm; `scattered_ore` does **not** reuse this function. It shares only a target-rule-plus-air-exposure admissibility check with the `ore` kind, which M5-B07's own module does not yet separately expose as a callable helper — a gap for the planning role to close, since this blueprint cannot add a public function to another blueprint's already-specified file.
 - **M5-B07's original `place_configured_feature`** (`crate::decoration::features::place_configured_feature`) — dispatches only its own 7 original kinds (`ore`, `disk`, `spring_feature`, `lake`, `tree`, `random_patch`, `simple_block`); untouched, still independently correct and independently tested.
 - Every family sibling's own `place_*` function (M5-B12a `dripstone`/`geode`/`sculk`, M5-B12b `nether`/`ice`, M5-B12c `misc`, M5-B12d `structure_bridge`) is imported and called directly by this blueprint's own `place_configured_feature_all` body — the full list is Table K.1 below.
 
@@ -68,7 +68,7 @@ Every kind in this section (except `scattered_ore`) delegates to ANOTHER named `
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct NoOpConfiguration {}
 ```
-`fn place_no_op(_config, _origin, _world, _resolver, _props, _random) {}` — zero draws, zero writes, always.
+`fn place_no_op(_config, _origin, _world, _resolver, _props, _random) -> bool { true }` — zero draws, zero writes, always succeeds.
 
 **K.2 — `random_selector` (HIGH confidence — sequential probability-gated selection with a default fallback; first success wins).**
 
@@ -80,31 +80,31 @@ pub struct RandomSelectorConfiguration { pub features: Vec<WeightedPlacedFeature
 ```
 
 ```text
-fn place_random_selector(origin, config, world, resolver, props, random, data, ctx, bridge):
+fn place_random_selector(origin, config, world, resolver, props, random, data, ctx, bridge) -> bool:
     for entry in &config.features:
         if random.next_float() < entry.chance:                       // 1 draw PER entry checked, stops at first success
             return delegate(&entry.feature, origin, world, ctx, random, data, resolver, props, bridge)
     delegate(&config.default, origin, world, ctx, random, data, resolver, props, bridge)   // zero further draws
 ```
 
-**K.3 — `weighted_random_selector` (HIGH confidence — cumulative-weight selection, the same shape as M5-B07's `HeightProvider::WeightedList`).**
+**K.3 — `weighted_random_selector` (HIGH confidence — cumulative-weight selection, the same shape as M5-B07's `HeightProvider::WeightedList`; this kind has no default feature at all).**
 
 ```rust
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct WeightedEntry { pub feature: crate::data::ResourceLocation, pub weight: u32 }
+pub struct WeightedEntry { pub data: crate::data::ResourceLocation, pub weight: u32 }
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct WeightedRandomSelectorConfiguration { pub features: Vec<WeightedEntry>, pub default: crate::data::ResourceLocation }
+pub struct WeightedRandomSelectorConfiguration { pub features: Vec<WeightedEntry> }
 ```
 
 ```text
-fn place_weighted_random_selector(origin, config, world, resolver, props, random, data, ctx, bridge):
+fn place_weighted_random_selector(origin, config, world, resolver, props, random, data, ctx, bridge) -> bool:
     total: u32 = config.features.iter().map(|e| e.weight).sum()
-    if total == 0: return delegate(&config.default, ...)                // zero draws
+    if total == 0: return true                                           // zero draws, nothing placed — no default exists on this kind
     mut roll = random.next_int_bounded(total as i32) as u32              // ONE draw
     for entry in &config.features:
-        if roll < entry.weight: return delegate(&entry.feature, ...)
+        if roll < entry.weight: return delegate(&entry.data, ...)
         roll -= entry.weight
-    delegate(&config.default, ...)                                       // unreachable given correct weights, safety net
+    unreachable!()                                                       // every draw < total, so some entry always satisfies roll < entry.weight
 ```
 
 **K.4 — `simple_random_selector` (HIGH confidence — uniform pick among N, one draw).**
@@ -123,15 +123,22 @@ pub struct RandomBooleanSelectorConfiguration { pub feature_true: crate::data::R
 ```
 `if random.next_bool() { delegate(&config.feature_true, ...) } else { delegate(&config.feature_false, ...) }` — ONE draw.
 
-**K.6 — `sequence` (HIGH confidence — runs every listed feature, in list order, at the SAME origin, each to full completion before the next begins — zero RNG of its own).**
+**K.6 — `sequence` (HIGH confidence — runs its listed features in list order at the SAME origin, each to full completion before the next begins, but stops the moment one of them fails: the first delegated feature whose own placement does not succeed aborts the sequence and every later entry is skipped entirely — zero RNG of its own beyond whatever each delegated feature's own chain consumes).**
 
 ```rust
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct SequenceConfiguration { pub features: Vec<crate::data::ResourceLocation> }
 ```
-`for name in &config.features { delegate(name, origin, world, ctx, random, data, resolver, props, bridge); }` — zero draws beyond whatever each delegated feature's own chain consumes.
 
-**K.7 — `scattered_ore` (LOW confidence, explicitly a placeholder shape — this blueprint's own reconstruction, not vanilla's real formula, stated as such; reuses M5-B07's own `ore::place` verbatim, zero duplicated algorithm, per GEN-D16's ownership resolution).**
+```text
+fn place_sequence(origin, config, world, resolver, props, random, data, ctx, bridge) -> bool:
+    for name in &config.features:
+        if !delegate(name, origin, world, ctx, random, data, resolver, props, bridge):
+            return false                                                 // first failed delegate aborts; every later entry is skipped entirely
+    true
+```
+
+**K.7 — `scattered_ore` (HIGH confidence — draws its own repetition count, jitters each attempt's target position along all three axes from a shared falloff formula, and places at most one block per attempt through the same admissibility check the vanilla `ore` kind uses — never the `ore` kind's own blob-placement algorithm).**
 
 ```rust
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -139,14 +146,24 @@ pub struct ScatteredOreConfiguration { pub inner: crate::decoration::features::O
 ```
 
 ```text
-fn place_scattered_ore(origin, config, world, resolver, props, random):
-    for _ in 0..3:                                                        // this blueprint's own fixed repetition count
-        dx = random.next_int_bounded(8) - 4                               // 1 draw
-        dz = random.next_int_bounded(8) - 4                               // 1 draw — Y unchanged
-        crate::decoration::features::ore::place(&config.inner, origin + (dx,0,dz), world, resolver, props, random)  // M5-B07's OWN function, reused verbatim
+fn place_scattered_ore(origin, config, world, resolver, props, random) -> bool:
+    tries = random.next_int_bounded(config.inner.size + 1)               // ONE draw, taken once, before any attempt; size is OreConfiguration's own 0..=64 field; zero tries is a normal outcome
+    for i in 0..tries:
+        max_dist = min(i, 7)                                             // attempt 0 always lands exactly on origin
+        dx = round((random.next_float() - random.next_float()) * max_dist)   // 2 draws
+        dy = round((random.next_float() - random.next_float()) * max_dist)   // 2 draws
+        dz = round((random.next_float() - random.next_float()) * max_dist)   // 2 draws — x, then y, then z: 6 next_float draws per attempt
+        target = origin + (dx, dy, dz)
+        state = world.get_block(target)
+        for target_state in &config.inner.target_states:                 // first passing entry wins, at most one block written
+            if ore::can_place_target(target_state, state, config.inner.discard_chance_on_air_exposure, world, resolver, random, target):
+                world.set_block(target, target_state.state)              // this attempt's only write
+                break
+    true                                                                  // always succeeds, even with zero tries or nothing written
 ```
+`place_scattered_ore` never calls `ore::place` (M5-B07's own full blob-placement algorithm — a materially different shape: one `next_float` angle, two `next_int_bounded(3)` Y-endpoint draws, a lerped double-ended ellipsoid blob sampled `config.inner.size` times). Only the shared target-rule-plus-air-exposure admissibility check, `ore::can_place_target` above, is reused; that helper is not yet exposed by M5-B07's own module (Context §0), which is an open gap for the planning role to close rather than a settled GEN-D16 resolution.
 
-`delegate(name, origin, world, ctx, random, data, resolver, props, bridge)` (an internal helper every kind in this section shares): looks up `placed = &data.placed_features[name]` (a missing entry is a loud `panic!`), then calls `run_placement_chain(&placed.placement, origin, world, ctx, random, &mut |w,p,r| place_configured_feature_all(&data.configured_features[&placed.feature], p, w, resolver, props, r, data, ctx, bridge))` — a genuine nested full-placement-modifier-chain call, exactly M5-B07's own `random_patch` shape, generalized to route back through THIS blueprint's own combined dispatcher (§S) rather than M5-B07's narrower one, so a selector/`sequence` member reachable this way can itself be any of this family's 35 kinds, not only M5-B07's original 7. The nested `PlacementCtx` `run_placement_chain` receives internally rebinds `feature_name` to `name` (Context §0's own restated rule).
+`delegate(name, origin, world, ctx, random, data, resolver, props, bridge) -> bool` (an internal helper every kind in this section except `scattered_ore` shares): looks up `placed = &data.placed_features[name]` (a missing entry is a loud `panic!`), then calls `run_placement_chain(&placed.placement, origin, world, ctx, random, &mut |w,p,r| place_configured_feature_all(&data.configured_features[&placed.feature], p, w, resolver, props, r, data, ctx, bridge))` — a genuine nested full-placement-modifier-chain call, exactly M5-B07's own `random_patch` shape, generalized to route back through THIS blueprint's own combined dispatcher (§S) rather than M5-B07's narrower one, so a selector/`sequence` member reachable this way can itself be any of this family's 35 kinds, not only M5-B07's original 7. The nested `PlacementCtx` `run_placement_chain` receives internally rebinds `feature_name` to `name` (Context §0's own documented deviation from vanilla). `delegate` returns whatever `place_configured_feature_all` itself returns for the nested feature (§S).
 
 ### N. End-dimension-only kinds — deferred, no owner yet reserved
 
@@ -165,7 +182,12 @@ fn place_scattered_ore(origin, config, world, resolver, props, random):
 /// identical `debug`-logged-no-op policy to M5-B07. `ctx: &PlacementCtx` is REQUIRED (the
 /// fix this blueprint's own position in the family makes structurally unavoidable to skip):
 /// every one of this blueprint's own 6 delegating kinds needs it to re-enter
-/// `run_placement_chain`.
+/// `run_placement_chain`. Returns `bool` so `sequence`'s own short-circuit (Context §K.6)
+/// can observe a nested failure: for this blueprint's own 7 kinds the return value is the
+/// kind's own real, computed success; for the 42 kinds owned by M5-B07 and M5-B12a/b/c/d,
+/// none of which report success themselves today, this dispatcher conservatively returns
+/// `true` regardless of what actually happened — a bounded, documented deviation tracked
+/// for the planning role, not a claim that those kinds cannot fail.
 #[allow(clippy::too_many_arguments)]
 pub fn place_configured_feature_all(
     feature: &crate::data::ConfiguredFeature,
@@ -177,7 +199,7 @@ pub fn place_configured_feature_all(
     data: &crate::data::WorldgenData,
     ctx: &crate::decoration::modifiers::PlacementCtx,
     bridge: Option<&UndergroundFeatureContext>,
-);
+) -> bool;
 ```
 
 **One-line additive change to M5-B07's already-specified `driver.rs`:** `decorate_chunk`'s own per-feature call site (M5-B07 Context §E.3, step 3's last bullet) changes from `place_configured_feature(&data.configured_features[&placed.feature], pos, world, resolver, props, random, data)` to `place_configured_feature_all(&data.configured_features[&placed.feature], pos, world, resolver, props, random, data, &ctx, bridge)`, where `ctx` is the SAME `PlacementCtx` `decorate_chunk` already constructs per feature (M5-B07 Context §E.3 — this blueprint adds no new construction, only forwards the existing one one layer further). `decorate_chunk`'s own signature gains one trailing parameter, `bridge: Option<&UndergroundFeatureContext>`, threaded through from its own caller (a future `GenStage`-driver blueprint's own responsibility to supply a real `UndergroundFeatureContext` once a real `DirectoryTemplateSource`/`BlockStateNames` registry exists — `None` until then, exactly M5-B08's own beardifier seam's identical bootstrap story; M5-B09's own text needs a small, additive correction to pass `bridge: None` at its own `advance_to_features` call site, tracked in `blueprints/M5/M5-B00-index.md`'s "Cross-blueprint gaps and reconciliation" — out of this blueprint's own assigned file scope). No other line of M5-B07's own Deliverables changes.
@@ -205,15 +227,35 @@ pub fn place_configured_feature_all(
 ### Porting-pitfall checklist (this blueprint's own additions)
 
 1. **`beehive`/`cocoa`-style conditional draws are not this blueprint's own concern** (that is M5-B11's), but the identical discipline applies here: `random_selector`'s per-entry `chance` roll stops at the FIRST success — entries after the first success consume zero further draws.
-2. **`sequence` runs every listed feature to full completion, in list order, at the SAME origin** — later entries in the list can overwrite earlier ones' own blocks; this is correct, matching vanilla's own layered-sequence behavior, never a bug to "fix" by skipping already-written positions.
-3. **`delegate`'s re-entrant `PlacementCtx` rebinds ONLY `feature_name`** — every other field (`step`, `biome_defs`, `biome_names`, `resolver`, `props`) is copied unchanged from the caller's own `ctx`.
+2. **`sequence` runs each listed feature to full completion, in list order, at the SAME origin, but stops at the first one that fails** — every later entry is then skipped entirely; among entries that DO run, a later one can overwrite an earlier one's own blocks, which is correct and matches vanilla's own layered-sequence behavior, never a bug to "fix" by skipping already-written positions.
+3. **`delegate`'s re-entrant `PlacementCtx` rebinds ONLY `feature_name`** — every other field (`step`, `biome_defs`, `biome_names`, `resolver`, `props`) is copied unchanged from the caller's own `ctx`. This rebinding is this project's own deliberate deviation from vanilla, which never resolves a biome check inside a nested chain at all (Context §0).
 4. **This is the ONLY blueprint in the M5-B12 family whose own `place_configured_feature_all` body actually exists** — M5-B12a/b/c/d's own kind functions are real and independently tested, but the combined dispatcher that reaches them by name is finalized here, last, by design (Context §0's own restated rationale).
+
+### Claims to verify (TEST-D57)
+
+- no_op is a genuine registered Feature kind, distinct from an unrecognized name, that performs zero draws and zero writes.
+- random_selector evaluates its listed entries in order, drawing one next_float per entry checked, and selects the first entry whose draw is less than that entry's chance value, consuming zero further draws once a success is found.
+- random_selector falls through to its default feature, with zero further draws, if none of its listed entries succeed.
+- weighted_random_selector sums the weight field of every listed entry into a total; this kind has no default feature at all, so when that total is 0 it selects nothing and consumes zero draws.
+- weighted_random_selector, when the total weight is nonzero, draws exactly one next_int_bounded(total) value, then walks its entries in list order subtracting each entry's weight from the running roll until the entry where roll is less than that entry's weight is selected.
+- simple_random_selector draws exactly one next_int_bounded(N) value, where N is the number of listed features, and selects the feature at that index.
+- random_boolean_selector draws exactly one next_bool() value, selecting feature_true on true and feature_false on false.
+- sequence runs its listed features in list order at the same origin, each to full completion before the next begins, but stops the moment one delegated feature fails: the first failure aborts the sequence and every later entry is skipped, consuming zero RNG draws of its own beyond whatever each delegated feature's own chain consumes.
+- In sequence, later entries in the list can overwrite earlier entries' own blocks, which is correct and matches vanilla's own layered-sequence behavior.
+- scattered_ore draws one next_int_bounded(size + 1) value before any attempt, where size is OreConfiguration's own field, and repeats its placement attempt that many times (zero attempts is a normal outcome).
+- Each of scattered_ore's attempts computes dx as round((next_float() - next_float()) * min(attempt_index, 7)) — two next_float draws, not a bounded-int draw.
+- Each of scattered_ore's attempts computes dz the same way as dx — round((next_float() - next_float()) * min(attempt_index, 7)) — and also draws dy by the identical formula between the x and z draws, applying all three offsets; the Y coordinate is not left unchanged.
+- scattered_ore does not reuse the ore feature kind's own placement algorithm; each attempt reads the block state at the jittered position offset by (dx, dy, dz) and, for the first target-state entry passing the shared admissibility check the ore kind also uses, writes a single block there.
+- The RNG stream used by a feature's placement continues across every one of that feature's own multiple placement attempts within one chunk, rather than being reseeded between attempts.
+- Vanilla never resolves a Biome placement modifier inside a nested selector/sequence delegation chain at all: the nested-call path leaves the top feature unset, and vanilla's own data never places a Biome modifier inside a nested chain; only the top-level call binds a checkable feature, and it is the outer placed feature's own identity that gets checked there.
+- random_selector, weighted_random_selector, simple_random_selector, and random_boolean_selector each place their selected feature at the same block position as the outer call, continuing the same already-seeded RNG stream rather than starting a new one.
+- end_platform, end_spike, end_island, and end_gateway are Feature kinds that vanilla only ever places in the End dimension.
 
 ## Deliverables
 
 ### `crates/worldgen/src/decoration/underground/selectors.rs` (NEW)
 
-`NoOpConfiguration`, `WeightedPlacedFeatureRef`, `RandomSelectorConfiguration`, `WeightedEntry`, `WeightedRandomSelectorConfiguration`, `SimpleRandomSelectorConfiguration`, `RandomBooleanSelectorConfiguration`, `SequenceConfiguration`, `ScatteredOreConfiguration` plus one `place`/`place_*` fn each (each of the six delegating kinds takes the additional `data: &WorldgenData, ctx: &PlacementCtx, bridge: Option<&UndergroundFeatureContext>` parameters their own re-entrant `run_placement_chain`/`place_configured_feature_all` calls need), exactly per Context §K. Also defines the shared internal `delegate(...)` helper (Context §K's own closing paragraph).
+`NoOpConfiguration`, `WeightedPlacedFeatureRef`, `RandomSelectorConfiguration`, `WeightedEntry` (its `data` field, not `feature`), `WeightedRandomSelectorConfiguration` (no `default` field — this kind has none), `SimpleRandomSelectorConfiguration`, `RandomBooleanSelectorConfiguration`, `SequenceConfiguration`, `ScatteredOreConfiguration` plus one `place`/`place_*` fn each, each returning `bool` (each of the six delegating kinds takes the additional `data: &WorldgenData, ctx: &PlacementCtx, bridge: Option<&UndergroundFeatureContext>` parameters their own re-entrant `run_placement_chain`/`place_configured_feature_all` calls need, and `delegate`/`place_sequence` propagate that `bool` so `sequence`'s own short-circuit (Context §K.6) can observe a nested failure), exactly per Context §K. Also defines the shared internal `delegate(...) -> bool` helper (Context §K's own closing paragraph).
 
 ### `crates/worldgen/src/decoration/underground/mod.rs` (MODIFY — final change to this file; one new module line PLUS the full `place_configured_feature_all` body)
 
@@ -231,7 +273,7 @@ pub fn place_configured_feature_all(
     data: &crate::data::WorldgenData,
     ctx: &crate::decoration::modifiers::PlacementCtx,
     bridge: Option<&UndergroundFeatureContext>,
-) {
+) -> bool {
     // body: Table K.1's full match on `feature.feature_type`, exactly per Context §S.
 }
 ```
@@ -251,8 +293,8 @@ pub fn place_configured_feature_all(
 3. `weighted_random_selector_cumulative_selection` — 3 entries with weights `[1,1,8]`; a fixed seed whose single `next_int_bounded(10)` draw is hand-verified `>= 2`; the THIRD entry is selected.
 4. `simple_random_selector_uniform_one_draw` — 4 entries; exactly one `next_int_bounded(4)` draw consumed, selecting `features[draw_result]`.
 5. `random_boolean_selector_one_draw_two_outcomes` — a fixed seed whose `next_bool()` is hand-verified `true`; `feature_true` is selected, exactly one draw.
-6. `sequence_runs_every_entry_at_same_origin_in_order` — 3 nested `simple_block`-configured features (M5-B07's own kind), each with a DISTINCT state; all 3 end up written at `origin` in list order (the LAST one's state is what `world.get_block(origin)` ultimately reads).
-7. `scattered_ore_calls_ore_place_exactly_three_times` — an instrumented call-counting wrapper around M5-B07's own `ore::place`; exactly 3 invocations, each preceded by exactly 2 fresh draws (the XZ jitter).
+6. `sequence_runs_every_entry_at_same_origin_in_order` — 3 nested `simple_block`-configured features (M5-B07's own kind), each with a DISTINCT state, each succeeding (a stubbed `delegate` returning `true` for all 3); all 3 end up written at `origin` in list order (the LAST one's state is what `world.get_block(origin)` ultimately reads), and `place_sequence` itself returns `true`. A companion case with the first delegate call stubbed to return `false` asserts `place_sequence` returns `false` and the remaining entries are never delegated to.
+7. `scattered_ore_draws_a_bounded_try_count_and_never_calls_ore_place` — a fixed seed whose single `next_int_bounded(size + 1)` draw is hand-verified to a known try count N; exactly N attempts run, each preceded by exactly 6 fresh `next_float` draws (the XYZ jitter) and at most one `world.set_block` call; an instrumented wrapper around M5-B07's own `ore::place` asserts it is never invoked; `place_scattered_ore` itself always returns `true`.
 8. **`random_selector_and_sequence_reachable_through_the_real_combined_dispatcher`** — calls `place_configured_feature_all` directly (not `place_random_selector`/`place_sequence` as unit calls) with a `feature_type: "minecraft:random_selector"` config whose nested `entry.feature` resolves to a `simple_block`-configured `placed_feature`, and separately with `feature_type: "minecraft:sequence"` referencing two nested features; asserts the delegated block(s) are actually written at `origin` through the FULL `place_configured_feature_all(..., ctx, bridge)` entry point, proving `ctx` is correctly threaded from the dispatcher's own parameter into `delegate`'s re-entrant `run_placement_chain` call — this is the exact class of gap the original, unsplit `M5-B12-features-underground-misc.md` left untested (its own `place_random_selector` unit tests never exercised the combined dispatcher's own signature at all).
 
 ### `crates/worldgen/tests/underground_dispatcher_registration.rs`

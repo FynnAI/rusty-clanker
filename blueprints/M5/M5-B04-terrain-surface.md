@@ -11,14 +11,14 @@
 
 ## Goal & Done definition
 
-Give `rc-worldgen` the noise-to-blocks terrain shaping pass: the per-chunk `Noise` `GenStage` (walks M5-B03's `NoiseChunk` cell machinery, applies the `density > 0 → default_block` rule, delegates every `density <= 0` position to a bit-exact aquifer simulation and every solid position to the density-function-driven ore-vein material rule, and maintains `HeightmapSet` as it writes) and the per-chunk `Surface` `GenStage` (a sequential per-column interpreter over the compiled `SurfaceRule`/`SurfaceCondition` tree — including bedrock's ragged edge, which is an ordinary `vertical_gradient` condition with no special-casing). This is the terrain-shape half of GEN-D25's pipeline; carvers, features, and structures are explicitly out of scope (future M5 blueprints).
+Give `rc-worldgen` the noise-to-blocks terrain shaping pass: the per-chunk `Noise` `GenStage` (walks M5-B03's `NoiseChunk` cell machinery, runs the bit-exact aquifer simulation first — it resolves `density <= 0` positions to air/water/lava outright, and leaves both `density > 0` solid positions and its own barrier-wall positions unresolved — delegates every position the aquifer left unresolved to the density-function-driven ore-vein material rule, falls back to `default_block` wherever both leave the position unresolved, and maintains `HeightmapSet` as it writes) and the per-chunk `Surface` `GenStage` (a sequential per-column interpreter over the compiled `SurfaceRule`/`SurfaceCondition` tree — including bedrock's ragged edge, which is an ordinary `vertical_gradient` condition with no special-casing). This is the terrain-shape half of GEN-D25's pipeline; carvers, features, and structures are explicitly out of scope (future M5 blueprints).
 
 Done when:
 
 - [ ] `cargo build -p rc-worldgen` succeeds with zero warnings.
 - [ ] Every acceptance test in this blueprint's own test changeset passes under `cargo nextest run -p rc-worldgen`.
 - [ ] Every fully-specified golden vector (aquifer grid/jitter/similarity math, ore-vein thresholds and RNG draw order, bedrock's deterministic and probabilistic zones, the full-column fill test on a tiny hand-built noise-settings fixture) reproduces its expected value **exactly**.
-- [ ] Every moderate-confidence reconstruction named in Context (the aquifer pressure/barrier formula, the aquifer `FluidStatus` floodedness thresholds, `stone_depth`'s exact offset-combination formula, `bandlands`'s clay-band palette, `steep`'s chunk-edge behavior) is implemented behind the exact seam Context specifies, tested only for the structural properties Context states (determinism, boundedness, the documented safe fallback), never asserted as an exact vanilla-matching golden value.
+- [ ] Every moderate-confidence reconstruction named in Context (the aquifer `FluidStatus` floodedness thresholds, `bandlands`'s clay-band palette) is implemented behind the exact seam Context specifies, tested only for the structural properties Context states (determinism, boundedness, the documented safe fallback), never asserted as an exact vanilla-matching golden value. The aquifer pressure/barrier formula, `stone_depth`'s offset-combination formula, and `steep`'s comparison/chunk-edge behavior are now confirmed EXACT by TEST-D57 and are held to that exact standard, not the moderate-confidence one.
 - [ ] `cargo run -p xtask -- lint-deps` still exits 0 — this blueprint adds zero new dependency edges.
 - [ ] `cargo run -p xtask -- fmt-check` and `-- lint` both exit 0.
 - [ ] `cargo test --doc -p rc-worldgen` exits 0.
@@ -30,7 +30,7 @@ Done when:
 
 **Owns**: the `Noise` `GenStage` body (per-cell/per-block density fill, the aquifer algorithm, the ore-vein material rule, `HeightmapSet` maintenance) and the `Surface` `GenStage` body (the per-column `SurfaceRule`/`SurfaceCondition` interpreter, including bedrock placement as an ordinary instance of that interpreter). Both are pure functions of `(compiled WorldgenData, world seed, chunk coordinates, the already-filled `BiomeColumn`)` — no RNG stream is shared or reused across chunks, no chunk reads another chunk's materialized block data (GEN-D13/D15/D16/D17's own "pure function of coordinates" property, inherited unchanged).
 
-**Does not own, and must not implement even partially**: biome *placement* (M5-B05's own `ClimateSampler`/`MultiNoiseBiomeSource` — this blueprint only *reads* the already-filled `BiomeColumn`, GEN-D14); carvers (GEN-D18 — caves/canyons run in a separate, later `ChunkStatus` stage, strictly after `Surface`); features/placement, including the classic `minecraft:ore` feature that places every ore *other* than the copper/iron veins this blueprint owns (GEN-D19); structures, jigsaw assembly, or real `Beardifier` piece-list wiring (GEN-D21 — `router.final_density`'s own compiled graph already contains whatever `Beardifier{}` node vanilla wires in, and M5-B03 makes that node evaluate to `0.0` until a future structures blueprint updates it; this blueprint never adds a *separate* Beardifier term of its own — sampling `router.final_density` through M5-B03's interpreter already includes it, Context §C); light propagation (M4-B07 — this blueprint writes blocks and calls `HeightmapSet::note_block_change`, WORLD-D5's own hook, exactly as any other block-write primitive would, but never touches `LightColumn` or runs any BFS); persistence/NBT (M2-B02/M2-B04); the `GenStage` scheduler itself, `ChunkKey` routing, or the Stage-1 structural-command handoff (GEN-D25's own execution-model machinery — a future blueprint's job; this blueprint's two entry points are plain functions a future scheduler-integration blueprint calls, not systems or scheduled tasks themselves).
+**Does not own, and must not implement even partially**: biome *placement* (M5-B05's own `ClimateSampler`/`MultiNoiseBiomeSource` — this blueprint only *reads* the already-filled `BiomeColumn`, GEN-D14); carvers (GEN-D18 — caves/canyons run in a separate, later `ChunkStatus` stage, strictly after `Surface`); features/placement, including the classic `minecraft:ore` feature, which places every ore type — including copper and iron via its own `ore_iron`/`ore_iron_small`/`ore_copper_small`/`ore_copper_large` configured features — as an additional mechanism alongside the copper/iron vein system this blueprint owns (GEN-D19); structures, jigsaw assembly, or real `Beardifier` piece-list wiring (GEN-D21 — this blueprint's own fill driver adds a `Beardifier{}` term (currently `0.0` until a future structures blueprint supplies real piece-list data) to the sampled `router.final_density` value and wraps the sum in a `cache_all_in_cell` node, exactly as vanilla's own fill driver does, Context §C/§E); light propagation (M4-B07 — this blueprint writes blocks and calls `HeightmapSet::note_block_change`, WORLD-D5's own hook, exactly as any other block-write primitive would, but never touches `LightColumn` or runs any BFS); persistence/NBT (M2-B02/M2-B04); the `GenStage` scheduler itself, `ChunkKey` routing, or the Stage-1 structural-command handoff (GEN-D25's own execution-model machinery — a future blueprint's job; this blueprint's two entry points are plain functions a future scheduler-integration blueprint calls, not systems or scheduled tasks themselves).
 
 ### B. GEN-D10 restated as binding Rust guardrails (identical rule to M5-B03's own Context §F, restated here since this blueprint's own code is new)
 
@@ -103,24 +103,24 @@ fn drive_noise_chunk(noise_chunk: &mut NoiseChunk, dims: &NoiseDimensions, chunk
 
 This is a moderate-confidence resolution of an API-usage protocol M5-B03 itself left as an open item — flagged here, not silently assumed, per this project's standing convention. It does not affect the correctness of any *fully-specified* golden vector this blueprint's own acceptance tests assert (Context §Acceptance tests deliberately uses a cache-node-free tiny fixture for the full-column golden test, Context §M), so a future correction to this cadence (if GEN-D27's black-box audit finds a divergence) is a narrowly-scoped fix to `terrain::fill`'s driver loop alone.
 
-### E. Material rule — `density > 0 → default_block`, else aquifer/ore-vein
+### E. Material rule — aquifer filler first, then the ore-vein filler, then `default_block`
 
-Per block, in this exact order (05-worldgen.md §3.6/§3.7/§3.8, restated as the binding `MaterialRuleList` shape):
+Per block, in this exact order (05-worldgen.md §3.6/§3.7/§3.8, restated as the binding `MaterialRuleList` shape — a fixed filler chain where each filler returns `None` to mean "no opinion, ask the next filler" and the chain falls back to `default_block` when every filler abstains):
 
 ```text
 fn material_at(density: f64, ctx, aquifer: &mut AquiferGrid, ore_vein_random: &AnyPositionalFactory, router, block_ids, ore_ids) -> BlockStateId:
-    if density > 0.0:
-        # OreVeinifier only ever touches SOLID positions (05-worldgen.md §3.8: "for every position where the base
-        # density is solid"), and only ever REPLACES default_block — it never turns a solid position into air/fluid.
-        if let Some(vein_block) = ore_vein::evaluate_ore_vein(ctx, ore_vein_random, router, ore_ids):
-            return vein_block
-        return block_ids.default_block
-    else:
-        # density <= 0: the aquifer decides air / water / lava / "stays solid" (Context §F).
-        return aquifer.compute_substance(ctx, density, router, block_ids)
+    # The aquifer filler runs FIRST and returns None both for density > 0.0 (an ordinary solid position, Context
+    # §F) and for its own barrier "stays solid" branch at density <= 0.0 (a wall between two aquifer regions,
+    # Context §F) — in both cases the position is left open for the ore-vein filler below, never turned into
+    # air/fluid by it, and only ever REPLACES default_block, never air or fluid (05-worldgen.md §3.8).
+    if let Some(fluid_block) = aquifer.compute_substance(ctx, density, router, block_ids):
+        return fluid_block
+    if let Some(vein_block) = ore_vein::evaluate_ore_vein(ctx, ore_vein_random, router, ore_ids):
+        return vein_block
+    return block_ids.default_block
 ```
 
-`density` is `noise_chunk.sample(router.final_density, ctx)` — this single call already includes whatever `Beardifier{}`/`BlendDensity{}`/`BlendAlpha{}`/`BlendOffset{}` contribution the compiled graph specifies (currently the M5-B03-fixed fresh-generation defaults, Context §A) and whatever caching M5-B03's own graph analysis determined `final_density`'s subtree needs (`CacheAllInCell`, per 05-worldgen.md §3.6's own note that `fillFromNoise` wraps the whole final-density sum in `cache_all_in_cell`) — this blueprint's own driver code performs **no** extra summation, clamping, or caching around this one call.
+`density` is **not** the raw `noise_chunk.sample(router.final_density, ctx)` value by itself: `final_density` already includes whatever `BlendDensity{}`/`BlendAlpha{}`/`BlendOffset{}` contribution the compiled graph specifies, but it contains no `Beardifier{}` node at all (the pinned `overworld.json` `noise_router.final_density` subtree has zero `minecraft:beardifier` and zero `minecraft:cache_all_in_cell` nodes) — this blueprint's own driver code adds its own `Beardifier{}` term (currently `0.0` until a future structures blueprint supplies real piece-list data) to the sampled `final_density` value and wraps the sum in a `cache_all_in_cell` node itself, exactly as vanilla's own fill driver does; `density` is that wrapped sum, never the bare `sample(router.final_density, ctx)` result.
 
 **Sea-level water placement from noise settings**: this is what the aquifer's own **disabled-aquifer fallback** and **global fluid picker** (Context §F) resolve to — `NoiseGeneratorSettings.sea_level` and the caller-resolved `default_fluid`/`air` ids are the only "sea-level water" inputs this blueprint needs; there is no separate "sea level fill pass."
 
@@ -154,13 +154,11 @@ fn find_4_nearest(positional, query_x, query_y, query_z) -> [AquiferLocation; 4]
         loc = aquifer_grid.location_for_cell(positional, gx+dx, gy+dy, gz+dz)   # memoized
         dist_sqr = (loc.x - query_x)^2 + (loc.y - query_y)^2 + (loc.z - query_z)^2   # i64, exact integer squared distance
         (loc, dist_sqr)
-    # partial selection: the 4 smallest dist_sqr, ties broken by ascending (dx,dy,dz) SCAN ORDER (i.e. the
-    # first-encountered candidate at a tied distance keeps the earlier rank) — Context's own tie-break choice,
-    # MODERATE CONFIDENCE (05-worldgen.md's own hazard note: "the partial-selection-sort tie-breaking order...
-    # affects which grid location wins on exact ties," and does not state vanilla's own `>=`-vs-`>` convention).
-    # This is a bounded, GEN-D20-style parity exception: exact ties require exact-integer-aligned jittered
-    # coordinates, a narrow, reproducible edge case a future GEN-D27 black-box pass can specifically target.
-    sort candidates by (dist_sqr ascending, scan_index ascending); take first 4
+    # partial selection: the 4 smallest dist_sqr, scanned in ascending (dx,dy,dz) order. Vanilla's own four
+    # insertion tests are all `>=`, so on an exact tie a LATER-scanned candidate displaces the incumbent and
+    # takes the better (lower-numbered) rank, pushing the earlier-scanned candidate down — i.e. the
+    # LAST-encountered candidate at a tied distance keeps the earlier rank, not the first (EXACT, TEST-D57).
+    sort candidates by (dist_sqr ascending, scan_index descending); take first 4
     return [c.0 for c in first_4], their dist_sqr values
 ```
 
@@ -174,38 +172,64 @@ fn similarity(dist_sqr_a: i64, dist_sqr_b: i64) -> f64:
 **The barrier/pressure gate — pairs, rejection rule, and the moderate-confidence pressure formula**:
 
 ```text
-fn compute_substance(pos, density, aquifer, router, block_ids) -> BlockStateId:
-    # invariant: only ever called for density <= 0.0 (Context §E)
+fn compute_substance(pos, density, aquifer, router, block_ids) -> Option<BlockStateId>:
+    # First filler in MaterialRuleList's own chain (Context §E): `None` means "no opinion, ask the ore-vein
+    # filler next" — returned both for an ordinary solid position (density > 0.0) and for the barrier "stays
+    # solid" branch below (density <= 0.0); the aquifer itself never resolves either case to default_block.
+    if density > 0.0:
+        return None
     [loc1, loc2, loc3, loc4] = aquifer.find_4_nearest(pos)          # loc4 is found but only ever used for the search
                                                                        # itself, never in the pairwise checks below —
                                                                        # 05-worldgen.md's own "1st/2nd, 1st/3rd, 2nd/3rd" list.
-    for (a, b) in [(loc1,loc2), (loc1,loc3), (loc2,loc3)]:
-        sim = similarity(a.dist_sqr, b.dist_sqr)
-        if sim > 0.0:
-            barrier = pressure(pos, a, b, sim, router)    # Context's own moderate-confidence reconstruction, below
-            if density + barrier > 0.0:
-                return block_ids.default_block             # "stays solid" — 05-worldgen.md's own literal phrase;
-                                                              # this is what carves the solid rock WALLS between two
-                                                              # adjacent, differently-leveled aquifer regions.
-    return fluid_block_for(loc1.fluid, pos.y, block_ids)     # closest location's own FluidStatus wins
+    sim12 = similarity(loc1.dist_sqr, loc2.dist_sqr)
+    if sim12 <= 0.0:
+        return Some(fluid_block_for(loc1.fluid, pos.y, block_ids))   # no barrier evaluated for any pair at all
+    # NOT modeled here, flagged only: vanilla has a further bypass right after this gate — when the closest
+    # location's own fluid is water and the global fluid picker one block below is lava, it returns that fluid
+    # immediately, before any pressure is evaluated. This blueprint's own reconstruction omits that one bypass.
+    barrier12 = sim12 * pressure(pos, loc1, loc2, router)      # Context's own exact reconstruction, below
+    if density + barrier12 > 0.0:
+        return None                                                  # "stays solid" — 05-worldgen.md's own literal
+                                                                         # phrase; carves the solid rock WALLS between
+                                                                         # two adjacent, differently-leveled aquifer regions.
+    sim13 = similarity(loc1.dist_sqr, loc3.dist_sqr)
+    if sim13 > 0.0:
+        barrier13 = sim12 * sim13 * pressure(pos, loc1, loc3, router)
+        if density + barrier13 > 0.0:
+            return None
+    sim23 = similarity(loc2.dist_sqr, loc3.dist_sqr)
+    if sim23 > 0.0:
+        barrier23 = sim12 * sim23 * pressure(pos, loc2, loc3, router)
+        if density + barrier23 > 0.0:
+            return None
+    return Some(fluid_block_for(loc1.fluid, pos.y, block_ids))       # closest location's own FluidStatus wins
 ```
 
-`pressure(pos, a, b, sim, router)` — **MODERATE CONFIDENCE, explicitly flagged, not literally sourced**: 05-worldgen.md's own text names every *ingredient* this formula uses (the two locations' fluid-level difference; the query Y's position relative to their average fluid level; asymmetric top/bottom bias constants `2.5`/`1.5` "near the top," `10.0`/`3.0` "near the bottom"; a sample of the `barrierNoise` density-router field) but never gives the literal combining arithmetic. This blueprint's own best-effort reconstruction, matching every named ingredient and every named constant exactly, is:
+`pressure(pos, a, b, router)` — **EXACT, source-verified (TEST-D57)**: the similarity weighting (`sim12`, `sim12*sim13`, `sim12*sim23`) is applied entirely by the caller above, never inside this function. Two guard clauses run before any of the gradient arithmetic: if one of `a`/`b`'s own fluid resolves to lava and the other to water at `pos.y`, the function returns the constant `2.0` immediately; otherwise, if the two locations' fluid levels are exactly equal, it returns `0.0` immediately. Only when neither guard fires does the gradient/noise chain below run:
 
 ```text
-fn pressure(pos, a: AquiferLocation, b: AquiferLocation, sim: f64, router) -> f64:
-    avg_level = (a.fluid.surface_level(pos.y) + b.fluid.surface_level(pos.y)) as f64 / 2.0
-    delta = pos.y as f64 - avg_level
-    (near_bias, far_bias) = if delta >= 0.0 { (2.5, 1.5) } else { (10.0, 3.0) }   # top vs. bottom asymmetry
+fn pressure(pos, a: AquiferLocation, b: AquiferLocation, router) -> f64:
+    if is_lava_water_pair(a.fluid, b.fluid, pos.y):
+        return 2.0
     level_gap = (a.fluid.surface_level(pos.y) - b.fluid.surface_level(pos.y)).abs() as f64
-    falloff = clamped_map(level_gap, 0.0, near_bias, 1.0, 0.0) * far_bias
-    barrier_sample = router_sample(router.barrier_noise, pos)    # via NoiseChunk::sample, GEN-D13's own noise-router field
-    sim * falloff * barrier_sample
+    if level_gap == 0.0:
+        return 0.0
+    avg_level = (a.fluid.surface_level(pos.y) + b.fluid.surface_level(pos.y)) as f64 / 2.0
+    delta = pos.y as f64 + 0.5 - avg_level                          # +0.5 block-centre offset
+    base_value = level_gap / 2.0
+    distance_from_barrier_edge = base_value - delta.abs()
+    (bias, near_divisor, far_divisor) = if delta > 0.0 { (0.0, 1.5, 2.5) } else { (3.0, 3.0, 10.0) }   # strict test
+    center_point = bias + distance_from_barrier_edge
+    gradient = if center_point > 0.0 { center_point / near_divisor } else { center_point / far_divisor }
+    barrier_sample = if gradient < -2.0 || gradient > 2.0 { 0.0 } else { router_sample(router.barrier_noise, pos) }
+                                                                       # via NoiseChunk::sample, memoized across the
+                                                                       # 3 pair checks so at most one sample per position
+    2.0 * (barrier_sample + gradient)   # ADDED then DOUBLED — never multiplied by similarity
 ```
 
-`surface_level(pos.y)` above means: for a `Water`/`Lava` fluid, its own quantized/global fluid level (an integer Y); for a `None` (dry) `FluidStatus`, a very-low sentinel far below `pos.y` so `delta`/`level_gap` still compute without special-casing (Context §F's own `FluidType::None` handling, below). This reconstruction is used **exactly as shown**, but its exact numeric correctness against vanilla is explicitly **not** asserted anywhere in this blueprint's own acceptance tests (Context §Acceptance tests) — only its documented properties (determinism, and that a larger `level_gap`/smaller `sim` never *decreases* the barrier's magnitude, a monotonicity sanity check, not a parity claim) are tested. A future GEN-D27 black-box pass is the actual reconciliation step for this one sub-formula; because it only affects the exact placement of aquifer dividing walls (a local, self-contained visual effect), an incorrect reconstruction here does not cascade into any other subsystem this blueprint or any of its dependents own.
+`surface_level(pos.y)` above means: for a `Water`/`Lava` fluid, its own quantized/global fluid level (an integer Y); for a `None` (dry) `FluidStatus`, a very-low sentinel far below `pos.y` so `delta`/`level_gap` still compute without special-casing (Context §F's own `FluidType::None` handling, below). This chain is now confirmed exact by TEST-D57's own recheck against the reference; this blueprint's own acceptance tests (Context §Acceptance tests, `aquifer_pressure_and_fluid_status.rs`) still exercise only structural properties (determinism, finiteness) rather than exact golden vectors, a scope choice a future test-plan revision may narrow now that the formula itself is pinned exact.
 
-**`FluidStatus` computation — grid-location-scoped, noise-router-driven, MODERATE CONFIDENCE on the exact floodedness thresholds**:
+**`FluidStatus` computation — grid-location-scoped, noise-router-driven; the near-surface test below is EXACT (TEST-D57), MODERATE CONFIDENCE remains only on the exact floodedness thresholds**:
 
 ```rust
 pub enum FluidKind { None, Water, Lava }
@@ -214,14 +238,30 @@ pub struct FluidStatus { pub level: i32, pub kind: FluidKind }   // `level` is m
 
 ```text
 fn compute_fluid_status(loc_x, loc_y, loc_z, router, settings, prelim_surface: impl Fn(i32,i32)->i32) -> FluidStatus:
-    # "near/above the terrain surface" test (05-worldgen.md §3.7): sample preliminarySurfaceLevel at the location's
-    # own (x,z) and each of 12 nearby chunk-corner offsets (the exact offset list is not literally given by the
-    # corpus — this blueprint samples the location's own column plus its 4 orthogonal ±8-block neighbors as a
-    # reasonable, bounded stand-in, MODERATE CONFIDENCE); if loc_y is at or above the LOWEST of those samples,
-    # inherit the global fluid picker's level (Context §E) unconditionally:
-    surface_samples = [prelim_surface(loc_x, loc_z)] + [prelim_surface(loc_x+dx, loc_z+dz) for (dx,dz) in [(8,0),(-8,0),(0,8),(0,-8)]]
-    if loc_y >= min(surface_samples):
-        return global_fluid_picker(loc_y, settings.sea_level)   # Water above min(-54,sea_level), Lava below, as a FluidStatus
+    # Near-surface test (EXACT, TEST-D57): 13 total samples of preliminarySurfaceLevel -- the location's own
+    # (x,z) (the CENTRE sample) plus 12 further chunk-sized (dx,dz) offsets, each in units of 16 blocks. Every
+    # sampled level is first adjusted by +8. AT THE CENTRE SAMPLE ONLY, an unconditional early return fires
+    # when loc_y - 12 > adjusted_surface_level, inheriting the global fluid picker's own level at loc_y — this
+    # is NOT an "at or above the minimum of all 13 samples" test. Separately, for ANY of the 13 samples
+    # (centre included) where loc_y + 12 > adjusted_surface_level, the global fluid picker is evaluated AT
+    # that sample's own (x,z) and adjusted level; if that is non-air, THAT status is returned immediately —
+    # not necessarily the location's own global fluid. The centre sample's own non-air/air outcome here also
+    # latches surface_at_center_is_under_global_fluid_level, consumed by the floodedness factor below. The
+    # minimum of all 13 UNADJUSTED samples (lowest_preliminary_surface) is not part of either return test — it
+    # is threaded into the floodedness factor and the randomized-level cap below, with +8 re-applied there.
+    lowest_preliminary_surface = i32::MAX
+    for (dx, dz) in CENTER_THEN_12_CHUNK_OFFSETS:                    # {0,0} first, then 12 more, each * 16
+        raw_surface = prelim_surface(loc_x + dx, loc_z + dz)         # UNADJUSTED
+        lowest_preliminary_surface = min(lowest_preliminary_surface, raw_surface)
+        adjusted_surface = raw_surface + 8
+        if (dx, dz) == (0, 0) && loc_y - 12 > adjusted_surface:
+            return global_fluid_picker(loc_y, settings.sea_level)
+        if loc_y + 12 > adjusted_surface:
+            fluid_at_surface = global_fluid_picker(adjusted_surface, settings.sea_level)
+            if (dx, dz) == (0, 0):
+                surface_at_center_is_under_global_fluid_level = fluid_at_surface.kind != FluidKind::None
+            if fluid_at_surface.kind != FluidKind::None:
+                return fluid_at_surface
 
     # otherwise: floodedness decides fully-flooded / partially-flooded / dry.
     floodedness = router_sample(router.fluid_level_floodedness_noise, (loc_x,loc_y,loc_z))   # NamedNoise, [-1,1]-ish range
@@ -233,21 +273,29 @@ fn compute_fluid_status(loc_x, loc_y, loc_z, router, settings, prelim_surface: i
     if floodedness > 0.0:
         return global_fluid_picker(loc_y, settings.sea_level)
     else:
+        # Fluid-level cell (EXACT, TEST-D57): cell indices are right, but the noise is sampled at the RAW CELL
+        # INDICES themselves, never at a cell-centre block position — no cell_x*16+8/cell_z*16+8 exists.
         cell_x = floor_div(loc_x, 16); cell_y = floor_div(loc_y, 40); cell_z = floor_div(loc_z, 16)
-        cell_center = (cell_x*16 + 8, cell_y*40 + 20, cell_z*16 + 8)
-        spread = router_sample(router.fluid_level_spread_noise, cell_center)
-        raw_level = (spread * 10.0)
-        level = (round(raw_level / 3.0) * 3.0) as i32              # quantized to steps of 3, ±10 max spread (§5's own constant)
-        lava_sample = router_sample(router.lava_noise, cell_center_for_lava(loc))   # 64×64×40-cell-quantized, §5
-        kind = if level <= -10 && lava_sample.abs() > 0.3 { FluidKind::Lava } else { FluidKind::Water }
+        cell_middle_y = cell_y*40 + 20                              # the only "cell middle" that exists — a base LEVEL
+        spread = router_sample(router.fluid_level_spread_noise, (cell_x, cell_y, cell_z))   # raw indices as the sample point
+        raw_level = spread * 10.0                                    # ±10 max spread (§5's own constant)
+        quantized = floor(raw_level / 3.0) * 3.0                     # FLOOR quantization, not round
+        target_level = cell_middle_y + (quantized as i32)             # quantized value is an OFFSET added to cell_middle_y
+        level = min(lowest_preliminary_surface, target_level)          # capped by the near-surface scan's own minimum
+        lava_cell_x = floor_div(loc_x, 64); lava_cell_y = floor_div(loc_y, 40); lava_cell_z = floor_div(loc_z, 64)
+        lava_sample = router_sample(router.lava_noise, (lava_cell_x, lava_cell_y, lava_cell_z))   # raw 64x40x64 cell indices
+        # Lava kind gate is THREE conjuncts, applied to every computed status (not only this branch): level <= -10
+        # AND level != WAY_BELOW_MIN_Y-equivalent dry sentinel AND the fallback kind below isn't already lava.
+        fallback = global_fluid_picker(loc_y, settings.sea_level)
+        kind = if level <= -10 && fallback.kind != FluidKind::Lava && lava_sample.abs() > 0.3 { FluidKind::Lava } else { fallback.kind }
         return FluidStatus { level, kind }
 ```
 
-`global_fluid_picker(y, sea_level) -> FluidStatus`: `if y < min(-54, sea_level) { Lava at that level } else if y < sea_level { Water at sea_level } else { None }` — the single function serving both the disabled-aquifer fallback (Context §E) and the surface-near-terrain branch above (05-worldgen.md's own `min(-54, sea_level)` lava-cutoff constant, §5).
+`global_fluid_picker(y, sea_level) -> FluidStatus`: exactly TWO outcomes, `if y < min(-54, sea_level) { FluidStatus { level: -54, kind: Lava } } else { FluidStatus { level: sea_level, kind: settings.default_fluid_kind } }` — the lava status's own level is the FIXED CONSTANT `-54`, not `min(-54, sea_level)` (the two differ whenever `sea_level < -54`, as in the pinned `floating_islands` preset, `sea_level = -64`); there is no third "no fluid" outcome — above sea level the picker still returns the sea status, and the air result comes later from `fluid_block_for`'s own `query_y >= status.level` test. The single function serves both the disabled-aquifer fallback (Context §E) and the surface-near-terrain branch above.
 
 **`fluid_block_for(status, query_y, block_ids)`**: `if status.kind == None || query_y >= status.level { block_ids.air }` else `if status.kind == Water { block_ids.water } else { block_ids.lava }` — a `FluidStatus` gives a fluid *surface* level; the query position only actually receives fluid if it is strictly below that level (air above it, even inside an otherwise-fluid-bearing grid cell).
 
-**Disabled-aquifer path** (`settings.aquifers_enabled == false` — every dimension except the overworld family, GEN-D15): skip the entire grid/nearest/pressure machinery; `compute_substance` degenerates to `fluid_block_for(global_fluid_picker(pos.y, settings.sea_level), pos.y, block_ids)` directly — **never** `block_ids.default_block` (the barrier "stays solid" branch never fires when aquifers are disabled, since it is never evaluated at all).
+**Disabled-aquifer path** (`settings.aquifers_enabled == false` — every dimension except the overworld family, GEN-D15): skip the entire grid/nearest/pressure machinery; `compute_substance` degenerates to `if density > 0.0 { None } else { Some(fluid_block_for(global_fluid_picker(pos.y, settings.sea_level), pos.y, block_ids)) }` — **never** resolving to `block_ids.default_block` itself (the barrier "stays solid" branch never fires when aquifers are disabled, since it is never evaluated at all; a `None` result here simply defers to the ore-vein filler and then `default_block`, exactly like any ordinary solid position).
 
 ### G. Ore veins (GEN-D16) — exact algorithm, thresholds, RNG draw order
 
@@ -266,7 +314,7 @@ pub struct VeinType { pub min_y: i32, pub max_y: i32, pub ore: BlockStateId, pub
 
 `OreVeinBlockIds` (Deliverables) is these six already-resolved `BlockStateId`s, supplied by the caller (this blueprint never resolves a `ResourceLocation`/`BlockStateSpec` itself, per every prior M5 blueprint's own resolver-seam convention).
 
-**Per-block evaluation** (called only for **solid** positions, `density > 0.0`, Context §E):
+**Per-block evaluation** (called whenever the aquifer filler returned `None` — an ordinary solid position, `density > 0.0`, AND an aquifer-barrier "stays solid" wall position, Context §E):
 
 ```text
 fn evaluate_ore_vein(pos, ore_vein_random: &AnyPositionalFactory, router, ore_ids) -> Option<BlockStateId>:
@@ -305,22 +353,34 @@ Draw count is genuinely **0, 1, 2, or 3** `next_float()` calls depending on whic
 **Per-column driver** (`SurfaceSystem.buildSurface`, 05-worldgen.md §3.10, restated exactly):
 
 ```text
-fn build_surface_column(x, z, ctx: &mut SurfaceEvalContext, columns, heightmaps, rule: &SurfaceRule, resolve_block, opacity):
-    top_y = heightmaps.world_y(HeightmapKind::WorldSurfaceWg, x, z)     # already correct — the Noise stage's own
-                                                                          # note_block_change calls already populated
-                                                                          # this heightmap (Context §D/§E's own hook)
-    ctx.column.biome = biome_column.get(x>>2, top_y, z>>2)               # M5-B05's already-filled BiomeColumn
+fn build_surface_column(x, z, ctx: &mut SurfaceEvalContext, columns, heightmaps, biome_column, rule: &SurfaceRule, resolve_block, opacity):
+    top_y = heightmaps.world_y(HeightmapKind::WorldSurfaceWg, x, z)     # one block ABOVE the highest non-air block
+                                                                          # (vanilla's own height+1, EXACT, TEST-D57);
+                                                                          # this project's own HeightmapSet::world_y
+                                                                          # convention already returns exactly that
+                                                                          # first-air-Y value (WORLD-D5), so no
+                                                                          # further +1 is applied here
     ctx.column.surface_depth = get_surface_depth(x, z, ctx.random, ctx.state)   # once per column, below
     ctx.column.stone_depth_above = 0
     ctx.column.water_height = i32::MIN                                    # sentinel: "no fluid seen yet"
     for y in (dims.min_y..=top_y).rev():                                   # top to bottom
+        ctx.column.biome = biome_column.get(x>>2, y>>2, z>>2)              # re-resolved at the CURRENT scan Y on
+                                                                              # every step (EXACT, TEST-D57) — vanilla
+                                                                              # re-samples per Y via its own
+                                                                              # BiomeManager quart lookup, invalidated
+                                                                              # every Y step, never cached once per
+                                                                              # column at top_y
         block = columns.get(x, y, z)
         if block == air_id:
             ctx.column.stone_depth_above = 0
             ctx.column.water_height = i32::MIN
-        elif block == block_ids.water || block == block_ids.lava:
-            ctx.column.stone_depth_above = 0
-            if ctx.column.water_height == i32::MIN: ctx.column.water_height = y + 1   # top-of-fluid Y
+        elif has_fluid_state(block):                                        # non-empty fluid state — also matches a
+                                                                                # waterlogged block, not an identity
+                                                                                # comparison against water/lava ids
+                                                                                # (EXACT, TEST-D57)
+            if ctx.column.water_height == i32::MIN: ctx.column.water_height = y + 1   # top-of-fluid Y — stone_depth_above
+                                                                                          # is NOT reset here, only the
+                                                                                          # air branch above resets it
         else:
             ctx.column.stone_depth_above += 1
         if block == block_ids.default_block:
@@ -379,29 +439,29 @@ This is the **general** mechanism GEN-D17's `vertical_gradient` condition uses (
 | Kind (compiled fields) | `evaluate(ctx) -> bool` |
 |---|---|
 | `Biome{biome_is}` | `biome_is.contains(&ctx.column.biome_resource_location)` — `biome_is` is `Vec<ResourceLocation>` (a resolved, non-tag list per M5-B02's own tag-expansion-deferred note; this blueprint treats an unresolved `TagOrList::Tag` reaching here as an implementer-facing panic, since tag expansion is out of every M5 blueprint's own current scope, flagged Context §I) |
-| `NoiseThreshold{noise, min_threshold, max_threshold}` | `let v = ctx.state.noise(noise).get_value(ctx.pos.x, ctx.pos.y, ctx.pos.z); min_threshold <= v && v <= max_threshold` |
+| `NoiseThreshold{noise, min_threshold, max_threshold, is_3d}` | `let v = if is_3d { ctx.state.noise(noise).get_value(ctx.pos.x, ctx.pos.y, ctx.pos.z) } else { ctx.state.noise(noise).get_value(ctx.pos.x, 0.0, ctx.pos.z) }; min_threshold <= v && v <= max_threshold` — `is_3d` codec-defaults to `false` (EXACT, TEST-D57): the default, and the common case in the pinned data, is a 2D sample at Y = 0, cached per XZ; only `is_3d = true` samples at the current `(x,y,z)`, cached per Y |
 | `VerticalGradient{random_name, true_at_and_below, false_at_and_above}` | exact per §3.9's own algorithm, restated: `true_y = resolve_anchor(true_at_and_below); false_y = resolve_anchor(false_at_and_above); if ctx.pos.y <= true_y { true } else if ctx.pos.y >= false_y { false } else { let p = clamped_map(ctx.pos.y as f64, true_y as f64, false_y as f64, 1.0, 0.0); ctx.random.factory_for(random_name).at(ctx.pos.x, ctx.pos.y, ctx.pos.z).next_float() < p as f32 }` — **0 draws** in either deterministic zone, **exactly 1** `next_float()` in the probabilistic band; bedrock's own two instances use this unmodified (Context's own "no special case" claim) |
-| `YAbove{anchor, surface_depth_multiplier, add_stone_depth}` | `let threshold = resolve_anchor(anchor) + surface_depth_multiplier * ctx.column.surface_depth + if add_stone_depth { ctx.column.stone_depth_above } else { 0 }; ctx.pos.y >= threshold` |
-| `Water{offset, surface_depth_multiplier, add_stone_depth}` | `let threshold = ctx.column.water_height + offset + surface_depth_multiplier * ctx.column.surface_depth + if add_stone_depth { ctx.column.stone_depth_above } else { 0 }; ctx.pos.y >= threshold` (mirrors `YAbove` exactly, against `water_height` instead of a fixed anchor) |
+| `YAbove{anchor, surface_depth_multiplier, add_stone_depth}` | `let left = ctx.pos.y + if add_stone_depth { ctx.column.stone_depth_above } else { 0 }; let threshold = resolve_anchor(anchor) + surface_depth_multiplier * ctx.column.surface_depth; left >= threshold` — the stone-depth term is added to the current Y on the LEFT side (EXACT, TEST-D57), not folded into the threshold; `y + s >= anchor + m*d` is not the same predicate as `y >= anchor + m*d + s` |
+| `Water{offset, surface_depth_multiplier, add_stone_depth}` | `if ctx.column.water_height == i32::MIN { true } else { let left = ctx.pos.y + if add_stone_depth { ctx.column.stone_depth_above } else { 0 }; let threshold = ctx.column.water_height + offset + surface_depth_multiplier * ctx.column.surface_depth; left >= threshold }` — does NOT simply mirror `YAbove` (EXACT, TEST-D57): a leading short-circuit returns `true` whenever no fluid has been seen yet in the column (the `water_height` sentinel), which `YAbove` has no analogue for; and it carries its own integer `offset` field rather than reusing `YAbove`'s `VerticalAnchor` |
 | `Temperature{}` | `ctx.cold_enough_to_snow(ctx.column.biome, ctx.pos)` — a caller-supplied `impl Fn(BiomeId, (i32,i32,i32)) -> bool` closure (Deliverables); biome *temperature*/`downfall`/`has_precipitation` property data is not part of any M5 blueprint's own compiled data (M5-B02's ten JSON families do not include `data/minecraft/worldgen/biome/*.json`'s own climate-flavor fields, only the *placement* parameter list), so this is a resolver-seam exactly like every other cross-domain lookup this blueprint needs |
-| `Steep{}` | compares `HeightmapKind::WorldSurfaceWg` at the 4 orthogonal neighbors (`(x±1,z)`, `(x,z±1)`) against the current column's own value; `true` if either axis's absolute difference is `>= 4`. **Chunk-edge behavior, MODERATE CONFIDENCE**: per GEN-D17's own binding "never another chunk's data" rule, a neighbor that would fall outside the current 16×16 chunk is **clamped** to the current column's own value (contributing a `0` difference for that one neighbor) rather than read from a neighboring chunk — this blueprint's own resolution of a case GEN-D17 constrains but does not spell out numerically; flagged for GEN-D27 reconciliation |
+| `Steep{}` | **never reads the current column's own height** (EXACT, TEST-D57): compares the two OPPOSITE neighbors on each axis against EACH OTHER, with a directional, signed test — Z axis first, `true` when `height_south >= height_north + 4`; otherwise X axis, `true` when `height_west >= height_east + 4` (a steep drop in the opposite direction on either axis does not trigger; the two axes use opposite orientations). Chunk-local neighbor coordinates are clamped to `0..15` (`Math.max(c-1,0)`/`Math.min(c+1,15)`), so on a chunk edge the "neighbor" collapses onto the current column's own chunk-local edge rather than reading a neighboring chunk's data — never across a chunk boundary. A `LazyXZCondition`: evaluated at most once per column, reused for every Y in that column |
 | `Hole{}` | `ctx.column.surface_depth <= 0` |
 | `AbovePreliminarySurface{}` | `ctx.pos.y >= ctx.min_surface_level(ctx.pos.x, ctx.pos.z) + ctx.column.surface_depth - 8` where `min_surface_level` is a per-XZ-cached (`SurfaceColumnState`'s own field, computed once per column on first use) call to `ctx.interpreter.sample(router.preliminary_surface_level, EvalContext::new(x, 0, z))` — a single-point Tier-1 sample (this field is Y-independent by construction, GEN-D13), not a "4-corner bilinear" reconstruction (05-worldgen.md's own phrase "cached per-XZ via a 4-corner bilinear lookup" describes vanilla's own *NoiseChunk*-level caching detail; this blueprint's own per-column cache achieves the same "computed once per XZ" contract via a plain memoized field, a simplification this blueprint treats as observationally equivalent since `preliminary_surface_level` is queried at the exact same `(x,z)` for every `y` in one column) |
 | `Not{invert}` | `!evaluate_condition(invert, ctx)` |
-| `StoneDepth{offset, add_surface_depth, secondary_depth_range, surface_type}` | **MODERATE CONFIDENCE on the exact combination arithmetic** (05-worldgen.md §3.9's own prose: "compares... `stoneDepthAbove`/`stoneDepthBelow`... against `offset [+ surfaceDepth] [+ secondaryDepthRange-scaled secondary noise]`"). This blueprint's own reconstruction: `let depth = if surface_type == Floor { ctx.column.stone_depth_above } else { ctx.column.stone_depth_below() }; let mut base = offset; if add_surface_depth { base += ctx.column.surface_depth }; if secondary_depth_range != 0 { base += (ctx.column.surface_secondary * secondary_depth_range as f64).round() as i32 }; depth <= base` |
+| `StoneDepth{offset, add_surface_depth, secondary_depth_range, surface_type}` | **EXACT (TEST-D57)**: `let depth = if surface_type == Floor { ctx.column.stone_depth_above } else { ctx.column.stone_depth_below() }; let surface_depth = if add_surface_depth { ctx.column.surface_depth } else { 0 }; let secondary_surface_depth = if secondary_depth_range == 0 { 0 } else { linear_map(ctx.column.surface_secondary, -1.0, 1.0, 0.0, secondary_depth_range as f64) as i32 }; depth <= 1 + offset + surface_depth + secondary_surface_depth` — there is a constant `+1` in the base value (what makes `offset = 0` mean "the top block of the run"), and the secondary term is a TRUNCATING linear remap of the secondary noise from `[-1, 1]` onto `[0, secondary_depth_range]` (`as i32` truncates toward zero), never a `round(secondary * range)` |
 
 **The four canned `stone_depth` presets** (05-worldgen.md §5's own named constants, restated as `pub const` values a caller may use when hand-authoring a test fixture or a small synthetic surface-rule graph — the real, compiled `surface_rule` JSON already embeds whichever preset each biome's own rules reference, so this blueprint never *constructs* a `SurfaceCondition` from these constants at runtime, only documents them):
 
-| Preset | `offset` | `add_surface_depth` | `surface_type` |
-|---|---|---|---|
-| `ON_FLOOR` | `0` | `true` | `Floor` |
-| `UNDER_FLOOR` | `1` | `true` | `Floor` |
-| `DEEP_UNDER_FLOOR` | `6` | `true` | `Floor` |
-| `VERY_DEEP_UNDER_FLOOR` | `30` | `true` | `Floor` |
-| `ON_CEILING` | `0` | `true` | `Ceiling` |
-| `UNDER_CEILING` | `1` | `true` | `Ceiling` |
+| Preset | `offset` | `add_surface_depth` | `secondary_depth_range` | `surface_type` |
+|---|---|---|---|---|
+| `ON_FLOOR` | `0` | `false` | `0` | `Floor` |
+| `UNDER_FLOOR` | `0` | `true` | `0` | `Floor` |
+| `DEEP_UNDER_FLOOR` | `0` | `true` | `6` | `Floor` |
+| `VERY_DEEP_UNDER_FLOOR` | `0` | `true` | `30` | `Floor` |
+| `ON_CEILING` | `0` | `false` | `0` | `Ceiling` |
+| `UNDER_CEILING` | `0` | `true` | `0` | `Ceiling` |
 
-(`secondary_depth_range` is `0` for every one of these six presets, per the corpus's own silence on a nonzero value for any of them — moderate confidence, since the corpus does not enumerate every biome's own concrete `stone_depth` JSON instance.)
+(EXACT, TEST-D57: every one of these six presets uses `offset = 0` — the "under"/"deep" behavior comes from the constant `+1` baked into the `StoneDepth` condition's own comparison, and the `6`/`30` values are `secondary_depth_range`, not `offset`. Machine census of the pinned `worldgen/noise_settings/*.json` files: 70 `ON_CEILING`, 27 `ON_FLOOR`, 13 `UNDER_FLOOR`, 5 `DEEP_UNDER_FLOOR`, 5 `VERY_DEEP_UNDER_FLOOR`, 2 `UNDER_CEILING` instances — no `minecraft:stone_depth` instance anywhere in the pinned data carries a nonzero `offset`.)
 
 ### I. Explicit scope gaps within surface rules — flagged, not silently guessed at
 
@@ -432,6 +492,96 @@ build_surface_for_chunk(rule: &SurfaceRule, random: &mut SurfaceRandomState, sta
 Runs Context §H's per-column driver for every `(x, z)` in the 16×16 chunk, in `x`-outer/`z`-inner iteration order (GEN-D17's own strictly-sequential, single-column-at-a-time evaluation — no observable difference from any other iteration order since every column's own state is independent, but stated for the implementer's own determinism-of-implementation-detail clarity, not a parity requirement).
 
 Neither function performs any I/O, spawns any task, or touches `LightColumn`/`ChunkPersistenceState`/`ChunkStatus` — a future `GenStage` scheduler-integration blueprint calls both, in `Noise`-then-`Surface` order, per chunk, off-tick (GEN-D25).
+
+### Claims to verify (TEST-D57)
+
+- In vanilla's chunk generation pipeline, carvers (caves and canyons) run in a separate, later ChunkStatus stage, strictly after the Surface stage.
+- The classic minecraft:ore feature places every ore type including copper and iron via its own ore_iron/ore_iron_small/ore_copper_small/ore_copper_large configured features, and the noise-router-driven vein system places copper and iron ore veins as an additional, separate mechanism rather than a replacement for that feature.
+- QuartPos.toBlock converts a quart-position size to blocks by left-shifting by 2 (multiplying by 4): cell_width = dims.size_horizontal << 2, cell_height = dims.size_vertical << 2.
+- A chunk is 16 blocks wide on X/Z, so the number of noise cells per chunk axis is 16 / cell_width (2, 4, or rarely more, depending on the dimension's noise settings).
+- The number of noise cells spanning a chunk column's full height is cell_count_y = dims.height / cell_height.
+- Vanilla's own doFill walk order visits noise cells from top to bottom (descending Y), and within each cell also visits local Y from top to bottom, before local X ascending then local Z ascending.
+- selectCellYZ marks the start of a new cell, and update_for_y/update_for_x/update_for_z are each called once per block-offset change along their axis, updating every interpolator node sharing that cell's coarse grid at once.
+- The terrain material rule fills a block as default_block whenever the sampled density at that position is greater than 0.0.
+- The ore-vein material rule (OreVeinifier) is evaluated at every position the aquifer filler left unresolved -- both ordinary solid positions (density > 0) and aquifer-barrier stays-solid positions (density <= 0) -- and only ever replaces default_block -> it never turns a position into air or fluid.
+- For positions where density <= 0.0, the aquifer algorithm alone decides whether the block becomes air, water, or lava.
+- The final_density noise-router field already incorporates any BlendDensity{}, BlendAlpha{}, and BlendOffset{} contributions the compiled density-function graph specifies, but not Beardifier{} -- the fill driver adds its own Beardifier term (currently 0.0) to the sampled final_density value and wraps the sum in a cache_all_in_cell node.
+- Vanilla's fillFromNoise wraps the entire final-density sum in a cache_all_in_cell cache node.
+- The aquifer grid's cells are 16x12x16 blocks: X_SPACING=16, Y_SPACING=12, Z_SPACING=16.
+- A block position's aquifer grid cell is computed by floor division (not truncation) of its coordinates by the grid spacings: grid_x = floor_div(block_x,16), grid_y = floor_div(block_y,12), grid_z = floor_div(block_z,16).
+- Each aquifer grid cell's jittered location is derived from exactly 3 RNG draws, always next_int_bounded, always in this order: X jitter bounded by 10 (range 0..=9), then Y jitter bounded by 9 (range 0..=8), then Z jitter bounded by 10 (range 0..=9).
+- The jittered aquifer location's coordinates are loc_x = grid_x*16 + jx, loc_y = grid_y*12 + jy, loc_z = grid_z*16 + jz.
+- Computing an aquifer location's FluidStatus after the 3 jitter draws consumes no further RNG draws.
+- Aquifer grid cells straddling a chunk boundary are resolved correctly because both neighboring chunks independently recompute the identical grid-cell sample.
+- Vanilla's own nearest-neighbor aquifer search scans the 2x3x2 = 12 neighboring grid cells, a narrower scan than a full 3x3x3 = 27 neighborhood, made possible by the 10/9/10-block jitter bounds.
+- Ties among aquifer grid locations at equal squared distance in the nearest-neighbor search are broken by ascending (dx,dy,dz) scan order over the neighboring-cell scan, so the LAST-encountered candidate at a tied distance displaces the incumbent and takes the earlier rank.
+- The aquifer lava cutoff Y is min(-54, sea_level).
+- The aquifer similarity formula is similarity(dist_sqr_a, dist_sqr_b) = 1.0 - (dist_sqr_b - dist_sqr_a) / 25.0, where 25.0 is a named constant divisor.
+- The barrier/pressure gate checks exactly the three location pairs (1st/2nd), (1st/3rd), (2nd/3rd) among the 4 nearest aquifer locations; the 4th-nearest location is used only in the search itself, never in these pairwise checks.
+- The whole barrier check is gated on similarity12 (the 1st/2nd pair) being positive -- when it is not, the closest location's own FluidStatus resolves the block immediately with no pressure evaluated; otherwise each of the three pairs (1st/2nd always, 1st/3rd and 2nd/3rd only when their own similarity is also positive) computes a similarity-weighted barrier (barrier12 = sim12 * pressure, barrier13 = sim12 * sim13 * pressure, barrier23 = sim12 * sim23 * pressure), and if density plus any checked barrier is greater than 0.0 the position stays solid (left unresolved for the ore-vein filler), otherwise the closest location's own FluidStatus wins.
+- The aquifer pressure formula's four named constants (2.5, 1.5, 10.0, 3.0) are DIVISORS chosen by a second, inner sign test on centerPoint, not multiplicative biases: strictly above the average fluid level, centerPoint = distanceFromBarrierEdgeTowardsMiddle and gradient = centerPoint / 1.5 when centerPoint > 0.0 else centerPoint / 2.5; at or below it, centerPoint = 3.0 + distanceFromBarrierEdgeTowardsMiddle and gradient = centerPoint / 3.0 when centerPoint > 0.0 else centerPoint / 10.0.
+- The aquifer pressure formula computes avg_level = (a.surface_level + b.surface_level)/2, but delta = pos.y + 0.5 - avg_level (a +0.5 block-centre offset) and the selecting test is strictly delta > 0.0; two guard clauses precede this arithmetic entirely -- a lava/water pair at pos.y returns the constant 2.0, and equal fluid levels return 0.0.
+- The aquifer pressure formula computes level_gap = abs(a.surface_level - b.surface_level), but there is no clamped_map: base_value = level_gap / 2.0, distance_from_barrier_edge = base_value - abs(delta), center_point = bias + distance_from_barrier_edge (bias 0.0 above the average fluid level, 3.0 below it), and gradient = center_point / divisor, the divisor chosen by the sign of center_point (1.5 or 2.5 above, 3.0 or 10.0 below).
+- The final aquifer pressure value is 2.0 * (barrier_sample + gradient), not sim * falloff * barrier_sample -- the barrier noise is added to the gradient and the sum doubled, sampled only when gradient lies inside [-2.0, 2.0] (otherwise the sample is 0.0) and memoized across the three pair checks; the similarity weighting (sim12, sim12*sim13, sim12*sim23) is applied by the caller, not inside the pressure function.
+- In the aquifer pressure formula, a location's surface_level(pos.y) is its own quantized/global fluid level for a Water or Lava FluidStatus, and a sentinel value far below pos.y for a None (dry) FluidStatus, so delta and level_gap still compute without special-casing.
+- Vanilla's own near-surface aquifer test samples preliminarySurfaceLevel at the location's own column plus 12 nearby chunk-corner offsets (13 total, each sample adjusted by +8), and its unconditional early return fires only at the centre sample when loc_y - 12 is greater than that adjusted level -- not an at-or-above-the-minimum-of-all-samples test.
+- FluidStatus determination first tests, at the centre sample only, whether loc_y - 12 exceeds the adjusted preliminary surface level; if so, it inherits the global fluid picker's own level unconditionally. A second, offset-driven return path fires whenever loc_y + 12 exceeds any of the 13 samples' own adjusted level and the global fluid at that adjusted level is non-air, returning THAT status rather than the location's own global fluid.
+- When not near the surface, floodedness is sampled from the noise router's fluid_level_floodedness_noise field; a fully-flooded result inherits the global fluid picker, otherwise the block is partially-flooded or dry.
+- In the partially-flooded/dry branch, the fluid-level cell indices are cell_x=floor_div(loc_x,16), cell_y=floor_div(loc_y,40), cell_z=floor_div(loc_z,16), but the spread noise is sampled at those RAW cell indices themselves, never at a cell_x*16+8/cell_z*16+8 centre position; only a cell_middle_y = cell_y*40+20 base level exists.
+- The fluid spread level is computed as raw_level = spread*10.0, then quantized to steps of 3 via level = floor(raw_level/3.0)*3.0 (FLOOR, not round), with a maximum spread of +/-10; the quantized value is an offset added to cell_middle_y, and the result is capped by the minimum of the near-surface scan's own lowest_preliminary_surface.
+- The fluid kind gate has three conjuncts, not one -- level <= -10 AND level is not the dry sentinel AND the fallback global-fluid kind is not already lava -- and only then does abs(lava-noise sample) > 0.3 select Lava; the gate applies to every computed FluidStatus, not only the partially-flooded branch, and the non-lava fallback is the global fluid picker's own kind, not unconditionally Water.
+- The global fluid picker resolves as exactly two outcomes: if y < min(-54, sea_level) the fluid is Lava at the FIXED level -54 (not at min(-54,sea_level)); otherwise it is the dimension's own default fluid at sea_level -- there is no third "no fluid" outcome, since air above sea level comes later from the level-vs-query-Y test, not from the picker itself.
+- A FluidStatus only yields fluid at a queried Y if that Y is strictly below the status's own level; otherwise (or if the status's kind is None) the block is air.
+- When aquifers are disabled for a dimension (every dimension except the overworld family), the stays-solid barrier branch never fires -> the block is resolved purely via the global fluid picker, never default_block.
+- The copper ore vein occupies Y range [0, 50] and consists of minecraft:copper_ore ore, minecraft:raw_copper_block raw-ore block, with minecraft:granite filler.
+- The iron ore vein occupies Y range [-60, -8] and consists of minecraft:deepslate_iron_ore ore, minecraft:raw_iron_block raw-ore block, with minecraft:tuff filler.
+- The ore-vein material rule is evaluated at every position the aquifer filler left unresolved, both solid-by-density positions (density > 0.0) and aquifer-barrier stays-solid positions (density <= 0.0), not solely at density > 0.0 positions.
+- The noise router's vein_toggle field is already Y-limited to [-60, 50] by the compiled graph itself.
+- The vein type is copper when the sampled vein_toggle value is greater than 0.0, and iron otherwise.
+- In the ore-vein rule, dist_from_top = vein_type.max_y - pos.y and dist_from_bottom = pos.y - vein_type.min_y are the distances from the current Y to the vein type's own upper and lower Y bounds.
+- A position outside its own vein type's Y band (dist_from_bottom < 0 or dist_from_top < 0) yields no vein, with zero RNG draws.
+- The edge round-off term is clamped_map(dist_from_edge, 0.0, 20.0, -0.2, 0.0), where dist_from_edge is the minimum of distance-from-top and distance-from-bottom of the vein's own Y band.
+- A position where veininess_ridged (the absolute value of vein_toggle) plus edge_roundoff is less than 0.4 yields no vein, consuming zero RNG draws.
+- The ore-vein rule's first RNG draw is next_float() > 0.7, which rejects (yields no vein) when true.
+- After the first ore-vein draw passes, the rule checks router.vein_ridged >= 0.0 (no RNG draw), rejecting (yields no vein) when true.
+- The ore-vein richness value is richness = clamped_map(veininess_ridged, 0.4, 0.6, 0.1, 0.3).
+- The ore-vein rule's second RNG draw is next_float() < richness combined with router.vein_gap > -0.3; when both hold the position yields ore or raw ore, otherwise it yields the vein's filler block.
+- When the second ore-vein draw's combined condition holds, the rule's third RNG draw is next_float() < 0.02, yielding the vein's raw-ore block when true and its ordinary ore block otherwise.
+- The ore-vein evaluation consumes exactly 0, 1, 2, or 3 next_float() calls depending on which branch is taken, never a fixed count.
+- The real Minecraft 26.2 surface-rule condition kinds are exactly 11: Biome, NoiseThreshold, VerticalGradient, YAbove, Water, Temperature, Steep, Hole, AbovePreliminarySurface, Not, and StoneDepth -> there is no and/or condition kind, and above_preliminary_surface does exist.
+- Surface rules only ever run against, and only ever overwrite, positions whose current block still equals default_block; already-placed fluid, ore-vein blocks, and air are never touched by surface rules.
+- The per-column surface-rule driver scans blocks from one block above the WorldSurfaceWg heightmap's highest non-air Y (height = getHeight(...) + 1) down to the world's minimum Y, inclusive.
+- Whenever the per-column surface-rule scan encounters an air block, it resets stone_depth_above to 0 and water_height to its sentinel.
+- Whenever the per-column surface-rule scan encounters any block with a non-empty fluid state (also matching a waterlogged block, not an identity comparison against the water/lava ids), it does NOT reset stone_depth_above -- only the air branch does that -- and, the first time this happens in the column, records water_height = y+1.
+- For any other block, the per-column surface-rule scan increments stone_depth_above by 1.
+- get_surface_depth(x,z) is computed as (surface_noise * 2.75 + 3.0 + jitter) as i32, where surface_noise is the "surface" named noise sampled at (x, 0, z) and jitter is random.at(x,0,z).next_double() * 0.25, truncated toward zero exactly like Java's (int) cast.
+- surface_secondary is sampled once per column via the "surface_secondary" named noise at (x, 0, z), with no jitter term.
+- The NoiseThreshold condition is true when min_threshold <= v <= max_threshold (inclusive on both ends); v is sampled at (x, 0, z) and cached per XZ by default (the condition's own is_3d field defaults to false), or at (x, y, z) and cached per Y only when is_3d is true.
+- The VerticalGradient condition resolves to true unconditionally at or below true_at_and_below, false unconditionally at or above false_at_and_above, and otherwise draws exactly one next_float() compared against a linear-map probability between those two anchors -> zero RNG draws in either deterministic zone, exactly one in the probabilistic band.
+- A surface rule's named random factory (used by VerticalGradient's random_name) is derived as root.from_hash_of(random_name).fork_positional(), memoized per distinct name so every reference to the same name shares one stream.
+- The YAbove condition is true when block_y + (stone_depth_above if add_stone_depth else 0) is at or above resolve_anchor(anchor) + surface_depth_multiplier * surface_depth -- the stone-depth term is added to the current Y on the left side, not folded into the threshold on the right.
+- The Water condition does not simply mirror YAbove against water_height: it is true when water_height still equals its sentinel (no fluid seen yet in the column) OR block_y + (stone_depth_above if add_stone_depth else 0) is at or above water_height + offset + surface_depth_multiplier * surface_depth, and it carries its own integer offset field rather than reusing YAbove's VerticalAnchor.
+- The per-column biome used by surface rules is re-resolved at the CURRENT scan Y on every Y step (via the already-filled 3D BiomeColumn at biome-cell coordinates x>>2, y>>2, z>>2), never fixed once per column at top_y.
+- The Biome condition is true when the current column's biome resource location is contained in the condition's own biome_is list.
+- The Temperature condition is true when the current position/biome is cold enough for snow to form, a per-biome climate test rather than a noise-router field sample.
+- The Steep condition never reads the current column's own height: it compares the two OPPOSITE neighbors on each axis against each other with a signed, directional test -- Z axis first (south >= north + 4 returns true), otherwise X axis (west >= east + 4) -- never an absolute-difference test against the current column's own value.
+- Steep's own chunk-edge behavior clamps a neighbor position that would fall outside the current chunk to the current column's own value (contributing a difference of 0 for that neighbor) rather than reading another chunk's data.
+- The Hole condition is true when the column's own surface_depth is less than or equal to 0.
+- The AbovePreliminarySurface condition is true when the current Y is at or above min_surface_level(x,z) + surface_depth - 8, where min_surface_level is the noise router's preliminary_surface_level field sampled once per column.
+- Vanilla caches the preliminary_surface_level noise-router field per-XZ via a 4-corner bilinear lookup, since the field is Y-independent and is queried at the same (x,z) for every Y within a column.
+- The Not condition evaluates to the boolean negation of its own wrapped condition.
+- Bedrock's two surface rules (bedrock_floor and bedrock_roof) are ordinary instances of the general VerticalGradient condition and its shared named-random mechanism, with no special-casing.
+- The ON_FLOOR stone_depth preset is offset=0, add_surface_depth=false, surface_type=Floor, secondary_depth_range=0.
+- The UNDER_FLOOR stone_depth preset is offset=0, add_surface_depth=true, surface_type=Floor, secondary_depth_range=0 -- the "under" behavior comes from the constant +1 baked into the StoneDepth condition's own comparison, not from a nonzero offset.
+- The DEEP_UNDER_FLOOR stone_depth preset is offset=0, add_surface_depth=true, surface_type=Floor, secondary_depth_range=6.
+- The VERY_DEEP_UNDER_FLOOR stone_depth preset is offset=0, add_surface_depth=true, surface_type=Floor, secondary_depth_range=30.
+- The ON_CEILING stone_depth preset is offset=0, add_surface_depth=false, surface_type=Ceiling, secondary_depth_range=0.
+- The UNDER_CEILING stone_depth preset is offset=0, add_surface_depth=true, surface_type=Ceiling, secondary_depth_range=0.
+- Vanilla computes stoneDepthBelow lazily via a cached nextCeilingStoneY, computed only when the current position could plausibly be the top of a solid run.
+- The StoneDepth condition is true when stone_depth_above (Floor) or stone_depth_below (Ceiling) is less than or equal to 1 + offset + surface_depth (if add_surface_depth, else 0) + a secondary-noise term that is a truncating linear remap of surface_secondary from [-1,1] onto [0, secondary_depth_range] (if secondary_depth_range != 0, else 0) -- the constant +1 in the base value is what makes offset=0 mean "the top block of the run".
+- The Bandlands clay-band palette is a fixed 192-entry palette generated once at SurfaceSystem construction, offset by round(clayBandsOffsetNoise(x,z) * 4), and indexed by (y + offset) mod 192.
+- The pinned bedrock_floor surface rule uses true_at_and_below = bottom(0) and false_at_and_above = aboveBottom(5).
+- The pinned bedrock_roof surface rule uses true_at_and_below = belowTop(5) and false_at_and_above = top(0), always wrapped in a Not condition in the real surface-rule tree.
 
 ## Deliverables
 
@@ -509,10 +659,13 @@ pub struct NoiseFillInputs<'a> {
 }
 
 /// The `Noise` `GenStage` body (Context §D/§E/§J). Drives a freshly-constructed
-/// `NoiseChunk` over every block in the 16×16 column, applies the `density > 0 →
-/// default_block` rule (delegating `density <= 0` to `aquifer` and solid positions to
-/// `ore_vein_random`'s vein material rule), writes the result into `columns`, and
-/// maintains `heightmaps` via `HeightmapSet::note_block_change` for every changed block.
+/// `NoiseChunk` over every block in the 16×16 column, runs `aquifer`'s bit-exact
+/// simulation first (it resolves `density <= 0` positions to air/water/lava outright and
+/// leaves both `density > 0` solid positions and its own barrier-wall positions
+/// unresolved), delegates every position it left unresolved to `ore_vein_random`'s vein
+/// material rule, falls back to `default_block` wherever both leave the position
+/// unresolved, writes the result into `columns`, and maintains `heightmaps` via
+/// `HeightmapSet::note_block_change` for every changed block.
 pub fn fill_chunk_from_noise(
     inputs: &NoiseFillInputs,
     aquifer: &mut AquiferGrid,
@@ -576,9 +729,13 @@ impl AquiferGrid {
     /// ascending by distance then by scan order (Context §F's own tie-break).
     pub fn find_4_nearest(&mut self, query_x: i32, query_y: i32, query_z: i32) -> [(AquiferLocation, i64); 4];
 
-    /// GEN-D15's full decision (Context §F): only ever called for `density <= 0.0`.
-    /// When `settings.aquifers_enabled` is `false`, degenerates to the disabled-aquifer
-    /// fallback (Context §F's own last paragraph) without touching the grid at all.
+    /// GEN-D15's full decision (Context §E/§F): the FIRST filler in `MaterialRuleList`'s own
+    /// chain, called for every `density`. Returns `None` — "no opinion, ask the ore-vein
+    /// filler next" — both for an ordinary solid position (`density > 0.0`) and for its own
+    /// barrier "stays solid" branch (`density <= 0.0`); never resolves either case to
+    /// `block_ids.default_block` itself. When `settings.aquifers_enabled` is `false`,
+    /// degenerates to the disabled-aquifer fallback (Context §F's own last paragraph)
+    /// without touching the grid at all.
     pub fn compute_substance(
         &mut self,
         pos: (i32, i32, i32),
@@ -587,7 +744,7 @@ impl AquiferGrid {
         router: &NoiseRouter,
         settings: &NoiseGeneratorSettings,
         block_ids: &TerrainBlockIds,
-    ) -> BlockStateId;
+    ) -> Option<BlockStateId>;
 }
 
 /// `Aquifer lava cutoff Y = min(-54, sea_level)` (Context §F, exact). Serves both the
@@ -629,9 +786,10 @@ pub struct OreVeinBlockIds {
 }
 
 /// GEN-D16's per-block material rule (Context §G, exact algorithm/thresholds/RNG order).
-/// Called only for `density > 0.0` positions. Draws 0, 1, 2, or 3 `next_float()` calls
-/// from `ore_vein_random.at(pos.0, pos.1, pos.2)` depending on which branch is taken —
-/// never a fixed count.
+/// Called whenever the aquifer filler returned `None` — an ordinary solid position
+/// (`density > 0.0`) AND an aquifer-barrier "stays solid" wall position alike. Draws 0, 1,
+/// 2, or 3 `next_float()` calls from `ore_vein_random.at(pos.0, pos.1, pos.2)` depending on
+/// which branch is taken — never a fixed count.
 pub fn evaluate_ore_vein(
     pos: (i32, i32, i32),
     ore_vein_random: &AnyPositionalFactory,
@@ -702,7 +860,11 @@ impl SurfaceRandomState {
     pub fn root(&self) -> &AnyPositionalFactory;
 }
 
-/// Context §H — one column's own running state, reset at the start of each `(x, z)`.
+/// Context §H — one column's own running state. `surface_depth`/`surface_secondary`/
+/// `min_surface_level_cache` are set once at the start of each `(x, z)`; `stone_depth_above`/
+/// `water_height` reset and update per Y step as the scan proceeds; `biome` is re-resolved
+/// on every Y step too (EXACT, TEST-D57 — vanilla re-samples per Y, never caches once per
+/// column), never fixed at the column's own top_y.
 #[derive(Copy, Clone, Debug)]
 pub struct SurfaceColumnState {
     pub biome: BiomeId,
@@ -772,7 +934,7 @@ Every vector is labeled: **"exact"** = a direct, source-verified restatement (th
 5. `disabled_aquifer_never_returns_default_block` — `AquiferGrid::compute_substance` with `settings.aquifers_enabled == false`, for a spread of `(pos, density)` inputs (density always `<= 0.0`); assert the result is never `block_ids.default_block` — only `air`, `water`, or `lava` (exact, per Context §F's own "the barrier 'stays solid' branch never fires when aquifers are disabled" claim).
 6. `find_4_nearest_returns_ascending_distance` — a fixed-seed `AquiferGrid`; `find_4_nearest(0,0,0)`; assert the 4 returned `(location, dist_sqr)` pairs are sorted by `dist_sqr` ascending (property-based sanity check, exact).
 
-### `crates/worldgen/tests/aquifer_pressure_and_fluid_status.rs` (property-based, moderate-confidence formula)
+### `crates/worldgen/tests/aquifer_pressure_and_fluid_status.rs` (property-based; the pressure formula and the near-surface test are now EXACT per TEST-D57, the floodedness threshold remains moderate-confidence)
 
 1. `pressure_is_deterministic` — the same `(pos, loc_a, loc_b, sim, router)` inputs fed to `pressure` twice; identical output both times.
 2. `pressure_returns_finite_values` — for a spread of synthetic `(pos, loc_a, loc_b)` inputs with `sim` in `(0.0, 1.0]`, `pressure(..)` is always a finite `f64` (no NaN/±inf — a basic sanity floor, not a parity claim).
@@ -804,11 +966,11 @@ Each condition/rule kind gets its own focused unit test using a minimal `Surface
 6. `vertical_gradient_deterministic_zones_consume_zero_draws` — `true_at_and_below = -60`, `false_at_and_above = -55`; `pos.y = -60` → `true`, zero RNG draws; `pos.y = -55` → `false`, zero RNG draws (exact, matching bedrock's own `bedrock_floor` shape — this is the general mechanism the dedicated bedrock test file, below, applies specifically).
 7. `vertical_gradient_probabilistic_band_consumes_one_draw` — `pos.y` strictly between the two anchors; assert exactly one `next_float()` draw occurs via `random.factory_for(name)`, and the returned `bool` matches a hand-computed `linear_map(y, true_y, false_y, 1.0, 0.0)` threshold against that draw's own known value (blueprint-derived).
 8. `y_above_and_water_share_the_same_formula_shape` — two parallel cases (one per condition), each with `surface_depth_multiplier=1`, `add_stone_depth=true`, proving both conditions reduce to the identical threshold-comparison shape against their own respective base value (anchor vs. `water_height`).
-9. `stone_depth_floor_vs_ceiling` — `StoneDepth{offset: 6, add_surface_depth: false, secondary_depth_range: 0, surface_type: Floor}` against `stone_depth_above = 5` → `true` (`5 <= 6`); the mirrored `Ceiling` case against a synthetic `stone_depth_below` value (property-based, moderate-confidence per Context §H's own flagged formula).
+9. `stone_depth_floor_vs_ceiling` — `StoneDepth{offset: 6, add_surface_depth: false, secondary_depth_range: 0, surface_type: Floor}` against `stone_depth_above = 5` → `true` (`5 <= 1 + 6 = 7`, per Context §H's own now-exact formula); the mirrored `Ceiling` case against a synthetic `stone_depth_below` value (property-based, since `stone_depth_below` itself is this blueprint's own non-lazy simplification, Context §H).
 10. `hole_is_surface_depth_le_zero` — `surface_depth = 0` → `true`; `surface_depth = 1` → `false`.
 11. `above_preliminary_surface_uses_the_router_field` — a synthetic `router.preliminary_surface_level = Constant(64.0)`; `pos.y = 64 + surface_depth - 8` (boundary) → `true`; one less → `false`.
-12. `steep_compares_orthogonal_neighbors` — a hand-built `HeightmapSet` with a `4`-block step between `(x,z)` and `(x+1,z)`; `Steep{}` → `true` at `(x,z)`; a flat heightmap → `false`.
-13. `steep_clamps_at_chunk_edge` — `(x,z) = (0, 5)` (X-edge of the chunk); assert the missing `x=-1` neighbor is treated as equal to the current column's own value (Context §H's own moderate-confidence chunk-edge rule) rather than panicking or reading out-of-bounds.
+12. `steep_compares_opposite_neighbors` — a hand-built `HeightmapSet` where the height at `(x,z+1)` (south) is `4` blocks taller than at `(x,z-1)` (north), with the current column `(x,z)`'s own height set to something else entirely (never read); `Steep{}` → `true`; a flat heightmap (both neighbors equal) → `false` (Context §H's own now-exact neighbor-vs-neighbor formula, TEST-D57).
+13. `steep_clamps_at_chunk_edge` — `(x,z) = (0, 5)` (X-edge of the chunk); the missing `x=-1` neighbor's chunk-local coordinate clamps to `0`, i.e. the same chunk-local X as the column itself, so the "west" read lands on `(0,z)` rather than panicking or reading out-of-bounds (Context §H's own chunk-edge clamping rule, EXACT per TEST-D57).
 14. `temperature_delegates_to_cold_enough_to_snow` — a synthetic closure returning `true` for one `BiomeId` and `false` for another; `Temperature{}` matches exactly.
 15. `biome_condition_matches_resolved_list` — `Biome{biome_is: [A, B]}` with `ctx.column.biome` resolving (via `biome_of`) to `A` → `true`; to `C` → `false`.
 16. `noise_threshold_half_open_or_closed_interval_matches_context` — a `Constant(5.0)`-wired named noise; `NoiseThreshold{min_threshold: 0.0, max_threshold: 10.0}` → `true`; `NoiseThreshold{min_threshold: 6.0, max_threshold: 10.0}` → `false` (boundary-inclusive per Context §H's own `<=`/`<=` formula, both ends).
@@ -835,7 +997,7 @@ A tiny, deliberately cache-node-free hand-built `NoiseRouter` (Context §M's own
 
 1. **`noise/any_random.rs` (M5-B03's own file — one additive method, Context).** Add `AnyPositionalFactory::at(&self, x, y, z) -> AnyRandom`, a plain `match self { Legacy(f) => AnyRandom::Legacy(f.at(x,y,z)), Xoroshiro(f) => AnyRandom::Xoroshiro(f.at(x,y,z)) }`. No other line of this file changes — `from_hash_of` and every other already-merged M5-B03 signature/behavior is untouched. Observable: compiles; every later step's own use of `.at(..)` on an `AnyPositionalFactory` resolves.
 2. **`terrain/aquifer.rs`.** `FluidKind`/`FluidStatus`/`AquiferLocation` per Deliverables. `AquiferGrid::new`/`location_for_cell` (Context §F's 3-draw formula, `BTreeMap` memoization). `find_4_nearest` (27-cell exhaustive scan, Context §F). `similarity`/`global_fluid_picker` (exact formulas). `compute_substance` (Context §F's full decision tree, including the disabled-aquifer degenerate path and the moderate-confidence `pressure`/`compute_fluid_status` helpers as private functions). Observable: `aquifer_grid.rs` passes.
-3. **`terrain/aquifer.rs` continued — the moderate-confidence sub-formulas.** `pressure`/`compute_fluid_status` exactly as Context §F's own pseudocode, clearly commented with the same MODERATE CONFIDENCE flag this blueprint's own Context carries. Observable: `aquifer_pressure_and_fluid_status.rs` passes.
+3. **`terrain/aquifer.rs` continued — `pressure`/`compute_fluid_status`.** Exactly as Context §F's own pseudocode: `pressure` and the near-surface test inside `compute_fluid_status` are now EXACT per TEST-D57; only the floodedness threshold inside `compute_fluid_status` keeps the MODERATE CONFIDENCE flag Context still carries for it. Observable: `aquifer_pressure_and_fluid_status.rs` passes.
 4. **`terrain/ore_vein.rs`.** `VeinType`/`COPPER_VEIN`/`IRON_VEIN`/`OreVeinBlockIds`/`evaluate_ore_vein` exactly per Context §G's pseudocode — draw count is branch-dependent, never padded to a fixed count. Observable: `ore_vein_thresholds.rs` passes.
 5. **`terrain/fill.rs`.** `TerrainBlockIds`/`NoiseFillInputs`/`fill_chunk_from_noise` per Context §D (the exact cell-driving loop)/§E (the material rule)/§J (the heightmap-maintenance contract). Constructs its own `NoiseChunk` internally from `inputs`. Observable: (exercised end-to-end by step 9's `fill_column_golden.rs`, not directly by an earlier test file).
 6. **`terrain/surface/context.rs`.** `SurfaceRandomState` (memoized `from_hash_of`/`fork_positional`), `SurfaceColumnState` (including the non-lazy `stone_depth_below` upward scan, Context §H), `SurfaceEvalContext`, `get_surface_depth` (exact formula, Context §H). Observable: compiles; exercised by every `surface_rule_nodes.rs`/`bedrock_pattern.rs` case.

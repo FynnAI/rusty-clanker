@@ -177,7 +177,7 @@ pub fn corpus_entries() -> Vec<WorldgenCorpusEntry>;
 
 ### §C — Canonical block-state-array hash: exact definition, gating vs. diagnostic
 
-**Two-layer hash, deliberately narrower-scoped gate than TEST-D10's general differential formula.** `09`'s TEST-D10 canonicalizes a general differential chunk-state hash over `(block-state array, block-entity NBT, biome array)`, excluding only lighting (derived state). M5's own roadmap acceptance-criterion text is narrower and more specific: *"block-state arrays hash-match."* This blueprint resolves the apparent gap deliberately, not by oversight: the **gating** hash (the one `evaluate_corpus`'s ≥99.9% threshold and GEN-D1's "bit-identical... with exactly one documented exception" claim are measured against) covers **block states only** — matching the roadmap's literal, binding acceptance-criterion wording and GEN-D1's own subsystem list (terrain density, surface blocks, aquifers, ore veins, carvers, and structure *geometry* are all fully captured by the block-state array alone; structure *placement* is captured because the same array reflects where blocks physically landed). A **diagnostic-only** biome hash is computed and reported alongside every corpus entry (GEN-D1 explicitly lists "biome placement" as an in-scope subsystem, so a regression there deserves visibility) but never affects pass/fail — a biome-only divergence with an identical block-state array is logged, never gate-failing. Block-entity NBT (structure-placed loot-table/spawner references, GEN-D23) is excluded from both layers: vanilla itself stores only an unrolled loot-table reference plus seed at generation time (items are rolled lazily on first player interaction, not at generation), so it is not part of "generated chunks'... arrays" in the roadmap's own sense; a future revision of this harness may add a third, diagnostic-only loot-table-reference hash without changing this blueprint's own gate definition.
+**Two-layer hash, deliberately narrower-scoped gate than TEST-D10's general differential formula.** `09`'s TEST-D10 canonicalizes a general differential chunk-state hash over `(block-state array, block-entity NBT, biome array)`, excluding only lighting (derived state). M5's own roadmap acceptance-criterion text is narrower and more specific: *"block-state arrays hash-match."* This blueprint resolves the apparent gap deliberately, not by oversight: the **gating** hash (the one `evaluate_corpus`'s ≥99.9% threshold and GEN-D1's "bit-identical... with exactly one documented exception" claim are measured against) covers **block states only** — matching the roadmap's literal, binding acceptance-criterion wording and GEN-D1's own subsystem list (terrain density, surface blocks, aquifers, ore veins, carvers, and structure *geometry* are all fully captured by the block-state array alone; structure *placement* is captured because the same array reflects where blocks physically landed). A **diagnostic-only** biome hash is computed and reported alongside every corpus entry (GEN-D1 explicitly lists "biome placement" as an in-scope subsystem, so a regression there deserves visibility) but never affects pass/fail — a biome-only divergence with an identical block-state array is logged, never gate-failing. Block-entity NBT (structure-placed loot-table references and spawner spawn data, GEN-D23) is excluded from both layers: vanilla itself stores only an unrolled loot-table reference plus seed at generation time for a structure-placed container, rolled lazily on first access to that container (a hopper or comparator read unrolls it too, not only a player interaction); a structure-placed spawner carries no loot-table reference at all, only spawn data (entity type plus a seed). Neither is part of "generated chunks'... arrays" in the roadmap's own sense; a future revision of this harness may add a third, diagnostic-only loot-table-reference hash without changing this blueprint's own gate definition.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,7 +226,7 @@ pub fn hash_generated_chunk(chunk: &crate::worldgen::generator::GeneratedChunk) 
 
 **D.2 — Settling and flushing to disk.** Chunk generation triggered by `forceload` happens asynchronously on the oracle's own worker threads; the in-memory result is not guaranteed to be reflected on disk until a save. This blueprint polls rather than guesses a fixed delay: every 2 real seconds (bounded by a hard `MAX_SETTLE_WAIT: Duration = Duration::from_secs(180)` per seed — comfortably covering the true-Overworld generation cost of 500 chunks including nine structure-density-adjacent far-field probes), issue `save-all flush` and then attempt `RegionFile::open`-equivalent reads (Context §D.3) for every one of this seed's 500 target chunks; once every target chunk's record is present and non-empty (`Ok(Some(_))` from `read_chunk_bytes`, below) for two consecutive polls in a row (guards against a mid-write torn read), settling is complete. A poll that still has missing records after `MAX_SETTLE_WAIT` is `CaptureError::SettleTimeout { seed, missing_count }` — a hard, named failure, never silently treated as "close enough."
 
-**D.3 — The `.mca` container reader (`oracle_reader.rs`, read-only subset).** Restated from M2-B03's own already-specified public Anvil format (a specification, not code): an 8 KiB header — 1024 4-byte big-endian `(sector_offset: u24, sector_count: u8)` location entries followed by 1024 4-byte big-endian Unix-timestamp entries — locates chunk `(local_x, local_z) = (chunk_x.rem_euclid(32), chunk_z.rem_euclid(32))`'s record at `sector_offset * 4096` bytes into the file; a record begins with a 4-byte big-endian `length` (payload byte count including the 1-byte compression-tag) then `tag` (1 byte: bit `0x80` set = external `.mcc` file, low 7 bits select `1`=GZip/`2`=Zlib/`3`=uncompressed/`4`=LZ4 exactly as `CompressionScheme`'s own already-pinned scheme) then `length - 1` bytes of (possibly-external, in a paired `r.<x>.<z>.mcc` file) compressed payload.
+**D.3 — The `.mca` container reader (`oracle_reader.rs`, read-only subset).** Restated from M2-B03's own already-specified public Anvil format (a specification, not code): an 8 KiB header — 1024 4-byte big-endian `(sector_offset: u24, sector_count: u8)` location entries followed by 1024 4-byte big-endian Unix-timestamp entries — locates chunk `(local_x, local_z) = (chunk_x.rem_euclid(32), chunk_z.rem_euclid(32))`'s record at `sector_offset * 4096` bytes into the file; a record begins with a 4-byte big-endian `length` (payload byte count including the 1-byte compression-tag) then `tag` (1 byte: bit `0x80` set = external `.mcc` file, low 7 bits select `1`=GZip/`2`=Zlib/`3`=uncompressed/`4`=LZ4 exactly as `CompressionScheme`'s own already-pinned scheme) then `length - 1` bytes of (possibly-external, in a paired `c.<chunk_x>.<chunk_z>.mcc` file — named from the chunk coordinates, resolved in the same region directory) compressed payload.
 
 ```rust
 /// `None` = the record slot is empty (all-zero location entry) — a legitimate
@@ -236,18 +236,33 @@ pub fn hash_generated_chunk(chunk: &crate::worldgen::generator::GeneratedChunk) 
 pub fn read_chunk_bytes(region_dir: &std::path::Path, chunk_x: i32, chunk_z: i32) -> Result<Option<Vec<u8>>, OracleReadError>;
 ```
 
-**D.4 — Chunk NBT decode (post-decompression, `simdnbt`-parsed) — the exact schema this reader targets.** Restated from minecraft.wiki's public "Chunk format" documentation (ASSET-D18(b)) for the pinned 26.2 shape: the root compound's `sections` is a list of compounds, one per populated section, each carrying a signed byte `Y` (section index, `-4..=19` for `WORLD_MIN_Y=-64`/`WORLD_HEIGHT=384` — this blueprint maps `local_section_index = (Y as i32) + 4`, `0..24`, matching `rc_chunk_storage::column::SECTION_COUNT`'s own indexing exactly), a `block_states` compound (`palette`: list of compounds, each `Name: String` plus optional `Properties: Compound` of string→string; `data`: optional `LongArray` — **absent** for a single-entry palette, meaning the whole section is that one state), and a `biomes` compound (identical `palette`/`data` shape, `palette` entries are plain namespaced-id strings, at 4×4×4-per-section granularity). A section absent from the `sections` list is all-air/default-biome for the whole section (mirrors `BlockStateColumn::new`'s/`BiomeColumn::new`'s own "single-value default" cheapest state, Context §B of M2-B01, restated).
+**D.4 — Chunk NBT decode (post-decompression, `simdnbt`-parsed) — the exact schema this reader targets.** Restated from minecraft.wiki's public "Chunk format" documentation (ASSET-D18(b)) for the pinned 26.2 shape: the root compound's `sections` is a list of compounds, each carrying a signed byte `Y` (section index, `-5..=20` for `WORLD_MIN_Y=-64`/`WORLD_HEIGHT=384`) — every section index `-4..=19` is always present, including all-air ones, and an additional light-only entry may appear at `Y=20` and/or `Y=-5` whenever a non-empty light layer exists there, carrying `SkyLight`/`BlockLight` but no `block_states`/`biomes`. This blueprint discards any `Y` outside `-4..=19` before mapping `local_section_index = (Y as i32) + 4`, `0..24`, matching `rc_chunk_storage::column::SECTION_COUNT`'s own indexing exactly (a light-only section's `Y=20`/`Y=-5` maps to `24`/`-1`, both out of bounds, and carries no block/biome data for this blueprint's own hash to consume), a `block_states` compound (`palette`: list of compounds, each `Name: String` plus optional `Properties: Compound` of string→string; `data`: optional `LongArray` — **absent** for a single-entry palette, meaning the whole section is that one state), and a `biomes` compound (identical `palette`/`data` shape, `palette` entries are plain namespaced-id strings, at 4×4×4-per-section granularity). A section absent from the `sections` list is all-air/default-biome for the whole section (mirrors `BlockStateColumn::new`'s/`BiomeColumn::new`'s own "single-value default" cheapest state, Context §B of M2-B01, restated).
 
 ```rust
 /// Vanilla's own post-1.18 "no entry crosses a long boundary" bit-packing
-/// (minecraft.wiki, ASSET-D18(b)): `bits_per_entry = max(4, ceil(log2(palette_len)))`,
-/// `values_per_long = 64 / bits_per_entry` (integer division — remaining bits per
-/// long are padding, never packed into), entry `i`'s raw palette index =
-/// `(data[i / values_per_long] >> ((i % values_per_long) * bits_per_entry)) &
-/// ((1u64 << bits_per_entry) - 1)`. A single-entry palette (`palette.len() == 1`)
-/// has `data` entirely absent — every position resolves to `palette[0]` directly,
-/// never a zero-bit read.
-pub fn unpack_paletted_indices(data: &[i64], palette_len: usize, entry_count: usize) -> Vec<u32>;
+/// (minecraft.wiki, ASSET-D18(b)): `values_per_long = 64 / bits_per_entry`
+/// (integer division — remaining bits per long are padding, never packed
+/// into), entry `i`'s raw palette index = `(data[i / values_per_long] >>
+/// ((i % values_per_long) * bits_per_entry)) & ((1u64 << bits_per_entry) -
+/// 1)`. `bits_per_entry == 0` (a single-entry palette) is a special case:
+/// `data` is entirely absent and every position resolves directly to `0`
+/// (i.e. `palette[0]`), never a division-by-zero `values_per_long` read.
+/// `bits_per_entry` is never derived inside this function — it differs by
+/// container (`block_state_bits_per_entry`/`biome_bits_per_entry`, below) and
+/// is always supplied by the caller.
+pub fn unpack_paletted_indices(data: &[i64], bits_per_entry: u32, entry_count: usize) -> Vec<u32>;
+
+/// Block-states' own bits-per-entry rule (Strategy.java's own
+/// `createForBlockStates`, restated): `0` for a single-entry palette, `4` for
+/// `palette_len` in `2..=16`, `ceil(log2(palette_len))` above that — i.e.
+/// `max(4, ceil(log2(palette_len)))` with an explicit `0` floor at
+/// `palette_len == 1`.
+pub fn block_state_bits_per_entry(palette_len: usize) -> u32;
+
+/// Biomes' own bits-per-entry rule (Strategy.java's own `createForBiomes`,
+/// restated): plain `ceil(log2(palette_len))` for every `palette_len`,
+/// including `0` at `palette_len == 1` — NO 4-bit floor, unlike block states.
+pub fn biome_bits_per_entry(palette_len: usize) -> u32;
 
 /// Resolves one `block_states.palette` entry (`Name` + optional `Properties`) to
 /// this project's own `BlockStateId` via `rc-registries`' generated lookup table
@@ -292,8 +307,11 @@ pub struct OracleChunk {
 /// D.2's own settle-poll already guarantees presence for every target chunk),
 /// `CompressionScheme::decompress_tagged`-equivalent decompress (this reader's
 /// own copy, `flate2`/`lz4_flex`-backed, matching `CompressionScheme`'s exact tag
-/// numbering restated above), `simdnbt`-parse, walk `sections`, decode each
-/// section's `block_states`/`biomes` via `unpack_paletted_indices` +
+/// numbering restated above), `simdnbt`-parse, walk `sections` (skipping any
+/// entry whose `Y` falls outside `-4..=19` — a light-only section carries no
+/// `block_states`/`biomes` to decode), decode each remaining section's
+/// `block_states`/`biomes` via `block_state_bits_per_entry`/
+/// `biome_bits_per_entry` + `unpack_paletted_indices`, then
 /// `resolve_block_state_id`/`resolve_biome_id`, assemble into
 /// `BlockStateColumn`/`BiomeColumn` via their own public `set` methods (M2-B01).
 pub fn read_oracle_chunk(region_dir: &std::path::Path, chunk_x: i32, chunk_z: i32) -> Result<OracleChunk, OracleReadError>;
@@ -481,13 +499,30 @@ M3-B07 shipped `xtask fetch-corpus` with **no** `<corpus>` selector — it alway
 
 `11-roadmap-milestones.md`'s M5 Acceptance Criterion 2, verbatim: *"Worldgen throughput sustains chunk generation fast enough to keep 20 simulated players spread across the server at render distance 12 from ever exhausting their loaded-chunk radius, while concurrently-ticking regions' p99 tick duration stays within the 50 ms budget (ARCH-D20's EDF admission never yields tick-stage work to worldgen ahead of an overdue region, confirmed by observing zero overdue-region admission violations during the run)."*
 
-**I.1 — Bot layout: spread across regions, not one region.** Unlike M3-B08's own 20-bot load test (deliberately concentrated in **one** region, per that blueprint's own AC2 text), this leg needs bots spread across **multiple, independently-ticking** regions — "concurrently-ticking regions'... p99" is meaningless with only one region ticking. `ARCH-D6`'s grid cell is 256×256 blocks (16×16 chunks); this blueprint spaces bots `BOT_SPACING_BLOCKS = 512` apart (two full grid cells) along a fixed spiral, guaranteeing each bot's own render-distance-12 view (up to 192 blocks radius) never geometrically overlaps a neighbor's, and that each bot very likely occupies a distinct region under any reasonable region-build policy.
+**I.1 — Bot layout: spread across regions, not one region.** Unlike M3-B08's own 20-bot load test (deliberately concentrated in **one** region, per that blueprint's own AC2 text), this leg needs bots spread across **multiple, independently-ticking** regions — "concurrently-ticking regions'... p99" is meaningless with only one region ticking. `ARCH-D6`'s grid cell is 256×256 blocks (16×16 chunks); this blueprint spaces bots `BOT_SPACING_BLOCKS = 512` apart (two full grid cells) along a fixed spiral, guaranteeing each bot's own render-distance-12 view (up to 192 blocks radius) never geometrically overlaps a neighbor's, and that each bot very likely occupies a distinct region under any reasonable region-build policy. `EXPECTED_LOADED_CHUNK_COUNT` (637) is only reached when the harness's own `rusty-clanker-server` instance negotiates a view distance of 12 with each bot; the composition root the throughput leg spawns must be configured with `view-distance >= 12` so this value applies.
 
 ```rust
 pub const WORLDGEN_BOT_COUNT: u32 = 20;
 pub const RENDER_DISTANCE_CHUNKS: i32 = 12;
 pub const BOT_SPACING_BLOCKS: i32 = 512;
-pub const EXPECTED_LOADED_CHUNK_COUNT: u32 = (2 * RENDER_DISTANCE_CHUNKS as u32 + 1).pow(2); // 625, a (2r+1)^2 square ring — matches TEST-D12's own established "square window" render-distance convention, not a circular approximation
+
+/// Vanilla's own tracked/sent chunk set for render distance `r` is a rounded
+/// square, not a full `(2r+1)x(2r+1)` grid and not a circle either:
+/// `ChunkTrackingView`'s own buffer-2 ("include neighbors") predicate —
+/// `max(0, |dx|-2)^2 + max(0, |dz|-2)^2 < r*r` — is exactly what gates which
+/// chunks the server sends as `Level Chunk with Light` packets, so it is what
+/// this blueprint's own packet-observed `loaded_count` must be measured
+/// against, never `(2r+1)^2` (unreachable — corners are always cut). Pure,
+/// counts `(dx, dz)` in `-r..=r x -r..=r` satisfying that predicate.
+pub fn expected_tracked_chunks(r: i32) -> u32;
+
+/// `expected_tracked_chunks(RENDER_DISTANCE_CHUNKS)` = 637 at r=12. This value
+/// is only reached if the harness server's own negotiated view distance
+/// actually clamps to 12 (`ChunkMap.getPlayerViewDistance` clamps a
+/// requested distance to the server's own `view-distance` config) — the
+/// throughput leg's `rusty-clanker-server` instance must have `view-distance
+/// >= 12` for this constant to apply.
+pub const EXPECTED_LOADED_CHUNK_COUNT: u32 = 637;
 
 #[derive(Debug, Clone)]
 pub struct WorldgenBotPlan {
@@ -504,7 +539,7 @@ pub struct WorldgenBotPlan {
 pub fn plan_worldgen_bot_layout(count: u32, spacing: i32, base_y: i32) -> Vec<WorldgenBotPlan>;
 ```
 
-**I.2 — Per-bot loaded-chunk-radius tracking.** Each bot, once connected and spawned, periodically (every 100 ticks — 5 real seconds at 20 TPS, cheap enough not to itself become the bottleneck) queries which of its own `EXPECTED_LOADED_CHUNK_COUNT` (625) render-distance-window chunks are currently loaded (a real client-observable signal: every loaded chunk within view distance produces a `Level Chunk with Light`-class packet the bot's own connection already receives — this blueprint's `worldgen_load.rs` tracks the running set of chunk-columns seen, mirroring `rc_paritybot::packet_capture`'s own "track state from ordinary received packets" pattern, M3-B07) and appends one `LoadedRadiusEntry` (Context §I.4) recording `loaded_count` against the fixed `expected_count = 625`.
+**I.2 — Per-bot loaded-chunk-radius tracking.** Each bot, once connected and spawned, periodically (every 100 ticks — 5 real seconds at 20 TPS, cheap enough not to itself become the bottleneck) queries which of its own `EXPECTED_LOADED_CHUNK_COUNT` (637) render-distance-window chunks are currently loaded (a real client-observable signal: every loaded chunk within view distance produces a `Level Chunk with Light`-class packet the bot's own connection already receives — this blueprint's `worldgen_load.rs` tracks the running set of chunk-columns seen, mirroring `rc_paritybot::packet_capture`'s own "track state from ordinary received packets" pattern, M3-B07) and appends one `LoadedRadiusEntry` (Context §I.4) recording `loaded_count` against the fixed `expected_count = 637`.
 
 **I.3 — Region-tick p99 and EDF violations.** Reuses `rc_test_harness::process::ManagedServer`'s `--tick-log`-style piped-stdout mechanism (M3-B08), extended with two new structured NDJSON streams (Context §I.4) the composition root writes: one `RegionTickLogEntry` line per region per tick (this blueprint's own new instrumentation, since M3-B08's existing `--tick-log` is a single, process-wide stream with no `region_id` field and was built for a single-region scenario) and one `EdfViolationEvent` line per violation drained from Context §A.3's `rc_scheduler::edf_log::drain_violations()`.
 
@@ -513,7 +548,7 @@ pub fn plan_worldgen_bot_layout(count: u32, spacing: i32, base_y: i32) -> Vec<Wo
 ```
 --region-tick-log <path>    # {"region_id":3,"tick":142,"tick_duration_ms":12.4}
 --edf-violation-log <path>  # {"region_id":3,"tick":142,"overdue_by_ms":8.2,"worldgen_active":true}
---loaded-radius-log <path>  # {"bot":"rc-worldgen-bot-00","tick":142,"loaded_count":600,"expected_count":625}
+--loaded-radius-log <path>  # {"bot":"rc-worldgen-bot-00","tick":142,"loaded_count":600,"expected_count":637}
 ```
 
 `region-tick-log` is written from Stage 10 (post-tick), one line per region, per real tick, whenever the flag is present. `edf-violation-log` is written by a background poll of `rc_scheduler::edf_log::drain_violations()` at the same 100-tick cadence as I.2. `loaded-radius-log` requires the composition root to expose, per connected player, which chunks are currently sent/loaded to them — a small, additive, `debug_*`-precedented query (mirrors every prior `HardcodedWorld::debug_query_*` hook, M4-B08/M4-B09) the throughput harness itself polls once per 100 ticks per bot and writes.
@@ -589,6 +624,27 @@ pub fn analyze_radius_exhaustion(entries: &[LoadedRadiusEntry]) -> RadiusReport;
 ```
 
 `M5ReportResult` wraps `xtask::tier_result::TierResult` exactly as `M1ReportResult`/`M2ReportResult`/`M3ReportResult`/`M4ReportResult` already do — `status: Fail` the instant any one case is `Fail` (`TierResult::finalize`'s already-established fail-on-any rule, unmodified).
+
+### Claims to verify (TEST-D57)
+
+- The Anvil region file format's header is 8 KiB, made up of 1024 4-byte location entries followed by 1024 4-byte Unix-timestamp entries, in that order.
+- Each region-file header location entry is encoded as a big-endian (sector_offset: u24, sector_count: u8) pair.
+- A chunk's record within a region file is located via (local_x, local_z) = (chunk_x.rem_euclid(32), chunk_z.rem_euclid(32)), with the record beginning at sector_offset * 4096 bytes into the file.
+- A chunk's on-disk record begins with a 4-byte big-endian length field giving the payload byte count including the 1-byte compression tag, followed by length-1 bytes of the (possibly external) compressed payload.
+- The record's leading compression tag byte has its 0x80 bit set when the payload is stored in an external file, and its low 7 bits select the compression scheme: 1=GZip, 2=Zlib, 3=uncompressed, 4=LZ4.
+- When a chunk record's payload is stored externally, it lives in a paired c.<chunk_x>.<chunk_z>.mcc file, named from the chunk coordinates, alongside the region file.
+- In the chunk NBT format, the root compound's "sections" field is a list of compounds: every section index -4..=19 is always present (including all-air ones), plus a light-only entry may additionally appear at Y=20 and/or Y=-5 carrying light data but no block_states/biomes; each entry carries a signed byte "Y" field holding the section index, ranging -5..=20 for a world with WORLD_MIN_Y=-64 and WORLD_HEIGHT=384, and discarded when outside -4..=19 before mapping to local_section_index = Y + 4.
+- Each section compound's "block_states" field is a compound containing a "palette" field, a list of compounds, and a "data" field, an optional LongArray.
+- Each "block_states" palette entry compound has a "Name" string field and an optional "Properties" compound of string-to-string key-value pairs.
+- Each section compound's "biomes" field has the same palette/data shape as "block_states", except palette entries are plain namespaced-id strings, at 4x4x4-block-per-cell granularity.
+- A section index absent from a chunk's "sections" list means that whole section is all-air (for blocks) or default-biome (for biomes).
+- Vanilla's post-1.18 paletted-container bit-packing never lets an entry cross a 64-bit long boundary: values_per_long = 64 / bits_per_entry using integer division (unused high bits per long are padding, never packed into), entry i's raw palette index is (data[i / values_per_long] >> ((i % values_per_long) * bits_per_entry)) & ((1u64 << bits_per_entry) - 1), and bits_per_entry is derived per container: 0 for a single-entry palette, else max(4, ceil(log2(palette_len))) for block states or plain ceil(log2(palette_len)) for biomes (no 4-bit floor).
+- When a paletted container's palette has exactly one entry, its "data" long array is entirely absent and every position resolves directly to palette[0], never requiring a zero-bit read.
+- Vanilla's "forceload" console command keeps a rectangular chunk region loaded and, if a chunk is not yet generated, triggers its generation, with no player needing to be present.
+- In vanilla, chunk generation triggered by "forceload" happens asynchronously on background worker threads, and the generated chunk data is not guaranteed to be reflected on disk until an explicit save such as "save-all flush" is performed.
+- In vanilla, a structure-placed container stores only an unrolled loot-table reference plus a seed at chunk generation time, with the actual loot contents rolled lazily on first access to the container (not only a player interaction); a structure-placed spawner stores no loot-table reference at all, only spawn data (entity type plus a seed).
+- In vanilla's protocol, each chunk that enters a client's render distance is sent to that client as a "Level Chunk with Light" class packet.
+- Vanilla's client chunk-loading area for a given render distance of r chunks is a rounded square, not a full (2r+1) by (2r+1) grid and not a circular approximation either: a chunk at relative offset (dx, dz) is tracked/sent iff max(0, |dx|-2)^2 + max(0, |dz|-2)^2 < r*r (637 chunks at r=12, versus 625 for (2r+1)^2 and 533 for the narrower in-view-only variant that drops the buffer to 1).
 
 ## Deliverables
 
@@ -1017,7 +1073,7 @@ No new row: `crates/testing/gametest/**` (M3-B07's own row, already covering thi
 
 ### `crates/testing/gametest/tests/worldgen_oracle_reader_pure_helpers.rs` (no real region file — pure decode logic only)
 
-1. `unpack_paletted_indices_single_entry_palette_with_no_data` — `palette_len: 1`, `data: &[]`, `entry_count: 4096` → all 4096 entries `== 0`.
+1. `unpack_paletted_indices_single_entry_palette_with_no_data` — `bits_per_entry: 0` (both `block_state_bits_per_entry(1)` and `biome_bits_per_entry(1)` return this), `data: &[]`, `entry_count: 4096` → all 4096 entries `== 0`.
 2. `unpack_paletted_indices_matches_a_hand_packed_example` — a hand-constructed 2-entry palette (`bits_per_entry = 4`), a small `data: &[i64]` slice hand-packed per §D.4's exact formula, `entry_count: 16` (one long's worth at 4 bits/entry) → the decoded sequence matches the hand-chosen index sequence used to build `data`.
 3. `unpack_paletted_indices_respects_no_cross_long_packing` — a palette large enough that `values_per_long` does not evenly divide a chosen `entry_count` (e.g. `bits_per_entry = 5`, `values_per_long = 12`, `entry_count = 13`) → entry `12` (the first entry of the second long) starts at bit offset `0` of `data[1]`, never straddling `data[0]`'s high bits (the "no cross-long" rule, explicitly distinguished from a naive continuous-bitstream packing that would fail this test).
 
@@ -1054,9 +1110,9 @@ No new row: `crates/testing/gametest/**` (M3-B07's own row, already covering thi
 5. **`exceptions.ron`, `manifest.json`.** Author per Deliverables; build the manifest via `xtask::fixture_manifest::build_manifest`. Commit both.
 6. **`exceptions.rs`.** Implement `load_exception_ledger` (RON parse + duplicate-key check) and `find_exception`. Observable: `worldgen_exception_ledger.rs` passes.
 7. **`diff.rs`.** Implement `diff_block_state_columns` (canonical-order `zip`, mirrors M3-B07's `diff_traces` shape), `attribute_stage` (Context §E's fixed six-branch heuristic, evaluated in the stated order), `passes_gate`. Observable: `worldgen_diff_and_gate.rs` passes.
-8. **`oracle_reader.rs`, pure decode helpers only.** Implement `unpack_paletted_indices` (Context §D.4's exact formula). Leave `read_chunk_bytes`/`read_oracle_chunk`/`resolve_block_state_id`/`resolve_biome_id`'s I/O- and registry-dependent bodies real but exercised only by the manual/nightly path — no test in this blueprint's own Tier-1 suite calls them. Observable: `worldgen_oracle_reader_pure_helpers.rs` passes.
+8. **`oracle_reader.rs`, pure decode helpers only.** Implement `unpack_paletted_indices`, `block_state_bits_per_entry`, `biome_bits_per_entry` (Context §D.4's exact formulas). Leave `read_chunk_bytes`/`read_oracle_chunk`/`resolve_block_state_id`/`resolve_biome_id`'s I/O- and registry-dependent bodies real but exercised only by the manual/nightly path — no test in this blueprint's own Tier-1 suite calls them. Observable: `worldgen_oracle_reader_pure_helpers.rs` passes.
 9. **`throughput_log.rs`.** Implement `parse_region_tick_log`/`parse_edf_violation_log`/`parse_loaded_radius_log` (NDJSON line parse, skip-malformed, mirrors `tick_cadence::parse_tick_log`), `analyze_region_tick_percentiles` (sort + nearest-rank index), `analyze_radius_exhaustion`. Observable: `throughput_log_self_tests.rs` passes.
-10. **`worldgen_load.rs`.** Implement `plan_worldgen_bot_layout` (square-spiral formula) fully; leave `run_one_worldgen_bot`/`run_worldgen_load_scenario`'s azalea-dependent bodies real but untested by Tier 1 (verify the exact packet/event names against azalea's current documentation at this step, per every prior azalea-integration blueprint's identical caveat). Observable: `worldgen_load_layout.rs` passes.
+10. **`worldgen_load.rs`.** Implement `plan_worldgen_bot_layout` (square-spiral formula) and `expected_tracked_chunks` (the buffer-2 rounded-square predicate) fully; leave `run_one_worldgen_bot`/`run_worldgen_load_scenario`'s azalea-dependent bodies real but untested by Tier 1 (verify the exact packet/event names against azalea's current documentation at this step, per every prior azalea-integration blueprint's identical caveat). Observable: `worldgen_load_layout.rs` passes.
 11. **`process.rs`.** Add the three new `ManagedServerConfig` fields and their conditional argument pushes. Observable: `cargo build -p rc-test-harness` succeeds; no existing test in M1-B06/M2-B08/M3-B08's own suites regresses (additive-only change).
 12. **`crates/server/src/play/worldgen_debug.rs`, `crates/scheduler/src/edf_log.rs` (conditional).** Wire per Context §I.4/§A.3. Observable: `rusty-clanker-server --help` lists the three new flags; `cargo build -p rc-scheduler` succeeds whether or not this step's `edf_log.rs` addition was needed (check first — Context §A.3's own conditional framing).
 13. **`xtask/src/corpus/{fetch_corpus.rs, parity_check.rs}`, `main.rs`, `m5_report.rs`.** Wire the `corpus: String` field, the two `run_worldgen` bodies, the new `M5Report` command and its `build_report`/`run` implementation (`build_report` pure and testable without any subprocess; `run`'s own subprocess-orchestration body real but untested by Tier 1). Observable: `m5_report_aggregation.rs` passes; `cargo run -p xtask -- fetch-corpus worldgen --help`/`parity-check worldgen --help`/`m5-report --help` all print usage and exit 0.
