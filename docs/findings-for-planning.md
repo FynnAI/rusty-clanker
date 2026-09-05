@@ -789,6 +789,16 @@ Entries name the milestone that surfaced them and the code they concern.
   then runs its real `useWithoutItem`), which would also let the lever and
   repeater/comparator fixtures exercise MECH-D82 end to end.
 
+- **M4-B08's player-walk acceptance test samples on wall-clock sleeps.**
+  `play_region_transfer_player_walk.rs` sends one movement packet per step,
+  sleeps 80 ms, then samples the owning region's position and demands an
+  x delta of exactly 0.5 per elapsed step. A region thread starved past one
+  tick on a contended runner shows a stale sample (delta 0) and fails the
+  test with the code unchanged — the same class as the chunk-streaming
+  timing assertion above. Test-authoring follow-up when the tick-unit
+  sampling helper exists: read the region's `CurrentTick` with each sample
+  and compare deltas per tick, not per sleep.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2551,6 +2561,28 @@ Entries name the milestone that surfaced them and the code they concern.
   versus the oracle's 10). Planning: a `--view-distance` flag / config key
   with vanilla's clamp is a prerequisite for M6-B06 and should close in the
   NET hardening changeset before M6.
+
+- **M4-B08 shipped its player transfer through a harness-only connection
+  driver; production `enter_play` never consults `PlayerMarker.routing`.**
+  The blueprint's Context (Part 1.5) has `enter_play`'s inbound dispatch
+  loop read `PlayerRouting::current()` per packet, but its Deliverables list
+  never names `connection.rs`; the implementer resolved the gap with
+  `TwoRegionWorld::join_and_drive` (`two_region_world.rs`), a second
+  play-entry driver that sends the twelve-chunk strip up front, routes
+  movement through the `PlayerRouting` handle, and skips chunk streaming,
+  persistence, block actions and mining. The single-region production path
+  (`HardcodedWorld`, `routing: None`) is unchanged, so nothing a real client
+  meets today differs. Two further harness-local stand-ins: players still
+  have no `RcEntityId` (the transfer envelope carries `entity.to_bits()`,
+  M4-B01's deferred "PlayerMarker onto BaseEntity" item), and player-to-
+  player visibility is a harness-own 20-block step sending `SpawnEntity`
+  with a stand-in entity type instead of M4-B01's `compute_tracking_delta`.
+  Planning: the real wiring — `enter_play` honouring `routing`, players as
+  `BaseEntity`/`LivingEntity` with tracking through the ordinary pass — is a
+  prerequisite for any composition root running more than one region
+  (M6-B07's EDF root, M7's cluster activation); decide which blueprint owns
+  it. The blueprint's implementation step 2 (adding `Component` derives to
+  seven entity structs) was already satisfied by landed M4-B01/B02 code.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
