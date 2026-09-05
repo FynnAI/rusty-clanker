@@ -289,13 +289,22 @@ impl RedstoneSignalSource for TorchBehavior {
             15
         }
     }
+    /// M3 field-report fix (finding 4): vanilla's `RedstoneTorchBlock::getDirectSignal` is
+    /// hard-coded to fire only when the querying block sits directly ABOVE the torch, for
+    /// both the floor and wall variants (`RedstoneWallTorchBlock` never overrides it) — the
+    /// former attachment-derived axis (`input_direction().opposite()`) was only correct for a
+    /// floor torch by coincidence (`input_direction() == Down`, whose `.opposite()` is `Up`);
+    /// for a wall torch it fired sideways, toward the torch's own `facing`, instead. This
+    /// project's own `towards` runs source -> receiver (`signal.rs`'s `direct_signal_to` calls
+    /// `direct_signal_toward(npos, d.opposite())`), so the fix is simply attachment-
+    /// independent: fire only toward `Up`.
     fn direct_signal_toward(
         &self,
-        world: &dyn BlockWorldAccess,
+        _world: &dyn BlockWorldAccess,
         pos: BlockPos,
         towards: Direction,
     ) -> u8 {
-        if self.lit(pos) && towards == self.attachment_at(world, pos).input_direction().opposite() {
+        if self.lit(pos) && towards == Direction::Up {
             15
         } else {
             0
