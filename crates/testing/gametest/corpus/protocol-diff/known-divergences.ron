@@ -168,6 +168,12 @@
     // needed on any other redstone fixture.
     (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
     (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    // The same scripted torch destroy → drop → pickup on this contraption also unlocks a
+    // recipe and grants an advancement on the oracle (recipe book and advancements are
+    // whole features our server does not have); scoped to this one step, the only
+    // contraption whose script drops an item within the bot's reach.
+    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
 
     // --- Bodies the normalizer must mask ---
     (steps: "session/configuration", packet: "minecraft:registry_data", class: Body, closes_with: Some("NET hardening: registry sync content"), expires: Some("M5")),
