@@ -827,6 +827,20 @@ Entries name the milestone that surfaced them and the code they concern.
   the negotiation plus the inline-NBT fallback for unknown packs is one NET
   hardening changeset before M5.
 
+- **The production light-property table is a hand classification.** Vanilla
+  derives opacity from code (`propagatesSkylightDown`, solid-render and
+  shape-occlusion rules) and emission from per-block registration lambdas; no
+  data-generator report carries either. The M4-B07 composition-root changeset
+  ships `production_registry()` covering all 1,196 blocks: emission values
+  cited per block against the reference (lit/state-dependent emitters
+  modelled), opacity by the implementer's own domain classification of every
+  block name (glass, ice, leaves, slime, honey and water at 1, full solids at
+  15, everything else 0). No TEST-D57 claims exist for that table. Planning:
+  schedule a research pass that verifies the opacity class of every block
+  against the reference (or derives it from the generated shape table plus a
+  verified exception list) before the M4-B07 acceptance harness compares
+  light against the oracle.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2633,6 +2647,21 @@ Entries name the milestone that surfaced them and the code they concern.
   M4 acceptance harness needs a day/night source before any light-gated
   behavior can be tested against vanilla (`sky_darken` is a constant 0 and
   time never advances on our server).
+
+- **Stage-8 fresh-chunk sky seeding assumes no overhangs in a chunk that
+  loads without light data.** M4-B07's seeding step enqueued one BFS entry per
+  position above every column's sky boundary (up to 380 per column, tens of
+  millions per chunk grid — 8 to 35 s per tick on the real 121-chunk world);
+  the composition-root changeset seeds the boundary level through the BFS and
+  writes the levels above it as sources directly. Bit-identical for every
+  chunk this project can produce today (the superflat placeholder; chunks
+  loaded with persisted light are never re-seeded), but a chunk that arrives
+  without light data AND has overhangs (generated terrain, M5) would leave
+  cells under an overhang unlit until a block change touches them, because no
+  BFS entry ever spreads a higher neighbour source sideways. Planning: the
+  M5 worldgen entry needs vanilla's neighbour-boundary-aware seeding (sources
+  enqueued only where a neighbouring column's boundary is lower) as an M4-B07
+  follow-up before the first generated chunk is lit.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
