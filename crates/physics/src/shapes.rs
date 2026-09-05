@@ -345,26 +345,30 @@ fn build_tier1_table() -> ShapeTable {
             max: Vec3::new(1.0, 0.125, 1.0),
         }])
     };
-    // Redstone wire: a flat layer, full x/z footprint, y: 0..0.0625 (1/16 block) -- M3-B04
-    // Context §B, refining this table's own original M3-B02 placeholder (`empty`, which is
-    // *also* non-full and so did not break M3-B02's own is-conductor-free scope, but is not
-    // wire's real hitbox).
-    let wire_shape = || {
-        VoxelShape::from_boxes(vec![Aabb {
-            min: Vec3::new(0.0, 0.0, 0.0),
-            max: Vec3::new(1.0, 0.0625, 1.0),
-        }])
-    };
-    // Redstone torch (floor and wall share the same box -- M3-B04 Context §B: "wall torches:
-    // the same box, offset toward the attached wall -- this blueprint's tests never depend on
-    // the wall-torch box's exact horizontal offset, only that it is non-full"): a centered
-    // post, x: 0.3125..0.6875, y: 0..0.625, z: 0.3125..0.6875.
-    let torch_shape = || {
-        VoxelShape::from_boxes(vec![Aabb {
-            min: Vec3::new(0.3125, 0.0, 0.3125),
-            max: Vec3::new(0.6875, 0.625, 0.6875),
-        }])
-    };
+    // Redstone wire/redstone_torch/redstone_wall_torch/lever (M4-B10 blueprint author's
+    // finding, M3 field-report fix, re-verified against the ASSET-D18(f) reference): all four
+    // register `.noCollision()` in `Blocks.java`, and `BlockBehaviour.getCollisionShape` is
+    // `this.hasCollision ? state.getShape(...) : Shapes.empty()` -- `hasCollision = false` for
+    // every one of them, unconditionally, regardless of each block's own non-empty *visual*
+    // outline (`getShape`, overridden by `RedStoneWireBlock`/`TorchBlock`/`WallTorchBlock`/
+    // `LeverBlock` for rendering/selection only -- none of the four overrides
+    // `getCollisionShape`, `getBlockSupportShape`, or `isRedstoneConductor`). This table stores
+    // one shape per id -- the shape every consumer in this codebase reads for BOTH entity
+    // collision (`rc_physics::collide`) AND redstone support/conductor purposes
+    // (`BlockBehaviour.getBlockSupportShape`'s own default body is exactly
+    // `getCollisionShape`, and the default `isRedstoneConductor` predicate is
+    // `BlockStateBase::isCollisionShapeFullBlock` -- both read the COLLISION shape, never the
+    // outline) -- so every reachable id in each of these four blocks' own ranges resolves to
+    // `VoxelShape::empty()` below, not the flat wire slab / centered torch post / lever handle
+    // box a former version of this table stored here (M4-B10 defect: those outline boxes let a
+    // face-attached block find a sturdy face on a lever/torch where vanilla finds none, and let
+    // placement obstruction refuse a torch/wire/lever placed into the player's own cell where
+    // vanilla allows it). No consumer of this table needs the outline separately from the
+    // collision shape (searched: `rc_physics::raycast::cast_ray`'s own doc comment already
+    // states real reach validation stopped calling it, MECH-D62 re-supersession; its only
+    // remaining caller, `crates/testing/paritybot`'s self-tests, injects its own
+    // test-controlled `BlockShapeSource` rather than reading this table) -- so no separate
+    // outline accessor exists here either.
     // Chest: box [0.0625,0.9375]x[0,0.875]x[0.0625,0.9375] (Context table).
     let chest_shape = || {
         VoxelShape::from_boxes(vec![Aabb {
@@ -501,22 +505,26 @@ fn build_tier1_table() -> ShapeTable {
         flat(hopper_shape),
     ));
 
-    // --- Lever (M3 field-report wave 3, PLAN-D10/MECH-D13) — own clearly delimited section,
-    // deliberately placed BEFORE piston_head below (a future blueprint's own `moving_piston`
-    // rows land at the END of this function instead, per that blueprint's own convention). All
-    // 24 real states (3 `face` values x 4 `facing` values x 2 `powered` values) -- non-full,
-    // non-conductor, not sturdy on any face for any `SupportKind` (`lever_shape`'s own doc
-    // comment, below, has the full per-`(face, facing)` box derivation).
+    // --- Lever (M3 field-report wave 3, PLAN-D10/MECH-D13; M4-B10 blueprint author's finding
+    // fixes the shape) — own clearly delimited section, deliberately placed BEFORE piston_head
+    // below (a future blueprint's own `moving_piston` rows land at the END of this function
+    // instead, per that blueprint's own convention). All 24 real states (3 `face` values x 4
+    // `facing` values x 2 `powered` values) resolve to the identical `VoxelShape::empty()` --
+    // `LEVER` registers `.noCollision()` (`Blocks.java`), so the real collision shape is empty
+    // regardless of `LeverBlock`'s own per-`(face, facing)` handle-box outline (this section's
+    // own former literal derivation, now unneeded here since no consumer reads the outline
+    // through this table -- see this function's own leading doc comment): non-conductor, not
+    // sturdy on any face for any `SupportKind`.
+    let lever_shape = flat(VoxelShape::empty());
     for face in ["floor", "wall", "ceiling"] {
         for facing in HORIZONTAL4 {
-            let shape = flat(lever_shape(face, facing));
             for powered in ["true", "false"] {
                 entries.push((
                     id_of(
                         block_id::LEVER,
                         &[("face", face), ("facing", facing), ("powered", powered)],
                     ),
-                    shape.clone(),
+                    lever_shape.clone(),
                 ));
             }
         }
@@ -587,19 +595,24 @@ fn build_tier1_table() -> ShapeTable {
     entries.push((default_state::SMOKER.0, full));
 
     // `redstone_wire`'s own *entire* reachable id range (M3 field-report fix: wire's conductor
-    // classification) -- blocks.json's own `minecraft:redstone_wire` entry is wire's full
-    // `power` (0..=15) x `east`/`north`/`south`/`west` (`up`/`side`/`none` each) cross-product,
-    // 1296 contiguous states, generated in a loop over the registry's own real range rather
-    // than hand-enumerated: every one of these states shares the identical flat, non-full
-    // `wire_shape()` box (only the *id* varies). Registering only the single default id (the
-    // M3-B02/M3-B04-era placeholder this fix removes) made `rc_mechanics::redstone::signal::
-    // is_conductor` wrongly resolve every *other* reachable wire id -- i.e. almost every
-    // powered or connected wire tile -- as a `default_full_cube()` conductor, spuriously
-    // leaking quasi-connectivity through wire tiles vanilla never treats as conductors at all
-    // (M3 field-report finding, `docs/findings-for-planning.md`'s own "wire own-state
-    // writeback attempt reverted" entry).
+    // classification; M4-B10 blueprint author's finding fixes the shape itself) -- blocks.json's
+    // own `minecraft:redstone_wire` entry is wire's full `power` (0..=15) x `east`/`north`/
+    // `south`/`west` (`up`/`side`/`none` each) cross-product, 1296 contiguous states, generated
+    // in a loop over the registry's own real range rather than hand-enumerated: every one of
+    // these states shares the identical `VoxelShape::empty()` (`REDSTONE_WIRE` registers
+    // `.noCollision()`, `Blocks.java` -- the real collision shape is empty regardless of
+    // `RedStoneWireBlock`'s own flat, full-footprint outline slab, this section's own former
+    // literal derivation, now unneeded here -- see this function's own leading doc comment).
+    // Registering only the single default id (the M3-B02/M3-B04-era placeholder this fix
+    // removes) made `rc_mechanics::redstone::signal::is_conductor` wrongly resolve every *other*
+    // reachable wire id -- i.e. almost every powered or connected wire tile -- as a
+    // `default_full_cube()` conductor, spuriously leaking quasi-connectivity through wire tiles
+    // vanilla never treats as conductors at all (M3 field-report finding, `docs/
+    // findings-for-planning.md`'s own "wire own-state writeback attempt reverted" entry).
     let wire_range = range_of(block_id::REDSTONE_WIRE);
-    entries.extend((wire_range.first.0..=wire_range.last.0).map(|id| (id, flat(wire_shape()))));
+    entries.extend(
+        (wire_range.first.0..=wire_range.last.0).map(|id| (id, flat(VoxelShape::empty()))),
+    );
 
     // `repeater`'s and `comparator`'s own *entire* reachable id ranges (M3 field-report fix,
     // Rule D depower correctness investigation: "repeater/comparator conductor
@@ -620,18 +633,24 @@ fn build_tier1_table() -> ShapeTable {
 
     // `redstone_torch`'s and `redstone_wall_torch`'s own *entire* reachable id ranges (M3
     // field-report fix, same "conductor misclassification" gap class as the repeater/comparator
-    // fix above): every `lit` value, and every wall-torch `facing`, must resolve to the
-    // identical non-full `torch_shape()` box (floor and wall torches "share the same box"
-    // already, `torch_shape()`'s own doc comment) -- otherwise an unregistered `lit=false`
-    // torch gets misclassified as a solid conductor, re-broadcasting a neighbor's direct
-    // signal through itself (`wire_strong_vs_weak_power_door`'s own `(9, 1, 0)` regression).
+    // fix above; M4-B10 blueprint author's finding fixes the shape itself): every `lit` value,
+    // and every wall-torch `facing`, must resolve to the identical `VoxelShape::empty()` (both
+    // `REDSTONE_TORCH` and `REDSTONE_WALL_TORCH` register `.noCollision()`, `Blocks.java` -- the
+    // real collision shape is empty regardless of `TorchBlock`'s/`WallTorchBlock`'s own centered-
+    // post outline, floor and wall torches sharing that same outline box -- this section's own
+    // former literal derivation, now unneeded here -- see this function's own leading doc
+    // comment) -- otherwise an unregistered `lit=false` torch gets misclassified as a solid
+    // conductor, re-broadcasting a neighbor's direct signal through itself (`wire_strong_vs_
+    // weak_power_door`'s own `(9, 1, 0)` regression).
     let torch_floor_range = range_of(block_id::REDSTONE_TORCH);
     entries.extend(
-        (torch_floor_range.first.0..=torch_floor_range.last.0).map(|id| (id, flat(torch_shape()))),
+        (torch_floor_range.first.0..=torch_floor_range.last.0)
+            .map(|id| (id, flat(VoxelShape::empty()))),
     );
     let torch_wall_range = range_of(block_id::REDSTONE_WALL_TORCH);
     entries.extend(
-        (torch_wall_range.first.0..=torch_wall_range.last.0).map(|id| (id, flat(torch_shape()))),
+        (torch_wall_range.first.0..=torch_wall_range.last.0)
+            .map(|id| (id, flat(VoxelShape::empty()))),
     );
 
     // M3 field-report wave 3 (PLAN-D10, moving_piston placeholder — MECH-D83/MECH-D84): the
@@ -685,56 +704,6 @@ fn piston_base_extended_shape(axis: usize, positive: bool) -> VoxelShape {
         min: Vec3::new(min[0], min[1], min[2]),
         max: Vec3::new(max[0], max[1], max[2]),
     }])
-}
-
-/// The lever's own single box for one `(face, facing)` pair (M3 field-report wave 3,
-/// PLAN-D10/MECH-D13), identical for `powered=true`/`false` (Context: the client-visible
-/// paddle angle never changes the collision hitbox). Base box, `wall`/`north` (in sixteenths):
-/// `X[5,11] Y[4,12] Z[10,16]` — touches the South boundary (`z=1`), the mount side for
-/// `facing=north` (mount = `facing.opposite()` = South, `lever.rs`'s own `mount_direction` doc
-/// comment). Every other `(face, facing)` pair rotates this same box (verified against the
-/// ASSET-D18(f) reference's own `Shapes.rotateAttachFace` + per-facing horizontal rotation,
-/// restated here as plain box arithmetic rather than a generic rotation utility):
-/// - `wall` rotates horizontally, around the vertical (Y) axis, per facing: the perpendicular
-///   in-plane width (`X[5,11]` for north/south, the identical interval placed on Z for
-///   east/west) is unaffected, only which boundary the depth axis touches changes (the mount
-///   side, `facing.opposite()`).
-/// - `floor`/`ceiling` tip the wall box 90 degrees about the horizontal axis perpendicular to
-///   both the mount direction and the box's own vertical extent: the former "vertical along the
-///   wall" interval (`Y[4,12]`) becomes the new in-plane interval along the facing axis
-///   (`Z[4,12]` for north/south facing, `X[4,12]` for east/west), and the former "depth from the
-///   wall" interval (`Z[10,16]`, touching the mount boundary at its high end) becomes the new
-///   vertical interval touching the floor (`Y[0,6]`) or ceiling (`Y[10,16]`, the mirrored high
-///   end) — the horizontal footprint is identical between `floor` and `ceiling` for the same
-///   facing; only the vertical placement differs.
-fn lever_shape(face: &str, facing: &str) -> VoxelShape {
-    let one_box = |min: (f64, f64, f64), max: (f64, f64, f64)| {
-        VoxelShape::from_boxes(vec![Aabb {
-            min: Vec3::new(min.0, min.1, min.2),
-            max: Vec3::new(max.0, max.1, max.2),
-        }])
-    };
-    match (face, facing) {
-        ("wall", "north") => one_box((0.3125, 0.25, 0.625), (0.6875, 0.75, 1.0)),
-        ("wall", "south") => one_box((0.3125, 0.25, 0.0), (0.6875, 0.75, 0.375)),
-        ("wall", "west") => one_box((0.625, 0.25, 0.3125), (1.0, 0.75, 0.6875)),
-        ("wall", "east") => one_box((0.0, 0.25, 0.3125), (0.375, 0.75, 0.6875)),
-        ("floor", "north") | ("floor", "south") => {
-            one_box((0.3125, 0.0, 0.25), (0.6875, 0.375, 0.75))
-        }
-        ("floor", "west") | ("floor", "east") => {
-            one_box((0.25, 0.0, 0.3125), (0.75, 0.375, 0.6875))
-        }
-        ("ceiling", "north") | ("ceiling", "south") => {
-            one_box((0.3125, 0.625, 0.25), (0.6875, 1.0, 0.75))
-        }
-        ("ceiling", "west") | ("ceiling", "east") => {
-            one_box((0.25, 0.625, 0.3125), (0.75, 1.0, 0.6875))
-        }
-        _ => {
-            unreachable!("lever_shape: {face:?}/{facing:?} is not a real lever (face,facing) pair")
-        }
-    }
 }
 
 fn piston_head_shape(axis: usize, positive: bool) -> VoxelShape {
