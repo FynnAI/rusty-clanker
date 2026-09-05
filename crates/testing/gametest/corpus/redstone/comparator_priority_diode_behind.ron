@@ -7,6 +7,9 @@ ContraptionSpec(
     max_ticks: 10,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        // M3.5-B03 governance fix: the comparator's own floor cell was missing — the
+        // repeater below already has its own floor row, but the comparator did not.
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         // Floor tile precedes the repeater here purely for build-order realism, not
         // because placement order is load-bearing: `RepeaterBehavior::on_placed` no
         // longer checks floor support at all (M3 field-report regression correction —

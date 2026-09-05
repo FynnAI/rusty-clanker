@@ -14,6 +14,13 @@ ContraptionSpec(
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
         (pos: (0, 1, -1), vanilla_state: "minecraft:chest[facing=south,type=single,waterlogged=false]{Items:[{Slot:0b,id:\"minecraft:redstone\",Count:32b}]}", state_id: 3994),
+        // M3.5-B03 governance fix (protocol-diff run 33789270683, m3-acceptance on
+        // ubuntu-24.04): the comparator had no floor support and popped to air on the
+        // tick right after setup (captured 11264 at tick 0, air from tick 1) — a
+        // floor cell under every block, following every other comparator-category
+        // spec's own established convention.
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [],
 )

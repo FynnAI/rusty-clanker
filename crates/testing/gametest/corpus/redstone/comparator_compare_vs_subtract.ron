@@ -9,6 +9,11 @@ ContraptionSpec(
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
         (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_torch[lit=true]", state_id: 6885),
+        // M3.5-B03 governance fix: this torch's own floor cell was missing — every
+        // other cell in this fixture already has its own floor row (below), but the
+        // torch at z=-1 did not, so it popped to air on the first neighbor-changed
+        // check.
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
         // Floor tiles precede their wire tiles here purely for build-order realism,
         // not because placement order is load-bearing: neither `WireBehavior` nor
         // `ComparatorBehavior::on_placed` validates floor support at `/setblock` time

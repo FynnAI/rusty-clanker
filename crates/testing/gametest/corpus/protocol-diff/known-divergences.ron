@@ -2,16 +2,78 @@
 // Planning-owned content: every `Missing`/`Body` entry names what closes it and the
 // milestone by which it must be gone; `Timer` entries are permanent (presence and
 // count of timer-driven packets never align between two independently ticking
-// servers). Written from the first real run (2026-09-03, run 33736929221).
+// servers). Register v2, resolved against run 33789270683 (both OS legs): widens
+// `Timer` entries to every step (including the redstone corpus, whose own step ids
+// never start with `session/`), covers the redstone-corpus-over-the-wire pass's own
+// entity/join-sequence backlog (`redstone/*`, absent from v1 entirely), consolidates
+// the join-sequence/chunk-streaming backlog onto `session/*` instead of repeating it
+// per step, and adds the `session/login`/`session/configuration` state-table
+// resolution's own newly-resolvable entries.
+//
+// Register v3, resolved against this worktree's own local full `protocol-diff` run
+// (M3.5 acceptance criterion 2 closure pass): the M4-B01/M4-B02 item-entity-litter
+// pattern already covered on most steps recurred on `session/move`/`session/spawn`
+// and `session/place/stone` too; adds one M4-B04/M4-B05 (mob spawning/combat damage,
+// both still fully unimplemented) `damage_event` entry, `redstone/*`-wide, for
+// ambient mob activity on the shared oracle world landing in an observation window
+// by chance; adds three narrowly-scoped `block_update` entries for vanilla's own
+// Stage-5 random-tick grass-spread mechanic firing on the shared oracle world by the
+// same kind of timing chance (a genuinely unscheduled mechanic across the current
+// roadmap — flagged to planning, `docs/findings-for-planning.md`).
+//
+// Register v4 (M3.5 acceptance criterion 2 closure pass, this session): the
+// `session/login`/`session/configuration`-scoped `Body` entries for
+// `login_finished`/`registry_data`/`update_tags` never widened to
+// `session/disconnect_reconnect`'s own real (non-stale) reconnect handshake, which
+// legitimately re-triggers the identical class of divergence — added as their own
+// exact-step entries below rather than a `session/*` glob, since `packet_name_known`
+// only validates a Login/Configuration-state packet name for the specific step ids
+// whose own capture is known to cross those states (`known_divergences.rs`'s own
+// `packet_name_known`, widened this session to treat `session/disconnect_reconnect`/
+// `session/observe_chunk` as mixed-state steps for exactly this reason). The
+// `update_tags` entries' own `closes_with` is renamed from "tag sync content" to
+// "registry/tag sync order": decoding both sides' 35203-byte bodies (identical
+// length, so this is pure reordering, never missing/extra content) shows the oracle
+// listing `minecraft:entity_type` first and ours `minecraft:banner_pattern` first —
+// `net.minecraft.tags.TagNetworkSerialization.serializeTagsToNetwork`/
+// `serializeToNetwork` (ASSET-D18(f) reference) collect both the per-registry tag
+// map and the outer per-registry-key map into a plain Java `HashMap`, so the real
+// wire order is Java's own hash-bucket iteration order over `Identifier` keys — not
+// insertion, declaration, or alphabetical order — making a literal reimplementation
+// impractical; the pragmatic fix is to capture and hardcode the fixed 26.2 order
+// rather than reimplement `HashMap` bucketing (flagged to planning,
+// `docs/findings-for-planning.md`). `registry_data`'s own divergence is unchanged in
+// kind (every one of the 29 registries is substantially smaller on our side, e.g.
+// `minecraft:enchantment` 32084 oracle vs. 967 ours — consistent with per-entry NBT
+// content never being encoded on our side at all, not merely a few
+// known-pack-eligible entries being skipped) — same `closes_with` title, now backed
+// by this session's own byte-level confirmation.
+//
+// `session/observe_chunk`'s own remaining failure (unregistered, deliberately left
+// so) is a harness bug, not a product divergence: `packet_capture::
+// connect_and_observe_with_recorder`'s `tokio::task::spawn_local` running
+// `ClientBuilder::start` was never aborted, and azalea's own `ClientBuilder::start`
+// retries the connection FOREVER on its own (already documented on this module's own
+// `handle`/`Progress`) — the FIRST connection's own supervising task, leaked past
+// `session/disconnect_reconnect`'s explicit `client.disconnect()`, kept silently
+// reconnecting under the same offline account name in the background and colliding
+// with the real, actively-walking second connection, repeatedly earning a genuine
+// vanilla `multiplayer.disconnect.duplicate_login` kick and reconnecting again —
+// contaminating `session/observe_chunk`'s own capture with an unbounded number of
+// phantom join/config/spawn cycles recorded through the same shared
+// `PacketRecorder`. Fixed in `packet_capture.rs` (`ObserverHandle` now owns and
+// aborts this task on drop); never registered, since it is not a real divergence at
+// all — closes once the next full capture (ghost-free) confirms the step passes on
+// its own.
 [
-    // --- Timer-driven presence (permanent) ---
-    (steps: "session/*", packet: "minecraft:keep_alive", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:set_time", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:player_info_update", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:move_entity_pos", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:move_entity_pos_rot", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:rotate_head", class: Timer, closes_with: None, expires: None),
-    (steps: "session/*", packet: "minecraft:set_entity_motion", class: Timer, closes_with: None, expires: None),
+    // --- Timer-driven presence (permanent, every step — session and redstone alike) ---
+    (steps: "*", packet: "minecraft:keep_alive", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:set_time", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:player_info_update", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:move_entity_pos", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:move_entity_pos_rot", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:rotate_head", class: Timer, closes_with: None, expires: None),
+    (steps: "*", packet: "minecraft:set_entity_motion", class: Timer, closes_with: None, expires: None),
 
     // --- Item drops of every break: entity infrastructure and item entities (M4) ---
     (steps: "session/break/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
@@ -32,66 +94,178 @@
     (steps: "session/dig_stone_survival", packet: "minecraft:game_event", class: Missing, closes_with: Some("NET hardening: gamemode switch sequence"), expires: Some("M5")),
     (steps: "session/dig_stone_survival", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: gamemode switch sequence"), expires: Some("M5")),
 
-    // --- Chunk streaming and batch pacing on movement (NET hardening) ---
-    (steps: "session/move", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/move", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/move", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    // --- Chunk streaming and batch pacing (NET hardening) — every step, not just
+    // move/sneak/dig_stone_survival: the redstone-corpus-over-the-wire pass's own
+    // contraption steps observe fresh chunk traffic too, and the register-resolved
+    // v1 run showed the same divergence recurring per step regardless. ---
+    (steps: "session/*", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:forget_level_chunk", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_chunk_cache_center", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
     (steps: "session/move", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/move", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/sneak", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/sneak", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/sneak", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
     (steps: "session/sneak", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:chunk_batch_finished", class: Body, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    // Register v3 (real full run against the pinned oracle, this repository's own
+    // protocol-diff.json): the shared oracle world already carries pre-existing item
+    // entities (litter from earlier corpus/session captures against the same
+    // persistent world — confirmed by decoding `add_entity`'s own body, every one an
+    // `entity_type: Item`) that enter/leave the observing bot's own tracking range as
+    // it walks — the exact same M4-B01/M4-B02 entity-infrastructure gap already
+    // registered on every other session step, just not yet needed on this one.
+    (steps: "session/move", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/move", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
 
-    // --- Join / reconnect sequence (NET hardening) ---
-    (steps: "session/spawn", packet: "minecraft:change_difficulty", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:commands", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:initialize_border", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:player_abilities", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:recipe_book_settings", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:server_data", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:set_experience", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:set_held_slot", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:ticking_state", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:ticking_step", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    // --- Join / reconnect sequence (NET hardening) — consolidated onto `session/*`:
+    // every one of these packet types was registered identically on both
+    // `session/spawn` and `session/disconnect_reconnect` in v1, and the
+    // register-resolved v1 run showed the same gap on `session/observe_chunk` and
+    // every other non-place/break step too (the whole handshake replays there,
+    // register-resolved). ---
+    (steps: "session/*", packet: "minecraft:change_difficulty", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:commands", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:initialize_border", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:player_abilities", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:recipe_book_settings", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:server_data", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_experience", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_held_slot", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:ticking_state", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:ticking_step", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:update_recipes", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:disconnect", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/spawn", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/spawn", packet: "minecraft:update_recipes", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/spawn", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/spawn", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/spawn", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    // Register v3: the same pre-existing item-entity litter noted on `session/move`
+    // above also enters/leaves view right at spawn (a `remove_entities` observed here
+    // too — one such item entity picked up or expiring out of the world during the
+    // settle window), the identical M4-B01/M4-B02 gap.
+    (steps: "session/spawn", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/spawn", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "session/spawn", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    // The M4-B01 attribute-sync gap already registered on `session/spawn` above also
+    // surfaced on this one place step in the real run — the server-side trigger for
+    // an `update_attributes` resend is timing-dependent (M4-B01's own missing
+    // implementation), not deterministically tied to any one step, so it is
+    // registered exactly where observed rather than widened to a `session/*` glob no
+    // other place/break step has shown a need for.
+    (steps: "session/place/redstone_torch", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    // Register v3: the same pre-existing item-entity litter (`session/move`'s own
+    // comment above has the full explanation) also leaves view during this one place
+    // step — an `entity_ids` list of length 1, decoded, no relation to the stone block
+    // this step itself places.
+    (steps: "session/place/stone", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    // Register v3 (real full run): decoding these three steps' own `block_update`
+    // bodies shows a `GrassBlock` state written at a position far outside anything
+    // this step's own script ever touches (session/place/furnace, /hopper: an
+    // unrelated grass tile tens of blocks from the placement site; session/sneak:
+    // likewise) — vanilla's own ordinary Stage-5 random-tick grass-spread mechanic
+    // firing on the shared oracle world in the background, purely by timing chance
+    // within this step's own short observation window, never triggered by the step's
+    // own scripted action. `rc_mechanics::random_tick`'s own module doc comment is
+    // explicit that this project "ships the deterministic per-chunk draw algorithm
+    // only — zero real receivers" yet; no blueprint across M4/M5 currently schedules
+    // a grass-spread (or any other Stage-5 random-tick vegetation) receiver — flagged
+    // to planning (`docs/findings-for-planning.md`) as needing a decision on which
+    // milestone owns it; "M5" here is a deadline bound, not a scope claim, matching
+    // this same file's own established "NET/MECH hardening" entries elsewhere.
+    (steps: "session/place/furnace", packet: "minecraft:block_update", class: Missing, closes_with: Some("MECH hardening: Stage-5 random-tick vegetation (grass spread)"), expires: Some("M5")),
+    (steps: "session/place/hopper", packet: "minecraft:block_update", class: Missing, closes_with: Some("MECH hardening: Stage-5 random-tick vegetation (grass spread)"), expires: Some("M5")),
+    (steps: "session/sneak", packet: "minecraft:block_update", class: Missing, closes_with: Some("MECH hardening: Stage-5 random-tick vegetation (grass spread)"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:change_difficulty", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:commands", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:initialize_border", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:player_abilities", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:recipe_book_settings", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:server_data", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:set_experience", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:set_held_slot", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:ticking_state", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:ticking_step", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:update_recipes", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Body, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/observe_chunk", packet: "minecraft:disconnect", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+
+    // --- Redstone-corpus-over-the-wire entity/join-sequence backlog (absent from v1
+    // entirely — every contraption step id is `redstone/<category>/<name>`, never
+    // matched by any `session/*` entry). ---
+    (steps: "redstone/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:entity_position_sync", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:set_equipment", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:player_info_remove", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    // `block_event` is deliberately NOT registered here (M3.5-B03 follow-up,
+    // deliverable 4): MECH-D83 landed since the run this register's own `redstone/*`
+    // section was last resolved against, and `crates/server/src/play/world.rs` now
+    // sends it — a registered-Missing entry for a packet type we actually send would
+    // itself be the kind of stale entry TEST-D59's own expiry rule exists to catch.
+    // If the real run still shows a genuine divergence here it will surface as an
+    // unregistered mismatch (most likely `Body`, not `Missing`) and gets a fresh,
+    // accurately-classed entry then.
+    (steps: "redstone/*", packet: "minecraft:section_blocks_update", class: Missing, closes_with: Some("M3.5-B06 follow-up: block-change coalescing matches vanilla's per-tick batching"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:open_screen", class: Missing, closes_with: Some("M3.5-B03 harness: container fill parity"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("M3.5-B03 harness: container fill parity"), expires: Some("M5")),
+
+    // --- Redstone-corpus-over-the-wire second correction (M3.5-B03 follow-up,
+    // deliverable 4, second pass — real full run against a live oracle, not
+    // predicted): every contraption capture connects its own fresh bot, so it
+    // replays the join sequence too; `system_chat`/`waypoint` were already
+    // registered for `session/*` but this bucket's own copy above never carried
+    // them. `sound`/`level_event` are new product-gap findings this real run
+    // surfaced directly: vanilla plays an audible click/particle effect whenever a
+    // comparator, repeater, torch or piston changes state within the observed
+    // window (`sound` for the click itself, `level_event` for a piston's own
+    // move effect) — neither is implemented yet. `two_torch_and_gate` is the one
+    // contraption whose own action set destroys a torch, dropping and then
+    // despawning-via-pickup an item entity — the same M4-B02 entity/item gap
+    // already registered elsewhere in this file, just not yet needed here. ---
+    (steps: "redstone/*", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:waypoint", class: Missing, closes_with: Some("NET hardening: locator bar waypoint sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:sound", class: Missing, closes_with: Some("MECH hardening: redstone component sound effects"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:level_event", class: Missing, closes_with: Some("MECH hardening: redstone component sound effects"), expires: Some("M5")),
+    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    // Register v3 (real full run): four different `torch_*` contraptions each showed
+    // exactly one `damage_event`, each naming a DIFFERENT, high-numbered entity id
+    // (decoded: `source_type_id` 31, no cause/direct entity, no position — none of
+    // them this capture's own observing bot) — the shared oracle world's own natural
+    // mob spawning and AI are alive in the background and occasionally land within an
+    // observation window purely by timing chance, unrelated to any one contraption's
+    // own action set (four different torch fixtures out of ~60, no shared cause
+    // beyond chance). `redstone/*`, not the four steps actually observed: M4-B04
+    // (mob spawning) and M4-B05 (combat/damage) are both still fully unimplemented —
+    // our server has zero mobs to ever take damage from, on any contraption — so this
+    // can recur on any redstone step, exactly like the M4-B01/M4-B02 entity-litter
+    // entries already registered `redstone/*`-wide above.
+    (steps: "redstone/*", packet: "minecraft:damage_event", class: Missing, closes_with: Some("M4-B05"), expires: Some("M4")),
 
     // --- Bodies the normalizer must mask (M3.5-B03 normalizer follow-up) ---
     (steps: "session/configuration", packet: "minecraft:custom_payload", class: Body, closes_with: Some("M3.5-B03 normalizer: brand payload value masked"), expires: Some("M4")),
-    (steps: "session/configuration", packet: "minecraft:registry_data", class: Body, closes_with: Some("NET hardening: dialog registry entries"), expires: Some("M5")),
+    (steps: "session/configuration", packet: "minecraft:registry_data", class: Body, closes_with: Some("NET hardening: registry sync content"), expires: Some("M5")),
+    (steps: "session/configuration", packet: "minecraft:update_tags", class: Body, closes_with: Some("NET hardening: registry/tag sync order"), expires: Some("M5")),
     (steps: "session/login", packet: "minecraft:login_finished", class: Body, closes_with: Some("M3.5-B03 normalizer: login_finished session UUID masked"), expires: Some("M4")),
+    // Register v4: the identical class of divergence, now also observed on the real
+    // reconnect handshake `session/disconnect_reconnect` captures (this session's own
+    // header comment above has the full byte-level verification for all three).
+    (steps: "session/disconnect_reconnect", packet: "minecraft:login_finished", class: Body, closes_with: Some("M3.5-B03 normalizer: login_finished session UUID masked"), expires: Some("M4")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:registry_data", class: Body, closes_with: Some("NET hardening: registry sync content"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:update_tags", class: Body, closes_with: Some("NET hardening: registry/tag sync order"), expires: Some("M5")),
     (steps: "session/dig_stone_survival", packet: "minecraft:block_update", class: Body, closes_with: Some("World parity: placeholder world adopts the vanilla flat preset layers"), expires: Some("M4")),
+
+    // --- Join-sequence packet bodies (NET hardening) — now resolvable at all
+    // (state-aware name resolution, `session/login`/`session/configuration` decode
+    // against their own clientbound tables instead of falling back to `<unresolved>`)
+    // and observed with differing bodies across every session step. ---
+    (steps: "session/*", packet: "minecraft:login", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:player_position", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_default_spawn_position", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_chunk_cache_center", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:set_health", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:game_event", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:chunk_batch_start", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:chunk_batch_finished", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:level_chunk_with_light", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    (steps: "session/*", packet: "minecraft:add_entity", class: Body, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
 ]

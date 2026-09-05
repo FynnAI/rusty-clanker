@@ -7,6 +7,11 @@ ContraptionSpec(
     max_ticks: 8,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        // M3.5-B03 governance fix: floor support for the comparator above — without
+        // it, the comparator survives `/setblock` placement but pops to air on the
+        // next neighbor-changed check (this spec's own tick-2 action fires right
+        // against its input face), matching every other comparator's own floor row.
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [
         (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),

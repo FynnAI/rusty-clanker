@@ -16,7 +16,7 @@
     },
     {
       "path": "comparator_2tick_fixed_delay.ron",
-      "sha256": "3cb8754748a1f85a788aed5817c67657beddfd08060b4a57276bce8f41cb4f70",
+      "sha256": "2721077bc115533ad02cd74b10e602a288eabb3f70c3717b036f8f801550afae",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -28,13 +28,13 @@
     },
     {
       "path": "comparator_compare_vs_subtract.ron",
-      "sha256": "ac9f385a777a55d6ba221d0acdec184535f770da494b0852d1bcf3a6c89c37ea",
+      "sha256": "d8a6bc803a2bc434b180ec101237a8b96db22fd16c3e90832a34519a58d4938f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_container_fullness_chest.ron",
-      "sha256": "de1dd252b5fcfb76b18bd8bc397826832b378c1c1bdf2ea85e53b9a45abc59f0",
+      "sha256": "eef1446bc3c932d2eaa82ec7aededa2e86a0f5591b7cd7b4674cb71edbc49999",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -46,7 +46,7 @@
     },
     {
       "path": "comparator_priority_diode_behind.ron",
-      "sha256": "ed96dd90b44462d390bd6b7166262cbe6c712fbc6e827821f7b6cb4cb2ed5cb5",
+      "sha256": "985323f6414885050eade7210dc137b0a174f6babee21fd3fd039c6aa4b15fca",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
@@ -70,13 +70,13 @@
     },
     {
       "path": "comparator_tie_no_turn_on.ron",
-      "sha256": "7dd8d88b8feeee7f1455ecbf26b5390bda75ba2bdfc038e67e659854b84869d3",
+      "sha256": "843e3b392b144ef0e5e32b9582c31dd3171a88b0432e5c69dc4b70938680550f",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },
     {
       "path": "comparator_wire_signal_read.ron",
-      "sha256": "b05984b94689bc6fd766b2368cef18d0a23c8f927115ca8fcb0e955d3707e0d6",
+      "sha256": "29b2f3fb2d7ed0034b576b9ee0479ac0ccfcd8c70377125c4e8eb15c989491f6",
       "generator_tool_version": "manual/M3-corpus-wave",
       "source_jar_sha1": "n/a"
     },

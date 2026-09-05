@@ -7,12 +7,23 @@ ContraptionSpec(
     max_ticks: 8,
     blocks: [
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        // M3.5-B03 governance fix: the comparator's own floor cell was missing — the
+        // wire below already has its own floor row, but the comparator did not.
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
         // Field-report fix: redstone_wire self-validates its own floor support
         // immediately on /setblock placement (unlike comparator, which doesn't) — this
         // floor tile must precede the wire in list order, or the wire never actually
         // comes into existence (placement silently reverts to air).
         (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 4591),
+        // M3.5-B03 governance fix: state_id corrected against a real oracle capture
+        // (`823e2250d24b3ddac457a60c92a6a941943fcd6a`, `fetch-corpus --only`) once the
+        // comparator above gained real floor support (this same changeset) and so no
+        // longer pops to air one tick after setup — a persistent comparator is a real
+        // redstone-conductor neighbor the wire genuinely connects to, settling into a
+        // *connected* state (5024) rather than the fully-disconnected one (4591) the
+        // old declared id assumed for a scene where the comparator never survived to
+        // be a neighbor at all.
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5024),
     ],
     actions: [
         (tick: 2, pos: (0, 1, -2), vanilla_state: "minecraft:redstone_block", state_id: 11311),

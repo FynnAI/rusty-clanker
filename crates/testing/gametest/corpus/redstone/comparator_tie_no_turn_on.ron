@@ -9,6 +9,9 @@ ContraptionSpec(
         (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=subtract,powered=false]", state_id: 11266, has_analog_state: true),
         (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
         (pos: (-1, 1, 0), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+        // M3.5-B03 governance fix: floor support for the comparator — without it, the
+        // comparator pops to air on the next neighbor-changed check.
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
     ],
     actions: [
         (tick: 4, pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264),
