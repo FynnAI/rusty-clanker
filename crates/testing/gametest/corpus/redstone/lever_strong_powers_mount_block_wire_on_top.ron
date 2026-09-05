@@ -1,0 +1,25 @@
+// M3 field-report corpus (PLAN-D10/MECH-D13, wave 3, finding 2): the lever's strong/direct
+// signal, relayed through its own mount block into a conductor's other faces -- the floor-
+// attachment variant of `lever_powers_wire_via_state_swap.ron`'s own wall-attachment wire-on-
+// top-of-mount assertion, diversifying attachment-face coverage. Every block_id/state_id below
+// was resolved directly against the generated registry (`minecraft:lever` = `block_id` 520,
+// range `[6771, 6794]`; state 6772 = face=floor/facing=north/powered=false, state 6771 = the
+// same with powered=true -- `crates/registries/generated/v776/block_state_properties.rs`'s own
+// `STATE_PROPERTIES` array).
+ContraptionSpec(
+    id: "redstone/qc/lever_strong_powers_mount_block_wire_on_top",
+    category: QcShowcase,
+    description: "A floor lever (facing north) standing on a stone. A wire sits directly east of that mount stone, on its own separate floor: the wire never touches the lever directly, but reads the lever's own strong/direct signal relayed through the shared mount stone (a conductor) once the lever is toggled on.",
+    quirk: "LeverBlock.getDirectSignal fires only toward the block the lever is mounted on (floor: straight down) -- any OTHER face of that same mount block, including one a wire merely rests beside via its own floor, inherits the relayed direct signal through the conductor rule (SignalGetter.getDirectSignalTo), exactly as it would for a wall-mounted lever's own mount block.",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 0, 0), vanilla_state: "minecraft:lever[face=floor,facing=north,powered=false]", state_id: 6772),
+        (pos: (1, -2, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, -1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+    ],
+    actions: [
+        // Tick 3: flip the lever in place from powered=false to powered=true.
+        (tick: 3, pos: (0, 0, 0), vanilla_state: "minecraft:lever[face=floor,facing=north,powered=true]", state_id: 6771),
+    ],
+)

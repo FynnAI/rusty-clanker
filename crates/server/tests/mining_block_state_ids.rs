@@ -46,7 +46,7 @@ fn placed_id(
         yaw_degrees,
         pitch_degrees,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .expect("every (kind, face, yaw, pitch) combination this file passes is a legal placement");

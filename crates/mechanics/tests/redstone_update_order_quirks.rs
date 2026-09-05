@@ -385,6 +385,8 @@ fn register_tier1_redstone_wires_all_four_components_into_both_registries() {
         torch_wall: (BlockStateId(102), BlockStateId(103)),
         repeater: (BlockStateId(103), BlockStateId(104)),
         comparator: (BlockStateId(104), BlockStateId(105)),
+        // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever, tier 1's fifth component.
+        lever: (BlockStateId(105), BlockStateId(106)),
     };
     let mut behaviors = BlockBehaviorRegistry::new();
     let mut signals = SignalSourceRegistry::new();

@@ -39,7 +39,7 @@ fn repeater_faces_away_from_player_facing_case() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -58,7 +58,7 @@ fn piston_faces_up_when_player_looks_steeply_down() {
         0.0,
         80.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -78,7 +78,7 @@ fn torch_on_top_face_is_standing() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -98,7 +98,7 @@ fn torch_on_side_face_is_wall_variant_facing_that_side() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -120,7 +120,7 @@ fn torch_on_bottom_face_is_rejected_when_no_candidate_has_support() {
         0.0,
         0.0,
         false,
-        &mut |_| false,
+        &mut |_, _| false,
         &mut |_| None,
     );
     assert_eq!(result, Err(RejectReason::InvalidTorchFace));
@@ -140,7 +140,7 @@ fn torch_on_bottom_face_falls_back_to_floor_torch_when_the_floor_below_is_solid_
         0.0,
         0.0,
         false,
-        &mut |dir| dir == Direction::Down,
+        &mut |dir, _kind| dir == Direction::Down,
         &mut |_| None,
     )
     .unwrap();
@@ -156,7 +156,7 @@ fn hopper_faces_opposite_the_clicked_side_face() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -174,7 +174,7 @@ fn hopper_clicked_on_top_defaults_to_facing_down_never_up() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -187,7 +187,7 @@ fn hopper_clicked_on_top_defaults_to_facing_down_never_up() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -204,7 +204,7 @@ fn chest_and_furnace_share_the_same_horizontal_away_from_player_rule() {
         90.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -214,7 +214,7 @@ fn chest_and_furnace_share_the_same_horizontal_away_from_player_rule() {
         90.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .unwrap();
@@ -246,7 +246,7 @@ fn chest_merges_left_with_a_same_facing_clockwise_neighbor() {
         0.0,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |dir| {
             if dir == Direction::East {
                 Some(ChestNeighbor {
@@ -284,7 +284,7 @@ fn sneak_click_on_a_perpendicular_chest_adopts_its_facing() {
         90.0,
         0.0,
         true,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |dir| {
             // `clicked_face.opposite()` (East.opposite() = West) is the direction FROM the
             // new chest's own target TO the clicked (existing) chest.

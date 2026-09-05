@@ -1,0 +1,26 @@
+// M3 field-report corpus (PLAN-D10/MECH-D13, wave 3, finding 2): the lever's basic weak-signal
+// toggle. Every block_id/state_id below was resolved directly against the generated registry
+// (`crates/registries/generated/v776/block_state_properties.rs`'s `STATE_PROPERTIES`/
+// `BLOCK_RANGES` arrays for `minecraft:lever` = `block_id` 520, range `[6771, 6794]`, default
+// `6780` = face=wall/facing=north/powered=false; `block_states.rs`'s own `STONE`/`REDSTONE_WIRE`
+// default-state constants).
+ContraptionSpec(
+    id: "redstone/qc/lever_powers_wire_via_state_swap",
+    category: QcShowcase,
+    description: "A wall-mounted lever (facing east, mounted on a stone to its west), toggled via a direct powered-state swap. A wire two cells east of the lever, on its own floor, reads only the lever's weak (direction-independent) output; a wire resting on top of the lever's own mount stone reads the lever's strong output relayed through that now-fully-powered conductor.",
+    quirk: "LeverBlock.getDirectSignal is nonzero only toward the block the lever is mounted on (FaceAttachedHorizontalDirectionalBlock.getConnectedDirection's own opposite); every other neighbor reads only the lever's weak, direction-independent ownSignal (POWERED ? 15 : 0) -- unlike RedstoneTorchBlock, a lever's weak output carries no direction exclusion at all (MECH-D13).",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=false]", state_id: 6786),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+        (pos: (2, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:redstone_wire[power=0]", state_id: 5171),
+    ],
+    actions: [
+        // Tick 3: flip the lever in place from powered=false to powered=true (this project's
+        // own state-id-swap action convention, standing in for a real player pull() -- there is
+        // no in-game interact/use packet path this replay harness drives directly).
+        (tick: 3, pos: (1, 0, 0), vanilla_state: "minecraft:lever[face=wall,facing=east,powered=true]", state_id: 6785),
+    ],
+)

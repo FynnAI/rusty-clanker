@@ -53,7 +53,7 @@ fn placed_shape(
         yaw_degrees,
         0.0,
         false,
-        &mut |_| true,
+        &mut |_, _| true,
         &mut |_| None,
     )
     .expect("every (kind, face, yaw) pair this test passes is a legal placement");

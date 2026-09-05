@@ -93,6 +93,18 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "lever_powers_wire_via_state_swap.ron",
+      "sha256": "bd7a82bfb620d73d2d673e97a5d68ba628f081f82648bf34012cee571ae83e9f",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "lever_strong_powers_mount_block_wire_on_top.ron",
+      "sha256": "9e63514ac83e3ee32f24f1a2a13c7ffcca4b9d343dd1a5e5d57dc6c91ff14dc0",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "piston_door_double_flush.ron",
       "sha256": "38e696761e8262d2307fa01b86f4cbcd9a9008dc642219d6fc02f232cec549ee",
       "generator_tool_version": "manual/M3-corpus-wave",
