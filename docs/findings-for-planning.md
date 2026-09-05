@@ -728,6 +728,26 @@ Entries name the milestone that surfaced them and the code they concern.
   a non-air block in its support direction would catch both; ships with the
   PLAN-D10 corpus wave.
 
+- **`xtask codegen` cannot run end to end against the real 26.2 data.**
+  `generate_registry_entries_rs`/`WORLDGEN_REGISTRIES` in
+  `xtask/src/datagen/codegen.rs` panics on `registries.json` (it expects
+  dynamic/datapack registry names such as `minecraft:banner_pattern` that the
+  file never carries), and its output `registry_entries.rs` is not referenced
+  by `crates/registries/generated/v776/mod.rs`. Stream B regenerated
+  `block_state_properties.rs` by calling the pure generator functions
+  directly and updated `MANIFEST.json` by hand. Planning: either delete the
+  dead worldgen-registry generator or make it tolerate the real file; until
+  then `verify-generated` is the only guard, and `codegen` is not a
+  reproducible step.
+- **Path guard protects all of `xtask/**` from implementation changesets,
+  including code generators.** MECH-D83's registry bridge needed a generator
+  change (`xtask/src/datagen/codegen.rs`) plus regenerated output; the guard
+  rejects the generator edit in an implementation commit, so the generator
+  landed in the test-authoring commit and its output in the implementation
+  commit. Planning: state in `09-testing-quality.md` which xtask paths are
+  verification tooling (protected) and which are build/codegen tooling
+  (implementation), or accept "generator in test-authoring" as the rule.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2422,6 +2442,24 @@ Entries name the milestone that surfaced them and the code they concern.
   the paused M3.5 harness worktree already re-geometries exactly these six —
   when it lands, the allowlist is removed and the six are recaptured.
 
+- **Sound seed is a fixed 0 (Stream B, MECH-D82).** Vanilla draws the
+  `sound` packet's seed from the level's dedicated sound RNG stream; no such
+  stream exists here and reusing the loot/drop stream would entangle two
+  independent vanilla streams. Closes with an `rc-rng` sound stream
+  (`M5-B01`'s RNG catalogue; add the stream there).
+- **Comparator click coverage uses a redstone block as side input**, not a
+  container with items (no container-click plumbing until M4-B09/menus);
+  the engine-level test proves the subtract path with a synthetic source.
+- **`runBlockEvents`' chunk-ticking gate is unmodelled.** Vanilla defers a
+  block event whose chunk is not currently ticking (`shouldTickBlocksAt`);
+  every event this engine queues is for an owned, ticking position, so the
+  branch is unreachable today. Becomes reachable with region borders under
+  load (M6) — note for the M6 blueprint.
+- **TEST-D59 register cannot annotate a body divergence per packet.** The
+  `moving_piston` block updates the oracle sends around a piston move have no
+  register entry (the schema has `steps, packet, class, closes_with, expires`
+  only); they close with the placeholder changeset instead.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
@@ -2511,3 +2549,12 @@ Entries name the milestone that surfaced them and the code they concern.
   and corrects the tests. Root cause: the planning row stated examples from
   memory instead of from the reference shapes — every future MECH row that
   names concrete block outcomes cites the shape it derives them from.
+
+- **`register_stage4`'s doc comment undercounted its resources** ("eight",
+  actually ten with `LightDirtyQueue` and the MECH-D83 outbox); corrected in
+  Stream B's implementation commit. Not a behaviour change.
+- **Stream B shipped MECH-D82/D83/D78 and the sound packet in one
+  test-authoring plus one implementation commit** instead of four pairs: the
+  use-dispatch context carries the sound outbox and the dual-cell resend's
+  outcome fields, so a split would have shipped a non-functional
+  intermediate state. Accepted; TEST-D45/D46 are satisfied per pair.
