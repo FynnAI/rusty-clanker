@@ -841,6 +841,17 @@ Entries name the milestone that surfaced them and the code they concern.
   verified exception list) before the M4-B07 acceptance harness compares
   light against the oracle.
 
+- **The protocol-diff session's survival dig is held by wall clock.** The
+  `session/dig_stone_survival` step holds the dig for 9 s of real time; vanilla
+  destroys stone by hand once `getDestroyProgress × (ticks + 1) ≥ 0.7`, i.e.
+  after 105 server ticks, so an oracle ticking below 12 TPS on a loaded machine
+  never finishes the block while our server does — the frozen capture showed
+  exactly that (oracle: two acks, no block change; ours: the `block_update`
+  every chunk watcher gets, the digger included, per the reference's chunk
+  change broadcast). The hold must count observed server ticks (world-age
+  advance in `set_time`), not seconds; until then the step's verdict is a
+  load artefact. Harness follow-up, M3.5-B03.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2662,6 +2673,22 @@ Entries name the milestone that surfaced them and the code they concern.
   M5 worldgen entry needs vanilla's neighbour-boundary-aware seeding (sources
   enqueued only where a neighbouring column's boundary is lower) as an M4-B07
   follow-up before the first generated chunk is lit.
+
+- **M4-B07's cross-chunk propagation deferral lost the edge semantics
+  (found when the engine was first wired into a real chunk grid).** Both
+  propagation steps deferred a cross-chunk neighbour as an entry AT the
+  neighbour carrying the origin's level; the receiving chunk processed it as a
+  fresh wave from that cell, so level-15 sky decreases bounced between border
+  cells forever (16 rounds every tick, 255 ms per tick on 225 chunks, the
+  server at ~4 TPS) and an increase wrote its level into an opaque border
+  block without the receiver's opacity or occlusion check. Closed forward by an
+  `M4-B07 field-report` changeset: deferred entries carry the origin
+  (position, level, light properties) and one direction, and the receiver
+  runs the ordinary neighbour evaluation with its own block data. Planning:
+  M4-B07 Context §5/§8 describe the deferral in the old shape and need the
+  matching correction; the B07 acceptance tests never ran a multi-chunk grid
+  through more than one tick — a converge-then-idle assertion belongs in the
+  M4-B09 harness.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
