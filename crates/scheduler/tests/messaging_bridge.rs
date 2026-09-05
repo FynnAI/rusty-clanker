@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
 use rc_messaging::{
-    Address, BorderUpdateEvent, BorderUpdateKind, Message, RegionId, RegionMessage,
+    Address, BorderUpdateEvent, BorderUpdateKind, Message, MobCensusReport, RegionId, RegionMessage,
 };
 use rc_scheduler::pool::RcWorkerPool;
 use rc_scheduler::{
-    BorderUpdateInbox, CurrentTick, DomainGroup, RcExecutorBuilder, RegionMessageOutbox,
-    SystemFactory,
+    BorderUpdateInbox, CurrentTick, DomainGroup, MobCensusInbox, RcExecutorBuilder,
+    RegionMessageOutbox, SystemFactory,
 };
 
 #[test]
@@ -175,4 +175,45 @@ fn current_tick_matches_region_tick_counter_at_stage1() {
     for (captured_tick, tick_counter_after) in observed_after_each_tick.lock().unwrap().iter() {
         assert_eq!(*captured_tick + 1, *tick_counter_after);
     }
+}
+
+/// M4-B04 acceptance test: mirrors `stage1_populates_border_inbox_from_transport_and_
+/// leaves_other_messages_in_message_state`'s own shape for `MobCensusInbox` (MECH-D35's
+/// own reception step) — two regions, `A` sends a `MobCensusReport` to `B`; after `B`'s
+/// next `tick_region`, `B`'s `MobCensusInbox` contains exactly that report; a second
+/// tick with no new send leaves it empty (replace, not append).
+#[test]
+fn mob_census_inbox_bridges_inbound_reports_at_stage1() {
+    let builder = RcExecutorBuilder::new(common::empty_bootstrap);
+    let executor = builder.build().expect("build should succeed");
+    let mut region_b = executor.spawn_region(RegionId(2));
+
+    let transport = common::MockTransport::new();
+
+    let report = MobCensusReport {
+        region: RegionId(1),
+        counts: [3, 0, 0, 0, 0, 0, 0],
+    };
+    transport.seed(
+        RegionId(2),
+        Message {
+            from: RegionId(1),
+            to: Address::Region(RegionId(2)),
+            tick_stamp: 0,
+            seq: 0,
+            payload: RegionMessage::MobCensusReport(report),
+        },
+    );
+
+    let pool = RcWorkerPool::new(1);
+    executor.tick_region(&mut region_b, &pool, &transport);
+
+    let inbox = region_b.world.resource::<MobCensusInbox>();
+    assert_eq!(inbox.0, vec![report]);
+
+    // A second tick with no new send leaves it empty -- replace, not append (mirrors
+    // `BorderUpdateInbox`'s own already-accepted "overwritten every tick" semantics).
+    executor.tick_region(&mut region_b, &pool, &transport);
+    let inbox = region_b.world.resource::<MobCensusInbox>();
+    assert!(inbox.0.is_empty());
 }

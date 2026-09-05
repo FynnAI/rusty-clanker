@@ -30,7 +30,8 @@ pub use lifecycle::{LifecycleOutcome, largest_connectivity_cut};
 pub use managed_region::ManagedRegion;
 pub use measurement::{RegionTickHistogram, SoakReport, SoakStatus};
 pub use messaging_bridge::{
-    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox, RegionTransferInbox,
+    BorderUpdateInbox, CurrentTick, LightBorderInbox, MobCensusInbox, RegionMessageOutbox,
+    RegionTransferInbox,
 };
 pub use pipeline::{DomainGroup, Stage};
 pub use region::RegionState;

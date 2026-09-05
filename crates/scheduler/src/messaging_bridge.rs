@@ -7,7 +7,8 @@
 
 use bevy_ecs::prelude::Resource;
 use rc_messaging::{
-    Address, BorderUpdateEvent, EntitySnapshot, LightBorderUpdate, RegionMessage, RegionMessageBus,
+    Address, BorderUpdateEvent, EntitySnapshot, LightBorderUpdate, MobCensusReport, RegionMessage,
+    RegionMessageBus,
 };
 
 /// This tick's inbound `BorderUpdateEvent` payloads, drained from `dyn Transport` at
@@ -28,6 +29,16 @@ pub struct BorderUpdateInbox(pub Vec<BorderUpdateEvent>);
 /// `RcExecutor::spawn_region`; overwritten (replace, not append) every tick.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct LightBorderInbox(pub Vec<LightBorderUpdate>);
+
+/// M4-B04: this tick's inbound `MobCensusReport` payloads (MECH-D35's cluster-safe
+/// census, reception step), drained at Stage 1 exactly as `BorderUpdateInbox`/
+/// `LightBorderInbox` already establish for their own payload types. Auto-inserted
+/// (empty) by `RcExecutor::spawn_region`; overwritten (replace, not append) every
+/// tick's Stage-1 step — an inbox not drained the same tick it arrives is lost, safe
+/// here because the Stage-5 spawn-cycle system that drains it runs later in the very
+/// same `tick_region` call that Stage 1 populated it.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct MobCensusInbox(pub Vec<MobCensusReport>);
 
 /// The in-`World`-reachable half of `RegionMessageBus` (Context: resolves M0-B02/M0-B05's
 /// explicitly-deferred "how does a running system send a `RegionMessage`" question). Any
