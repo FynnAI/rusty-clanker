@@ -610,9 +610,8 @@ fn build_tier1_table() -> ShapeTable {
     // vanilla never treats as conductors at all (M3 field-report finding, `docs/
     // findings-for-planning.md`'s own "wire own-state writeback attempt reverted" entry).
     let wire_range = range_of(block_id::REDSTONE_WIRE);
-    entries.extend(
-        (wire_range.first.0..=wire_range.last.0).map(|id| (id, flat(VoxelShape::empty()))),
-    );
+    entries
+        .extend((wire_range.first.0..=wire_range.last.0).map(|id| (id, flat(VoxelShape::empty()))));
 
     // `repeater`'s and `comparator`'s own *entire* reachable id ranges (M3 field-report fix,
     // Rule D depower correctness investigation: "repeater/comparator conductor
