@@ -2430,13 +2430,20 @@ Entries name the milestone that surfaced them and the code they concern.
   client's light stays stale until an unrelated `set_block` nearby. Closed in
   the PLAN-D10 wave as an `M4-B07 field-report` changeset (mark in
   `write_block_state` too; light emission is a property of the state alone).
-- **Moving-piston placeholder still unmodelled after MECH-D83.** The client
-  animates from the `block_event` and our final block updates arrive two
-  ticks later; vanilla additionally writes `moving_piston` states with block
-  entities at trigger time. Registered as a TEST-D59 `Missing` divergence for
-  the piston contraptions once the packet lands; closes with a future
-  blueprint that models the placeholder (none scheduled).
-
+- **RESOLVED — moving-piston placeholder modelled (M3 field-report changeset,
+  PLAN-D10).** `moving_piston` states now hold the two-tick window server-side
+  with vanilla's fan-out flags, sources vacate at accept, clients receive no
+  placeholder updates; the discriminating fixture (a pushed redstone block
+  beside wires) settles the timing against the oracle. Residuals for planning:
+  (1) a `moving_piston` cell whose side-table entry is gone (a chunk saved
+  mid-animation and reloaded) has no self-heal — vanilla has none either
+  beyond a right-click check; harmless until chunk saves land mid-animation,
+  then the loader should drop such cells; (2) the wire-level order inside one
+  tick is now `block_event` then that tick's block updates — vanilla sends the
+  tick's chunk changes before `runBlockEvents` and the piston's own source-air
+  updates in the next tick's batch; the protocol-differential harness decides
+  whether the difference is visible and, if so, the changed positions produced
+  during the block-event subphase move to the next tick's broadcast.
 - **RESOLVED — two-repeater loop clock latched at tick 7 (not a drift): the
   scheduled-tick dedup guard answered the opposite of vanilla in one window.**
   Vanilla keeps two structures: the chunk container's per-position set of
