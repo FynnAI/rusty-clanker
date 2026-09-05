@@ -2525,8 +2525,8 @@ Entries name the milestone that surfaced them and the code they concern.
   and skips `updateFromNeighbourShapes`; no fixture distinguishes the orders
   today — the harness should mirror `/setblock` exactly once a fixture does.
 
-- **Shape table stored outline shapes; every server-side consumer needs the
-  collision shape (M4-B10 author finding, fixed in this wave).** Vanilla's
+- **RESOLVED — the shape table carries collision shapes (M4-B10 author
+  finding; wire, both torches and the lever register empty shapes).** Vanilla's
   conductor test (`isCollisionShapeFullBlock`), the `SupportType` predicates
   (`getBlockSupportShape` defaults to the collision shape) and placement
   obstruction (`isUnobstructed`) all read the collision shape, which is EMPTY
