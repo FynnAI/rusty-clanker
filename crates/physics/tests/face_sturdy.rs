@@ -14,10 +14,15 @@
 //! all.
 //!
 //! Chest's own real support shape (`ChestBlock.SHAPE`, `Block.column(14,0,14)`) never reaches
-//! `y=1` either, yet vanilla still lets a torch/diode attach to its top (`docs/planning/
-//! 05-game-mechanics.md`'s own MECH-D84 row: "chests (torches and diodes stand on them, wire
-//! does not)") — `face_sturdy`'s own doc comment has the exact `Full`-vs-`Center`/`Rigid`
-//! distinction this requires.
+//! `y=1` (its own hitbox tops out at 14/16), so its top face shape is empty and vanilla lets
+//! nothing rest, stand, or attach there at all — `face_sturdy`'s own doc comment has the exact
+//! algorithm this falls out of.
+//!
+//! Hopper's own real rim (`HopperBlock`'s six-box outline minus the hollow scooped out of its
+//! own top, `crates/physics/src/shapes.rs`'s own `hopper_shape` doc comment has the full box
+//! citation) touches `y=1` only along its outer 2px border — exactly `Rigid`'s own required
+//! frame, and nothing more — so a hopper's top face reads `Rigid`-sturdy but neither `Full`-
+//! nor `Center`-sturdy.
 
 use rc_physics::{Face, SupportKind, tier1_shape_table};
 use rc_registries::block_state_properties::state_id;
@@ -66,70 +71,115 @@ fn extended_piston_base_is_never_a_full_cube_per_facing_orientation_case() {
 }
 
 #[test]
-fn extended_piston_base_top_face_full_false_for_horizontal_facings_orientation_case() {
+fn extended_piston_base_top_face_full_false_center_true_rigid_false_for_horizontal_facings_orientation_case()
+ {
     let table = tier1_shape_table();
     for facing in HORIZONTAL_FACINGS {
+        let id = piston_id(false, facing);
         assert!(
-            !table.is_face_sturdy(piston_id(false, facing), Face::Up, SupportKind::Full),
+            !table.is_face_sturdy(id, Face::Up, SupportKind::Full),
             "extended base facing={facing}: Y stays full (not the facing axis), but the \
              TOP face's own in-plane footprint (X,Z) is truncated on whichever of those two \
              axes the facing points along, so it must not read Full"
+        );
+        assert!(
+            table.is_face_sturdy(id, Face::Up, SupportKind::Center),
+            "extended base facing={facing}: the truncated footprint still spans past 0.75 or \
+             from 0.25, either way covering the centred 7/16..9/16 square — Center-sturdy"
+        );
+        assert!(
+            !table.is_face_sturdy(id, Face::Up, SupportKind::Rigid),
+            "extended base facing={facing}: the truncated footprint never reaches the far \
+             14/16..1 (or 0..2/16) strip of Rigid's own required outer frame — not Rigid-sturdy"
         );
     }
 }
 
 #[test]
-fn extended_piston_base_top_face_full_true_for_facing_down_nondefault_case() {
+fn extended_piston_base_top_face_full_center_rigid_all_true_for_facing_down_nondefault_case() {
     let table = tier1_shape_table();
-    assert!(
-        table.is_face_sturdy(piston_id(false, "down"), Face::Up, SupportKind::Full),
-        "facing=down: the missing slab sits at Y's negative end, so the top face (Y's \
-         positive end) is the untouched full [0,1]x[0,1] footprint"
-    );
+    let id = piston_id(false, "down");
+    for kind in ALL_KINDS {
+        assert!(
+            table.is_face_sturdy(id, Face::Up, kind),
+            "facing=down: the missing slab sits at Y's negative end, so the top face (Y's \
+             positive end) is the untouched full [0,1]x[0,1] footprint — sturdy for every kind \
+             (kind={kind:?})"
+        );
+    }
 }
 
 #[test]
-fn extended_piston_base_top_face_full_false_for_facing_up_nondefault_case() {
+fn extended_piston_base_top_face_full_center_rigid_all_false_for_facing_up_nondefault_case() {
     let table = tier1_shape_table();
-    assert!(
-        !table.is_face_sturdy(piston_id(false, "up"), Face::Up, SupportKind::Full),
-        "facing=up: the missing slab sits at Y's positive end, so no box reaches the literal \
-         top boundary at all — nothing can attach there"
-    );
+    let id = piston_id(false, "up");
+    for kind in ALL_KINDS {
+        assert!(
+            !table.is_face_sturdy(id, Face::Up, kind),
+            "facing=up: the missing slab sits at Y's positive end, so no box reaches the \
+             literal top boundary at all — the face shape is empty, so nothing can attach \
+             there for any kind (kind={kind:?})"
+        );
+    }
 }
 
 #[test]
-fn hopper_top_face_is_not_full_nondefault_case() {
+fn retracted_piston_base_top_face_full_center_rigid_all_true_composition_case() {
     let table = tier1_shape_table();
+    for sticky in [false, true] {
+        let block = if sticky {
+            block_id::STICKY_PISTON
+        } else {
+            block_id::PISTON
+        };
+        let id = state_id(block, &[("extended", "false"), ("facing", "north")])
+            .unwrap_or_else(|| panic!("retracted base sticky={sticky} must be legal"))
+            .0;
+        for kind in ALL_KINDS {
+            assert!(
+                table.is_face_sturdy(id, Face::Up, kind),
+                "a retracted base's own shape is a plain full cube — sturdy for every kind \
+                 (sticky={sticky}, kind={kind:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn hopper_top_face_full_false_center_false_rigid_true_nondefault_case() {
+    let table = tier1_shape_table();
+    let id = default_state::HOPPER.0;
     assert!(
-        !table.is_face_sturdy(default_state::HOPPER.0, Face::Up, SupportKind::Full),
+        !table.is_face_sturdy(id, Face::Up, SupportKind::Full),
         "hopper's real rim has a hollow scooped out of its center — the top face's own \
-         footprint is a ring, never the full unit square (MECH-D84: hoppers, unlike chests, \
-         support nothing standing on top of them)"
+         footprint is an outer border frame, never the full unit square"
+    );
+    assert!(
+        !table.is_face_sturdy(id, Face::Up, SupportKind::Center),
+        "the hollow scooped out of the rim's own top swallows the tiny 7/16..9/16 center \
+         square whole — a hopper's top is never Center-sturdy (unlike a chest's)"
+    );
+    assert!(
+        table.is_face_sturdy(id, Face::Up, SupportKind::Rigid),
+        "the rim's own outer border exactly matches Rigid's required outer frame (everything \
+         outside 2/16..14/16) — a repeater/comparator survives on a hopper"
     );
 }
 
 #[test]
-fn chest_top_face_full_false_center_true_rigid_true_nondefault_case() {
+fn chest_top_face_full_center_rigid_all_false_nondefault_case() {
     let table = tier1_shape_table();
     let id = state_id(block_id::CHEST, &[("facing", "north")])
         .expect("chest facing=north is legal")
         .0;
-    assert!(
-        !table.is_face_sturdy(id, Face::Up, SupportKind::Full),
-        "chest's own hitbox stops at 14/16 — never Full-sturdy (dust does not survive on a \
-         chest)"
-    );
-    assert!(
-        table.is_face_sturdy(id, Face::Up, SupportKind::Center),
-        "chest's own top footprint still covers the tiny 7/16..9/16 center square (a floor \
-         torch survives on a chest)"
-    );
-    assert!(
-        table.is_face_sturdy(id, Face::Up, SupportKind::Rigid),
-        "chest's own top footprint still covers the 2/16..14/16 square (a repeater/comparator \
-         survives on a chest)"
-    );
+    for kind in ALL_KINDS {
+        assert!(
+            !table.is_face_sturdy(id, Face::Up, kind),
+            "chest's own hitbox stops at 14/16 — its top face never reaches the literal y=1 \
+             boundary at all, so the face shape is empty and nothing can rest, stand, or \
+             attach on a chest for any kind (kind={kind:?})"
+        );
+    }
 }
 
 #[test]

@@ -69,6 +69,10 @@ fn repeater_id(facing: &str) -> BlockStateId {
     )
 }
 
+fn hopper_id() -> BlockStateId {
+    BlockStateId(default_state::HOPPER.0)
+}
+
 struct Harness {
     world: FakeWorld,
     engine: NeighborUpdateEngine,
@@ -204,7 +208,7 @@ fn wire_on_a_chest_pops_nondefault_case() {
 }
 
 #[test]
-fn floor_torch_on_a_chest_survives_nondefault_case() {
+fn floor_torch_on_a_chest_pops_nondefault_case() {
     let torch = Arc::new(TorchBehavior::new(TorchAttachment::Floor));
     torch.bind_registry(Arc::new(SignalSourceRegistry::new()));
     let mut h = Harness::new();
@@ -215,16 +219,39 @@ fn floor_torch_on_a_chest_survives_nondefault_case() {
     let result = torch.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
 
     // source: blocks.json
-    assert_ne!(
+    assert_eq!(
         result,
         Some(BlockStateId(0)),
-        "a floor torch needs only Center-sturdiness on its support's top face, and a chest's \
-         own top footprint still covers the tiny 7/16..9/16 center square"
+        "a floor torch needs Center-sturdiness on its support's top face, and a chest's own \
+         hitbox never reaches its own top boundary at all (its own top face shape is empty) — \
+         vanilla refuses torches on chests"
     );
 }
 
 #[test]
-fn repeater_on_a_chest_survives_nondefault_case() {
+fn floor_torch_on_an_extended_horizontal_piston_base_survives_nondefault_case() {
+    let torch = Arc::new(TorchBehavior::new(TorchAttachment::Floor));
+    torch.bind_registry(Arc::new(SignalSourceRegistry::new()));
+    let mut h = Harness::new();
+    let pos = BlockPos::new(0, 1, 0);
+    h.world
+        .set_block(Direction::Down.apply(pos), extended_piston_base_id("east"));
+
+    let mut ctx = h.ctx();
+    let result = torch.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
+
+    // source: blocks.json
+    assert_ne!(
+        result,
+        Some(BlockStateId(0)),
+        "a floor torch needs only Center-sturdiness on its support's top face, and an extended \
+         horizontal piston base's own truncated top footprint still covers the tiny \
+         7/16..9/16 center square"
+    );
+}
+
+#[test]
+fn repeater_on_a_chest_pops_nondefault_case() {
     let pos = BlockPos::new(0, 1, 0);
     let repeater = RepeaterBehavior::new();
     repeater.place(pos, Direction::North, 1);
@@ -238,10 +265,59 @@ fn repeater_on_a_chest_survives_nondefault_case() {
     repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
 
     // source: blocks.json
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "a repeater needs Rigid-sturdiness on its floor's top face, and a chest's own hitbox \
+         never reaches its own top boundary at all (its own top face shape is empty) — a \
+         repeater pops off a chest just as a wire does"
+    );
+}
+
+#[test]
+fn repeater_on_a_hopper_survives_nondefault_case() {
+    let pos = BlockPos::new(0, 1, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    let repeater = Arc::new(repeater);
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+    let mut h = Harness::new();
+    h.world.set_block(pos, repeater_id("north"));
+    h.world.set_block(Direction::Down.apply(pos), hopper_id());
+
+    let mut ctx = h.ctx();
+    repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    // source: blocks.json
     assert_ne!(
         h.world.get_block(pos),
         Some(BlockStateId(0)),
-        "a repeater needs only Rigid-sturdiness on its floor's top face, and a chest's own top \
-         footprint still covers the 2/16..14/16 square"
+        "a repeater needs only Rigid-sturdiness on its floor's top face, and a hopper's own \
+         rim exactly covers Rigid's required outer 2px border frame"
+    );
+}
+
+#[test]
+fn repeater_on_an_extended_horizontal_piston_base_pops_nondefault_case() {
+    let pos = BlockPos::new(0, 1, 0);
+    let repeater = RepeaterBehavior::new();
+    repeater.place(pos, Direction::North, 1);
+    let repeater = Arc::new(repeater);
+    repeater.bind_registry(Arc::new(SignalSourceRegistry::new()));
+    let mut h = Harness::new();
+    h.world.set_block(pos, repeater_id("north"));
+    h.world
+        .set_block(Direction::Down.apply(pos), extended_piston_base_id("east"));
+
+    let mut ctx = h.ctx();
+    repeater.on_neighbor_changed(&mut ctx, pos, Direction::East);
+
+    // source: blocks.json
+    assert_eq!(
+        h.world.get_block(pos),
+        Some(BlockStateId(0)),
+        "a repeater needs Rigid-sturdiness on its floor's top face, and an extended horizontal \
+         piston base's own truncated top footprint never reaches the far strip of Rigid's own \
+         required outer frame — the repeater pops"
     );
 }
