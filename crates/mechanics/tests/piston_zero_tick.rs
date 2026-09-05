@@ -20,7 +20,19 @@ use rc_messaging::{Address, RegionMessage};
 
 use support::{FakeWorld, TestSignalSource};
 
-const PISTON_ID: BlockStateId = BlockStateId(100);
+/// M3 field-report fix (MECH-D83, wave 3 Stream B): the real `minecraft:piston` id for
+/// `facing=east, extended=false` (`piston.rs`'s own `piston_state_id` doc comment: "2258
+/// extended / 2264 retracted") -- was an arbitrary placeholder (`BlockStateId(100)`) until
+/// `run_block_event_subphase`'s own new staleness gate (`doBlockEvent`'s own live-block-type
+/// re-check, compared via `block_of`) started resolving it against the REAL generated table:
+/// an arbitrary small id there resolves to whatever unrelated block occupies that raw
+/// number, making every event emitted against the initial (never-yet-committed) piston state
+/// spuriously "stale" the moment the first commit writes a REAL piston id back (`block_of`
+/// mismatch, two unrelated block types) -- exactly the scenario this file's own two-events-
+/// one-tick test exercises. A real id closes the gap; `register_range` below no longer needs
+/// its own separate placeholder-range registration either, since the real `[2258, 2265)`
+/// range (below) already covers this exact id.
+const PISTON_ID: BlockStateId = BlockStateId(2264);
 const SOURCE_ID: BlockStateId = BlockStateId(1);
 /// M3 field-report fix (Task 3): the real `minecraft:piston_head` id for `type=normal,
 /// facing=east, short=false` (`piston.rs`'s own `piston_head_id` doc comment has the full
@@ -165,18 +177,14 @@ fn setup() -> SetupResult {
         inner: Arc::clone(&piston),
         event_ids: Arc::clone(&event_ids),
     }) as Arc<dyn BlockBehavior>;
-    behaviors.register_range(
-        PISTON_ID,
-        BlockStateId(PISTON_ID.0 + 1),
-        Arc::clone(&logging_piston),
-    );
     // Own-state writeback (M3 field-report fix): once a commit writes this regular, facing=East
     // piston's own real id (2258 extended / 2264 retracted, `piston_state_id`'s own doc comment
     // in piston.rs) back into the world, a *later* block-event's own `block_state` (captured
-    // live at emit time, in `on_neighbor_changed`) reflects that real id instead of the
-    // placeholder-only `PISTON_ID` above -- `run_block_event_subphase`'s own dispatch needs it
-    // registered too, or a second commit's own TRIGGER_CONTRACT/TRIGGER_EXTEND event silently
-    // falls through to `NoOpBehavior`.
+    // live at emit time, in `on_neighbor_changed`) reflects that same real range --
+    // `run_block_event_subphase`'s own dispatch needs it registered, or a second commit's own
+    // TRIGGER_CONTRACT/TRIGGER_EXTEND event silently falls through to `NoOpBehavior`. `PISTON_ID`
+    // (2264, the initial retracted state) already falls inside this one real range, so a
+    // separate placeholder-range registration is no longer needed.
     behaviors.register_range(BlockStateId(2258), BlockStateId(2265), logging_piston);
 
     let mut h = Harness::new(behaviors);

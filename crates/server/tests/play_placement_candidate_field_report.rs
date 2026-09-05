@@ -24,7 +24,7 @@ use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     AcknowledgeBlockChange, BlockUpdate, ChunkBatchFinished, KeepAliveClientbound,
     KeepAliveServerbound, PLAYER_INPUT_SHIFT, PlayerInput, SetPlayerRotation, UseItemOn,
-    pack_position,
+    pack_position, unpack_position,
 };
 use rusty_clanker_server::play::{
     ChestType, HardcodedWorld, HeldItemStub, PlaceableBlockKind, PlayerProfile, chest_state_id,
@@ -190,8 +190,21 @@ async fn place_and_read_id(
         decode_one::<AcknowledgeBlockChange>(body).unwrap().sequence,
         *seq
     );
-    let body = recv_packet_of_type(actor, acc, BlockUpdate::ID).await;
-    decode_one::<BlockUpdate>(body).unwrap().block_state_id
+    // M3 field-report necessary exception (MECH-D78 -- `respond_place` now ALWAYS also
+    // resends the CLICKED cell's own live state to the actor first, ahead of the
+    // placement-direction cell's own value, on every outcome including a rejection --
+    // this helper's own historical "the first Block Update is the answer" assumption held
+    // only because a rejection used to send nothing but that one corrective update).
+    // Skips any Block Update whose own position is exactly the clicked `location`; the
+    // first one that is NOT is the placement-direction cell's own value, this helper's
+    // real, unchanged contract.
+    loop {
+        let body = recv_packet_of_type(actor, acc, BlockUpdate::ID).await;
+        let update = decode_one::<BlockUpdate>(body).unwrap();
+        if unpack_position(update.location) != location {
+            return update.block_state_id;
+        }
+    }
 }
 
 // Yaw values producing each cardinal `FACING`

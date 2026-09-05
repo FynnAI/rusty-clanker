@@ -558,6 +558,54 @@ pub fn generate_block_state_properties_rs(blocks: &BlocksReport) -> String {
     out
 }
 
+/// MECH-D83 (M3 field-report wave 3, Stream B): a bridging fragment appended onto
+/// `block_state_properties.rs`'s own emission (never its own separate file -- `generate`'s
+/// own call site concatenates this straight after `generate_block_state_properties_rs`'s own
+/// output for the identical filename) -- bridges the internal `BlockId` index (`block_id`
+/// module, `blocks`' own `BTreeMap` iteration order, alphabetical-by-full-name) to the wire
+/// `minecraft:block` registry's own protocol id (`registries.rs`'s own `block` module, real
+/// vanilla registration order) -- the `block_event` packet's own `block_state` field (MECH-
+/// D83's own row in `05-game-mechanics.md`) transmits THIS id, never the internal `BlockId`/
+/// `BlockStateId`. Kept as a plain `&[u32]` table (never `RegistryEntryId` -- that type lives
+/// in a sibling generated module, `registries.rs`, which this fragment must stay compilable
+/// without depending on: `xtask/tests/datagen_codegen.rs`'s own `generated_files_compile_
+/// standalone` case compiles `block_state_properties.rs` as a standalone two-module wrapper
+/// crate, `block_states`+`block_state_properties` only, no `registries` module at all) --
+/// `rc_registries::block_state_properties::wire_block_id`'s own hand-written wrapper converts
+/// to `RegistryEntryId` at the call site instead. A block name absent from the `minecraft:
+/// block` registry (never true for a real, complete report; only reachable from one of
+/// `xtask`'s own pre-existing minimal/degenerate test fixtures that exercises some *other*
+/// file's content, not this one) falls back to protocol id `0` rather than panicking, so this
+/// generator stays usable against every one of those pre-existing fixtures unchanged.
+pub fn generate_block_wire_id_table_rs(
+    registries: &RegistriesReport,
+    blocks: &BlocksReport,
+) -> String {
+    let block_registry = registries.get("minecraft:block");
+
+    let mut out = String::new();
+    out.push_str(
+        "\n/// MECH-D83: indexed by `BlockId.0`; length `block_states::BLOCK_TYPE_COUNT`. Each\n",
+    );
+    out.push_str(
+        "/// entry is the wire `minecraft:block` registry's own protocol id for that block --\n",
+    );
+    out.push_str(
+        "/// never the same number as `BlockId.0` itself. See `rc_registries::block_state_\n",
+    );
+    out.push_str("/// properties::wire_block_id` for the typed accessor.\n");
+    out.push_str("pub static BLOCK_WIRE_ID: &[u32] = &[\n");
+    for full_name in blocks.keys() {
+        let wire_id = block_registry
+            .and_then(|report| report.entries.get(full_name))
+            .map(|entry| entry.protocol_id)
+            .unwrap_or(0);
+        out.push_str(&format!("    {wire_id},\n"));
+    }
+    out.push_str("];\n");
+    out
+}
+
 /// Pure transform: `--reports` data in, generated Rust source out. No filesystem
 /// access. Deterministic per Context's four rules: parses/iterates only via `BTreeMap`
 /// (never `HashMap`), sorts registry entries by `protocol_id` explicitly, embeds no
@@ -567,6 +615,9 @@ pub fn generate_block_state_properties_rs(blocks: &BlocksReport) -> String {
 /// identical `GeneratedFiles::files` content — this is the property
 /// `output_is_independent_of_input_insertion_order` (Acceptance tests) checks.
 pub fn generate(registries: &RegistriesReport, blocks: &BlocksReport) -> GeneratedFiles {
+    let mut block_state_properties = generate_block_state_properties_rs(blocks);
+    block_state_properties.push_str(&generate_block_wire_id_table_rs(registries, blocks));
+
     GeneratedFiles {
         files: vec![
             (
@@ -583,7 +634,7 @@ pub fn generate(registries: &RegistriesReport, blocks: &BlocksReport) -> Generat
             ),
             (
                 "block_state_properties.rs".to_string(),
-                generate_block_state_properties_rs(blocks),
+                block_state_properties,
             ),
         ],
     }
