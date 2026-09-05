@@ -38,16 +38,38 @@ const EMPTY_LIST: &[SpawnerEntry] = &[];
 /// category besides `Monster`/`Creature` is correctly-accounted-for but permanently
 /// empty until a future blueprint's biome/mob-list work populates it.
 pub fn spawn_list(category: MobCategory) -> &'static [SpawnerEntry] {
-    let _ = category;
-    todo!()
+    match category {
+        MobCategory::Monster => MONSTER_LIST,
+        MobCategory::Creature => CREATURE_LIST,
+        MobCategory::Ambient
+        | MobCategory::Axolotls
+        | MobCategory::UndergroundWaterCreature
+        | MobCategory::WaterCreature
+        | MobCategory::WaterAmbient => EMPTY_LIST,
+        MobCategory::Misc => EMPTY_LIST,
+    }
 }
 
 /// Vanilla's `WeightedList::getRandom` (M4-B04-CLAIMS.md row 42): cumulative-weight
 /// linear scan over one `next_int_bounded(total_weight)` draw. `None` (0 RNG calls) iff
 /// `entries` is empty or every weight is zero.
 pub fn pick_weighted(entries: &[SpawnerEntry], rng: &mut RcRandom) -> Option<SpawnerEntry> {
-    let _ = (entries, rng);
-    todo!()
+    let total_weight: u32 = entries.iter().map(|entry| entry.weight).sum();
+    if total_weight == 0 {
+        return None;
+    }
+    let mut roll = rng.next_int_bounded(total_weight as i32) as u32;
+    for entry in entries {
+        if roll < entry.weight {
+            return Some(*entry);
+        }
+        roll -= entry.weight;
+    }
+    // Unreachable given `total_weight > 0` and `roll < total_weight` by construction
+    // (`next_int_bounded`'s own upper-exclusive contract) — every entry's weight was
+    // subtracted from `roll` in turn, so some entry must have satisfied `roll <
+    // entry.weight` before the loop exhausts the slice.
+    None
 }
 
 /// Zombie 20.0, Cow 10.0 (blueprint Context, moderate confidence, M4-B04-CLAIMS.md
@@ -55,6 +77,9 @@ pub fn pick_weighted(entries: &[SpawnerEntry], rng: &mut RcRandom) -> Option<Spa
 /// cycle (Scope boundary) and so never reach this function in production; the
 /// fallback below exists only so the function stays total over `EntityKind`.
 pub fn default_max_health(kind: EntityKind) -> f32 {
-    let _ = kind;
-    todo!()
+    match kind {
+        EntityKind::Zombie => 20.0,
+        EntityKind::Cow => 10.0,
+        EntityKind::Item | EntityKind::Villager => 20.0,
+    }
 }

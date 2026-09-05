@@ -21,8 +21,9 @@ pub const SPAWN_DISTANCE_BLOCKS: f64 = 128.0;
 /// identical 128-block rule between `LocalCapCounts` (below) and the production
 /// adapter's own `spawn_candidate_chunks` (`ecs.rs`) without duplicating the formula.
 pub(crate) fn is_within_spawn_distance(a: [f64; 3], b: [f64; 3]) -> bool {
-    let _ = (a, b);
-    todo!()
+    let dx = a[0] - b[0];
+    let dz = a[2] - b[2];
+    dx * dx + dz * dz < SPAWN_DISTANCE_BLOCKS * SPAWN_DISTANCE_BLOCKS
 }
 
 /// A chunk's own center column, `y` fixed at `0.0` (distance checks against it are
@@ -30,8 +31,11 @@ pub(crate) fn is_within_spawn_distance(a: [f64; 3], b: [f64; 3]) -> bool {
 /// own doc comment for why this lives here rather than in the blueprint's literal
 /// Deliverables list.
 pub(crate) fn chunk_center(chunk: ChunkKey) -> [f64; 3] {
-    let _ = chunk;
-    todo!()
+    [
+        chunk.x as f64 * 16.0 + 8.0,
+        0.0,
+        chunk.z as f64 * 16.0 + 8.0,
+    ]
 }
 
 /// `[u32; 7]`, category-indexed (`MobCategory::index()`), `Copy`/`Default`-able.
@@ -40,13 +44,11 @@ pub struct MobCategoryCounts(pub [u32; 7]);
 
 impl MobCategoryCounts {
     pub fn get(&self, category: MobCategory) -> u32 {
-        let _ = category;
-        todo!()
+        self.0[category.index()]
     }
 
     pub fn bump(&mut self, category: MobCategory) {
-        let _ = category;
-        todo!()
+        self.0[category.index()] += 1;
     }
 }
 
@@ -58,12 +60,11 @@ pub struct LocalCapCounts(HashMap<i32, MobCategoryCounts>);
 
 impl LocalCapCounts {
     pub fn new() -> Self {
-        todo!()
+        Self::default()
     }
 
     pub fn for_player(&self, network_entity_id: i32) -> MobCategoryCounts {
-        let _ = network_entity_id;
-        todo!()
+        self.0.get(&network_entity_id).copied().unwrap_or_default()
     }
 
     /// Bumps every one of `players` within `SPAWN_DISTANCE_BLOCKS` of `mob_pos`'s own
@@ -75,8 +76,11 @@ impl LocalCapCounts {
         mob_pos: [f64; 3],
         players: &[(i32, [f64; 3])],
     ) {
-        let _ = (category, mob_pos, players);
-        todo!()
+        for &(id, pos) in players {
+            if is_within_spawn_distance(mob_pos, pos) {
+                self.0.entry(id).or_default().bump(category);
+            }
+        }
     }
 
     /// `true` iff at least one of `players` within 128 blocks of `chunk_center` is
@@ -89,8 +93,10 @@ impl LocalCapCounts {
         chunk_center: [f64; 3],
         players: &[(i32, [f64; 3])],
     ) -> bool {
-        let _ = (category, chunk_center, players);
-        todo!()
+        players.iter().any(|&(id, pos)| {
+            is_within_spawn_distance(chunk_center, pos)
+                && self.for_player(id).get(category) < category.max_instances_per_chunk()
+        })
     }
 }
 
@@ -114,8 +120,13 @@ impl RegionCensusState {
         live_mobs: impl IntoIterator<Item = (MobCategory, [f64; 3])>,
         players: &[(i32, [f64; 3])],
     ) -> Self {
-        let _ = (live_mobs, players);
-        todo!()
+        let mut global = MobCategoryCounts::default();
+        let mut local = LocalCapCounts::default();
+        for (category, pos) in live_mobs {
+            global.bump(category);
+            local.bump_near(category, pos, players);
+        }
+        Self { global, local }
     }
 
     /// Live bookkeeping update as this tick's cycle spawns a mob (mirrors vanilla's own
@@ -126,8 +137,8 @@ impl RegionCensusState {
         pos: [f64; 3],
         players: &[(i32, [f64; 3])],
     ) {
-        let _ = (category, pos, players);
-        todo!()
+        self.global.bump(category);
+        self.local.bump_near(category, pos, players);
     }
 }
 
@@ -142,38 +153,43 @@ pub struct GlobalMobCensus {
 
 impl GlobalMobCensus {
     pub fn new(own_region: RegionId) -> Self {
-        let _ = own_region;
-        todo!()
+        Self {
+            own_region,
+            own_counts: MobCategoryCounts::default(),
+            peer_reports: HashMap::new(),
+        }
     }
 
     /// This region's own id — needed by the production adapter (`ecs.rs`) to fill
     /// `rc_messaging::MobCensusReport.region` on its own outgoing gossip emission.
     pub fn own_region(&self) -> RegionId {
-        todo!()
+        self.own_region
     }
 
     /// Refreshed every tick from this region's own `RegionCensusState.global` (always
     /// fresh — never stale for the local region itself).
     pub fn set_own_counts(&mut self, counts: MobCategoryCounts) {
-        let _ = counts;
-        todo!()
+        self.own_counts = counts;
     }
 
     /// Overwrites (not merges) `region`'s last-known counts — MECH-D35's own "sums the
     /// latest report per region" semantics.
     pub fn record_peer_report(&mut self, region: RegionId, counts: MobCategoryCounts) {
-        let _ = (region, counts);
-        todo!()
+        self.peer_reports.insert(region, counts);
     }
 
     /// This region's own live count plus every known peer's latest reported count.
     pub fn aggregate(&self, category: MobCategory) -> u32 {
-        let _ = category;
-        todo!()
+        self.own_counts.get(category)
+            + self
+                .peer_reports
+                .values()
+                .map(|counts| counts.get(category))
+                .sum::<u32>()
     }
 
     pub fn known_peer_count(&self) -> usize {
-        todo!()
+        self.peer_reports.len()
     }
 }
 
@@ -189,6 +205,6 @@ pub struct KnownRegionIds(pub Vec<RegionId>);
 /// `category.max_instances_per_chunk() * spawnable_chunk_count / 289`, floor division
 /// (blueprint Context, global-cap formula; M4-B04-CLAIMS.md row 20).
 pub fn global_cap(category: MobCategory, spawnable_chunk_count: u32) -> u32 {
-    let _ = (category, spawnable_chunk_count);
-    todo!()
+    category.max_instances_per_chunk() * spawnable_chunk_count
+        / MobCategory::global_cap_magic_number()
 }

@@ -19,9 +19,8 @@ pub struct DespawnTimer {
 /// flattened here to a per-kind table since this blueprint ships a fixed, closed kind
 /// set. Never called for `Item`/`Villager` — neither is naturally spawned by this
 /// blueprint, so neither ever carries a `MobCategoryTag`/`DespawnTimer`.
-pub fn remove_when_far_away_for_kind(kind: EntityKind) -> bool {
-    let _ = kind;
-    todo!()
+pub const fn remove_when_far_away_for_kind(kind: EntityKind) -> bool {
+    matches!(kind, EntityKind::Zombie)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -44,13 +43,36 @@ pub fn check_despawn(
     rng: &mut RcRandom,
     timer: &mut DespawnTimer,
 ) -> DespawnDecision {
-    let _ = (
-        persistence_required,
-        nearest_player_dist_sqr,
-        category,
-        remove_when_far_away,
-        rng,
-        timer,
-    );
-    todo!()
+    if persistence_required {
+        timer.no_action_ticks = 0;
+        return DespawnDecision::Keep;
+    }
+    let Some(dist_sqr) = nearest_player_dist_sqr else {
+        // No players loaded — no despawn logic runs (M4-B04-CLAIMS.md row 60).
+        return DespawnDecision::Keep;
+    };
+
+    let instant_dist_sqr = category.despawn_distance_blocks().powi(2);
+    if dist_sqr > instant_dist_sqr && remove_when_far_away {
+        return DespawnDecision::Despawn;
+    }
+
+    let no_despawn_dist_sqr = MobCategory::no_despawn_distance_blocks().powi(2);
+    // The roll is evaluated (and consumed) whenever `no_action_ticks > 600`,
+    // regardless of `remove_when_far_away`'s own value — Rust's left-to-right `&&`
+    // short-circuit only ever skips it when the timer conjunct itself is false
+    // (M4-B04-CLAIMS.md row 46's own restated evaluation order: timer, roll, distance,
+    // then `removeWhenFarAway`).
+    if timer.no_action_ticks > 600
+        && rng.next_int_bounded(800) == 0
+        && dist_sqr > no_despawn_dist_sqr
+        && remove_when_far_away
+    {
+        return DespawnDecision::Despawn;
+    }
+
+    if dist_sqr < no_despawn_dist_sqr {
+        timer.no_action_ticks = 0;
+    }
+    DespawnDecision::Keep
 }

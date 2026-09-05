@@ -102,8 +102,14 @@ struct EcsSpawnWorld<'w, 's> {
 
 impl<'w, 's> EcsSpawnWorld<'w, 's> {
     fn get_block_state(&self, pos: BlockPos) -> Option<rc_chunk_storage::BlockStateId> {
-        let _ = pos;
-        todo!()
+        if !(WORLD_MIN_Y..WORLD_MIN_Y + WORLD_HEIGHT).contains(&pos.y) {
+            return None;
+        }
+        let chunk_key = pos.chunk_key(self.dimension);
+        let entity = *self.chunk_index.0.get(&chunk_key)?;
+        let (_, column, _) = self.chunk_query.get(entity).ok()?;
+        let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+        Some(column.get(lx, pos.y, lz))
     }
 
     /// Mirrors `fluid::occlusion::is_full_cube`'s own established fluid-aware shape
@@ -114,13 +120,18 @@ impl<'w, 's> EcsSpawnWorld<'w, 's> {
     /// reusing that function directly, since it takes `&dyn BlockWorldAccess`, a
     /// different trait than `SpawnWorldAccess`.
     fn shape_at(&self, pos: BlockPos) -> VoxelShape {
-        let _ = pos;
-        todo!()
+        match self.get_block_state(pos) {
+            Some(id) if self.fluid_tables.ranges.kind_of(id).is_some() => VoxelShape::empty(),
+            Some(id) => self.shape_table.lookup(id.0).shape,
+            None => VoxelShape::full_cube(),
+        }
     }
 
     fn light_column_at(&self, pos: BlockPos) -> Option<&LightColumn> {
-        let _ = pos;
-        todo!()
+        let chunk_key = pos.chunk_key(self.dimension);
+        let entity = *self.chunk_index.0.get(&chunk_key)?;
+        let (_, _, light) = self.chunk_query.get(entity).ok()?;
+        Some(light)
     }
 
     /// `0` when the position's own chunk is unloaded or (defensively) carries no
@@ -132,51 +143,83 @@ impl<'w, 's> EcsSpawnWorld<'w, 's> {
     /// fix, restated here since it makes the Monster darkness gate trivially permissive
     /// (final report has the full citation).
     fn light_at(&self, pos: BlockPos, sky: bool) -> u8 {
-        let _ = (pos, sky);
-        todo!()
+        let Some(light) = self.light_column_at(pos) else {
+            return 0;
+        };
+        let section_index = light_section_index_for_y(pos.y);
+        let local_y = light_local_y(pos.y);
+        let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+        let index = light_nibble_index(lx, local_y, lz);
+        let section = light.section(section_index);
+        let nibbles = if sky { &section.sky } else { &section.block };
+        nibble_at(nibbles, index)
     }
 }
 
 impl<'w, 's> SpawnWorldAccess for EcsSpawnWorld<'w, 's> {
     fn min_y(&self) -> i32 {
-        todo!()
+        WORLD_MIN_Y
     }
 
     fn topmost_non_air_y(&self, x: i32, z: i32) -> i32 {
-        let _ = (x, z);
-        todo!()
+        let chunk_key = ChunkKey::new(self.dimension, x >> 4, z >> 4);
+        let Some(&entity) = self.chunk_index.0.get(&chunk_key) else {
+            return WORLD_MIN_Y - 1;
+        };
+        let Ok((_, column, _)) = self.chunk_query.get(entity) else {
+            return WORLD_MIN_Y - 1;
+        };
+        let (lx, lz) = (x.rem_euclid(16) as u8, z.rem_euclid(16) as u8);
+        // `rc_registries`' generated `BlockStateId` and `rc_chunk_storage::BlockStateId`
+        // are distinct newtypes over the identical raw `u32` space (`to_storage_id`'s
+        // own doc comment, `rusty-clanker-server::play::block_action`) — compared here
+        // via the raw field rather than pulling that server-crate-only bridge function
+        // into `rc-mechanics`.
+        for y in (WORLD_MIN_Y..WORLD_MIN_Y + WORLD_HEIGHT).rev() {
+            if column.get(lx, y, lz).0 != AIR.0 {
+                return y;
+            }
+        }
+        WORLD_MIN_Y - 1
     }
 
     fn is_full_opaque_cube(&self, pos: BlockPos) -> bool {
-        let _ = pos;
-        todo!()
+        self.shape_at(pos) == VoxelShape::full_cube()
     }
 
     fn has_fluid(&self, pos: BlockPos) -> bool {
-        let _ = pos;
-        todo!()
+        match self.get_block_state(pos) {
+            Some(id) => self.fluid_tables.ranges.kind_of(id).is_some(),
+            None => false,
+        }
     }
 
     fn sky_light(&self, pos: BlockPos) -> u8 {
-        let _ = pos;
-        todo!()
+        self.light_at(pos, true)
     }
 
     fn block_light(&self, pos: BlockPos) -> u8 {
-        let _ = pos;
-        todo!()
+        self.light_at(pos, false)
     }
 
     fn sky_darken(&self) -> i32 {
-        todo!()
+        0
     }
 
     fn spawn_candidate_chunks(&self) -> Vec<ChunkKey> {
-        todo!()
+        self.chunk_query
+            .iter()
+            .map(|(tag, _, _)| tag.0)
+            .filter(|key| {
+                self.players
+                    .iter()
+                    .any(|&(_, pos)| is_within_spawn_distance(chunk_center(*key), pos))
+            })
+            .collect()
     }
 
     fn players(&self) -> Vec<(i32, [f64; 3])> {
-        todo!()
+        self.players.clone()
     }
 
     fn spawn_mob(
@@ -188,8 +231,16 @@ impl<'w, 's> SpawnWorldAccess for EcsSpawnWorld<'w, 's> {
         marker: MobMarker,
         category: MobCategory,
     ) {
-        let _ = (base, living, payload, marker, category);
-        todo!()
+        let mut entity_commands = self.commands.spawn((
+            base,
+            marker,
+            MobCategoryTag(category),
+            DespawnTimer::default(),
+        ));
+        entity_commands.insert(payload);
+        if let Some(living) = living {
+            entity_commands.insert(living);
+        }
     }
 }
 
@@ -200,12 +251,14 @@ impl<'w, 's> SpawnWorldAccess for EcsSpawnWorld<'w, 's> {
 /// the two systems are conflict-free either way (disjoint `Query`/`Commands` access
 /// sets), so the exact `order_tag` value carries no behavioral consequence.
 pub fn register_mob_spawn_cycle(builder: &mut RcExecutorBuilder) {
-    let _ = builder;
-    todo!()
+    builder.register_system(DomainGroup::RandomTick, mob_spawn_cycle_factory(), vec![]);
 }
 
 fn mob_spawn_cycle_factory() -> SystemFactory {
-    todo!()
+    Box::new(|| {
+        Box::new(IntoSystem::into_system(system_mob_spawn_cycle))
+            as Box<dyn System<In = (), Out = ()>>
+    })
 }
 
 /// Registers `system_mob_despawn` into `DomainGroup::EntityPhysicsIntegration` (blueprint
@@ -215,12 +268,17 @@ fn mob_spawn_cycle_factory() -> SystemFactory {
 /// three-way order across this function, `register_stage6b`, and M4-B05's own mob-combat
 /// registration function.
 pub fn register_mob_despawn(builder: &mut RcExecutorBuilder) {
-    let _ = builder;
-    todo!()
+    builder.register_system(
+        DomainGroup::EntityPhysicsIntegration,
+        mob_despawn_factory(),
+        vec![],
+    );
 }
 
 fn mob_despawn_factory() -> SystemFactory {
-    todo!()
+    Box::new(|| {
+        Box::new(IntoSystem::into_system(system_mob_despawn)) as Box<dyn System<In = (), Out = ()>>
+    })
 }
 
 // `structural_writes: vec![]` on both registration functions above (blueprint Context's
@@ -245,8 +303,11 @@ fn mob_despawn_factory() -> SystemFactory {
 /// convention). `SpawnCycleRandom`'s seed is caller-supplied — never vanilla's own
 /// time-seeded stream (blueprint Constraints).
 pub fn bootstrap_spawn_resources(world: &mut World, region_id: RegionId, spawn_rng_seed: i64) {
-    let _ = (world, region_id, spawn_rng_seed);
-    todo!()
+    world.insert_resource(SpawnCycleRandom::new(spawn_rng_seed));
+    world.insert_resource(RegionCensusState::default());
+    world.insert_resource(GlobalMobCensus::new(region_id));
+    world.insert_resource(KnownRegionIds::default());
+    world.insert_resource(KnownPlayers::default());
 }
 
 /// The Stage-5 spawn-cycle system (blueprint Context, Implementation step 9): drains
@@ -282,24 +343,61 @@ fn system_mob_spawn_cycle(
     mut outbox: ResMut<RegionMessageOutbox>,
     commands: Commands,
 ) {
-    let _ = (
-        live_mob_query,
+    for report in inbox.0.drain(..) {
+        global_census.record_peer_report(report.region, MobCategoryCounts(report.counts));
+    }
+
+    let players = known_players.0.clone();
+    let live_mobs = live_mob_query
+        .iter()
+        .filter(|(_, _, marker)| !marker.persistence_required)
+        .map(|(tag, base, _)| (tag.0, base.pos));
+    *census = RegionCensusState::build(live_mobs, &players);
+    global_census.set_own_counts(census.global);
+
+    let mut world = EcsSpawnWorld {
         chunk_query,
-        chunk_index,
-        shape_table,
-        fluid_tables,
-        dimension,
-        known_players,
-        known_regions,
-        current_tick,
-        &mut spawn_rng,
-        &mut census,
-        &mut global_census,
-        &mut inbox,
-        &mut outbox,
+        chunk_index: &chunk_index,
+        dimension: dimension.0,
+        shape_table: shape_table.0,
+        fluid_tables: &fluid_tables,
+        players: players.clone(),
         commands,
-    );
-    todo!()
+    };
+
+    let eligible_chunk_count = world.spawn_candidate_chunks().len() as u32;
+
+    {
+        let global_census_ref = &*global_census;
+        let global_cap_ok = |category: MobCategory| {
+            global_census_ref.aggregate(category) < global_cap(category, eligible_chunk_count)
+        };
+        run_spawn_cycle(
+            &mut world,
+            &mut spawn_rng.0,
+            &mut census,
+            global_cap_ok,
+            current_tick.0,
+        );
+    }
+
+    global_census.set_own_counts(census.global);
+
+    if current_tick.0.is_multiple_of(20) {
+        let own_region = global_census.own_region();
+        let report = MobCensusReport {
+            region: own_region,
+            counts: census.global.0,
+        };
+        for &peer in &known_regions.0 {
+            if peer != own_region {
+                outbox.send(
+                    Address::Region(peer),
+                    RegionMessage::MobCensusReport(report),
+                );
+            }
+        }
+    }
 }
 
 /// The Stage-6b despawn system (blueprint Context, Implementation step 9): iterates
@@ -319,6 +417,20 @@ fn system_mob_despawn(
     mut spawn_rng: ResMut<SpawnCycleRandom>,
     mut commands: Commands,
 ) {
-    let _ = (&mut query, known_players, &mut spawn_rng, &mut commands);
-    todo!()
+    let players = &known_players.0;
+    for (entity, base, tag, marker, payload, mut timer) in query.iter_mut() {
+        let dist_sqr = nearest_player_dist_sqr(players, base.pos);
+        let remove_when_far_away = remove_when_far_away_for_kind(payload.kind());
+        let decision = check_despawn(
+            marker.persistence_required,
+            dist_sqr,
+            tag.0,
+            remove_when_far_away,
+            &mut spawn_rng.0,
+            &mut timer,
+        );
+        if decision == DespawnDecision::Despawn {
+            commands.entity(entity).despawn();
+        }
+    }
 }

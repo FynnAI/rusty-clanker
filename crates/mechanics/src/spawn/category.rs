@@ -49,40 +49,85 @@ impl MobCategory {
     /// inside a `const fn` body (`E0015`), and every accessor below shares the same
     /// constraint for the identical reason.
     pub fn index(self) -> usize {
-        todo!()
+        match self {
+            MobCategory::Monster => 0,
+            MobCategory::Creature => 1,
+            MobCategory::Ambient => 2,
+            MobCategory::Axolotls => 3,
+            MobCategory::UndergroundWaterCreature => 4,
+            MobCategory::WaterCreature => 5,
+            MobCategory::WaterAmbient => 6,
+            MobCategory::Misc => unreachable!("MobCategory::Misc has no census index"),
+        }
     }
 
     /// M4-B04-CLAIMS.md rows 10-16 (constructor parameter order `name,
     /// debugAbbreviation, max, isFriendly, isPersistent, despawnDistance`).
     pub fn max_instances_per_chunk(self) -> u32 {
-        todo!()
+        match self {
+            MobCategory::Monster => 70,
+            MobCategory::Creature => 10,
+            MobCategory::Ambient => 15,
+            MobCategory::Axolotls => 5,
+            MobCategory::UndergroundWaterCreature => 5,
+            MobCategory::WaterCreature => 5,
+            MobCategory::WaterAmbient => 20,
+            MobCategory::Misc => unreachable!("MobCategory::Misc is never spawn-capped"),
+        }
     }
 
     pub fn is_friendly(self) -> bool {
-        todo!()
+        match self {
+            MobCategory::Monster => false,
+            MobCategory::Creature
+            | MobCategory::Ambient
+            | MobCategory::Axolotls
+            | MobCategory::UndergroundWaterCreature
+            | MobCategory::WaterCreature
+            | MobCategory::WaterAmbient => true,
+            MobCategory::Misc => unreachable!("MobCategory::Misc is never spawn-capped"),
+        }
     }
 
     /// `Creature` is the only `isPersistent == true` capped category (M4-B04-CLAIMS.md
     /// row 16's own correction: `WaterAmbient` is **not** persistent, contrary to the
     /// blueprint's own uncorrected table).
     pub fn is_persistent(self) -> bool {
-        todo!()
+        match self {
+            MobCategory::Creature => true,
+            MobCategory::Monster
+            | MobCategory::Ambient
+            | MobCategory::Axolotls
+            | MobCategory::UndergroundWaterCreature
+            | MobCategory::WaterCreature
+            | MobCategory::WaterAmbient => false,
+            MobCategory::Misc => unreachable!("MobCategory::Misc is never spawn-capped"),
+        }
     }
 
     pub fn despawn_distance_blocks(self) -> f64 {
-        todo!()
+        match self {
+            MobCategory::WaterAmbient => 64.0,
+            MobCategory::Monster
+            | MobCategory::Creature
+            | MobCategory::Ambient
+            | MobCategory::Axolotls
+            | MobCategory::UndergroundWaterCreature
+            | MobCategory::WaterCreature => 128.0,
+            MobCategory::Misc => unreachable!("MobCategory::Misc is never spawn-capped"),
+        }
     }
 
     /// `32.0` for every category — a category-independent constant, not a per-variant
     /// field (M4-B04-CLAIMS.md row 17: vanilla's own getter is hardcoded, never reading
     /// the per-instance field of the same name).
-    pub fn no_despawn_distance_blocks() -> f64 {
-        todo!()
+    pub const fn no_despawn_distance_blocks() -> f64 {
+        32.0
     }
 
     /// `17^2 = 289` (M4-B04-CLAIMS.md row 21).
-    pub fn global_cap_magic_number() -> u32 {
-        todo!()
+    pub const fn global_cap_magic_number() -> u32 {
+        289
     }
 }
 
@@ -93,7 +138,11 @@ impl MobCategory {
 /// `MISC`, not `Creature`). `Misc` is never a member of `MobCategory::ALL`, so natural
 /// spawning skips every `Misc`-category kind automatically, with no separate exclusion
 /// check needed anywhere this function's result is consumed.
-pub fn mob_category_for_kind(kind: EntityKind) -> Option<MobCategory> {
-    let _ = kind;
-    todo!()
+pub const fn mob_category_for_kind(kind: EntityKind) -> Option<MobCategory> {
+    match kind {
+        EntityKind::Item => None,
+        EntityKind::Zombie => Some(MobCategory::Monster),
+        EntityKind::Villager => Some(MobCategory::Misc),
+        EntityKind::Cow => Some(MobCategory::Creature),
+    }
 }
