@@ -8,7 +8,8 @@ use bevy_ecs::world::World;
 
 use crate::access::ComponentAccessSummary;
 use crate::messaging_bridge::{
-    BorderUpdateInbox, CurrentTick, LightBorderInbox, RegionMessageOutbox, RegionTransferInbox,
+    BorderUpdateInbox, CurrentTick, LightBorderInbox, MobCensusInbox, RegionMessageOutbox,
+    RegionTransferInbox,
 };
 use crate::pipeline::DomainGroup;
 use crate::pool::RcWorkerPool;
@@ -157,6 +158,8 @@ impl RcExecutor {
         world.insert_resource(LightBorderInbox::default());
         // M4-B08 (Context, Part 1.2): mirrors the resources above exactly.
         world.insert_resource(RegionTransferInbox::default());
+        // M4-B04: mirrors the same pattern for MECH-D35's own inbound census reports.
+        world.insert_resource(MobCensusInbox::default());
 
         RegionState {
             id,
@@ -207,6 +210,15 @@ impl RcExecutor {
             .iter()
             .filter_map(|m| match m {
                 RegionMessage::LightBorderUpdate(ev) => Some((**ev).clone()),
+                _ => None,
+            })
+            .collect();
+        // M4-B04: the same already-drained `inbound` batch, no second drain call
+        // (MECH-D35's own reception step).
+        region.world.resource_mut::<MobCensusInbox>().0 = inbound
+            .iter()
+            .filter_map(|m| match m {
+                RegionMessage::MobCensusReport(ev) => Some(*ev),
                 _ => None,
             })
             .collect();
