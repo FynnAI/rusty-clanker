@@ -193,6 +193,61 @@ async fn collect_block_updates_at(
     seen
 }
 
+/// M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): `collect_block_updates_
+/// at`'s own early-exit ("return as soon as every wanted position has SOME value") is now
+/// unsafe for a piston's own head/base cell -- vanilla writes the `moving_piston` placeholder
+/// there immediately, at accept time, and only replaces it with the real settled content two
+/// ticks later (`crates/mechanics/src/redstone/piston.rs`'s own `write_extend_placeholders`/
+/// `apply_retract_content` doc comments). The early exit would return the moment the
+/// (still-transient) placeholder arrives, never waiting for the real final content that follows
+/// it. This variant instead always listens for the ENTIRE `window`, keeping only the LAST value
+/// seen per position (a `HashMap` insert already overwrites) -- generous enough for every piston
+/// caller here (2500ms against a handful-of-ticks settle time), just slower than the early-exit
+/// original. Used only by this file's own two piston tests below; every other `collect_block_
+/// updates_at` call site in this file is unaffected by the moving_piston placeholder and keeps
+/// the faster early-exit original unchanged.
+async fn collect_settled_block_updates_at(
+    socket: &mut TcpStream,
+    accumulator: &mut BytesMut,
+    wanted: &[BlockPos],
+    window: Duration,
+) -> std::collections::HashMap<BlockPos, i32> {
+    let mut seen = std::collections::HashMap::new();
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return seen;
+        }
+        match tokio::time::timeout(remaining, recv_clientbound(socket, accumulator)).await {
+            Ok((id, body)) if id == BlockUpdate::ID => {
+                let update = decode_one::<BlockUpdate>(body).unwrap();
+                let pos = unpack_position(update.location);
+                if wanted.contains(&pos) {
+                    seen.insert(pos, update.block_state_id);
+                }
+            }
+            Ok((id, body)) if id == SectionBlocksUpdate::ID => {
+                let packet = decode_one::<SectionBlocksUpdate>(body).unwrap();
+                let (chunk_x, section_y, chunk_z) = unpack_section_position(packet.section_pos);
+                for entry in packet.states {
+                    let (state_id, local_x, local_z, local_y) = unpack_block_in_section(entry);
+                    let pos = BlockPos::new(
+                        chunk_x * 16 + local_x as i32,
+                        section_y * 16 + local_y as i32,
+                        chunk_z * 16 + local_z as i32,
+                    );
+                    if wanted.contains(&pos) {
+                        seen.insert(pos, state_id as i32);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(_) => return seen,
+        }
+    }
+}
+
 /// Reads and discards every clientbound packet arriving on `socket` for `window`, auto-
 /// answering keep-alives along the way -- used to fully settle a bystander's own traffic
 /// between two placements. Not a "drain exactly one packet" step: `world.rs`'s own
@@ -893,7 +948,7 @@ async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_t
         let seen = staged(
             "piston extends via an adjacent torch, no further player action",
             Duration::from_secs(5),
-            collect_block_updates_at(
+            collect_settled_block_updates_at(
                 &mut b,
                 &mut b_acc,
                 &[piston_pos, head_pos],
@@ -945,7 +1000,7 @@ async fn a_piston_placed_by_a_real_player_extends_and_retracts_via_an_adjacent_t
         let seen = staged(
             "piston retracts once its power source is broken, no further player action",
             Duration::from_secs(5),
-            collect_block_updates_at(
+            collect_settled_block_updates_at(
                 &mut b,
                 &mut b_acc,
                 &[piston_pos, head_pos],
@@ -1029,7 +1084,7 @@ async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract
         let seen = staged(
             "sticky piston extends via an adjacent torch, no further player action",
             Duration::from_secs(5),
-            collect_block_updates_at(
+            collect_settled_block_updates_at(
                 &mut b,
                 &mut b_acc,
                 &[piston_pos, head_pos],
@@ -1088,7 +1143,7 @@ async fn a_sticky_piston_placed_by_a_real_player_pulls_the_block_back_on_retract
             "sticky piston pulls the stone back once its power source is broken, no further \
              player action",
             Duration::from_secs(5),
-            collect_block_updates_at(
+            collect_settled_block_updates_at(
                 &mut b,
                 &mut b_acc,
                 &[candidate_pos, head_pos, piston_pos],

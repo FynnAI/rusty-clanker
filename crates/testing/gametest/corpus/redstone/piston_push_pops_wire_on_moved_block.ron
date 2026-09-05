@@ -1,0 +1,23 @@
+// M3 field-report corpus wave 3 (PLAN-D10, moving_piston placeholder) — promoted from the
+// withheld Stream A draft (`docs/findings-for-planning.md`'s own "moving_piston placeholder:
+// now a measured parity divergence" entry): a horizontally-facing piston pushes a single stone
+// block one cell forward; a redstone wire rests on top of that stone block, directly above the
+// cell the piston's own arm lands in. The pushed stone's old cell becomes `moving_piston`
+// (`MovingPistonBlock.getShape` — `Shapes.empty()`, unconditionally, MECH-D84), so the wire
+// loses its own top-face support and must pop the SAME tick the extend accepts (not two ticks
+// later, when the structural commit used to be the only write this engine ever made there).
+ContraptionSpec(
+    id: "redstone/piston/piston_push_pops_wire_on_moved_block",
+    category: PulseGenerator,
+    description: "A horizontally-facing piston (facing=east) pushes a single stone block one cell forward; a redstone wire rests on top of that stone block, directly above the cell the piston's own arm lands in. The pushed stone's old cell becomes moving_piston (MovingPistonBlock.getShape — Shapes.empty(), never a full top face), so the wire loses its own top-face support and must pop the same tick the extend accepts.",
+    quirk: "Regression lock for the 'wire on the block the piston pushes' half of Finding 6 (docs/findings-for-planning.md) — the moving_piston placeholder now models the same-tick support loss directly, closing the divergence the withheld draft measured against the real oracle.",
+    max_ticks: 10,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:piston[facing=east,extended=false]", state_id: 2264),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 0), vanilla_state: "minecraft:redstone_wire[east=side,north=side,power=0,south=side,west=side]", state_id: 4591),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 0, -1), vanilla_state: "minecraft:redstone_block", state_id: 11311),
+    ],
+)

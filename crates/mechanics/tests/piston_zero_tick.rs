@@ -65,6 +65,14 @@ impl BlockBehavior for EventLoggingWrapper {
         self.event_ids.lock().unwrap().push(event.event_id);
         self.inner.on_block_event(ctx, pos, event);
     }
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): forwards to
+    // `self.inner` -- without this override, the trait's own default no-op would silently
+    // swallow `PistonBehavior::on_after_drain`'s own placeholder-revert step, since dispatch
+    // resolves THIS wrapper (never `self.inner` directly) for every id this suite registers it
+    // under.
+    fn on_after_drain(&self, ctx: &mut UpdateContext, pos: BlockPos) {
+        self.inner.on_after_drain(ctx, pos);
+    }
 }
 
 struct Harness {
@@ -185,6 +193,23 @@ fn setup() -> SetupResult {
     // TRIGGER_CONTRACT/TRIGGER_EXTEND event silently falls through to `NoOpBehavior`. `PISTON_ID`
     // (2264, the initial retracted state) already falls inside this one real range, so a
     // separate placeholder-range registration is no longer needed.
+    //
+    // M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): a retract's own
+    // deferred commit fires at the piston's own base position, which now holds the
+    // `moving_piston` placeholder for the whole 2-tick window between accept and commit --
+    // `dispatch_scheduled_tick` resolves the behavior to call from that position's own LIVE
+    // block state, so the full real `moving_piston` range must ALSO route to this same
+    // `logging_piston` (mirrors `register_piston`'s own production registration,
+    // `crates/mechanics/src/redstone/piston.rs`'s own `PistonStateIds` doc comment has the full
+    // citation).
+    let moving_piston_range = rc_registries::block_state_properties::range_of(
+        rc_registries::generated_v776::block_state_properties::block_id::MOVING_PISTON,
+    );
+    behaviors.register_range(
+        BlockStateId(moving_piston_range.first.0),
+        BlockStateId(moving_piston_range.last.0 + 1),
+        Arc::clone(&logging_piston),
+    );
     behaviors.register_range(BlockStateId(2258), BlockStateId(2265), logging_piston);
 
     let mut h = Harness::new(behaviors);

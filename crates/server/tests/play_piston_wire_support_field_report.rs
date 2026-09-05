@@ -134,7 +134,17 @@ fn unpack_block_in_section(entry: VarLong) -> (u32, u8, u8, u8) {
     (state_id, local_x, local_z, local_y)
 }
 
-async fn collect_block_updates_at(
+/// M3 field-report test-authoring (PLAN-D10, moving_piston placeholder): `collect_block_updates_
+/// at`'s own early-exit ("return as soon as every wanted position has SOME value") is now
+/// unsafe for a piston's own head cell -- vanilla writes the `moving_piston` placeholder there
+/// immediately, at accept time, and only replaces it with the real settled content two ticks
+/// later (`crates/mechanics/src/redstone/piston.rs`'s own `write_extend_placeholders` doc
+/// comment). The early exit would return the moment the (still-transient) placeholder arrives,
+/// never waiting for the real final content that follows it. This variant instead always
+/// listens for the ENTIRE `window`, keeping only the LAST value seen per position (a `HashMap`
+/// insert already overwrites) -- generous enough for every caller here (2500ms against a
+/// handful-of-ticks settle time), just slower than the early-exit original.
+async fn collect_settled_block_updates_at(
     socket: &mut TcpStream,
     accumulator: &mut BytesMut,
     wanted: &[BlockPos],
@@ -142,10 +152,10 @@ async fn collect_block_updates_at(
 ) -> std::collections::HashMap<BlockPos, i32> {
     let mut seen = std::collections::HashMap::new();
     let deadline = tokio::time::Instant::now() + window;
-    while seen.len() < wanted.len() {
+    loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            break;
+            return seen;
         }
         match tokio::time::timeout(remaining, recv_clientbound(socket, accumulator)).await {
             Ok((id, body)) if id == BlockUpdate::ID => {
@@ -171,10 +181,9 @@ async fn collect_block_updates_at(
                 }
             }
             Ok(_) => {}
-            Err(_) => break,
+            Err(_) => return seen,
         }
     }
-    seen
 }
 
 async fn drain_traffic_for(socket: &mut TcpStream, accumulator: &mut BytesMut, window: Duration) {
@@ -345,7 +354,7 @@ async fn a_piston_extending_pops_wire_resting_on_its_own_base_nondefault_case() 
         let seen = staged(
             "piston extends and the wire above it pops, no further player action",
             Duration::from_secs(5),
-            collect_block_updates_at(
+            collect_settled_block_updates_at(
                 &mut b,
                 &mut b_acc,
                 &[piston_pos, head_pos, wire_pos],

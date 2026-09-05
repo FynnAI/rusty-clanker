@@ -135,6 +135,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "piston_push_pops_wire_on_moved_block.ron",
+      "sha256": "cfb0bd2c1dbf331eafa6aa76b64c049919425ced9e8c2c3c68d4eb4e2538fc81",
+      "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "piston_quasi_connectivity_trigger.ron",
       "sha256": "5d3a9731f78df6b0c1e9590c32f3eaeeb0a2dbcd0fd2f2a006844131afd89631",
       "generator_tool_version": "manual/M3-corpus-wave",

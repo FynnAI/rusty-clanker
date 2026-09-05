@@ -70,6 +70,14 @@ const OBSIDIAN: BlockStateId = BlockStateId(3369);
 const CRYING_OBSIDIAN: BlockStateId = BlockStateId(21820);
 const RESPAWN_ANCHOR: BlockStateId = BlockStateId(21821);
 const REINFORCED_DEEPSLATE: BlockStateId = BlockStateId(32085);
+/// M3 field-report test-authoring (PLAN-D10, moving_piston placeholder — MECH-D83/MECH-D84): a
+/// real `minecraft:moving_piston` id (`type=normal, facing=north` -- the block's own generated
+/// default state) — `classify` must treat every id in this block's own full 12-state range as
+/// `Immovable`, exactly like a real extended piston base or a `piston_head`
+/// (`PistonBaseBlock.isPushable`'s own real reference has no exception that would let a second
+/// piston push through, or a sticky pull grab, an in-flight one). Cited directly off
+/// `datagen-output/26.2/generated/reports/blocks.json`, protocol 776.
+const MOVING_PISTON: BlockStateId = BlockStateId(2309);
 
 fn local_ownership() -> RegionOwnership {
     RegionOwnership::always_local(Address::Region(RegionId(0)))
@@ -98,6 +106,7 @@ fn classify_matches_tier1_table() {
         PISTON_EXTENDED,
         PISTON_EXTENDED_REAL,
         PISTON_HEAD,
+        MOVING_PISTON,
         CHEST,
         FURNACE,
         HOPPER,
