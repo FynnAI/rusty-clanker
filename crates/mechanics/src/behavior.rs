@@ -87,8 +87,15 @@ impl<'a> UpdateContext<'a> {
     /// `set_block`, specifically so it does *not* restart its own fan-out). Returns `true` iff
     /// the stored value actually changed.
     pub fn write_block_state(&mut self, pos: BlockPos, new_state: BlockStateId) -> bool {
+        let old_state = self.world.get_block(pos);
         let did_change = self.world.set_block(pos, new_state);
         if did_change {
+            // M4-B07 field-report fix (ledger B): `set_block` was the only caller of
+            // `LightDirtyQueue::mark` -- every settled redstone state flip goes through this
+            // method instead, so light emission is a property of the state alone and must
+            // reach the light engine here too.
+            self.light_dirty
+                .mark(pos, old_state.unwrap_or(new_state), new_state);
             Self::record_changed(self.changed, pos, new_state);
         }
         did_change
