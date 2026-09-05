@@ -291,27 +291,6 @@ pub trait BlockBehavior: Send + Sync {
     }
     fn on_scheduled_tick(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     fn on_block_event(&self, _ctx: &mut UpdateContext, _pos: BlockPos, _event: &BlockEvent) {}
-    /// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder): called once per dispatched
-    /// block event, at `event.pos`, immediately after `run_block_event_subphase`'s own
-    /// `drain_engine` call for that SAME event has fully settled every neighbor-changed/shape-
-    /// update cascade it triggered — i.e., strictly after every OTHER behavior's own reaction to
-    /// this event's writes has already run and settled, but still within the very same
-    /// synchronous dispatch, before this tick's own per-tick snapshot/broadcast ever runs.
-    /// Default no-op — every behavior but `PistonBehavior` needs no such step at all (additive,
-    /// backward-compatible, mirrors `on_placed`/`on_random_tick`/`on_use`'s own identical
-    /// convention). `PistonBehavior`'s own override is the sole reason this hook exists: a real
-    /// oracle capture (`xtask parity-check redstone`) settled empirically that the
-    /// `moving_piston` placeholder this same wave writes at accept time is never independently
-    /// visible at its own position at all — only its own real, indirect side effects (e.g. a
-    /// wire losing support and popping, which needs the placeholder to genuinely sit in
-    /// `BlockWorldAccess` for the cascade above to see it) are ever observed. This hook is the
-    /// seam that lets a behavior write a real, dispatch-visible value, let every reactive
-    /// cascade it triggers settle against that real value, and then restore the position's own
-    /// pre-write content — all before this same event's own dispatch is considered complete —
-    /// without requiring a new `UpdateContext` field (`UseUpdateContext`'s own doc comment has
-    /// the "why not" citation for that alternative: it would break every one of this workspace's
-    /// own dozen-plus pre-existing `UpdateContext { .. }` construction sites).
-    fn on_after_drain(&self, _ctx: &mut UpdateContext, _pos: BlockPos) {}
     /// M3 field-report fix (Task 2): called whenever a caller that owns both a live placement
     /// pipeline and this position's own freshly-written `BlockStateId` wants to (re-)seed a
     /// behavior's own per-position placement state (facing/delay/mode — whatever a concrete

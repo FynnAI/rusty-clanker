@@ -401,26 +401,5 @@ pub fn run_block_event_subphase(
             current_tick,
             behaviors,
         );
-        // M3 field-report wave 3 (PLAN-D10, moving_piston placeholder): `BlockBehavior::
-        // on_after_drain`'s own doc comment has the full "why this seam exists" citation --
-        // called once per dispatched event, right here, after every reactive cascade this
-        // event's own writes triggered has already fully settled (the `drain_engine` call
-        // immediately above), so a behavior that wrote a transient, dispatch-visible value can
-        // now restore its own pre-write content, still within this same synchronous dispatch.
-        // A no-op for every behavior but `PistonBehavior`.
-        {
-            let mut ctx = make_ctx(
-                world,
-                engine,
-                scheduled,
-                events,
-                outbound,
-                changed,
-                light_dirty,
-                ownership,
-                current_tick,
-            );
-            behavior.on_after_drain(&mut ctx, event.pos);
-        }
     }
 }

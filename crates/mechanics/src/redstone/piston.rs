@@ -85,36 +85,97 @@
 //! ordering), an accepted block event does not wait `COMMIT_DELAY_TICKS` to change the world at
 //! all — every pushed block's own destination cell and the head cell (extend), or the base cell
 //! and a sticky pull's own destination cell (retract), become `minecraft:moving_piston[facing,
-//! type]` immediately, synchronously with the triggering block event, via the new
+//! type]` immediately, synchronously with the triggering block event, via the
 //! `write_extend_placeholders`/`write_moving_piston_placeholder` helpers (their own doc comments
-//! have the exact per-case reference citation). Only the FINAL settled content — `commit_extend`/
-//! `commit_retract`, both otherwise unchanged by this wave — still lands at the existing 2-tick
-//! commit. `MovingPistonState` is this engine's own block-entity stand-in (moved state per cell
-//! via the new `pre_move_contents` field, direction, extending/retracting, source flag via the
-//! `MovingPlan` variant) with two accepted, documented simplifications beyond real vanilla: no
-//! NBT persistence (a chunk saved mid-animation loses the placeholder and reloads showing
-//! whatever the base's own real id already was — reported to planning, since no chunk-save path
-//! exists yet for this engine to actually exhibit the gap today), and the placeholder's own
-//! redstone treatment (no signal, never a conductor) is modeled by giving all 12 real
-//! `moving_piston` ids an empty `rc_physics` shape row (`crates/physics/src/shapes.rs`) rather
-//! than a literal `MovingPistonBlock.getBlockSupportShape`/`isRedstoneConductor` port — this
-//! engine's own already-established single-shape-table convention already makes an empty shape
-//! both "no support" and "not a conductor" simultaneously (`signal::is_conductor`'s own doc
-//! comment), so no separate override is needed. `crates/server/src/play/world.rs`'s own tick
-//! loop additionally never broadcasts a `moving_piston`-ranged state change to any client at all
-//! (a state-id-range filter on the per-tick changed-positions drain) — settled empirically
-//! against a real oracle capture (`xtask parity-check redstone`; the placeholder's own former
-//! "deferred by one tick" draft measurably diverged, `world.rs`'s own doc comment at that filter
-//! has the full citation): the placeholder's own block state, at its own position, is never
-//! independently visible to a client across the whole 2-tick window, not even for one tick —
-//! only the real final content's own write (which DOES carry vanilla's own immediate-broadcast
-//! bit) is ever observed there, and the triggering `block_event` packet (sent synchronously,
-//! unaffected by this filter) always precedes it. A placeholder's own real, indirect side
-//! effects stay fully client-visible regardless (e.g. a wire losing support and popping to air —
-//! that write is never `moving_piston`-ranged, so this filter never touches it). Entity
-//! displacement/collision during the animation stays out of scope (M4 territory, MECH-D13's own
-//! "entity displacement" note) — this wave models the block-state placeholder only, never
-//! `PistonMovingBlockEntity`'s own entity-pushing machinery.
+//! have the exact per-case reference citation), and this server GENUINELY, PERMANENTLY KEEPS
+//! every one of these writes for the whole `COMMIT_DELAY_TICKS` window — never reverted. Only the
+//! FINAL settled content — `commit_extend`/`commit_retract`, both otherwise unchanged by this
+//! wave — still lands at the existing 2-tick commit. `MovingPistonState` is this engine's own
+//! block-entity stand-in (moved state per cell via the `pre_move_contents` field, direction,
+//! extending/retracting, source flag via the `MovingPlan` variant) with two accepted, documented
+//! simplifications beyond real vanilla: no NBT persistence (a chunk saved mid-animation loses the
+//! placeholder's own side-table entry and reloads still showing the real `moving_piston` block
+//! state, now a genuine orphan with no side-table entry — verified directly against the
+//! decompiled reference (`MovingPistonBlock`): real vanilla has NO periodic or load-time self-
+//! heal for this either (no block-level `tick`/`randomTick`, and `getTicker` only ever fires for
+//! a position that actually HAS a block entity, so an entity-less `moving_piston` is simply
+//! never ticked at all) — vanilla's ONLY self-heal is `MovingPistonBlock.useWithoutItem`'s own
+//! defensive `getBlockEntity(pos) == null` check, which removes the block (to air) the moment a
+//! PLAYER right-clicks it, never on its own. This engine does not yet implement even that
+//! narrower self-heal (`PistonBehavior` has no `on_use` override for the `moving_piston` range),
+//! so a genuine orphan here has no self-heal path at all today; reported to planning, since no
+//! chunk-save path exists yet for this engine to actually exercise the gap either way), and the
+//! placeholder's own redstone treatment (no signal, never a conductor) is modeled by giving all
+//! 12 real `moving_piston` ids an empty `rc_physics` shape row (`crates/physics/src/shapes.rs`)
+//! rather than a literal `MovingPistonBlock.getBlockSupportShape`/`isRedstoneConductor` port —
+//! this engine's own already-established single-shape-table convention already makes an empty
+//! shape both "no support" and "not a conductor" simultaneously (`signal::is_conductor`'s own doc
+//! comment), so no separate override is needed.
+//!
+//! A second, real-oracle-corrected wave (`crates/mechanics/tests/piston_moving_placeholder.rs`'s
+//! own top-of-file doc comment has the full "why the first draft was wrong" writeup) replaced
+//! this module's own FIRST implementation of the above design, which reverted every placeholder
+//! write via a now-withdrawn `BlockBehavior::on_after_drain` hook (a CLIENT-side oracle capture
+//! cannot distinguish "the server never wrote it" from "the server wrote it and kept it, just
+//! never told me" — the two are not the same thing, and the reference is unambiguous that
+//! vanilla's own server-side `BlockState` genuinely, permanently holds the placeholder). This
+//! wave's own three corrections:
+//! - **No more server-side revert.** Every placeholder write from `write_extend_placeholders`/
+//!   `write_moving_piston_placeholder` now stays in the world, permanently, until its own
+//!   `commit_extend`/`commit_retract` overwrites it with real content (or `finalize_moving`'s own
+//!   whole-abort leaves it there forever, a genuine orphan). Client invisibility is achieved
+//!   SOLELY by `crates/server/src/play/world.rs`'s own moving_piston-ranged filter on the per-tick
+//!   changed-positions drain — never by a server-side mutation of any kind.
+//! - **Corrected fan-out mapping**, read directly off vanilla's own real per-write `setBlock`
+//!   flag arguments in `moveBlocks`/`triggerEvent` (`Block`'s own `UPDATE_*` bit constants):
+//!   - Every push-loop/`armPos` placeholder write (extend's own destinations, and a sticky
+//!     pull's own old head) carries a flag with `UPDATE_MOVE_BY_PISTON`+`UPDATE_INVISIBLE` set
+//!     but neither `UPDATE_NEIGHBORS` nor `UPDATE_CLIENTS` — its own automatic per-write shape
+//!     recompute fires (client-invisible, never reaching `UPDATE_CLIENTS`), but no automatic
+//!     neighbor-changed notification does. `write_extend_placeholders`/`write_moving_piston_
+//!     placeholder`'s own `PlaceholderFanOut::ShapeOnly` mode (`border::fan_out_shape_update_
+//!     only`) models exactly this.
+//!   - The retract base cell's own placeholder write is different: vanilla's own `triggerEvent`
+//!     follows it with an explicit, unconditional `updateNeighborsAt`-then-`updateNeighbourShapes`
+//!     pair, at the SAME position, in that order — functionally identical to this crate's own
+//!     ordinary, unified `fan_out_from_changed_block` (same two signals, same relative order).
+//!     `PlaceholderFanOut::Both` models this.
+//!   - A vacated source's own real `air` write (a bare retraction's old head; a sticky pull's own
+//!     source) keeps using `fan_out_from_changed_block` unchanged, exactly as before this wave —
+//!     unaffected by any of the above.
+//!   - Once every placeholder write in one accept-time batch has landed, vanilla's own SEPARATE,
+//!     LATER `updateNeighborsAt` loop fires an explicit neighbor-changed-only notification from
+//!     `armPos` (unconditionally, for every extend, regardless of push-chain length) and from
+//!     every OTHER `to_push` chain element's own position too (never from the one destination
+//!     beyond the chain, which only ever receives its own shape-update pass) —
+//!     `write_extend_placeholders`'s own doc comment has the exact per-index derivation and the
+//!     `border::fan_out_neighbor_changed_only` calls that model it.
+//! - **Context §G snapshot-timing fix.** `extend_snapshot`/`retract_snapshot` now capture each
+//!   position's own live state AFTER its own placeholder write has landed (previously: before) —
+//!   the snapshot's whole purpose is "what should still be here, unless a third party
+//!   interfered," and since the placeholder is now the PERMANENT expected value until commit
+//!   (never reverted back to the pre-write original), the snapshot must record the placeholder
+//!   itself, not the stale pre-write content, or every untouched position would spuriously read
+//!   as "changed" at commit time and the whole commit would wrongly no-op even in the ordinary,
+//!   nothing-tampered case. `pre_move_contents` is UNAFFECTED (still captured strictly before any
+//!   placeholder write touches the world, exactly as before this wave) — it is a completely
+//!   different value (the real content a commit will eventually write), never compared against a
+//!   live snapshot at all.
+//!
+//! `crates/server/src/play/world.rs`'s own tick loop never broadcasts a `moving_piston`-ranged
+//! state change to any client at all (a state-id-range filter on the per-tick changed-positions
+//! drain, `world.rs`'s own doc comment at that filter has the full citation): the placeholder's
+//! own block state, at its own position, is never independently visible to a client across the
+//! whole 2-tick window, not even for one tick — only the real final content's own write (which
+//! DOES carry vanilla's own client-visible flag) is ever observed there, and the triggering
+//! `block_event` packet (sent synchronously, unaffected by this filter, and — this wave's own
+//! additional `world.rs` drain-order fix — always broadcast before this same tick's own filtered
+//! block-update flush) always precedes it. A placeholder's own real, indirect side effects stay
+//! fully client-visible regardless (e.g. a wire losing support and popping to air — that write is
+//! never `moving_piston`-ranged, so this filter never touches it). Entity displacement/collision
+//! during the animation stays out of scope (M4 territory, MECH-D13's own "entity displacement"
+//! note) — this wave models the block-state placeholder only, never `PistonMovingBlockEntity`'s
+//! own entity-pushing machinery.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -338,15 +399,16 @@ fn is_air_or_unloaded(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
 /// resolution time (Context §G) — `false` for a position `snapshot` never recorded (defensive;
 /// every position either caller actually re-validates is always present in its own snapshot).
 ///
-/// M3 field-report wave 3 bugfix: both sides are normalized through `unwrap_or(AIR_ID)` before
-/// comparing — `is_air_or_unloaded`'s own identical "Air | Unloaded... folded into one check
+/// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder — Context §G snapshot-timing
+/// fix): `extend_snapshot`/`retract_snapshot` are now captured AFTER each position's own
+/// placeholder write has landed (this module's own top-of-file doc comment has the full
+/// citation), so every entry this function compares against is normally `Some` (the placeholder
+/// id itself) by construction — both sides still normalized through `unwrap_or(AIR_ID)` before
+/// comparing, defensively, purely for the one pathological edge case a snapshot capture can
+/// still see `None` for (a target one cell beyond the world's own floor/ceiling, whose write
+/// never actually landed — `write_extend_placeholders`'s own doc comment has the identical
+/// tolerance) — `is_air_or_unloaded`'s own identical "Air | Unloaded... folded into one check
 /// since both produce the identical 'empty landing space' outcome" convention, restated here.
-/// Without this, a position the snapshot recorded as `None` (never explicitly touched) that
-/// `on_after_drain` later restores via an EXPLICIT `write_block_state(pos, AIR_ID)` (`write_
-/// extend_placeholders`'/`write_moving_piston_placeholder`'s own "untouched is vanilla's own
-/// ordinary air default, not unloaded" fix) would spuriously read as "changed" here — `None` vs
-/// `Some(AIR_ID)`, semantically identical, syntactically different — and Context §G's own
-/// distrust logic would then skip a write that a real third party never actually made.
 fn state_matches_snapshot(
     world: &dyn BlockWorldAccess,
     snapshot: &[(BlockPos, Option<BlockStateId>)],
@@ -666,15 +728,23 @@ pub struct PistonBehavior {
     registry: Arc<SignalSourceRegistry>,
     state: Mutex<HashMap<BlockPos, PistonState>>,
     moving: Mutex<HashMap<BlockPos, MovingPistonState>>,
-    /// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder) — keyed by the acting
-    /// piston's own position (`BlockEvent::pos`, matching `on_after_drain`'s own dispatch key),
-    /// each entry the list of `(position, content-to-restore)` pairs `on_after_drain` applies
-    /// once that same event's own reactive cascade has fully settled. Populated by
-    /// `write_extend_placeholders`/`write_moving_piston_placeholder`, consumed (removed) by
-    /// `on_after_drain` within the very same synchronous dispatch — never observed to hold an
-    /// entry across two different events, so a plain `Vec` per key (no ordering guarantee
-    /// needed beyond "applied before the next event in this pass starts") suffices.
-    pending_reverts: Mutex<HashMap<BlockPos, Vec<(BlockPos, BlockStateId)>>>,
+}
+
+/// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder — corrected fan-out mapping):
+/// distinguishes which of vanilla's own two placeholder-write fan-out shapes a
+/// `write_moving_piston_placeholder` call needs — this module's own top-of-file doc comment has
+/// the exact per-case flag citation. `Both` mirrors the retract base cell's own real
+/// `updateNeighborsAt`-then-`updateNeighbourShapes` pair, at the SAME position, in that order —
+/// functionally identical to this crate's own ordinary, unified `fan_out_from_changed_block`
+/// (same two signals, same relative order). `ShapeOnly` mirrors a sticky pull's own old head,
+/// which real vanilla's `moveBlocks` reaches only through the general push-loop write (automatic
+/// shape recompute only, no automatic OR later explicit neighbor-changed at all — unlike a
+/// `to_push` chain element, an old head is never itself one of `toPush`'s own entries, so
+/// `moveBlocks`'s own later `updateNeighborsAt` loop, keyed by `toPush.get(i)`, never reaches it
+/// either).
+enum PlaceholderFanOut {
+    Both,
+    ShapeOnly,
 }
 
 impl PistonBehavior {
@@ -685,7 +755,6 @@ impl PistonBehavior {
             registry,
             state: Mutex::new(HashMap::new()),
             moving: Mutex::new(HashMap::new()),
-            pending_reverts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -788,11 +857,14 @@ impl PistonBehavior {
     }
 
     /// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder — MECH-D83/MECH-D84): writes
-    /// the shared `moving_piston` id at `target`, then fans out from that one position — the
-    /// single-position counterpart to `write_extend_placeholders` below, used for retract's own
-    /// two placeholder cells (the base itself, and a sticky pull's own destination). Tolerates a
-    /// no-op write (mirrors `write_extend_placeholders`'s identical tolerance): fans out only if
-    /// `target` actually holds the freshly-written id afterward.
+    /// the shared `moving_piston` id at `target`, PERMANENTLY (no revert — this module's own
+    /// top-of-file doc comment has the full "why" writeup), then fans out from that one position
+    /// according to `fan_out` (`PlaceholderFanOut`'s own doc comment has the exact per-case
+    /// citation) — the single-position counterpart to `write_extend_placeholders` below, used for
+    /// retract's own two placeholder cells (the base itself, always `PlaceholderFanOut::Both`;
+    /// a sticky pull's own old head, always `PlaceholderFanOut::ShapeOnly`). Fans out only if
+    /// `target` actually holds the freshly-written id afterward (tolerates a no-op write, mirrors
+    /// `write_extend_placeholders`'s identical tolerance).
     ///
     /// Verified directly against the decompiled reference (`PistonBaseBlock.triggerEvent`, the
     /// `b0 == TRIGGER_CONTRACT || b0 == TRIGGER_DROP` arm): vanilla writes the identical
@@ -806,41 +878,21 @@ impl PistonBehavior {
     /// — this engine's own equivalent stand-in is simply `commit_retract`'s own already-existing
     /// `write_base_extended(..., false)` call, which needs no new parameter to carry that same
     /// information (it already knows how to compute the real retracted id from scratch).
-    ///
-    /// M3 field-report wave 3, real-oracle correction: a capture (`xtask parity-check redstone`)
-    /// settled empirically that this placeholder is never independently visible at `target` at
-    /// all — `target`'s own pre-write content is captured here, before the write, and queued
-    /// into `pending_reverts` under `piston_pos` for `on_after_drain` to restore once every
-    /// reactive cascade this write triggers (e.g. a wire above it losing support) has already
-    /// settled — `BlockBehavior::on_after_drain`'s own doc comment has the full citation.
     fn write_moving_piston_placeholder(
         &self,
         ctx: &mut UpdateContext,
-        piston_pos: BlockPos,
         target: BlockPos,
         facing: Direction,
         sticky: bool,
+        fan_out: PlaceholderFanOut,
     ) {
         let id = moving_piston_id(facing, sticky);
-        // M3 field-report wave 3 bugfix: `get_block` returning `None` for a position that was
-        // simply never explicitly written is NOT "unloaded" here (unlike the base position
-        // `write_base_extended` guards against) -- it is vanilla's own ordinary "untouched = air"
-        // default, the exact convention `rc_gametest::replay`'s own `snapshot_volume` already
-        // documents (the AIR_ID sentinel for any position `world.get_block` answers `None` for).
-        // `original.unwrap_or(AIR_ID)` restores that position to air, matching what a real
-        // client (and this replay-based comparison) already believes it to be.
-        let original = ctx.world.get_block(target).unwrap_or(AIR_ID);
         ctx.write_block_state(target, id);
-        if let Some(state) = ctx.world.get_block(target) {
-            border::fan_out_from_changed_block(ctx, target, state);
-            // Only queue a revert for a write that actually landed (mirrors `write_extend_
-            // placeholders`'s identical "genuinely out-of-bounds, tolerate the no-op" handling).
-            self.pending_reverts
-                .lock()
-                .unwrap()
-                .entry(piston_pos)
-                .or_default()
-                .push((target, original));
+        if ctx.world.get_block(target).is_some() {
+            match fan_out {
+                PlaceholderFanOut::Both => border::fan_out_from_changed_block(ctx, target, id),
+                PlaceholderFanOut::ShapeOnly => border::fan_out_shape_update_only(ctx, target),
+            }
         }
     }
 
@@ -850,46 +902,49 @@ impl PistonBehavior {
     /// apply(piston_pos)`) and each shifted-forward destination (`push_direction.apply(p)` for
     /// every `p` in `plan.to_push`); together these are EXACTLY `commit_extend`'s own `i in
     /// 0..=n` target set (`head == to_push[0]` when the chain is non-empty, since the chain is
-    /// always contiguous). For `i < n` (`i.e.` every destination that doubles as a `to_push`
-    /// entry) the pre-write content is simply `pre_move_contents[i]` — already captured by the
-    /// caller, before any write, for exactly this reuse; the one destination beyond the chain
-    /// (`i == n`, never itself a `to_push` entry) is read fresh here, still strictly before its
-    /// own write (nothing else ever targets it earlier in this same loop, since the chain is
-    /// contiguous and strictly increasing along `push_direction`).
+    /// always contiguous). Every one of these writes is PERMANENT — this module's own top-of-
+    /// file doc comment has the full "no revert" writeup — and stays exactly as written until
+    /// `commit_extend` overwrites it with real content two ticks later (or `finalize_moving`'s
+    /// own whole-abort leaves it there forever).
     ///
     /// No Context §G re-validation here (unlike `commit_extend`'s own per-position `consistent`
     /// gating) — `plan` was just resolved against this very `ctx.world`, moments ago, in the same
     /// `on_block_event` call (mirrors `apply_retract_content`'s own identical "no re-validation
     /// needed for this read" reasoning); only the LATER, deferred commit re-validates, against
-    /// `extend_snapshot` (captured by the caller BEFORE this method runs, so it reflects each
-    /// destination's own true pre-write content — the same content this method's own reverts
-    /// restore, via `on_after_drain`, before this same event's dispatch is even complete).
+    /// `extend_snapshot` (captured by the CALLER strictly AFTER this method returns — Context §G
+    /// snapshot-timing fix, this module's own top-of-file doc comment has the full citation — so
+    /// it reflects each destination's own now-permanent placeholder content, the same content
+    /// still expected to be there, unless a third party interfered, when the deferred commit
+    /// actually re-validates it).
     ///
     /// Tolerates a target landing beyond the world's own floor/ceiling exactly like
     /// `commit_extend`'s own write loop does (that method's own doc comment has the full
-    /// citation): write unconditionally, fan out (and queue a revert) only for a position that
-    /// actually landed (and was previously loaded).
+    /// citation): write unconditionally, fan out only for a position that actually landed (and
+    /// was previously loaded).
     ///
-    /// Verified directly against the decompiled reference (`PistonBaseBlock.moveBlocks`): every
-    /// one of vanilla's own push-loop writes (`level.setBlock(pos, actualState, 324)`, one per
-    /// `toPush` entry, plus the separate unconditional `armPos` write in the `if (extending)`
-    /// arm) writes this exact `moving_piston[facing=direction, type=...]` state — `direction`
-    /// here is always the acting piston's own facing (`push_direction`, matching this method's
-    /// own parameter name, since extend's push direction and the piston's own facing coincide),
-    /// never anything else.
+    /// Fan-out, verified directly against the decompiled reference (`PistonBaseBlock.
+    /// moveBlocks`) and restated in full in this module's own top-of-file doc comment: EVERY
+    /// one of these `i in 0..=n` writes gets its own shape-update-only pass immediately, at
+    /// write time (`PlaceholderFanOut::ShapeOnly`'s own doc comment) — this happens for ALL
+    /// n+1 positions, unconditionally, in the first loop below. THEN, once every one of those
+    /// writes has landed, a SEPARATE, LATER pass fires an explicit neighbor-changed-ONLY
+    /// notification from `written[0]` (`armPos` — unconditionally, since this method only ever
+    /// runs for an extend, regardless of whether the push chain is empty) and from every OTHER
+    /// `to_push` chain element's own position too (`written[1..n]`, i.e. every entry except the
+    /// one destination beyond the chain, `written[n]`, which never receives this second pass at
+    /// all — vanilla's own explicit `updateNeighborsAt` loop is keyed by `toPush.get(i)`, which
+    /// never includes the position one past the chain's own last element).
     fn write_extend_placeholders(
         &self,
         ctx: &mut UpdateContext,
         piston_pos: BlockPos,
         push_direction: Direction,
         plan: &PushPlan,
-        pre_move_contents: &[Option<BlockStateId>],
         sticky: bool,
     ) {
         let id = moving_piston_id(push_direction, sticky);
         let n = plan.to_push.len();
         let mut written: Vec<BlockPos> = Vec::with_capacity(n + 1);
-        let mut reverts: Vec<(BlockPos, BlockStateId)> = Vec::with_capacity(n + 1);
 
         for i in 0..=n {
             let target = if i == 0 {
@@ -897,40 +952,33 @@ impl PistonBehavior {
             } else {
                 push_direction.apply(plan.to_push[i - 1])
             };
-            // M3 field-report wave 3 bugfix: `None` here (either from `pre_move_contents` or
-            // the fresh `i == n` read) means "untouched, vanilla's own ordinary air default"
-            // (`rc_gametest::replay`'s own `snapshot_volume` doc comment has the identical
-            // convention), never "unloaded" -- `unwrap_or(AIR_ID)` restores that position to
-            // air, not "skip reverting it at all" (a real, empirically-hit bug this exact
-            // distinction fixes: a piston's own head landing in previously-air space).
-            let original = if i < n {
-                pre_move_contents.get(i).copied().flatten()
-            } else {
-                ctx.world.get_block(target)
-            }
-            .unwrap_or(AIR_ID);
             ctx.write_block_state(target, id);
             written.push(target);
-            // Only queue a revert for a write that actually landed (tolerates a target one
-            // block beyond the world's own floor/ceiling, mirroring `commit_extend`'s own
-            // identical "written a position that never actually landed" tolerance below).
-            if ctx.world.get_block(target).is_some() {
-                reverts.push((target, original));
-            }
         }
 
+        // Shape-update-only pass, one per landed write — automatic per-write shape recompute,
+        // matching every one of vanilla's own push-loop/armPos writes (this method's own doc
+        // comment has the full citation).
         for &pos in &written {
-            if let Some(state) = ctx.world.get_block(pos) {
-                border::fan_out_from_changed_block(ctx, pos, state);
+            if ctx.world.get_block(pos).is_some() {
+                border::fan_out_shape_update_only(ctx, pos);
             }
         }
 
-        self.pending_reverts
-            .lock()
-            .unwrap()
-            .entry(piston_pos)
-            .or_default()
-            .extend(reverts);
+        // Neighbor-changed-only pass, strictly AFTER every write above has landed (vanilla's
+        // own explicit, later `updateNeighborsAt` calls) -- `written[0]` (armPos) always, since
+        // this method only ever runs for an extend; every OTHER `to_push` chain element
+        // (`written[1..n]`, excluding the one destination beyond the chain, `written[n]`) too.
+        if ctx.world.get_block(written[0]).is_some() {
+            border::fan_out_neighbor_changed_only(ctx, written[0], id);
+        }
+        if n >= 1 {
+            for &pos in &written[1..n] {
+                if ctx.world.get_block(pos).is_some() {
+                    border::fan_out_neighbor_changed_only(ctx, pos, id);
+                }
+            }
+        }
     }
 
     /// Context §E's own atomic commit for an extend. Every write goes through the raw
@@ -1068,10 +1116,13 @@ impl PistonBehavior {
     /// placeholder at exactly this position (`candidate.relative(pushDirection) == old_head`),
     /// carrying the pulled block's own just-captured content as the block entity's "moved
     /// state" — the same content this method already returns for `commit_retract` to write in
-    /// later, now ALSO written immediately, as a placeholder, right here. A bare retraction is
-    /// unaffected (vanilla's own initial `moveBlocks` guard clears `armPos` to plain air directly
-    /// whenever `!extending`, never through the push loop at all, since a bare retraction never
-    /// resolves a pull plan for the push loop to iterate over).
+    /// later, now ALSO written immediately, PERMANENTLY, as a placeholder, right here — via
+    /// `PlaceholderFanOut::ShapeOnly` (`write_moving_piston_placeholder`'s own doc comment has
+    /// the full fan-out citation: an old head is never itself a `to_push` entry, so it gets no
+    /// explicit neighbor-changed pass, only its own automatic shape-update one). A bare
+    /// retraction is unaffected (vanilla's own initial `moveBlocks` guard clears `armPos` to
+    /// plain air directly whenever `!extending`, never through the push loop at all, since a
+    /// bare retraction never resolves a pull plan for the push loop to iterate over).
     fn apply_retract_content(
         &self,
         ctx: &mut UpdateContext,
@@ -1095,7 +1146,13 @@ impl PistonBehavior {
         if let Some(state) = ctx.world.get_block(source) {
             border::fan_out_from_changed_block(ctx, source, state);
         }
-        self.write_moving_piston_placeholder(ctx, piston_pos, old_head, push_direction, sticky);
+        self.write_moving_piston_placeholder(
+            ctx,
+            old_head,
+            push_direction,
+            sticky,
+            PlaceholderFanOut::ShapeOnly,
+        );
         pulled_content
     }
 
@@ -1360,38 +1417,33 @@ impl BlockBehavior for PistonBehavior {
                     // MECH-D84): vanilla does not wait two ticks to change the world once this
                     // block event is accepted (`PistonBaseBlock.triggerEvent` -> `moveBlocks`) --
                     // every pushed block's own destination cell and the head cell become
-                    // `moving_piston[facing,type]` immediately, right here, carrying each
-                    // destination's own pre-move content as the block-entity stand-in's "moved
-                    // state" (`pre_move_contents`, captured BEFORE `write_extend_placeholders`
-                    // overwrites the very positions it reads — mirrors vanilla's own
-                    // `toPushShapes` capture). Only the FINAL settled content (`commit_extend`,
-                    // unchanged by this addition) still lands at the existing
-                    // `COMMIT_DELAY_TICKS`-later commit.
+                    // `moving_piston[facing,type]` immediately, right here, PERMANENTLY (this
+                    // module's own top-of-file doc comment has the full "no revert" writeup),
+                    // carrying each destination's own pre-move content as the block-entity
+                    // stand-in's "moved state" (`pre_move_contents`, captured BEFORE
+                    // `write_extend_placeholders` overwrites the very positions it reads --
+                    // mirrors vanilla's own `toPushShapes` capture, and is UNAFFECTED by the
+                    // reorder below: it must still be read before any placeholder write ever
+                    // touches these positions, or it would read back the placeholder itself
+                    // instead of the real content commit_extend still owes two ticks later).
+                    // Only the FINAL settled content (`commit_extend`, unchanged by this
+                    // addition) still lands at the existing `COMMIT_DELAY_TICKS`-later commit.
                     //
-                    // Real-oracle correction (`xtask parity-check redstone` settled this
-                    // empirically): the placeholder is never independently visible at any of
-                    // these destinations at all — only its own real, indirect side effects (a
-                    // wire above a pushed block losing support and popping) are ever observed.
-                    // `extend_snapshot` is therefore taken BEFORE `write_extend_placeholders`
-                    // runs, capturing each destination's own TRUE pre-write content (the same
-                    // content `on_after_drain` restores there, via `write_extend_placeholders`'s
-                    // own `pending_reverts` queue, before this same event's dispatch is even
-                    // complete) — Context §G's later re-validation compares against that same,
-                    // permanently-true value, never the transient placeholder.
+                    // Context §G snapshot-timing fix (this module's own top-of-file doc comment
+                    // has the full citation): `extend_snapshot` is taken AFTER
+                    // `write_extend_placeholders` runs now (reversed from this comment's own
+                    // former ordering) -- since the placeholder is never reverted, the snapshot
+                    // must record what each destination now PERMANENTLY holds (the placeholder
+                    // itself), not its stale pre-write content, or Context §G's later
+                    // re-validation would spuriously see every untouched position as "changed"
+                    // and no-op the whole commit even when nothing was ever tampered with.
                     let pre_move_contents: Vec<Option<BlockStateId>> = plan
                         .to_push
                         .iter()
                         .map(|&p| ctx.world.get_block(p))
                         .collect();
+                    self.write_extend_placeholders(ctx, pos, facing, &plan, sticky);
                     let snapshot = extend_snapshot(ctx.world, pos, &plan);
-                    self.write_extend_placeholders(
-                        ctx,
-                        pos,
-                        facing,
-                        &plan,
-                        &pre_move_contents,
-                        sticky,
-                    );
                     self.moving.lock().unwrap().insert(
                         pos,
                         MovingPistonState {
@@ -1418,18 +1470,26 @@ impl BlockBehavior for PistonBehavior {
                 // MECH-D84): verified directly against the decompiled reference
                 // (`PistonBaseBlock.triggerEvent`, the `b0 == TRIGGER_CONTRACT || b0 ==
                 // TRIGGER_DROP` arm): the base cell itself becomes `moving_piston[facing,type]`
-                // immediately, replacing its own currently-extended real id.
+                // immediately, PERMANENTLY (this module's own top-of-file doc comment has the
+                // full "no revert" writeup), replacing its own currently-extended real id --
+                // via `PlaceholderFanOut::Both` (the base cell's own fan-out is functionally
+                // identical to this crate's own ordinary, unified `fan_out_from_changed_block`,
+                // `PlaceholderFanOut`'s own doc comment has the full citation).
                 //
-                // Real-oracle correction (`xtask parity-check redstone` settled this
-                // empirically, same finding as the extend arm above): this placeholder is never
-                // independently visible either — `retract_snapshot` is taken BEFORE any write
-                // below, capturing the base's own (and, for a sticky pull, the old head's own)
-                // TRUE pre-retract content, the same content `on_after_drain` restores via
-                // `write_moving_piston_placeholder`'s/`apply_retract_content`'s own
-                // `pending_reverts` queue before this same event's dispatch is complete.
-                let old_head_for_snapshot = plan.pulled.map(|_| facing.apply(pos));
-                let snapshot = retract_snapshot(ctx.world, pos, old_head_for_snapshot);
-                self.write_moving_piston_placeholder(ctx, pos, pos, facing, sticky);
+                // Context §G snapshot-timing fix (this module's own top-of-file doc comment has
+                // the full citation): `retract_snapshot` is taken AFTER both writes below now
+                // (reversed from this comment's own former ordering) -- capturing the base's own
+                // (and, for a sticky pull, the old head's own) now-PERMANENT placeholder
+                // content, never the stale pre-retract content, so Context §G's later
+                // re-validation compares against what these positions actually still hold at
+                // commit time, unless a third party interfered.
+                self.write_moving_piston_placeholder(
+                    ctx,
+                    pos,
+                    facing,
+                    sticky,
+                    PlaceholderFanOut::Both,
+                );
                 // M3 field-report fix (retract content/base timing split, verified against a
                 // now-deterministic real-oracle capture: `docs/findings-for-planning.md`'s own
                 // "recapture-stability closed for real" entry has the full citation): a bare
@@ -1439,9 +1499,13 @@ impl BlockBehavior for PistonBehavior {
                 // the base's own `EXTENDED=false` flip; only the pulled block's own *source*
                 // position clears immediately here (permanently — `apply_retract_content`'s own
                 // doc comment has the full breakdown of which half settles when). The old head's
-                // own placeholder (for a sticky pull) is, like the base's, never independently
-                // visible either — the SAME `on_after_drain` restoration applies to it too.
+                // own placeholder (for a sticky pull), written inside `apply_retract_content`
+                // itself, is likewise PERMANENT -- never independently visible to a client
+                // (`crates/server/src/play/world.rs`'s own moving_piston-ranged filter is the
+                // ONLY thing that ever hides either placeholder from a client).
                 let pulled_content = self.apply_retract_content(ctx, pos, facing, sticky, &plan);
+                let old_head_for_snapshot = plan.pulled.map(|_| facing.apply(pos));
+                let snapshot = retract_snapshot(ctx.world, pos, old_head_for_snapshot);
                 self.moving.lock().unwrap().insert(
                     pos,
                     MovingPistonState {
@@ -1465,24 +1529,6 @@ impl BlockBehavior for PistonBehavior {
             return;
         };
         self.finalize_moving(ctx, pos, moving);
-    }
-
-    /// M3 field-report wave 3 (PLAN-D10, moving_piston placeholder): restores every position
-    /// `write_extend_placeholders`/`write_moving_piston_placeholder` queued into
-    /// `pending_reverts` under `pos` (the piston's own position, matching `event.pos` — the key
-    /// `run_block_event_subphase` calls this with) to its own true pre-write content, via
-    /// `write_block_state` (a raw restore, no further fan-out — this is a correction, not a new
-    /// externally-observable change: every reactive cascade the placeholder's own appearance
-    /// should trigger has already run and settled, via `drain_engine`, by the time this method is
-    /// called). A no-op if `pos` queued nothing this event (every non-piston dispatch, and a
-    /// piston's own resolution-failure/no-op paths, which never call either placeholder writer).
-    fn on_after_drain(&self, ctx: &mut UpdateContext, pos: BlockPos) {
-        let Some(reverts) = self.pending_reverts.lock().unwrap().remove(&pos) else {
-            return;
-        };
-        for (target, original) in reverts {
-            ctx.write_block_state(target, original);
-        }
     }
 }
 

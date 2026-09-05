@@ -3307,6 +3307,39 @@ impl HardcodedWorld {
                 entity_pickup_step(&mut region.world);
                 entity_resync_step(&mut region.world, region.tick_counter);
 
+                // MECH-D83 (M3 field-report wave 3) -- M3 field-report wave 3 CORRECTION
+                // (PLAN-D10, moving_piston placeholder, "corrected drain order"): drains
+                // `TickBlockEventOutbox` BEFORE `TickChangedPositions` now (reversed from this
+                // comment's own former ordering, which had these two swapped) -- verified
+                // directly against the decompiled reference (`ServerLevel.tick`'s own
+                // `chunkSource.tick(haveTime, true)` call flushes `ChunkHolder.broadcastChanges`
+                // -- this tick's own queued block-update packets -- for every change queued as
+                // of the START of this same tick, strictly BEFORE that same tick's own
+                // `blockEvents`/`runBlockEvents()` phase ever runs): a block event's own
+                // real-time world mutation (a piston's own extend/retract accept-time write
+                // among them -- `moveBlocks`'s own `deleteAfterMove` air write in vanilla's own
+                // real analogue) is queued too late to make THIS SAME tick's own already-run
+                // flush, so it is only ever picked up by the NEXT tick's own flush; the
+                // triggering `block_event` PACKET itself, in contrast, is sent immediately and
+                // synchronously the moment the event actually fires, unaffected by that
+                // buffering. This engine's own `TickChangedPositions`/`TickBlockEventOutbox`
+                // resources are a single-buffer-per-tick simplification (no real one-tick delay
+                // for the buffered half is reproduced here), but draining `TickBlockEventOutbox`
+                // FIRST still reproduces the one property a real client actually observes: this
+                // tick's own `block_event` packet always precedes this same tick's own
+                // block-update packet for whatever that SAME event just wrote -- settled
+                // directly against a real field-report test,
+                // `crates/server/tests/play_piston_placeholder_field_report.rs`'s own
+                // `retracting_piston_broadcasts_block_event_then_the_vacated_air_never_the_
+                // placeholder`.
+                let tick_block_events = region
+                    .world
+                    .resource_mut::<rc_mechanics::stage4::ecs::TickBlockEventOutbox>()
+                    .drain();
+                for event in tick_block_events {
+                    broadcast_block_event(&region.world, event);
+                }
+
                 // M3 field-report fix ("block-state changes made outside a direct player
                 // action never reach any client" -- `docs/findings-for-planning.md`'s own
                 // entry has the full citation): drains `TickChangedPositions`
@@ -3321,31 +3354,38 @@ impl HardcodedWorld {
                 // in pending` loop and the destroy-tick substep above) never covered at all.
                 // `primary: None` -- unlike a direct action, no single position here was
                 // already broadcast by some other response function, so nothing is excluded.
+                //
+                // M3 field-report wave 3 fix (PLAN-D10, moving_piston placeholder -- corrected,
+                // persistent design): `moving_piston` is a real, PERMANENTLY-held server-side
+                // placeholder for the whole 2-tick commit window
+                // (`crates/mechanics/src/redstone/piston.rs`'s own top-of-file doc comment has
+                // the full citation) -- but every one of vanilla's own equivalent writes
+                // (`PistonBaseBlock.moveBlocks`'s own push-loop/armPos writes, and
+                // `triggerEvent`'s own base-cell write) uses a flag lacking `UPDATE_CLIENTS`, so
+                // this placeholder's own block state, at its own position, is never broadcast
+                // to any client, at any point in the window -- filtered out right here, before
+                // this tick's own broadcast, never server-side (the stored `BlockWorldAccess`
+                // value itself is completely untouched by this filter; only the OUTBOUND client
+                // packet is ever suppressed). A vacated source's own real `air` write (a bare
+                // retraction's old head; a sticky pull's own source) is never `moving_piston`-
+                // ranged, so this filter never touches it -- matches vanilla's own client-
+                // visible `UPDATE_CLIENTS`-carrying flag for that write exactly
+                // (`piston.rs`'s own doc comment on `apply_retract_content` has the citation).
                 let tick_changed_positions = region
                     .world
                     .resource_mut::<rc_mechanics::stage4::ecs::TickChangedPositions>()
                     .drain();
+                let moving_piston_range = range_of(block_id::MOVING_PISTON);
+                let tick_changed_positions: Vec<(BlockPos, StorageBlockStateId)> =
+                    tick_changed_positions
+                        .into_iter()
+                        .filter(|&(_, state)| {
+                            !(moving_piston_range.first.0..=moving_piston_range.last.0)
+                                .contains(&state.to_raw())
+                        })
+                        .collect();
                 if !tick_changed_positions.is_empty() {
                     broadcast_changed_positions(&region.world, &tick_changed_positions, None);
-                }
-
-                // MECH-D83 (M3 field-report wave 3): drains `TickBlockEventOutbox` once per
-                // tick, right after `TickChangedPositions`'s own drain immediately above --
-                // vanilla's own real tick order confirms this same relative placement:
-                // `ChunkHolder.broadcastChanges` (this tick's queued block-update packets)
-                // runs inside `ServerChunkCache.tick`, called from `ServerLevel.tick` strictly
-                // BEFORE that same tick's own `runBlockEvents()` call (`ServerLevel.tick`'s own
-                // `chunkSource.tick(haveTime, true)` -> `blockEvents` profiler-section
-                // ordering, ASSET-D18(f) reference, decompiled-source-verified) -- so this
-                // tick's own block-update packets always reach a client before that same
-                // tick's `block_event` packets, exactly reproduced here by draining
-                // `TickChangedPositions` first, `TickBlockEventOutbox` second.
-                let tick_block_events = region
-                    .world
-                    .resource_mut::<rc_mechanics::stage4::ecs::TickBlockEventOutbox>()
-                    .drain();
-                for event in tick_block_events {
-                    broadcast_block_event(&region.world, event);
                 }
 
                 lifecycle.post_tick();
