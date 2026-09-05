@@ -634,6 +634,32 @@ fn build_tier1_table() -> ShapeTable {
         (torch_wall_range.first.0..=torch_wall_range.last.0).map(|id| (id, flat(torch_shape()))),
     );
 
+    // M3 field-report wave 3 (PLAN-D10, moving_piston placeholder — MECH-D83/MECH-D84): the
+    // twelve real `minecraft:moving_piston` states (six `facing` values crossed with `type=
+    // normal|sticky`; no `short` property, unlike `piston_head`) each get the identical empty
+    // shape, in a separate block at the end of this builder (kept deliberately last and
+    // self-contained so a sibling changeset's own additions elsewhere in this function merge
+    // cleanly). Verified directly against the decompiled reference: `MovingPistonBlock.getShape`
+    // is unconditionally `Shapes.empty()`, regardless of the block entity's own progress-
+    // dependent state -- a fresh `BlockPhysicsProperties::air()` per row (the same "shape absent,
+    // other properties immaterial" value `air`'s own entry above already uses, though that one
+    // is moved rather than cloned there, so a fresh instance is built here instead) gives every
+    // moving_piston id no support on any face (`is_face_sturdy`, MECH-D84 -- the wire that
+    // pops the instant this placeholder appears reads exactly this) and never resolves as the
+    // redstone-conductor full-cube shape (`signal::is_conductor`'s own doc comment: any shape
+    // other than a single `(0,0,0)..(1,1,1)` box, empty included, is never a conductor) --
+    // `MovingPistonBlock`'s own real `getBlockSupportShape`/`isRedstoneConductor` are never
+    // overridden either, and this project's own single-shape-table convention already makes an
+    // empty shape both "no support" and "not a conductor" simultaneously, so no separate override
+    // is needed here. The block entity's own real, progress-dependent COLLISION shape (entity
+    // displacement during the animation) stays out of scope -- a separate M4 item, unmodeled by
+    // this project's own simplified single-shape-table architecture regardless.
+    let moving_piston_range = range_of(block_id::MOVING_PISTON);
+    entries.extend(
+        (moving_piston_range.first.0..=moving_piston_range.last.0)
+            .map(|id| (id, BlockPhysicsProperties::air())),
+    );
+
     ShapeTable::from_entries(entries)
 }
 
