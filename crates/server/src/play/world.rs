@@ -45,7 +45,7 @@ use tokio::sync::oneshot;
 
 use super::block_action::{
     BlockActionKind, ChunkIndex, DebugBlockInfo, PendingBlockAction, debug_query_block,
-    target_position, to_storage_biome_id, to_storage_id,
+    debug_query_light, target_position, to_storage_biome_id, to_storage_id,
 };
 use super::connection::SPAWN_POSITION;
 use super::entity_drops;
@@ -78,6 +78,12 @@ use rc_chunk_storage::RegistryId as _;
 use rc_mechanics::{BlockWorldAccess, RegionOwnership};
 
 pub const HARDCODED_REGION_ID: RegionId = RegionId(1);
+
+/// M4-B07 field-report implementation, test/diagnostic only -- `debug_query_light`'s own
+/// channel sender, factored into a named alias per `clippy::type_complexity` (mirrors
+/// `DebugEntitySpawnMsg`'s own identical rationale, just below).
+type LightQuerySender =
+    tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<(u8, u8)>>)>;
 
 /// M4-B01, test/diagnostic only -- `HardcodedWorld::debug_spawn_entity`'s own channel
 /// message shape, factored into a named alias per `clippy::type_complexity`.
@@ -849,6 +855,15 @@ fn bootstrap_region(world: &mut World) {
     world.insert_resource(EntityNetworkIds::default());
     world.insert_resource(RegionDropEntropy(RcRandom::new(DEBUG_WORLD_SEED)));
     world.insert_resource(build_overworld_fluid_tables());
+    // M4-B07 field-report implementation: the production `LightPropertiesRegistry` (opacity/
+    // emission for every one of the generated registry's 1196 blocks, `rc_mechanics::light::
+    // production_registry`'s own doc comment has the full classification/citation writeup) --
+    // `run_stage8_lighting`'s own `world.get_resource::<LightPropertiesRegistry>()` call
+    // silently falls back to `LightPropertiesRegistry::default()` (every block reading as
+    // `LightProperties::AIR`, opacity 0) when this resource is absent, which is exactly the
+    // gap this changeset closes: without a real registry present, every light read stayed 0
+    // regardless of what Stage 8 itself computed.
+    world.insert_resource(rc_mechanics::light::production_registry());
     // M3-B06's own `Default`-able Stage-7 resources (`SmeltingRecipeTable`/`FuelTable`/
     // `MaxStackSizeResource`) -- `ContainerSignalsResource` has no uniform default and is
     // inserted directly below, alongside the tier-1 redstone wiring it feeds.
@@ -1331,6 +1346,9 @@ pub struct HardcodedWorld {
     /// New (M2-B07), test/diagnostic only -- `debug_query_block`'s own doc comment.
     query_tx:
         tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<DebugBlockInfo>>)>,
+    /// M4-B07 field-report implementation, test/diagnostic only -- `debug_query_light`'s own
+    /// doc comment (this struct's own method, below), mirrors `query_tx` exactly.
+    light_query_tx: LightQuerySender,
     next_network_entity_id: Arc<AtomicI32>,
     /// New (M2-B05): signals the region thread to stop after finishing its current round
     /// (`shutdown`'s own doc comment).
@@ -1457,6 +1475,10 @@ impl HardcodedWorld {
             BlockPos,
             oneshot::Sender<Option<DebugBlockInfo>>,
         )>();
+        // M4-B07 field-report implementation, test/diagnostic only -- `debug_query_light`'s
+        // own doc comment (this struct's own method, below), mirrors `query_tx` exactly.
+        let (light_query_tx, mut light_query_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(BlockPos, oneshot::Sender<Option<(u8, u8)>>)>();
         let (chunk_grid_tx, mut chunk_grid_rx) =
             tokio::sync::mpsc::unbounded_channel::<ChunkGridRequest>();
         let (debug_held_item_tx, mut debug_held_item_rx) =
@@ -1596,6 +1618,16 @@ impl HardcodedWorld {
             // EntityPhysicsIntegration` -- must be called before any sibling M4 blueprint's
             // own registration into this same group so this system keeps `order_tag = 0`.
             register_stage6b(&mut builder);
+            // M4-B07 field-report implementation: registers Stage 8's own chunk-parallel BSP
+            // light driver -- the light engine shipped by M4-B07 has run every tick since
+            // that blueprint's own implementation changeset landed (`run_stage8_lighting`'s
+            // own dispatch through `RcExecutor::tick_region`, `rc-scheduler`), but no
+            // composition root ever registered it here, so Stage 8 was a real, empty no-op
+            // every tick and every `LightColumn` stayed `new_uninitialized()` forever
+            // (`docs/findings-for-planning.md`'s own entry on this changeset has the full
+            // writeup -- found by M4-B04's own natural-mob-spawning darkness gate, which
+            // reads real light values for the first time).
+            builder.with_lighting_driver(rc_mechanics::lighting_stage_driver);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );
@@ -3130,6 +3162,15 @@ impl HardcodedWorld {
                     ));
                 }
 
+                // M4-B07 field-report implementation, test/diagnostic only.
+                while let Ok((pos, reply)) = light_query_rx.try_recv() {
+                    let _ = reply.send(debug_query_light(
+                        &region.world,
+                        DimensionId::OVERWORLD,
+                        pos,
+                    ));
+                }
+
                 while let Ok(reply) = stage4_counters_rx.try_recv() {
                     let engine = region
                         .world
@@ -3439,6 +3480,7 @@ impl HardcodedWorld {
             movement_tx,
             player_input_tx,
             query_tx,
+            light_query_tx,
             next_network_entity_id: Arc::new(AtomicI32::new(1)),
             shutdown_flag,
             thread_handle: Arc::new(Mutex::new(Some(handle))),
@@ -3607,6 +3649,15 @@ impl HardcodedWorld {
     pub async fn debug_query_block(&self, pos: BlockPos) -> Option<DebugBlockInfo> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.query_tx.send((pos, reply_tx)).ok()?;
+        reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B07 field-report implementation, test/diagnostic only -- mirrors `debug_query_block`
+    /// exactly, over the light engine's own `(sky, block)` nibble pair (`block_action::
+    /// debug_query_light`'s own doc comment has the full contract).
+    pub async fn debug_query_light(&self, pos: BlockPos) -> Option<(u8, u8)> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.light_query_tx.send((pos, reply_tx)).ok()?;
         reply_rx.await.ok().flatten()
     }
 

@@ -19,7 +19,9 @@ pub use propagator::{
     LightChannel, check_node_block, check_node_sky, propagate_decrease_step,
     propagate_increase_step,
 };
-pub use properties::{LightProperties, LightPropertiesRegistry, direction_index, shape_occludes};
+pub use properties::{
+    LightProperties, LightPropertiesRegistry, direction_index, production_registry, shape_occludes,
+};
 pub use queue::{
     ALL_DIRECTIONS, ChannelState, DirectionSet, LightDirtyEntry, LightDirtyQueue,
     LightPropagatorState, QueueEntry, all_except, contains, only,

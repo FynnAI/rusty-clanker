@@ -40,8 +40,8 @@ mod world;
 pub use attribute_packets::{UpdateAttributes, build_update_attributes};
 pub use block_action::{
     BlockActionKind, ChunkIndex, DebugBlockInfo, ENTITY_INTERACTION_RANGE, Face,
-    PendingBlockAction, debug_query_block, resolve_place_position, seed_chunk_column,
-    target_position, to_storage_biome_id, to_storage_id,
+    PendingBlockAction, debug_query_block, debug_query_light, resolve_place_position,
+    seed_chunk_column, target_position, to_storage_biome_id, to_storage_id,
 };
 pub use connection::{PlayerProfile, enter_play};
 pub use entity_packets::{

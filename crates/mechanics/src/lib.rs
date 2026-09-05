@@ -59,7 +59,8 @@ pub use light::{
     ChannelState, DirectionSet, LightDirtyEntry, LightDirtyQueue, LightPropagatorState,
     LightProperties, LightPropertiesRegistry, LightTickReport, QueueEntry, SkyLightSourceColumn,
     UpdateLightPayload, apply_inbound_light_border_update, build_light_border_update,
-    build_update_light_payload, direction_index, is_sky_edge_occluded, shape_occludes,
+    build_update_light_payload, direction_index, is_sky_edge_occluded, production_registry,
+    shape_occludes,
 };
 pub use neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 pub use random::{RcRandom, chunk_random_seed};

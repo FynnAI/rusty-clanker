@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use bevy_ecs::entity::Entity;
+use bevy_ecs::query::{With, Without};
 use bevy_ecs::world::World;
 use rc_chunk_storage::{
     BlockStateColumn, ChunkKeyTag, HeightmapSet, LightColumn, LightNibbles, WORLD_HEIGHT,
@@ -25,7 +26,7 @@ use crate::border::RegionOwnership;
 use crate::direction::Direction;
 use crate::light::propagator::{
     LightChannel, LocalChunkLight, check_node_block, check_node_sky, propagate_decrease_step,
-    propagate_increase_step,
+    propagate_increase_step, set_stored,
 };
 use crate::light::properties::LightPropertiesRegistry;
 use crate::light::queue::{LightDirtyQueue, LightPropagatorState};
@@ -102,6 +103,45 @@ fn is_fresh(column: &LightColumn) -> bool {
     })
 }
 
+/// M4-B07 field-report implementation: backfills `LightPropagatorState`/
+/// `SkyLightSourceColumn` onto every chunk entity that carries `ChunkKeyTag` (a real, spawned
+/// chunk) but not yet either of those two components -- the production chunk-spawn site
+/// (`rc_chunk_storage::lifecycle::ChunkLifecycleManager::pre_tick`) cannot insert either type
+/// itself: `rc-chunk-storage` sits below `rc-mechanics` in the crate graph (WS-D3), so that
+/// dependency edge would run backwards. This driver's own call to this function, its first
+/// action every invocation, is the sole place both crates' types are simultaneously in scope
+/// alongside a real `&mut World` -- the only architecturally legal place to perform this
+/// insert (`docs/findings-for-planning.md`'s own entry on this changeset has the full
+/// writeup). A freshly backfilled entity's own `LightColumn` is left completely untouched by
+/// this function (still `new_uninitialized()` for a brand-new chunk, or a real persisted
+/// value for one loaded from disk) -- step 2's own "freshly uninitialized" full-recompute
+/// trigger (below) picks either case up correctly on this very same invocation, exactly as if
+/// `LightPropagatorState`/`SkyLightSourceColumn` had been present from spawn time. A chunk
+/// entity missing `BlockStateColumn`/`HeightmapSet` (not a real, fully-seeded chunk) is
+/// skipped -- this function never inserts a light-propagator pair it cannot also seed a real
+/// `SkyLightSourceColumn` for.
+fn ensure_light_components(world: &mut World, properties: &LightPropertiesRegistry) {
+    let missing: Vec<Entity> = {
+        let mut query =
+            world.query_filtered::<Entity, (With<ChunkKeyTag>, Without<LightPropagatorState>)>();
+        query.iter(world).collect()
+    };
+    for entity in missing {
+        let sky_sources = match (
+            world.get::<BlockStateColumn>(entity),
+            world.get::<HeightmapSet>(entity),
+        ) {
+            (Some(blocks), Some(heightmap)) => {
+                SkyLightSourceColumn::recompute(blocks, heightmap, properties)
+            }
+            _ => continue,
+        };
+        world
+            .entity_mut(entity)
+            .insert((LightPropagatorState::new(), sky_sources));
+    }
+}
+
 /// Stage 8's complete driver (Context §8). See that section for the full 10-step
 /// algorithm.
 pub fn run_stage8_lighting(world: &mut World, pool: &dyn ParallelDispatch) -> LightTickReport {
@@ -117,6 +157,11 @@ pub fn run_stage8_lighting(world: &mut World, pool: &dyn ParallelDispatch) -> Li
         .get_resource::<LightPropertiesRegistry>()
         .cloned()
         .unwrap_or_default();
+
+    // M4-B07 field-report implementation: this invocation's own first action -- see
+    // `ensure_light_components`'s own doc comment for why this is the only architecturally
+    // legal place to perform it.
+    ensure_light_components(world, &properties);
 
     // --- Seeding (round -1, sequential) ---
     let mut fresh_handled: std::collections::HashSet<Entity> = std::collections::HashSet::new();
@@ -219,13 +264,54 @@ pub fn run_stage8_lighting(world: &mut World, pool: &dyn ParallelDispatch) -> Li
                 for z in 0u8..16 {
                     let boundary = local.sky_sources.boundary_y(x, z);
                     let start = boundary.max(WORLD_MIN_Y);
-                    for world_y in start..(WORLD_MIN_Y + WORLD_HEIGHT) {
+                    let top = WORLD_MIN_Y + WORLD_HEIGHT;
+                    if start >= top {
+                        continue;
+                    }
+                    // M4-B07 field-report implementation (found by this changeset's own
+                    // wiring, `docs/findings-for-planning.md`'s entry has the full writeup):
+                    // a real chunk's own open sky commonly spans hundreds of Y levels above
+                    // its own surface (this project's build limit alone gives up to 380, per
+                    // WORLD_HEIGHT=384/WORLD_MIN_Y=-64) -- enqueueing one `check_node_sky`
+                    // call per level, as the blueprint's own literal per-position mechanism
+                    // does (Context §8 step 2), makes every fresh chunk's own full recompute
+                    // cost scale with the world's own vertical extent, not with anything
+                    // about that chunk's real content: tens of millions of BFS queue entries
+                    // for a single ordinary chunk grid, each one an immediate no-op once
+                    // processed (every position in a uniform open-sky span is already at the
+                    // propagator's own ceiling value, 15 -- no neighbor in that same span can
+                    // ever receive a further increase, `propagate_increase_step`'s own early
+                    // bail). This changeset seeds only the boundary level itself through the
+                    // real BFS entry point (`check_node_sky`, below) -- the level that
+                    // actually needs to initiate downward decay and any real cross-boundary
+                    // propagation -- and writes every level strictly above it directly via
+                    // `set_stored` (bit-identical to what the full per-position BFS would
+                    // itself converge to, since every one of those levels is already a source
+                    // moving no further increase past its own ceiling): a pure internal-
+                    // seeding-strategy change, never a change to any converged, observable
+                    // light value. Scoped, documented caveat: this optimization assumes every
+                    // (x, z) column directly above `start` shares the identical "always
+                    // source" status this column's own boundary implies -- true for every
+                    // world this project can currently produce (M1-B05's superflat filler,
+                    // the only chunk content that exists before real world generation ships,
+                    // `04-worldgen-parity.md`), but not a fact this function can prove for an
+                    // arbitrary future terrain shape where a *neighboring* column's own
+                    // obstruction reaches higher than this one's -- recorded as a scoped
+                    // limitation for whichever future worldgen-integration blueprint first
+                    // makes chunk height vary, not a defect of this changeset's own scope.
+                    let pos = BlockPos::new(
+                        chunk_key.x * 16 + x as i32,
+                        start,
+                        chunk_key.z * 16 + z as i32,
+                    );
+                    check_node_sky(local, pos, true, &mut state.sky);
+                    for world_y in (start + 1)..top {
                         let pos = BlockPos::new(
                             chunk_key.x * 16 + x as i32,
                             world_y,
                             chunk_key.z * 16 + z as i32,
                         );
-                        check_node_sky(local, pos, true, &mut state.sky);
+                        set_stored(local, pos, LightChannel::Sky, 15);
                     }
                 }
             }

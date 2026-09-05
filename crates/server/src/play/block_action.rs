@@ -251,3 +251,26 @@ pub fn debug_query_block(
         dirty: persistence.dirty,
     })
 }
+
+/// M4-B07 field-report implementation: test/diagnostic only, mirrors `debug_query_block`'s
+/// exact shape and "`None` iff `pos`'s chunk has no entity in `world`'s `ChunkIndex`"
+/// contract -- `(sky, block)` light nibbles (`0..=15` each) currently stored at `pos`, read
+/// through this chunk's own `LightColumn` (`rc_chunk_storage::LightColumn::section`) via
+/// `rc_mechanics::light::section_ops`'s uniform `nibble_at` accessor (handles all three
+/// `LightNibbles` representations -- `Uninitialized` reads as `0`, matching a chunk whose
+/// light has not yet been computed by Stage 8 this tick).
+pub fn debug_query_light(world: &World, dimension: DimensionId, pos: BlockPos) -> Option<(u8, u8)> {
+    let &entity = world
+        .resource::<ChunkIndex>()
+        .0
+        .get(&pos.chunk_key(dimension))?;
+    let column = world.get::<LightColumn>(entity)?;
+    let (lx, lz) = (pos.x.rem_euclid(16) as u8, pos.z.rem_euclid(16) as u8);
+    let section_index = rc_mechanics::light::light_section_index_for_y(pos.y);
+    let local_y = rc_mechanics::light::light_local_y(pos.y);
+    let nibble_index = rc_mechanics::light::light_nibble_index(lx, local_y, lz);
+    let section = column.section(section_index);
+    let sky = rc_mechanics::light::nibble_at(&section.sky, nibble_index);
+    let block = rc_mechanics::light::nibble_at(&section.block, nibble_index);
+    Some((sky, block))
+}
