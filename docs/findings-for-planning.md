@@ -756,6 +756,17 @@ Entries name the milestone that surfaced them and the code they concern.
   sha256 — the cache key must include it. Test-tooling change; ships with the
   next corpus changeset.
 
+- **`placement-diff` does not cover the lever.** `crates/testing/gametest/src/
+  placement_spec.rs` mirrors the server's placeable set (twelve kinds) and
+  was not extended for `Lever`; the 85-case placement differential never
+  exercises the six-candidate face-attached placement. Test-tooling change;
+  ships with the M3.5 harness resume.
+- **`dig_properties_for_raw_state` knows only placement-time default
+  states.** A lever's `powered=true` states and every non-default wire/
+  repeater/comparator substate fall back to `FALLBACK_DIG_PROPERTIES` when
+  broken directly (pre-existing). Closes by deriving dig properties per block
+  from the generated registry (`block_of(state)`) instead of per raw id.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2473,6 +2484,22 @@ Entries name the milestone that surfaced them and the code they concern.
   `moving_piston` block updates the oracle sends around a piston move have no
   register entry (the schema has `steps, packet, class, closes_with, expires`
   only); they close with the placeholder changeset instead.
+
+- **Wire beside a toggled signal source loses its power in the replay
+  harness (lever fixture, wave 3).** A powered-state swap of a lever next to
+  an isolated wire tile: the oracle keeps the wire's connection shape and
+  raises power to 15 (id 5306); our replay recomputes the shape to the
+  four-side cross and reverts power to 0 (id 4591) — the wire's
+  `on_neighbor_changed` (power) and `on_shape_update` (connections) run in an
+  order where the shape recompute overwrites the freshly written power digit
+  and no longer sees the lever as connectable. The real-connection path
+  (`on_use` toggle through the server) reads 15, so either the harness's
+  scripted state swap and the server's `set_block` fan-out differ, or the
+  engine is wrong and the server test only checks the power digit. The
+  agent scoped the committed fixture to the lever's own transition instead
+  of fixing it. Open: an instrumented diagnosis restores a
+  `lever_toggle_powers_adjacent_wire` fixture, finds the real order/visibility
+  defect, and fixes engine or harness — never the fixture.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
