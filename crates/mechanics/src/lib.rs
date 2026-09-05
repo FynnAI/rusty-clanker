@@ -20,6 +20,7 @@ pub mod random_tick;
 pub mod redstone;
 pub mod scheduled_tick;
 pub mod sound_request;
+pub mod spawn;
 #[cfg(feature = "server-systems")]
 pub mod stage4;
 #[cfg(feature = "server-systems")]
