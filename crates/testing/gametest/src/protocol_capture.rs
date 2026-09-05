@@ -44,9 +44,15 @@ pub struct CapturedPacket {
     pub index: u32,
     pub packet_id: i32,
     pub body: Vec<u8>,
-    /// Best-effort, display-only — see this module's own doc comment. Never read by
-    /// `diff_step` (grouping and pass/fail are always keyed on `packet_id`, §3.9),
-    /// only by `normalize_body` to select which `NORMALIZATION_RULES` row applies.
+    /// Best-effort — see this module's own doc comment. Read by `normalize_body` to
+    /// select which `NORMALIZATION_RULES` row applies, and (M3.5-B03 governance fix:
+    /// mismatch buckets keyed by connection state, `docs/findings-for-planning.md`)
+    /// by `diff_step`'s own `resolve_conn_states` to detect the boundary packets
+    /// (`login_finished`/`finish_configuration`/`start_configuration`) that walk each
+    /// side's own connection state forward — grouping and pass/fail are keyed on
+    /// `(ConnState, packet_id)`, never `packet_id` alone, precisely because a raw id
+    /// can mean a different packet in a different state (§3.9's own superseded "always
+    /// keyed on the raw packet_id" text described the pre-fix shape).
     pub packet_name: Option<String>,
 }
 
@@ -882,75 +888,190 @@ pub fn apply_observation_window(
     }
 }
 
+/// The three protocol connection states one captured stream can carry packets from
+/// (M3.5-B03 governance fix, mismatch buckets keyed by connection state —
+/// `docs/findings-for-planning.md`). Restated independently of `rc_paritybot::
+/// protocol_session::ConnState` rather than shared with it: that crate is azalea/
+/// nightly-only (this module's own doc comment, "`rc-gametest` never depends on
+/// `rc-protocol` or any azalea packet struct") and can never be a dependency here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConnState {
+    Login,
+    Configuration,
+    Play,
+}
+
+impl ConnState {
+    pub fn label(self) -> &'static str {
+        match self {
+            ConnState::Login => "login",
+            ConnState::Configuration => "configuration",
+            ConnState::Play => "play",
+        }
+    }
+}
+
+impl std::fmt::Display for ConnState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// `step_id`'s own STARTING connection state — mirrors `rc_paritybot::protocol_session::
+/// conn_state_for_step`'s fixed-per-step model for every step whose own capture never
+/// crosses a boundary in the first place; `session/disconnect_reconnect` is the one
+/// exception that must start at `Login` rather than `Play` (it captures a brand-new
+/// connection's own handshake, from its very first byte) — `resolve_conn_states`
+/// below walks the real boundary packets forward from here, so this is only ever the
+/// FIRST packet's own state, never the whole step's.
+fn starting_state_for_step(step_id: &str) -> ConnState {
+    match step_id {
+        "session/login" => ConnState::Login,
+        "session/configuration" => ConnState::Configuration,
+        "session/disconnect_reconnect" => ConnState::Login,
+        _ => ConnState::Play,
+    }
+}
+
+/// Walks `packets` in receipt order from `start`, resolving each packet's OWN
+/// connection state from the three boundary packets a real handshake or resync can
+/// ever cross (`rc_paritybot::protocol_session::resolve_multi_phase`'s own doc comment
+/// has the full mechanism/citation, restated here independently since this crate can
+/// never depend on that one): `login_finished` ends `Login` — the very next packet is
+/// `Configuration`; `finish_configuration` ends `Configuration` — the very next packet
+/// is `Play`; `start_configuration`, observed while in `Play`, is the server-initiated
+/// mid-play resync back to `Configuration` (a real Play-state clientbound packet,
+/// `protocol_packet_catalog::PLAY_CLIENTBOUND_PACKET_NAMES`). A packet whose own name
+/// could not be resolved at capture time (`packet_name: None`) can never itself BE one
+/// of these three markers, so it is carried at whatever state is already in effect,
+/// exactly like every other unremarkable packet — it never advances or resets the
+/// walk. Returns one `ConnState` per `packets` entry, same order, same length.
+fn resolve_conn_states(start: ConnState, packets: &[CapturedPacket]) -> Vec<ConnState> {
+    let mut state = start;
+    packets
+        .iter()
+        .map(|p| {
+            let this = state;
+            match (state, p.packet_name.as_deref()) {
+                (ConnState::Login, Some("login_finished")) => state = ConnState::Configuration,
+                (ConnState::Configuration, Some("finish_configuration")) => {
+                    state = ConnState::Play;
+                }
+                (ConnState::Play, Some("start_configuration")) => state = ConnState::Configuration,
+                _ => {}
+            }
+            this
+        })
+        .collect()
+}
+
 pub struct PacketTypeDiff {
     pub packet_id: i32,
-    /// The first `Some` name any captured instance of this `packet_id` carried, on
-    /// either side — report-only.
+    pub state: ConnState,
+    /// The first `Some` name any captured instance of this `(state, packet_id)`
+    /// bucket carried, on either side — report-only.
     pub packet_name: Option<String>,
     pub oracle_only_bodies: Vec<(Vec<u8>, usize)>, // (normalized body, excess count)
     pub ours_only_bodies: Vec<(Vec<u8>, usize)>,
 }
 
+/// One packet type absent from a step's own capture on exactly one side —
+/// `missing_in_oracle`/`missing_in_ours`'s own element type. Carries its own resolved
+/// connection state and name directly, exactly like `PacketTypeDiff` already carries
+/// its own `packet_name` — no caller ever needs a separate `packet_id -> name` map to
+/// interpret one of these, which is exactly the mechanism the pre-fix `(state, id)`
+/// collision defect exploited one layer up (a Configuration-state and a Play-state
+/// packet sharing a raw id could only ever contribute ONE name to a
+/// `BTreeMap<i32, String>`, M3.5-B03 governance fix).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingPacketType {
+    pub packet_id: i32,
+    pub state: ConnState,
+    pub packet_name: Option<String>,
+}
+
 #[derive(Default)]
 pub struct ProtocolDiffReport {
     pub mismatches: Vec<PacketTypeDiff>,
-    pub missing_in_oracle: Vec<i32>, // packet_id present only in ours
-    pub missing_in_ours: Vec<i32>,   // packet_id present only in oracle
-    /// The first `Some` `packet_name` observed for each `packet_id` this step's own
-    /// two packet lists carried, on either side — covers every id in `mismatches`
-    /// *and* every id in `missing_in_oracle`/`missing_in_ours` (unlike
-    /// `PacketTypeDiff::packet_name`, which only names a mismatched id). TEST-D59's
-    /// `known_divergences::resolve_step` resolves every mismatch's own packet name
-    /// through this map — an id absent from it (every packet on both sides that
-    /// carried no `packet_name` at capture time) can never match any register entry.
-    pub packet_names: std::collections::BTreeMap<i32, String>,
+    pub missing_in_oracle: Vec<MissingPacketType>, // present only in ours
+    pub missing_in_ours: Vec<MissingPacketType>,   // present only in oracle
 }
 
 /// §3.9, for one step's two packet lists (chunk-batch reordering + normalization
 /// already applied by the caller — kept as two separable steps for the acceptance
-/// tests' own benefit, mirroring `diff_captures`'s pure-function shape). Grouping and
-/// pass/fail are always keyed on the raw `packet_id`, never the best-effort
-/// `packet_name`.
-pub fn diff_step(oracle: &[CapturedPacket], ours: &[CapturedPacket]) -> ProtocolDiffReport {
+/// tests' own benefit, mirroring `diff_captures`'s pure-function shape). `step_id`
+/// picks each side's own `starting_state_for_step`; `resolve_conn_states` then walks
+/// each side's OWN packet list forward from there (independently — a real divergence
+/// could make the two sides cross a boundary at different points, and each side's own
+/// bucket key must reflect its own real state at that packet, not the other side's).
+/// Grouping and pass/fail are keyed on `(ConnState, packet_id)`, never the raw
+/// `packet_id` alone (M3.5-B03 governance fix, `docs/findings-for-planning.md`): a
+/// step whose own capture crosses more than one connection state
+/// (`session/disconnect_reconnect`, `session/observe_chunk`) can carry two genuinely
+/// different packet types under the same raw id (Configuration `update_enabled_
+/// features` and Play `chunk_batch_start` are both id 12) — bucketing on the raw id
+/// alone would silently fuse their two independent body multisets into one, masking
+/// a real divergence in either.
+pub fn diff_step(
+    step_id: &str,
+    oracle: &[CapturedPacket],
+    ours: &[CapturedPacket],
+) -> ProtocolDiffReport {
     use std::collections::BTreeMap;
 
     let mut report = ProtocolDiffReport::default();
-    let mut names: BTreeMap<i32, String> = BTreeMap::new();
+    let mut names: BTreeMap<(ConnState, i32), String> = BTreeMap::new();
 
-    let mut oracle_groups: BTreeMap<i32, BTreeMap<Vec<u8>, usize>> = BTreeMap::new();
-    for p in oracle {
+    let start = starting_state_for_step(step_id);
+    let oracle_states = resolve_conn_states(start, oracle);
+    let ours_states = resolve_conn_states(start, ours);
+
+    let mut oracle_groups: BTreeMap<(ConnState, i32), BTreeMap<Vec<u8>, usize>> = BTreeMap::new();
+    for (p, &state) in oracle.iter().zip(&oracle_states) {
         if let Some(n) = &p.packet_name {
-            names.entry(p.packet_id).or_insert_with(|| n.clone());
+            names
+                .entry((state, p.packet_id))
+                .or_insert_with(|| n.clone());
         }
         *oracle_groups
-            .entry(p.packet_id)
+            .entry((state, p.packet_id))
             .or_default()
             .entry(p.body.clone())
             .or_insert(0) += 1;
     }
-    let mut ours_groups: BTreeMap<i32, BTreeMap<Vec<u8>, usize>> = BTreeMap::new();
-    for p in ours {
+    let mut ours_groups: BTreeMap<(ConnState, i32), BTreeMap<Vec<u8>, usize>> = BTreeMap::new();
+    for (p, &state) in ours.iter().zip(&ours_states) {
         if let Some(n) = &p.packet_name {
-            names.entry(p.packet_id).or_insert_with(|| n.clone());
+            names
+                .entry((state, p.packet_id))
+                .or_insert_with(|| n.clone());
         }
         *ours_groups
-            .entry(p.packet_id)
+            .entry((state, p.packet_id))
             .or_default()
             .entry(p.body.clone())
             .or_insert(0) += 1;
     }
 
-    let all_ids: std::collections::BTreeSet<i32> = oracle_groups
+    let all_keys: std::collections::BTreeSet<(ConnState, i32)> = oracle_groups
         .keys()
         .chain(ours_groups.keys())
         .copied()
         .collect();
 
-    for id in all_ids {
-        match (oracle_groups.get(&id), ours_groups.get(&id)) {
-            (Some(_), None) => report.missing_in_ours.push(id),
-            (None, Some(_)) => report.missing_in_oracle.push(id),
-            (None, None) => unreachable!("id came from the union of both key sets"),
+    for key @ (state, id) in all_keys {
+        match (oracle_groups.get(&key), ours_groups.get(&key)) {
+            (Some(_), None) => report.missing_in_ours.push(MissingPacketType {
+                packet_id: id,
+                state,
+                packet_name: names.get(&key).cloned(),
+            }),
+            (None, Some(_)) => report.missing_in_oracle.push(MissingPacketType {
+                packet_id: id,
+                state,
+                packet_name: names.get(&key).cloned(),
+            }),
+            (None, None) => unreachable!("key came from the union of both key sets"),
             (Some(oracle_bodies), Some(ours_bodies)) => {
                 if oracle_bodies == ours_bodies {
                     continue;
@@ -970,7 +1091,8 @@ pub fn diff_step(oracle: &[CapturedPacket], ours: &[CapturedPacket]) -> Protocol
                 }
                 report.mismatches.push(PacketTypeDiff {
                     packet_id: id,
-                    packet_name: names.get(&id).cloned(),
+                    state,
+                    packet_name: names.get(&key).cloned(),
                     oracle_only_bodies: oracle_only,
                     ours_only_bodies: ours_only,
                 });
@@ -978,7 +1100,6 @@ pub fn diff_step(oracle: &[CapturedPacket], ours: &[CapturedPacket]) -> Protocol
         }
     }
 
-    report.packet_names = names;
     report
 }
 
@@ -1052,7 +1173,7 @@ pub fn diff_captures(
             p.body = normalized;
         }
 
-        let report = diff_step(&oracle_packets, &ours_packets);
+        let report = diff_step(step_id, &oracle_packets, &ours_packets);
         result.insert(step_id.to_string(), report);
     }
     result
@@ -1211,9 +1332,90 @@ mod tests {
         );
         let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
         let step = report.get("session/spawn").expect("step present");
-        assert_eq!(step.missing_in_oracle, vec![77]);
+        assert_eq!(
+            step.missing_in_oracle,
+            vec![MissingPacketType {
+                packet_id: 77,
+                state: ConnState::Play,
+                packet_name: Some("some_packet".to_string()),
+            }]
+        );
         assert!(step.missing_in_ours.is_empty());
         assert!(step.mismatches.is_empty());
+    }
+
+    #[test]
+    fn a_configuration_and_play_packet_sharing_a_raw_id_never_collide_in_one_step() {
+        // `session/disconnect_reconnect` crosses Login -> Configuration -> Play within
+        // its own one capture; Configuration's own `update_enabled_features` and
+        // Play's own `chunk_batch_start` are both real id 12 (the collision this
+        // bucketing exists to fix — M3.5-B03 governance fix, `docs/findings-for-
+        // planning.md`). Both sides see the identical Configuration-state packet;
+        // only the oracle ever sees the Play-state one. The pre-fix raw-id-only
+        // bucketing would treat "id 12 present on both sides" as satisfied by the
+        // Configuration packet alone and silently hide the real, missing
+        // `chunk_batch_start` gap.
+        fn handshake(trailing: Vec<CapturedPacket>) -> Vec<CapturedPacket> {
+            let mut packets = vec![
+                pkt(0, 2, vec![9, 9], Some("login_finished")), // ends Login
+                pkt(1, 12, vec![1, 2, 3], Some("update_enabled_features")), // Configuration, id 12
+                pkt(2, 3, vec![], Some("finish_configuration")), // ends Configuration
+            ];
+            packets.extend(trailing);
+            packets
+        }
+
+        let oracle = cap(
+            "oracle:abc",
+            vec![StepCapture {
+                step_id: "session/disconnect_reconnect".to_string(),
+                observe_from: 0,
+                packets: handshake(vec![pkt(3, 12, vec![], Some("chunk_batch_start"))]),
+            }],
+        );
+        let ours = cap(
+            "ours",
+            vec![StepCapture {
+                step_id: "session/disconnect_reconnect".to_string(),
+                observe_from: 0,
+                packets: handshake(vec![]),
+            }],
+        );
+
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
+        let step = report
+            .get("session/disconnect_reconnect")
+            .expect("step present");
+
+        assert!(
+            step.missing_in_ours.contains(&MissingPacketType {
+                packet_id: 12,
+                state: ConnState::Play,
+                packet_name: Some("chunk_batch_start".to_string()),
+            }),
+            "the Play-state chunk_batch_start gap must surface even though \
+             Configuration's own id-12 update_enabled_features matched cleanly on \
+             both sides: {:?}",
+            step.missing_in_ours
+        );
+        assert!(
+            !step
+                .missing_in_ours
+                .iter()
+                .any(|m| m.state == ConnState::Configuration),
+            "the matching Configuration-state id-12 packet must never itself appear \
+             in missing_in_ours: {:?}",
+            step.missing_in_ours
+        );
+        assert!(
+            step.mismatches.is_empty(),
+            "the two id-12 packet types must never be compared against each other \
+             as one bucket: {:?}",
+            step.mismatches
+                .iter()
+                .map(|d| (d.state, d.packet_id))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

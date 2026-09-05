@@ -76,6 +76,13 @@ pub enum ProtocolSessionError {
         "floor-height discovery timed out — no non-air block ever observed below the bot's own spawn column within {0:?}"
     )]
     FloorDiscoveryTimeout(Duration),
+    /// M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "the survival
+    /// dig is held by wall clock" finding): `timed_break`'s own tick-based hold
+    /// (`SURVIVAL_DIG_HOLD_TICKS`) never released within `SURVIVAL_DIG_HOLD_MAX_WAIT`
+    /// — a server that stopped ticking (or never sent another `set_time` at all) must
+    /// fail the step loudly, never silently release the STOP packet early.
+    #[error("survival dig hold: {0}")]
+    ServerTickHold(#[from] crate::server_tick_wait::ServerTickWaitTimeout),
 }
 
 /// Bot usernames — `[a-zA-Z0-9_]`, well under 16 characters
@@ -86,17 +93,42 @@ pub enum ProtocolSessionError {
 /// nothing else in this crate needs to restate it.
 pub const DEFAULT_ACCOUNT_NAME: &str = "rc_proto_bot";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
-/// Generous settle wait after an ordinary (non-timed) action — mirrors
-/// `placement_capture.rs`'s own `ACTION_SETTLE_TICKS` idiom, restated in wall-clock
-/// terms since this module drives a live TCP connection through a real relay rather
-/// than azalea's own `wait_ticks` (still available via `client.wait_ticks`, used
-/// where it is the more natural unit).
+/// Generous settle wait after an ordinary (non-timed) action, via `client.
+/// wait_ticks` — mirrors `placement_capture.rs`'s own `ACTION_SETTLE_TICKS` idiom.
+/// M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "the survival dig
+/// is held by wall clock" finding) documents what this actually counts, since the
+/// distinction is exactly what that finding turned on: `Client::wait_ticks` waits for
+/// azalea's own `GameTick` schedule, which the bot runs on a fixed LOCAL cadence (50ms
+/// nominal, `client.rs`'s own "Runs the Update schedule 60 times per second and the
+/// GameTick schedule" doc comment, verified live against the pinned rev) entirely
+/// independent of the real server's own tick rate — never the server's own world age.
+/// That is exactly right for "wait a generous while for whatever packets are coming"
+/// (nothing here gates on an exact server-side count), but it would be exactly wrong
+/// for a step whose own pass/fail genuinely depends on the server having reached a
+/// specific tick — the one such step in this whole session is `session/dig_stone_
+/// survival`, held by `SURVIVAL_DIG_HOLD_TICKS` via `server_tick_wait::
+/// wait_for_server_ticks` instead, never this constant.
 const SETTLE_TICKS: usize = 10;
-/// Comfortably longer than vanilla's own well-established bare-hand-on-stone break
-/// time (~7.5s, hardness 1.5 with no correct-tool multiplier) — the one step in this
-/// whole session that needs *real* survival timing, not merely "eventually settles"
-/// (blueprint §4.3: "dig with timing").
-const SURVIVAL_DIG_HOLD: Duration = Duration::from_secs(9);
+/// Vanilla destroys a block by hand once `getDestroyProgress × (ticksSpentDestroying +
+/// 1) ≥ 0.7` at the STOP packet (reference `ServerPlayerGameMode.
+/// handleBlockBreakAction`'s own "destroyed" branch, restated — never Mojang's own
+/// method body, ASSET-D18/D19) — hardness 1.5, no correct-tool multiplier, bare-hand
+/// speed 1.0 gives `destroySpeed ≈ 0.0222`/tick, so the gate is met at real server
+/// tick 105. `SURVIVAL_DIG_HOLD_TICKS` holds for 130 (not exactly 105): headroom for
+/// `set_time`'s own periodic-broadcast granularity (vanilla resyncs roughly every 20
+/// ticks, `server_tick_wait`'s own module doc comment has the full citation) — the
+/// hold can only ever release a partial `set_time` interval LATE relative to 105,
+/// never early, so 130 is a safety margin, not a looser threshold. Counts the
+/// OBSERVED SERVER's own real ticks (`server_tick_wait::wait_for_server_ticks`),
+/// never wall-clock time: an oracle ticking below real time on a loaded machine must
+/// never let the STOP packet release before the server has genuinely earned it
+/// (`docs/findings-for-planning.md`'s own "the survival dig is held by wall clock"
+/// finding this fix closes).
+const SURVIVAL_DIG_HOLD_TICKS: u64 = 130;
+/// Safety net for `SURVIVAL_DIG_HOLD_TICKS`'s own hold — a server that stops ticking
+/// (or never sends another `set_time` at all) must fail this step loudly rather than
+/// block forever waiting for tick advance that will never come.
+const SURVIVAL_DIG_HOLD_MAX_WAIT: Duration = Duration::from_secs(30);
 /// `session/disconnect_reconnect`'s own reconnect boundary: how long the recorder
 /// must go quiet before it is trusted (`wait_for_recorder_quiescence`'s own doc
 /// comment has the full mechanism/citation).
@@ -427,29 +459,45 @@ async fn place_at_slot(
     ))
 }
 
-/// A plain `StartDestroyBlock`/wait/`StopDestroyBlock` sequence, `hold` apart —
-/// `instant_break` (creative speed) needs only the first packet (`placement_capture::
-/// break_block`'s own established shape); this longer form is the one genuine
-/// survival-timed dig this session drives (`SURVIVAL_DIG_HOLD`'s own doc comment).
+/// A `StartDestroyBlock`/hold/`StopDestroyBlock` sequence, held for `hold_ticks`
+/// OBSERVED SERVER ticks (`server_tick_wait::wait_for_server_ticks`, never wall
+/// clock) — `instant_break` (creative speed) needs only the first packet
+/// (`placement_capture::break_block`'s own established shape); this longer form is
+/// the one genuine survival-timed dig this session drives (`SURVIVAL_DIG_HOLD_TICKS`'s
+/// own doc comment). `recorder` is the SAME live recorder the caller's own step
+/// capture already reads — `skip` (its length right before `StartDestroyBlock` is
+/// queued) anchors the tick count to this dig's own start, never to whatever
+/// `set_time` traffic an earlier settle wait already left sitting in it.
 async fn timed_break(
     client: &Client,
+    recorder: &PacketRecorder,
     seq: &mut placement_capture::SeqCounter,
     pos: (i32, i32, i32),
-    hold: Duration,
-) {
+    hold_ticks: u64,
+    max_wait: Duration,
+) -> Result<(), ProtocolSessionError> {
+    let skip = recorder.len();
     client.write_packet(ServerboundPlayerAction {
         action: PlayerActionKind::StartDestroyBlock,
         pos: AzBlockPos::new(pos.0, pos.1, pos.2),
         direction: AzDirection::Up,
         seq: seq.next() as u32,
     });
-    tokio::time::sleep(hold).await;
+    crate::server_tick_wait::wait_for_server_ticks(
+        recorder,
+        skip,
+        |packet_id, body| resolve_packet_name(ConnState::Play, packet_id, body),
+        hold_ticks,
+        max_wait,
+    )
+    .await?;
     client.write_packet(ServerboundPlayerAction {
         action: PlayerActionKind::StopDestroyBlock,
         pos: AzBlockPos::new(pos.0, pos.1, pos.2),
         direction: AzDirection::Up,
         seq: seq.next() as u32,
     });
+    Ok(())
 }
 
 /// Discovers this session's own natural floor height at the bot's current column —
@@ -585,15 +633,23 @@ pub async fn run_protocol_session(
     recorder.clear();
 
     // `session/dig_stone_survival`: the one genuinely survival-timed dig (module doc
-    // comment, `SURVIVAL_DIG_HOLD`). `gamemode_survival`/`gamemode_creative` are the
-    // caller's own side-specific bridge into whichever mechanism that side's server
-    // actually exposes (this project's own `--debug-hooks` stdin line for `ours`, a
-    // real `/gamemode` console command for `oracle`) — this function only ever calls
-    // them, never inspects which one it got.
+    // comment, `SURVIVAL_DIG_HOLD_TICKS`). `gamemode_survival`/`gamemode_creative` are
+    // the caller's own side-specific bridge into whichever mechanism that side's
+    // server actually exposes (this project's own `--debug-hooks` stdin line for
+    // `ours`, a real `/gamemode` console command for `oracle`) — this function only
+    // ever calls them, never inspects which one it got.
     gamemode_survival().await;
     client.wait_ticks(SETTLE_TICKS).await;
     let dig_target = placement_capture::absolute(floor_y, (0, 0, 0));
-    timed_break(&client, &mut seq, dig_target, SURVIVAL_DIG_HOLD).await;
+    timed_break(
+        &client,
+        &recorder,
+        &mut seq,
+        dig_target,
+        SURVIVAL_DIG_HOLD_TICKS,
+        SURVIVAL_DIG_HOLD_MAX_WAIT,
+    )
+    .await?;
     client.wait_ticks(SETTLE_TICKS).await;
     push_step(
         &mut out,

@@ -35,8 +35,8 @@ pub use placement_trace::{
     PlacementDiffReport, ScenarioCapture,
 };
 pub use protocol_capture::{
-    CapturedPacket, PROTOCOL_CAPTURE_FORMAT_VERSION, ProtocolCaptureFile, ProtocolDiffReport,
-    StepCapture,
+    CapturedPacket, ConnState, MissingPacketType, PROTOCOL_CAPTURE_FORMAT_VERSION,
+    ProtocolCaptureFile, ProtocolDiffReport, StepCapture,
 };
 pub use replay::replay_contraption;
 pub use spec::{Category, ContraptionSpec, PlacedBlock, ScriptedAction};

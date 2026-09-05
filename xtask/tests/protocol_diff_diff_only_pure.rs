@@ -17,6 +17,39 @@ use rc_gametest::protocol_capture::{
 use xtask::corpus::protocol_diff::diff_into_result;
 use xtask::tier_result::{Status, TierResult};
 
+/// `session/disconnect_reconnect`'s own handshake prelude: `login_finished` (ends
+/// Login), a Configuration-state `update_enabled_features` at real id 12, then
+/// `finish_configuration` (ends Configuration) — every packet after this is Play
+/// state. Shared by both sides of `a_colliding_raw_id_across_states_is_never_masked`
+/// so the only difference between oracle and ours is `trailing`.
+fn reconnect_handshake(trailing: Vec<CapturedPacket>) -> Vec<CapturedPacket> {
+    let mut packets = vec![
+        CapturedPacket {
+            index: 0,
+            packet_id: 2,
+            body: vec![9, 9],
+            packet_name: Some("login_finished".to_string()),
+        },
+        CapturedPacket {
+            index: 1,
+            packet_id: 12,
+            body: vec![1, 2, 3],
+            packet_name: Some("update_enabled_features".to_string()),
+        },
+        CapturedPacket {
+            index: 2,
+            packet_id: 3,
+            body: vec![],
+            packet_name: Some("finish_configuration".to_string()),
+        },
+    ];
+    for (offset, mut packet) in trailing.into_iter().enumerate() {
+        packet.index = 3 + offset as u32;
+        packets.push(packet);
+    }
+    packets
+}
+
 /// A fresh, uniquely named temp directory `diff_into_result`'s own `repo_root`
 /// parameter can point at — its own `write_bodies_dump` needs somewhere to write
 /// `target/verify/protocol-diff-bodies.json` under, and this crate's own tests must
@@ -323,5 +356,102 @@ fn a_body_mismatch_detail_never_carries_the_full_body_bytes() {
         longest_hex_run <= 64,
         "detail contains a hex run of {longest_hex_run} chars — looks like a full body \
          dump, not a bounded preview: {detail}"
+    );
+}
+
+#[test]
+fn a_colliding_raw_id_across_states_is_never_masked() {
+    // `session/disconnect_reconnect` crosses Login -> Configuration -> Play within
+    // one capture; Configuration's own `update_enabled_features` and Play's own
+    // `chunk_batch_start` are both real id 12 (M3.5-B03 governance fix, mismatch
+    // buckets keyed by connection state — `docs/findings-for-planning.md`). Both
+    // sides send the identical Configuration-state packet; only the oracle ever
+    // sends the Play-state `chunk_batch_start` batches. Before the fix, `diff_step`
+    // grouped purely by raw `packet_id`, so "id 12 present on both sides" was already
+    // satisfied by the Configuration packet alone and the real, missing
+    // `chunk_batch_start` gap could never surface as its own case detail.
+    let oracle_batches: Vec<CapturedPacket> = (0..3)
+        .map(|i| CapturedPacket {
+            index: 0,
+            packet_id: 12,
+            body: vec![i],
+            packet_name: Some("chunk_batch_start".to_string()),
+        })
+        .collect();
+
+    let oracle = capture(
+        "oracle:deadbeef",
+        vec![StepCapture {
+            step_id: "session/disconnect_reconnect".to_string(),
+            observe_from: 0,
+            packets: reconnect_handshake(oracle_batches),
+        }],
+    );
+    let ours = capture(
+        "ours",
+        vec![StepCapture {
+            step_id: "session/disconnect_reconnect".to_string(),
+            observe_from: 0,
+            packets: reconnect_handshake(vec![]),
+        }],
+    );
+
+    let mut result = TierResult::new("protocol-diff");
+    let repo_root = temp_repo_root("colliding-id-unregistered");
+    diff_into_result(&mut result, &oracle, &ours, &[], &repo_root);
+    let result = result.finalize();
+
+    let case = result
+        .cases
+        .iter()
+        .find(|c| c.name == "session/disconnect_reconnect")
+        .expect("session/disconnect_reconnect case present");
+    assert_eq!(
+        case.status,
+        Status::Fail,
+        "the Play-state chunk_batch_start gap must fail the step even though \
+         Configuration's own id-12 update_enabled_features matched cleanly"
+    );
+    let detail = case.detail.as_deref().expect("fail case carries a detail");
+    assert!(
+        detail.contains("chunk_batch_start"),
+        "detail must name the genuinely missing packet type: {detail}"
+    );
+    assert!(
+        !detail.contains("update_enabled_features"),
+        "the matching Configuration-state packet must never appear as a divergence: {detail}"
+    );
+
+    // A register entry naming `chunk_batch_start` for this step closes exactly this
+    // gap — proving the fix resolves the *correct* one of the two id-12 packet types,
+    // never the Configuration-state one that happens to share its raw id.
+    let register = vec![KnownDivergence {
+        steps: "session/disconnect_reconnect".to_string(),
+        packet: "minecraft:chunk_batch_start".to_string(),
+        class: DivergenceClass::Missing,
+        closes_with: Some("NET hardening: chunk streaming and batch pacing".to_string()),
+        expires: Some("M5".to_string()),
+    }];
+    let mut registered_result = TierResult::new("protocol-diff");
+    let registered_repo_root = temp_repo_root("colliding-id-registered");
+    diff_into_result(
+        &mut registered_result,
+        &oracle,
+        &ours,
+        &register,
+        &registered_repo_root,
+    );
+    let registered_result = registered_result.finalize();
+    let registered_case = registered_result
+        .cases
+        .iter()
+        .find(|c| c.name == "session/disconnect_reconnect")
+        .expect("session/disconnect_reconnect case present");
+    assert_eq!(
+        registered_case.status,
+        Status::Pass,
+        "registering minecraft:chunk_batch_start as Missing for this step must close \
+         the gap: {:?}",
+        registered_case.detail
     );
 }

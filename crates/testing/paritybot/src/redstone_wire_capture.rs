@@ -57,6 +57,14 @@ pub enum RedstoneWireCaptureError {
         "floor-height discovery timed out — no non-air block ever observed below the bot's own spawn column within {0:?}"
     )]
     FloorDiscoveryTimeout(Duration),
+    /// M3.5-B03 governance fix (`docs/findings-for-planning.md`'s own "the survival
+    /// dig is held by wall clock" finding, generalized to every timed wait for a
+    /// server-side effect this crate drives): `apply_actions`'s own tick-based hold
+    /// never released within its own generous cap — a server that stopped ticking (or
+    /// never sent another `set_time` at all) must fail the contraption's own capture
+    /// loudly, never silently apply a scripted action at the wrong real server tick.
+    #[error("scripted-action tick hold: {0}")]
+    ServerTickHold(#[from] crate::server_tick_wait::ServerTickWaitTimeout),
 }
 
 /// How one `PlacedBlock` cell of a corpus contraption is realized.
@@ -384,28 +392,66 @@ where
     Ok(())
 }
 
-/// Nominal real-time budget per simulated tick, for `spec.actions`' own `tick` field
-/// (§"No tick-freeze" — this pass runs real, unfrozen ticks, so a scripted action's
-/// own `tick` is realized as a proportional real-time wait rather than a tick-exact
-/// barrier).
+/// Nominal real-time budget per simulated tick — still used by the trailing settle
+/// wait at the end of `capture_contraption_over_wire` (`spec.max_ticks * NOMINAL_TICK_
+/// MS`, a deliberately approximate margin per the blueprint's own §"No tick-freeze"
+/// text: "`spec.max_ticks` bounds a generous real-time wait... rather than a
+/// tick-exact barrier"), and by `action_tick_max_wait`'s own generous scaling below.
+/// No longer used to convert a scripted action's own `tick` into a wall-clock sleep
+/// (M3.5-B03 governance fix, `docs/findings-for-planning.md`'s own "the survival dig
+/// is held by wall clock" finding, generalized here): unlike the trailing settle
+/// wait, a `ScriptedAction`'s own `tick` IS a real server-tick threshold (blueprint
+/// §4.4: applied "at the *start* of this tick") a mid-run state poke must land at —
+/// realizing it as `gap * NOMINAL_TICK_MS` real milliseconds landed the poke at the
+/// wrong real server tick whenever either side ticked below the assumed 20 TPS,
+/// exactly the class of defect the dig-hold finding surfaced.
 const NOMINAL_TICK_MS: u64 = 50;
 
-/// Applies `spec.actions` in ascending `tick` order, waiting proportionally to the
-/// gap between consecutive ticks before each — the exact same `setblock` prelude
-/// mechanism `place_contraption` uses for a `SetblockPrelude` cell, never a separate
-/// code path (blueprint §4.4).
-async fn apply_actions<F, Fut>(origin: (i32, i32, i32), spec: &ContraptionSpec, setblock: &F)
+/// Generous per-action wait cap for `apply_actions`' own tick-based hold, scaled from
+/// the contraption's own declared `spec.max_ticks` (a real budget this fixture's own
+/// author already sized for the whole capture) rather than a single flat constant —
+/// the redstone corpus spans `max_ticks` values from 6 to 190
+/// (`crates/testing/gametest/corpus/redstone/*.ron`), and a cap sized for the
+/// smallest would starve the largest on a loaded machine. A 6x margin over the
+/// nominal (20 TPS) real-time budget absorbs a server ticking as low as ~3.3 TPS
+/// without ever hanging indefinitely; floored at 30s so even a tiny `max_ticks`
+/// fixture gets a real safety margin (mirrors `protocol_session.rs`'s own
+/// `SURVIVAL_DIG_HOLD_MAX_WAIT`).
+fn action_tick_max_wait(spec_max_ticks: u32) -> Duration {
+    let nominal = Duration::from_millis(spec_max_ticks as u64 * NOMINAL_TICK_MS);
+    (nominal * 6).max(Duration::from_secs(30))
+}
+
+/// Applies `spec.actions` in ascending `tick` order, holding before each until the
+/// OBSERVED SERVER has genuinely reached that action's own `tick` since this
+/// contraption's own actions began (`server_tick_wait::wait_for_server_ticks`, never
+/// a wall-clock sleep proportional to the tick gap — M3.5-B03 governance fix, this
+/// module's own `NOMINAL_TICK_MS` doc comment has the full rationale). `setblock` is
+/// the exact same closure `place_contraption` uses for a `SetblockPrelude` cell,
+/// never a separate mechanism (blueprint §4.4).
+async fn apply_actions<F, Fut>(
+    origin: (i32, i32, i32),
+    spec: &ContraptionSpec,
+    recorder: &PacketRecorder,
+    setblock: &F,
+) -> Result<(), RedstoneWireCaptureError>
 where
     F: Fn((i32, i32, i32), u32, &str) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
     let mut actions: Vec<&ScriptedAction> = spec.actions.iter().collect();
     actions.sort_by_key(|a| a.tick);
-    let mut previous_tick = 0u64;
+    let start_index = recorder.len();
+    let max_wait = action_tick_max_wait(spec.max_ticks);
     for action in actions {
-        let gap = action.tick.saturating_sub(previous_tick);
-        tokio::time::sleep(Duration::from_millis(gap * NOMINAL_TICK_MS)).await;
-        previous_tick = action.tick;
+        crate::server_tick_wait::wait_for_server_ticks(
+            recorder,
+            start_index,
+            resolve_packet_name,
+            action.tick,
+            max_wait,
+        )
+        .await?;
         setblock(
             world_pos(origin, action.pos),
             action.state_id,
@@ -413,6 +459,7 @@ where
         )
         .await;
     }
+    Ok(())
 }
 
 /// Drives one `ContraptionSpec`'s own `blocks` through real placement (or the
@@ -479,7 +526,7 @@ where
     // is where the setup phase ends and the observed window begins, identically on
     // both sides.
     let observe_from = recorder.len() as u32;
-    apply_actions(origin, spec, &setblock).await;
+    apply_actions(origin, spec, recorder, &setblock).await?;
 
     // The remainder of `spec.max_ticks`' own real-time budget, so any settling
     // effect a scripted action (or the placement pass itself) triggers has a real

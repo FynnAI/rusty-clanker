@@ -87,7 +87,8 @@ use std::time::Duration;
 
 use rc_gametest::known_divergences::{self, DivergenceClass, KnownDivergence};
 use rc_gametest::protocol_capture::{
-    ContraptionBounds, PacketTypeDiff, ProtocolCaptureFile, diff_captures, read_capture,
+    ContraptionBounds, MissingPacketType, PacketTypeDiff, ProtocolCaptureFile, diff_captures,
+    read_capture,
 };
 
 use crate::corpus::placement_diff::Side;
@@ -827,7 +828,9 @@ pub fn run(args: &ProtocolDiffArgs) -> std::process::ExitCode {
                 runner_args.push(only.clone());
             }
             // The scripted session's own genuinely survival-timed dig step
-            // (`SURVIVAL_DIG_HOLD`, ~9s) plus 51 real redstone-corpus placements
+            // (`SURVIVAL_DIG_HOLD_TICKS`/`SURVIVAL_DIG_HOLD_MAX_WAIT` — ~6.5s nominal,
+            // capped at 30s on a lagging server, `protocol_session.rs`'s own doc
+            // comment) plus 51 real redstone-corpus placements
             // (each waiting up to its own `spec.max_ticks * 50ms`, MAX_TICKS capped
             // at 200 -> up to 10s) dominate this budget far more than `placement-
             // diff`'s own scenario count ever did. Real-run finding (`docs/findings-
@@ -1139,6 +1142,11 @@ fn write_bodies_dump(
     struct BodiesDumpEntry<'a> {
         step_id: &'a str,
         packet_id: i32,
+        /// M3.5-B03 governance fix (mismatch buckets keyed by connection state,
+        /// `docs/findings-for-planning.md`): named explicitly so a step whose own
+        /// capture crosses more than one connection state never leaves a reader
+        /// guessing which of two same-id packet types a dumped body pair belongs to.
+        conn_state: &'static str,
         packet_name: Option<&'a str>,
         oracle_only_bodies: &'a [(Vec<u8>, usize)],
         ours_only_bodies: &'a [(Vec<u8>, usize)],
@@ -1150,6 +1158,7 @@ fn write_bodies_dump(
             entries.push(BodiesDumpEntry {
                 step_id,
                 packet_id: diff.packet_id,
+                conn_state: diff.state.label(),
                 packet_name: diff.packet_name.as_deref(),
                 oracle_only_bodies: &diff.oracle_only_bodies,
                 ours_only_bodies: &diff.ours_only_bodies,
@@ -1310,14 +1319,12 @@ fn push_diff_cases(
             detail_parts.push(compact_missing_detail(
                 "packet id(s) present only in ours, never observed from the oracle",
                 &verdict.unregistered_missing_in_oracle,
-                &report.packet_names,
             ));
         }
         if !verdict.unregistered_missing_in_ours.is_empty() {
             detail_parts.push(compact_missing_detail(
                 "packet id(s) present only in the oracle capture, never observed from ours",
                 &verdict.unregistered_missing_in_ours,
-                &report.packet_names,
             ));
         }
         for diff in &verdict.unregistered_mismatches {
@@ -1357,8 +1364,10 @@ fn body_preview(body: &[u8]) -> String {
 fn compact_mismatch_detail(diff: &PacketTypeDiff) -> String {
     let name = diff.packet_name.as_deref().unwrap_or("<unresolved>");
     let mut detail = format!(
-        "packet id {} ({name}): {} distinct oracle-only bod(ies), {} distinct ours-only bod(ies)",
+        "packet id {} ({name}, {} state): {} distinct oracle-only bod(ies), {} distinct \
+         ours-only bod(ies)",
         diff.packet_id,
+        diff.state,
         diff.oracle_only_bodies.len(),
         diff.ours_only_bodies.len()
     );
@@ -1378,19 +1387,20 @@ fn compact_mismatch_detail(diff: &PacketTypeDiff) -> String {
 }
 
 /// One `unregistered_missing_in_oracle`/`unregistered_missing_in_ours` list's own
-/// compact detail — packet type names (resolved from `names`, `<unresolved>` when
-/// the id never carried one) with their raw ids, never anything about the body (a
-/// presence-set entry has no body to compare in the first place).
-fn compact_missing_detail(
-    label: &str,
-    ids: &[i32],
-    names: &std::collections::BTreeMap<i32, String>,
-) -> String {
-    let parts: Vec<String> = ids
+/// compact detail — each entry's own resolved packet name and connection state
+/// (`<unresolved>` when the packet never carried a name at capture time) with its raw
+/// id, never anything about the body (a presence-set entry has no body to compare in
+/// the first place). Each entry carries its own name/state directly (M3.5-B03
+/// governance fix, mismatch buckets keyed by connection state,
+/// `docs/findings-for-planning.md`) — no separate `packet_id -> name` map to consult,
+/// which is exactly the mechanism that used to let a Configuration-state and a
+/// Play-state packet sharing a raw id shadow each other's own name.
+fn compact_missing_detail(label: &str, entries: &[&MissingPacketType]) -> String {
+    let parts: Vec<String> = entries
         .iter()
-        .map(|id| match names.get(id) {
-            Some(name) => format!("{name} (id {id})"),
-            None => format!("<unresolved> (id {id})"),
+        .map(|entry| {
+            let name = entry.packet_name.as_deref().unwrap_or("<unresolved>");
+            format!("{name} (id {}, {} state)", entry.packet_id, entry.state)
         })
         .collect();
     format!("{label}: {}", parts.join(", "))
@@ -1432,7 +1442,9 @@ fn print_case_table(result: &TierResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rc_gametest::protocol_capture::{PacketTypeDiff, ProtocolDiffReport};
+    use rc_gametest::protocol_capture::{
+        ConnState, MissingPacketType, PacketTypeDiff, ProtocolDiffReport,
+    };
 
     #[test]
     fn tier_result_shape() {
@@ -1442,13 +1454,17 @@ mod tests {
             ProtocolDiffReport {
                 mismatches: vec![PacketTypeDiff {
                     packet_id: 9,
+                    state: ConnState::Play,
                     packet_name: Some("block_update".to_string()),
                     oracle_only_bodies: vec![(vec![1, 2, 3], 1)],
                     ours_only_bodies: vec![(vec![1, 2, 4], 1)],
                 }],
-                missing_in_oracle: vec![77],
+                missing_in_oracle: vec![MissingPacketType {
+                    packet_id: 77,
+                    state: ConnState::Play,
+                    packet_name: None,
+                }],
                 missing_in_ours: vec![],
-                ..Default::default()
             },
         );
         report_by_step.insert(
@@ -1457,7 +1473,6 @@ mod tests {
                 mismatches: vec![],
                 missing_in_oracle: vec![],
                 missing_in_ours: vec![],
-                ..Default::default()
             },
         );
 

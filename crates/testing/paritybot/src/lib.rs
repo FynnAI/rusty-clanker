@@ -14,4 +14,5 @@ pub mod placement_capture;
 pub mod protocol_session;
 pub mod redstone_wire_capture;
 pub mod restart_persistence;
+pub mod server_tick_wait;
 pub mod vanilla_registry_defaults;

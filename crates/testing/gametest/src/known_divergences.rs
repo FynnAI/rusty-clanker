@@ -24,7 +24,7 @@
 
 use std::path::Path;
 
-use crate::protocol_capture::{PacketTypeDiff, ProtocolDiffReport};
+use crate::protocol_capture::{MissingPacketType, PacketTypeDiff, ProtocolDiffReport};
 
 /// TEST-D59's own three-way class taxonomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
@@ -84,10 +84,11 @@ impl KnownDivergence {
     }
 
     /// `packet` compared against `resolved_name` (the already-resolved, unnamespaced
-    /// name `protocol_capture::CapturedPacket::packet_name`/`ProtocolDiffReport::
-    /// packet_names` carries — azalea's own `ProtocolPacket::name()` never includes
-    /// the `"minecraft:"` prefix) with the register's own namespaced `packet` field
-    /// stripped of that same prefix before comparing.
+    /// name `protocol_capture::CapturedPacket::packet_name`/`MissingPacketType::
+    /// packet_name`/`PacketTypeDiff::packet_name` carries — azalea's own
+    /// `ProtocolPacket::name()` never includes the `"minecraft:"` prefix) with the
+    /// register's own namespaced `packet` field stripped of that same prefix before
+    /// comparing.
     pub fn matches_packet(&self, resolved_name: &str) -> bool {
         self.packet
             .strip_prefix("minecraft:")
@@ -226,8 +227,8 @@ pub struct KnownEntryMatch<'a> {
 /// One step's own resolution verdict — `resolve_step`'s return value.
 pub struct StepVerdict<'a> {
     pub known: Vec<KnownEntryMatch<'a>>,
-    pub unregistered_missing_in_oracle: Vec<i32>,
-    pub unregistered_missing_in_ours: Vec<i32>,
+    pub unregistered_missing_in_oracle: Vec<&'a MissingPacketType>,
+    pub unregistered_missing_in_ours: Vec<&'a MissingPacketType>,
     pub unregistered_mismatches: Vec<&'a PacketTypeDiff>,
 }
 
@@ -255,11 +256,15 @@ fn find_match<'a>(
 
 /// TEST-D59's own per-step diff resolution (Deliverable 2): classifies every entry of
 /// `report`'s own `missing_in_oracle`/`missing_in_ours`/`mismatches` against
-/// `register`, by packet name (`report.packet_names`, populated by `diff_step` for
-/// every packet id it ever saw on either side — an id absent from that map can never
-/// match any register entry and always stays unregistered, TEST-D59's own "an
-/// unresolvable id can never match an entry" clause). `Missing`/`Timer` entries cover
-/// presence-only divergences; `Body`/`Timer` entries cover `mismatches`.
+/// `register`, by packet name — each entry now carries its own resolved
+/// `packet_name` directly (`MissingPacketType`/`PacketTypeDiff`, M3.5-B03 governance
+/// fix: mismatch buckets keyed by connection state, `docs/findings-for-planning.md`),
+/// never a shared `packet_id -> name` map a Configuration-state and a Play-state
+/// packet sharing a raw id could only ever populate with one winner's name. An
+/// unresolvable name (`packet_name: None`) can never match any register entry,
+/// TEST-D59's own "an unresolvable id can never match an entry" clause, unchanged.
+/// `Missing`/`Timer` entries cover presence-only divergences; `Body`/`Timer` entries
+/// cover `mismatches`.
 pub fn resolve_step<'a>(
     step_id: &str,
     report: &'a ProtocolDiffReport,
@@ -276,28 +281,36 @@ pub fn resolve_step<'a>(
         &[DivergenceClass::Missing, DivergenceClass::Timer];
     const BODY_CLASSES: &[DivergenceClass] = &[DivergenceClass::Body, DivergenceClass::Timer];
 
-    for &id in &report.missing_in_oracle {
-        let name = report.packet_names.get(&id).cloned();
-        match find_match(register, step_id, name.as_deref(), PRESENCE_CLASSES) {
-            Some(entry) => verdict.known.push(KnownEntryMatch {
-                packet_id: id,
-                packet_name: name,
+    for entry in &report.missing_in_oracle {
+        match find_match(
+            register,
+            step_id,
+            entry.packet_name.as_deref(),
+            PRESENCE_CLASSES,
+        ) {
+            Some(matched) => verdict.known.push(KnownEntryMatch {
+                packet_id: entry.packet_id,
+                packet_name: entry.packet_name.clone(),
                 kind: MismatchKind::MissingInOracle,
-                matched: entry,
+                matched,
             }),
-            None => verdict.unregistered_missing_in_oracle.push(id),
+            None => verdict.unregistered_missing_in_oracle.push(entry),
         }
     }
-    for &id in &report.missing_in_ours {
-        let name = report.packet_names.get(&id).cloned();
-        match find_match(register, step_id, name.as_deref(), PRESENCE_CLASSES) {
-            Some(entry) => verdict.known.push(KnownEntryMatch {
-                packet_id: id,
-                packet_name: name,
+    for entry in &report.missing_in_ours {
+        match find_match(
+            register,
+            step_id,
+            entry.packet_name.as_deref(),
+            PRESENCE_CLASSES,
+        ) {
+            Some(matched) => verdict.known.push(KnownEntryMatch {
+                packet_id: entry.packet_id,
+                packet_name: entry.packet_name.clone(),
                 kind: MismatchKind::MissingInOurs,
-                matched: entry,
+                matched,
             }),
-            None => verdict.unregistered_missing_in_ours.push(id),
+            None => verdict.unregistered_missing_in_ours.push(entry),
         }
     }
     for diff in &report.mismatches {
@@ -518,7 +531,14 @@ mod tests {
     #[test]
     fn a_missing_entry_turns_an_oracle_only_type_into_known() {
         let report = one_step_report(vec![pkt(0, 55, vec![1, 2, 3], Some("commands"))], vec![]);
-        assert_eq!(report.missing_in_ours, vec![55]);
+        assert_eq!(
+            report.missing_in_ours,
+            vec![MissingPacketType {
+                packet_id: 55,
+                state: crate::protocol_capture::ConnState::Play,
+                packet_name: Some("commands".to_string()),
+            }]
+        );
 
         let register = vec![missing_entry("session/spawn", "minecraft:commands")];
         let verdict = resolve_step("session/spawn", &report, &register);
@@ -583,7 +603,8 @@ mod tests {
         }];
         let verdict = resolve_step("session/spawn", &report, &register);
         assert!(!verdict.passes());
-        assert_eq!(verdict.unregistered_missing_in_ours, vec![200]);
+        assert_eq!(verdict.unregistered_missing_in_ours.len(), 1);
+        assert_eq!(verdict.unregistered_missing_in_ours[0].packet_id, 200);
     }
 
     #[test]
