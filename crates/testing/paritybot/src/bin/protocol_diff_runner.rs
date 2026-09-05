@@ -83,6 +83,28 @@ use rc_paritybot::{protocol_session, redstone_wire_capture};
 /// the runner it launches).
 const ORACLE_PORT: u16 = 25568;
 
+/// M3.5-B03 governance fix (`run_oracle_side`'s own doc comment on its call site has the
+/// full rationale): the three gamerules that stop the oracle's background world
+/// simulation — mob spawning, random ticks, weather — from producing nondeterministic
+/// packets this pass can neither compare nor honestly register, while `set_time` and the
+/// rest of the clock keep advancing (`tick freeze`/`advance_time false` are never sent).
+/// Command text and expected-acknowledgement substring both match `corpus_capture.rs`'s
+/// own `SETUP_COMMANDS` table entries for these same three gamerules exactly.
+const FREEZE_COMMANDS: [(&str, &str); 3] = [
+    (
+        "gamerule spawn_mobs false",
+        "Gamerule spawn_mobs is now set to: false",
+    ),
+    (
+        "gamerule random_tick_speed 0",
+        "Gamerule random_tick_speed is now set to: 0",
+    ),
+    (
+        "gamerule advance_weather false",
+        "Gamerule advance_weather is now set to: false",
+    ),
+];
+
 fn single_line(text: impl std::fmt::Display) -> String {
     text.to_string().replace('\n', " ")
 }
@@ -234,13 +256,40 @@ async fn run_oracle_side(
 
     // Governance fix (mirrors `placement_diff_runner`'s own identical concern): a
     // real end-to-end run shares this machine with other real, CPU-heavy work.
-    let handle = rc_gametest::capture::launch_oracle_server(
+    let mut handle = rc_gametest::capture::launch_oracle_server(
         &jar_path,
         &work_dir,
         ORACLE_PORT,
         Duration::from_secs(300),
     )
     .map_err(|err| format!("failed to launch the oracle server: {err}"))?;
+
+    // M3.5-B03 governance fix (blueprint §4.4's amended "No tick-freeze" note,
+    // `docs/findings-for-planning.md`): time keeps running on this pass — freezing it
+    // would itself change the wire shape a real client sees — but the oracle's
+    // background world simulation outside the M1–M3 surface must not: natural mob
+    // spawning, random-tick vegetation (grass spread, crop growth, leaf decay, …) and
+    // weather changes are nondeterministic in position and count, so a `Missing`/`Body`
+    // divergence keyed on one of their packets for a whole step could mask a real gap in
+    // that same step. `tick freeze`/`gamerule advance_time false` are deliberately never
+    // sent here — the clock keeps advancing (`set_time` stays a `Timer`-class register
+    // entry) — only these three gamerules, sent and positively acknowledged exactly as
+    // `corpus_capture.rs`'s own `SETUP_COMMANDS` table does for the same three (same
+    // command text, same expected-acknowledgement substring, same verification via
+    // `verify_setup_commands_accepted` rather than trusting `send_console_command`'s own
+    // success). Table lives at module scope (`FREEZE_COMMANDS` below) so
+    // `freeze_commands_tests` can check its exact contents without a JVM.
+    for (command, _expected_ack) in FREEZE_COMMANDS {
+        rc_gametest::capture::send_console_command(&mut handle, command)
+            .map_err(|err| format!("failed to send {command:?} to the oracle: {err}"))?;
+    }
+    rc_gametest::capture::verify_setup_commands_accepted(
+        &work_dir,
+        &FREEZE_COMMANDS,
+        Duration::from_secs(10),
+    )
+    .map_err(|err| format!("oracle rejected the background-simulation freeze commands: {err}"))?;
+
     let handle = Rc::new(RefCell::new(handle));
 
     let account_name = protocol_session::DEFAULT_ACCOUNT_NAME.to_string();
@@ -455,4 +504,78 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
 
     write_capture(&out_capture_path, &capture)
         .map_err(|err| format!("failed to write {}: {err}", out_capture_path.display()))
+}
+
+/// M3.5-B03 governance fix: `FREEZE_COMMANDS` is the one part of the oracle-side
+/// background-simulation freeze checkable without a live JVM — everything else
+/// (`launch_oracle_server`, `send_console_command`, `verify_setup_commands_accepted`)
+/// needs the real oracle process this crate never links in a unit test (module doc
+/// comment's own "`xtask.exe` must never link `azalea`" citation applies equally to a
+/// real JVM oracle). This module is not a `crates/*/tests/` suite and its basename
+/// matches none of `xtask::case_matrix::MECHANIC_TEST_PREFIXES`, so it owes no TEST-D55
+/// case-matrix header (`is_crate_test_path`/`file_requires_case_matrix`) — it exercises
+/// harness plumbing, not world-interacting game mechanics.
+#[cfg(test)]
+mod freeze_commands_tests {
+    use super::FREEZE_COMMANDS;
+
+    #[test]
+    fn exactly_three_gamerules_and_none_are_the_clock() {
+        assert_eq!(FREEZE_COMMANDS.len(), 3);
+        for (command, ack) in FREEZE_COMMANDS {
+            assert!(
+                command.starts_with("gamerule "),
+                "freeze command {command:?} is not a gamerule"
+            );
+            assert!(
+                !command.contains("advance_time") && !command.contains("tick freeze"),
+                "freeze command {command:?} would stop the clock, which must keep running"
+            );
+            assert!(
+                ack.starts_with("Gamerule "),
+                "acknowledgement {ack:?} for {command:?} is not a gamerule acknowledgement"
+            );
+        }
+    }
+
+    #[test]
+    fn commands_and_acknowledgements_match_corpus_capture_setup_commands() {
+        // Same command text and same expected-acknowledgement substring as
+        // `corpus_capture.rs`'s own `SETUP_COMMANDS` table for these same three
+        // gamerules — verified by inspection there; pinned here so the two tables can
+        // never silently drift apart.
+        assert_eq!(
+            FREEZE_COMMANDS,
+            [
+                (
+                    "gamerule spawn_mobs false",
+                    "Gamerule spawn_mobs is now set to: false",
+                ),
+                (
+                    "gamerule random_tick_speed 0",
+                    "Gamerule random_tick_speed is now set to: 0",
+                ),
+                (
+                    "gamerule advance_weather false",
+                    "Gamerule advance_weather is now set to: false",
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_duplicate_gamerule_names() {
+        let names: Vec<&str> = FREEZE_COMMANDS
+            .iter()
+            .map(|(command, _)| command.split_whitespace().nth(1).unwrap_or(command))
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            names.len(),
+            sorted.len(),
+            "FREEZE_COMMANDS names the same gamerule twice: {names:?}"
+        );
+    }
 }

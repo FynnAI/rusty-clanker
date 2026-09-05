@@ -217,15 +217,25 @@ mod tests {
     }
 
     /// Every packet name this harness's own `NORMALIZATION_RULES` table masks
-    /// (`protocol_capture.rs`) is a real play-state clientbound packet — a stale or
-    /// mistyped `packet_name` row there would otherwise mask nothing.
+    /// (`protocol_capture.rs`) is a real clientbound packet in at least one of the
+    /// three protocol states this harness ever observes — a stale or mistyped
+    /// `packet_name` row there would otherwise mask nothing. Most rows are Play-state
+    /// (the harness's own overwhelming majority of traffic), but `NORMALIZATION_RULES`
+    /// is matched purely by name (`normalize_body`'s own dispatch), never by state, so
+    /// a genuinely Login-only or Configuration-only packet (`login_finished`,
+    /// M3.5-B03 governance fix) belongs in this table exactly the same way — checked
+    /// against the union of all three tables, never `PLAY_CLIENTBOUND_PACKET_NAMES`
+    /// alone.
     #[test]
-    fn every_normalization_rule_packet_name_is_a_known_play_clientbound_packet() {
+    fn every_normalization_rule_packet_name_is_a_known_clientbound_packet() {
         for rule in crate::protocol_capture::NORMALIZATION_RULES {
             let namespaced = format!("minecraft:{}", rule.packet_name);
             assert!(
-                PLAY_CLIENTBOUND_PACKET_NAMES.contains(&namespaced.as_str()),
-                "NORMALIZATION_RULES packet_name {:?} not found in PLAY_CLIENTBOUND_PACKET_NAMES",
+                LOGIN_CLIENTBOUND_PACKET_NAMES.contains(&namespaced.as_str())
+                    || CONFIGURATION_CLIENTBOUND_PACKET_NAMES.contains(&namespaced.as_str())
+                    || PLAY_CLIENTBOUND_PACKET_NAMES.contains(&namespaced.as_str()),
+                "NORMALIZATION_RULES packet_name {:?} not found in any of the Login/\
+                 Configuration/Play clientbound packet-name tables",
                 rule.packet_name
             );
         }

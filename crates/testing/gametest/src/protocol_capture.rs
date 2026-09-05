@@ -297,6 +297,43 @@ pub const NORMALIZATION_RULES: &[PacketNormalizationRule] = &[
         }],
         mask_whole_body: false,
     },
+    // `LoginFinished`: `record ClientboundLoginFinishedPacket(GameProfile gameProfile,
+    // UUID sessionId)` (ASSET-D18(f) reference) — `gameProfile` (id: UUID 16B + name:
+    // VarInt-length string + properties: VarInt-counted list of {name, value, optional
+    // signature} strings) is deterministic (offline-mode UUID is a pure hash of the
+    // fixed bot account name, TEST-D57) and stays unmasked; `sessionId` (16B, the same
+    // fixed-width UUID codec) is a fresh random value picked per login and immediately
+    // follows the profile at a data-dependent offset (the properties list is
+    // variable-length, even though this harness's own bot always presents zero of
+    // them) — masked wholesale (M3.5-B03 governance fix: replaces the register entry
+    // this session UUID divergence used to need on every step that logs in).
+    PacketNormalizationRule {
+        packet_name: "login_finished",
+        masks: &[FieldMask {
+            field: "session_id",
+            range: 0..0,
+        }],
+        mask_whole_body: false,
+    },
+    // `CustomPayload` (clientbound plugin message): `channel: Identifier` (VarInt-
+    // length string) followed by the channel-specific payload. This harness only ever
+    // observes the `minecraft:brand` channel, whose own payload
+    // (`record BrandPayload(String brand)`, ASSET-D18(f) reference) is a single
+    // VarInt-length string that is the *entire* remainder of the packet — masked
+    // wholesale, since our own server name will never equal vanilla's own literal
+    // `"vanilla"` value and nothing else in the packet differs (M3.5-B03 governance
+    // fix: replaces the register entry this divergence used to need). A channel other
+    // than `minecraft:brand` is left completely unmasked — this harness never
+    // sends/observes any other channel, and a genuine difference there would be a
+    // real divergence, never masked blind.
+    PacketNormalizationRule {
+        packet_name: "custom_payload",
+        masks: &[FieldMask {
+            field: "brand",
+            range: 0..0,
+        }],
+        mask_whole_body: false,
+    },
     // `SetTime`: 26.2's real shape is `(gameTime: i64, clockUpdates: Map<Holder
     // <WorldClock>, ClockNetworkState>)` — no separate day-time field exists any
     // more. `gameTime` is fixed offset 0 / width 8 (CLAIMS row 1's own genuinely
@@ -535,6 +572,67 @@ fn try_normalize_player_info_update(body: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// `LoginFinished`'s own structural walk (NORMALIZATION_RULES's own doc comment has
+/// the full field citation): `gameProfile.id` (16B UUID) and `.name` (VarInt-length
+/// string) are copied unmasked; `.properties` (VarInt-counted, each `{name, value,
+/// optional signature}`, all VarInt-length strings, the optional signature gated by a
+/// leading bool) is walked past unmasked too (this harness's own bot always presents
+/// zero properties, but the decoder does not assume that); the fixed-width 16B
+/// `sessionId` immediately following is masked to canonical zero bytes.
+fn try_normalize_login_finished(body: &[u8]) -> Option<Vec<u8>> {
+    let mut cur = Cur::new(body);
+    cur.take(16)?; // gameProfile.id (UUID), unmasked — deterministic in offline mode.
+    cur.string()?; // gameProfile.name
+    let props = cur.varint()?;
+    if props < 0 {
+        return None;
+    }
+    for _ in 0..props {
+        cur.string()?; // property name
+        cur.string()?; // property value
+        if cur.bool()? {
+            cur.string()?; // optional signature
+        }
+    }
+    let session_id_start = cur.pos;
+    cur.take(16)?; // sessionId (UUID) — masked below.
+    let session_id_end = cur.pos;
+
+    let mut out = Vec::with_capacity(body.len());
+    out.extend_from_slice(&body[..session_id_start]);
+    out.extend(std::iter::repeat_n(0u8, 16));
+    out.extend_from_slice(&body[session_id_end..]);
+    Some(out)
+}
+
+/// `minecraft:brand`'s own wire form, `channel: Identifier` (VarInt-length-prefixed
+/// UTF-8 string): the VarInt length byte `0x0f` (15) followed by the 15 ASCII bytes
+/// of `"minecraft:brand"` — matched verbatim against `CustomPayload`'s own leading
+/// bytes rather than decoded field-by-field, since this harness never needs the
+/// channel string for anything but this one equality check.
+const BRAND_CHANNEL_WIRE: &[u8] = b"\x0fminecraft:brand";
+
+/// `CustomPayload`'s own structural walk (NORMALIZATION_RULES's own doc comment has
+/// the full field citation): the leading `channel` field is copied unmasked; when it
+/// is exactly `minecraft:brand`, the entire remainder (`BrandPayload`'s own single
+/// `brand` string, which is the whole rest of the packet) is dropped from the
+/// compared bytes — the same "drop the whole variable-length field" precedent
+/// `normalize_set_time`'s own `clockUpdates` map already establishes. Any other
+/// channel is returned unchanged (`Some(body.to_vec())`), never masked — this
+/// harness never sends/observes one, so a genuine difference there must still show up
+/// as a real divergence.
+fn try_normalize_custom_payload(body: &[u8]) -> Option<Vec<u8>> {
+    let mut cur = Cur::new(body);
+    let channel_start = cur.pos;
+    cur.string()?; // channel: Identifier
+    let channel_end = cur.pos;
+
+    if &body[channel_start..channel_end] != BRAND_CHANNEL_WIRE {
+        return Some(body.to_vec());
+    }
+    Some(body[..channel_end].to_vec())
+}
+
 /// `SetTime`: `gameTime` (fixed offset 0, width 8) is masked precisely; the entire
 /// `clockUpdates` map that follows is masked wholesale (dropped from the compared
 /// bytes) rather than only its *values* — `ClockNetworkState`'s own wire width is not
@@ -576,6 +674,8 @@ pub fn normalize_body(packet: &CapturedPacket) -> Vec<u8> {
         | "move_entity_rot" => normalize_leading_varint(&packet.body),
         "add_entity" => normalize_add_entity(&packet.body),
         "player_info_update" => try_normalize_player_info_update(&packet.body).unwrap_or_default(),
+        "login_finished" => try_normalize_login_finished(&packet.body).unwrap_or_default(),
+        "custom_payload" => try_normalize_custom_payload(&packet.body).unwrap_or_default(),
         "set_time" => normalize_set_time(&packet.body),
         _ => packet.body.clone(),
     }
@@ -1177,6 +1277,180 @@ mod tests {
         assert_eq!(packets[6].body, chunk_body(9, 9));
         // The unbracketed packet at the tail is untouched.
         assert_eq!(packets[8].body, chunk_body(3, 3));
+    }
+
+    /// One `login_finished` body: 16B uuid + VarInt-length name + VarInt `0`
+    /// properties + 16B session id — matches `try_normalize_login_finished`'s own
+    /// doc comment field order exactly.
+    fn login_finished_body(uuid: u8, name: &str, session_id: u8) -> Vec<u8> {
+        let mut out = vec![uuid; 16];
+        out.push(name.len() as u8); // name is short enough for a 1-byte VarInt.
+        out.extend_from_slice(name.as_bytes());
+        out.push(0); // zero properties
+        out.extend(std::iter::repeat_n(session_id, 16));
+        out
+    }
+
+    #[test]
+    fn login_finished_masks_only_the_trailing_session_id() {
+        let masked = try_normalize_login_finished(&login_finished_body(0xAB, "bot", 0xCD))
+            .expect("well-formed body normalizes");
+        let mut expected = vec![0xABu8; 16];
+        expected.push(3);
+        expected.extend_from_slice(b"bot");
+        expected.push(0);
+        expected.extend(std::iter::repeat_n(0u8, 16));
+        assert_eq!(masked, expected);
+    }
+
+    #[test]
+    fn login_finished_session_id_difference_normalizes_clean() {
+        // Same profile (uuid, name), different session id — the exact M3.5-B03
+        // divergence this normalizer exists to close.
+        let oracle = cap(
+            "oracle:abc",
+            vec![StepCapture {
+                step_id: "session/login".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    2,
+                    login_finished_body(0xAB, "bot", 0xCD),
+                    Some("login_finished"),
+                )],
+            }],
+        );
+        let ours = cap(
+            "ours",
+            vec![StepCapture {
+                step_id: "session/login".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    2,
+                    login_finished_body(0xAB, "bot", 0xEF),
+                    Some("login_finished"),
+                )],
+            }],
+        );
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
+        let step = report.get("session/login").expect("step present");
+        assert!(step.mismatches.is_empty());
+    }
+
+    #[test]
+    fn login_finished_username_difference_still_reported() {
+        // A genuinely differing (unmasked) field must still surface.
+        let oracle = cap(
+            "oracle:abc",
+            vec![StepCapture {
+                step_id: "session/login".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    2,
+                    login_finished_body(0xAB, "bot", 0xCD),
+                    Some("login_finished"),
+                )],
+            }],
+        );
+        let ours = cap(
+            "ours",
+            vec![StepCapture {
+                step_id: "session/login".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    2,
+                    login_finished_body(0xAB, "not-bot", 0xCD),
+                    Some("login_finished"),
+                )],
+            }],
+        );
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
+        let step = report.get("session/login").expect("step present");
+        assert_eq!(step.mismatches.len(), 1);
+    }
+
+    fn brand_payload_body(brand: &str) -> Vec<u8> {
+        let mut out = vec![0x0f]; // "minecraft:brand" is 15 bytes, a 1-byte VarInt.
+        out.extend_from_slice(b"minecraft:brand");
+        out.push(brand.len() as u8);
+        out.extend_from_slice(brand.as_bytes());
+        out
+    }
+
+    #[test]
+    fn custom_payload_masks_only_the_brand_channels_payload() {
+        let masked = try_normalize_custom_payload(&brand_payload_body("vanilla"))
+            .expect("well-formed body normalizes");
+        let mut expected = vec![0x0f];
+        expected.extend_from_slice(b"minecraft:brand");
+        assert_eq!(masked, expected);
+    }
+
+    #[test]
+    fn custom_payload_brand_difference_normalizes_clean() {
+        let oracle = cap(
+            "oracle:abc",
+            vec![StepCapture {
+                step_id: "session/configuration".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    1,
+                    brand_payload_body("vanilla"),
+                    Some("custom_payload"),
+                )],
+            }],
+        );
+        let ours = cap(
+            "ours",
+            vec![StepCapture {
+                step_id: "session/configuration".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(
+                    0,
+                    1,
+                    brand_payload_body("rusty-clanker"),
+                    Some("custom_payload"),
+                )],
+            }],
+        );
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
+        let step = report.get("session/configuration").expect("step present");
+        assert!(step.mismatches.is_empty());
+    }
+
+    #[test]
+    fn custom_payload_non_brand_channel_is_never_masked() {
+        // A channel other than `minecraft:brand` must still be compared unmasked —
+        // the normalizer never blind-masks a channel this harness has never seen.
+        let mut other_channel = vec![0x0d]; // "minecraft:test" is 14 bytes.
+        other_channel.extend_from_slice(b"minecraft:test");
+        other_channel.extend_from_slice(&[1, 2, 3]);
+        let mut other_channel_differing = other_channel.clone();
+        *other_channel_differing.last_mut().unwrap() = 4;
+
+        let oracle = cap(
+            "oracle:abc",
+            vec![StepCapture {
+                step_id: "session/configuration".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(0, 1, other_channel, Some("custom_payload"))],
+            }],
+        );
+        let ours = cap(
+            "ours",
+            vec![StepCapture {
+                step_id: "session/configuration".to_string(),
+                observe_from: 0,
+                packets: vec![pkt(0, 1, other_channel_differing, Some("custom_payload"))],
+            }],
+        );
+        let report = diff_captures(&oracle, &ours, &ContraptionBounds::new());
+        let step = report.get("session/configuration").expect("step present");
+        assert_eq!(step.mismatches.len(), 1);
     }
 
     #[test]
