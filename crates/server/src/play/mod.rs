@@ -32,7 +32,9 @@ mod movement;
 /// deliverable").
 pub mod packets;
 mod persistence;
+mod player_transfer;
 mod registry_resolvers;
+mod two_region_world;
 mod world;
 
 pub use attribute_packets::{UpdateAttributes, build_update_attributes};
@@ -74,7 +76,16 @@ pub use movement::{
     merge_move_report,
 };
 pub use persistence::{DEFAULT_SAVE_INTERVAL_TICKS, PlayerPersistenceConfig, PlayerSessionStore};
+pub use player_transfer::{
+    PlayerConnectionState, PlayerRouting, PlayerRoutingRedirectTable, PlayerTransferDecodeError,
+    PlayerTransferPayload, RegionQueueHandles, TRANSFER_PAYLOAD_KIND_PLAYER,
+    build_player_entity_snapshot, combined_arrival_driver, try_decode_player_snapshot,
+};
+pub use two_region_world::{
+    BOUNDARY_CHUNK_X, REGION_EAST_ID, REGION_WEST_ID, STRIP_CHUNK_X_RANGE, STRIP_CHUNK_Z_RANGE,
+    TwoRegionWorld,
+};
 pub use world::{
-    DebugItemEntityInfo, EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PlayerMarker,
-    SYNCHRONIZED_REGISTRIES, Stage4Counters,
+    DebugItemEntityInfo, EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PendingJoin,
+    PlayerMarker, SYNCHRONIZED_REGISTRIES, Stage4Counters,
 };

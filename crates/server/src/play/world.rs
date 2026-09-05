@@ -678,6 +678,13 @@ pub struct PlayerMarker {
     /// `entity_tracking::entity_resync_step` — mutated only by that step (never by
     /// `apply_tracking_delta_for_player`'s own initial `Spawn Entity` send).
     pub last_sent_entity_state: HashMap<rc_core::RcEntityId, ([f64; 3], [f64; 3])>,
+    /// New (M4-B08, Context Part 1.5): this player's own connection-redirect handle —
+    /// `None` for every single-region composition (`HardcodedWorld`'s own join-drain step
+    /// below always constructs `None`, unchanged behavior for every existing test), `Some`
+    /// only for a player joined through `TwoRegionWorld`'s own multi-region join path. A
+    /// player's own inbound-packet routing follows this handle's current target rather
+    /// than a fixed, region-wide queue set whenever it is `Some`.
+    pub routing: Option<Arc<super::player_transfer::PlayerRouting>>,
 }
 
 pub struct PendingJoin {
@@ -1783,6 +1790,7 @@ impl HardcodedWorld {
                             sent_chunks: already_sent,
                             tracked_entities: HashSet::new(),
                             last_sent_entity_state: HashMap::new(),
+                            routing: None,
                         },
                         PickedUpItems::default(),
                         PlayerMotion {

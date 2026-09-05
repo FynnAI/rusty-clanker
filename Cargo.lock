@@ -3515,6 +3515,7 @@ dependencies = [
  "bevy_ecs",
  "bytes",
  "parking_lot",
+ "postcard",
  "rc-auth",
  "rc-chunk-storage",
  "rc-cluster",

@@ -35,6 +35,11 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 bevy_ecs = { workspace = true }
 serde = { workspace = true } # M2-B05 — `WorldConfig: Deserialize` (promoted from dev-dependencies)
+# M4-B08: `PlayerTransferPayload`'s own encode/decode (`play::player_transfer`) — already
+# workspace-pinned at 1.1.3 (CLUSTER-D12) and already used transitively via `rc-mechanics`'s
+# own dependency on it (M4-B01); this is the first file in this crate itself to call
+# `postcard::to_allocvec`/`postcard::from_bytes` directly.
+postcard = { workspace = true }
 rc-cluster = { path = "../cluster", optional = true }
 rc-transport-net = { path = "../transport-net", optional = true }
 rc-proxy = { path = "../proxy", optional = true }
