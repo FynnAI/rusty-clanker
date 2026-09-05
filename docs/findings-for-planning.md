@@ -690,6 +690,19 @@ Entries name the milestone that surfaced them and the code they concern.
   pattern already used by the multiplayer tests) or raise the keep-alive
   window for test servers.
 
+- **Flaky under CI load: `play_chunk_streaming_on_move::chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_resolves`
+  (run 33968675213, `windows-2025` gates).** The test bounds the wall-clock
+  gap between the region thread persisting a resolved position and the
+  matching `SetChunkCacheCenter` reaching the socket at 20 ms (the M3
+  field-report Defect C regression guard: same-tick versus next-tick
+  streaming). The loaded runner measured 25.3 ms on a commit that touches
+  only the physics shape table; the rerun passed. A wall-clock bound cannot
+  separate "next tick" (50 ms or more) from scheduler jitter on a contended
+  runner. Test-authoring follow-up: assert in tick units — read the server's
+  tick counter at both anchors (`--tick-log`, or the `set_time` echo) and
+  require the cache-center packet within the same tick as the position write,
+  logging the wall-clock figure for information only.
+
 - **Tier-2 input components have no blueprint (PLAN-D10 follow-up).** M3-B04
   §H excluded lever, button and pressure plate together; PLAN-D10 pulled the
   lever into M3. Button (auto-off scheduled tick per material, wooden buttons
@@ -2091,17 +2104,6 @@ Entries name the milestone that surfaced them and the code they concern.
   pair for `rc-protocol` and an `M4-B01 implementation` follow-up for the two
   encoders land before M4-B02 consumes the metadata path. The M4-B01
   blueprint carries the corrected rule above its Deliverables.
-
-- **Flaky under CI load: `play_block_break_place_full::creative_break_is_still_instant_and_excludes_the_breaker_from_the_level_event`
-  (run 33779660538, `ubuntu-24.04` gates).** Failed once with "peer closed
-  before a full frame arrived" after 33 s while the same test passes in 2.7 s
-  locally (3 of 3) and passed on the rerun and on `windows-2025`. Same class
-  as the M3 delayed-destroy keep-alive starvation: a test that holds a second
-  connection idle while waiting on the first can be disconnected by the
-  server's keep-alive timeout when the runner is slow. Test-authoring
-  follow-up: service every socket concurrently in this file's helpers (the
-  pattern already used by the multiplayer tests) or raise the keep-alive
-  window for test servers.
 
 - **Second real protocol-diff run (33789270683): contraption-level findings.**
   With floor-relative slots both sides captured all 51 contraptions; the diff

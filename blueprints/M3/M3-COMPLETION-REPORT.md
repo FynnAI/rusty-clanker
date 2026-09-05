@@ -130,6 +130,30 @@ hang-guard timeouts on both legs — fixed by a per-section palette pre-check;
 the stage budgets were raised to hang-guard scale and the nextest throttle
 group now covers the whole server crate.
 
+The owner's wave-3 play test of the pinned `m3.5-final` binary (§6, 2026-09-04)
+added a fifth class: **the interaction surface the corpus cannot drive.** Two
+of the six findings were the tier's own scope exclusions (block use on the
+diodes, the lever — M3-B04 §G/§H) that a player meets within minutes; one was
+an engine result computed and then discarded at the ECS boundary (block
+events, hence pistons that teleport instead of animating); two were
+shape-table gaps (no rows for the extended piston bases; outline shapes
+stored where every server-side consumer — conductor test, support
+predicates, placement obstruction — reads the collision shape); one was an
+axis bug in the wall torch's strong signal; and the finding that was not a
+bug (the latching two-repeater clock) exposed a real deviation in the
+scheduled-tick dedup guard. All six closed under PLAN-D10 as `M3
+field-report` changesets (MECH-D82 block use, MECH-D83 block-event
+broadcast with the modelled moving-piston placeholder, MECH-D84 per-face
+support, MECH-D13 lever), guarded by 12 new oracle fixtures (corpus
+52 → 64, parity green), the lever in `placement-diff`, a fixture
+support lint, and real-connection tests for the `block_event` and `sound`
+packets. The blind spot is structural: the corpus drives Stage 4 with
+oracle-pre-resolved block states and has no `use` action, so nothing
+between a client's right-click and the engine's behavior was ever
+differential-tested — the protocol-differential harness (TEST-D54) and a
+corpus `use` action (ledger A) are the instruments that cover it from now
+on.
+
 Lesson recorded for every future audit: a blueprint step shipped as a
 documented placeholder is an unfinished deliverable; and every server-side
 behavior needs at least one test that drives it through the real client
