@@ -151,6 +151,40 @@ pub fn is_conductor(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
         && boxes[0].max == Vec3::new(1.0, 1.0, 1.0)
 }
 
+/// MECH-D84: `true` iff the block at `pos` (air/unloaded is never sturdy) is sturdy on `face`
+/// for `kind` — reuses `rc_physics::tier1_shape_table()`'s own per-face predicate directly,
+/// never the redstone-conductor test above (`is_conductor` stays the conductor question only).
+/// Support/attachment consumers: `WireBehavior::should_pop` (`Full`, plus the hard-coded
+/// hopper exception), `TorchBehavior::should_pop` (`Center` for a floor torch, `Full` for a
+/// wall torch's own mount face), `RepeaterBehavior`/`ComparatorBehavior::on_neighbor_changed`
+/// (`Rigid`).
+pub fn is_face_sturdy(
+    world: &dyn BlockWorldAccess,
+    pos: BlockPos,
+    face: Direction,
+    kind: rc_physics::SupportKind,
+) -> bool {
+    let Some(state) = world.get_block(pos) else {
+        return false;
+    };
+    rc_physics::tier1_shape_table().is_face_sturdy(state.to_raw(), to_physics_face(face), kind)
+}
+
+/// `rc-mechanics::direction::Direction` -> `rc_physics::Face` — `rc-physics` sits below
+/// `rc-mechanics` in the crate graph (WS-D3) and so cannot name this crate's own `Direction`
+/// type itself (`rc_physics::Face`'s own doc comment has the full citation); every caller
+/// translates at this one seam instead.
+fn to_physics_face(d: Direction) -> rc_physics::Face {
+    match d {
+        Direction::Down => rc_physics::Face::Down,
+        Direction::Up => rc_physics::Face::Up,
+        Direction::North => rc_physics::Face::North,
+        Direction::South => rc_physics::Face::South,
+        Direction::West => rc_physics::Face::West,
+        Direction::East => rc_physics::Face::East,
+    }
+}
+
 /// `emitted_toward` (Context §A) — the one shared quasi-connectivity primitive.
 pub fn emitted_toward(
     world: &dyn BlockWorldAccess,

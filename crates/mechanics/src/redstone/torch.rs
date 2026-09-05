@@ -146,12 +146,23 @@ impl TorchBehavior {
         }
     }
 
-    /// Pure query, no mutation (Context §E's "out of scope, flagged" support-loss note) —
-    /// `true` iff this torch's own support block (per `attachment_at`'s per-position derivation)
-    /// is currently not a conductor.
+    /// Pure query, no mutation (Context §E's "out of scope, flagged" support-loss note, M3
+    /// field-report fix MECH-D84) — `true` iff this torch's own mount block (per
+    /// `attachment_at`'s per-position derivation) is no longer sturdy, on the face toward the
+    /// torch, for the kind this attachment needs: a floor torch needs only `Center`-sturdiness
+    /// on the block below's top face (`BaseTorchBlock::canSurvive`'s own `canSupportCenter`
+    /// call); a wall torch needs `Full`-sturdiness on the mount's own face toward the torch
+    /// (`WallTorchBlock::canSurvive`'s own `Full` check) — never the redstone-conductor test
+    /// this used to reuse, which wrongly required a full cube for both.
     pub fn should_pop(&self, world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-        let support = self.attachment_at(world, pos).input_direction().apply(pos);
-        !signal::is_conductor(world, support)
+        let attachment = self.attachment_at(world, pos);
+        let mount_pos = attachment.input_direction().apply(pos);
+        let face_toward_torch = attachment.input_direction().opposite();
+        let kind = match attachment {
+            TorchAttachment::Floor => rc_physics::SupportKind::Center,
+            TorchAttachment::Wall(_) => rc_physics::SupportKind::Full,
+        };
+        !signal::is_face_sturdy(world, mount_pos, face_toward_torch, kind)
     }
 
     /// Sets this behavior's own registry handle (Context §I½). Called exactly once, by

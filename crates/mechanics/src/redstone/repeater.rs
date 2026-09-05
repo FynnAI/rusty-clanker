@@ -355,7 +355,15 @@ impl BlockBehavior for RepeaterBehavior {
     /// check, but reachable from any neighbor-changed trigger rather than only a `Down`-
     /// direction shape update.
     fn on_neighbor_changed(&self, ctx: &mut UpdateContext, pos: BlockPos, _from: Direction) {
-        if !signal::is_conductor(ctx.world, Direction::Down.apply(pos)) {
+        // M3 field-report fix (MECH-D84): a repeater's own floor support check is `Rigid`-
+        // sturdiness on the block below's top face, never the redstone-conductor test (a chest
+        // is not a conductor but is `Rigid`-sturdy, and a repeater does survive on one).
+        if !signal::is_face_sturdy(
+            ctx.world,
+            Direction::Down.apply(pos),
+            Direction::Up,
+            rc_physics::SupportKind::Rigid,
+        ) {
             ctx.set_block(pos, AIR_ID);
             return;
         }

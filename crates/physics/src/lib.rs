@@ -24,7 +24,8 @@ pub use motion::{
 };
 pub use raycast::{RayHit, cast_ray};
 pub use shapes::{
-    BlockPhysicsProperties, BlockShapeSource, ShapeTable, VoxelShape, tier1_shape_table,
+    BlockPhysicsProperties, BlockShapeSource, Face, ShapeTable, SupportKind, VoxelShape,
+    tier1_shape_table,
 };
 pub use trig::{mth_cos, mth_sin};
 pub use vec3::Vec3;

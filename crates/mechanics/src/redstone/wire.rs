@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use rc_chunk_storage::BlockStateId;
+use rc_chunk_storage::{BlockStateId, RegistryId};
 use rc_core::BlockPos;
 use rc_registries::block_state_properties::{properties, range_of, with_property};
 use rc_registries::generated_v776::block_state_properties::block_id;
@@ -60,10 +60,28 @@ fn is_wire_range(raw: u32) -> bool {
 /// depends on `rc-registries` normally, instead of a bare hardcoded literal.
 const AIR_ID: BlockStateId = BlockStateId(default_state::AIR.0);
 
-/// `RedStoneWireBlock::canSurvive` (Context/research doc §3.1/Notes): a wire tile requires a
-/// conductor directly beneath it. Mirrors `TorchBehavior::should_pop`'s identical role/shape.
+/// `RedStoneWireBlock::canSurvive` (Context/research doc §3.1/Notes, M3 field-report fix
+/// MECH-D84): a wire tile survives only on a block whose own top face is `Full`-sturdy, plus
+/// vanilla's own hard-coded hopper exception (`RedStoneWireBlock`'s own extra `instanceof
+/// HopperBlock` allowance — a hopper's real top face is never `Full`-sturdy by shape alone,
+/// `crates/physics/tests/face_sturdy.rs`'s own `hopper_top_face_is_not_full` case). Mirrors
+/// `TorchBehavior::should_pop`'s identical role/shape.
 fn should_pop(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
-    !signal::is_conductor(world, Direction::Down.apply(pos))
+    let below = Direction::Down.apply(pos);
+    if is_hopper_below(world, below) {
+        return false;
+    }
+    !signal::is_face_sturdy(world, below, Direction::Up, rc_physics::SupportKind::Full)
+}
+
+/// `true` iff the block at `pos` falls inside `minecraft:hopper`'s own real generated id range
+/// (`should_pop`'s own doc comment — the hard-coded exception, never a shape fact).
+fn is_hopper_below(world: &dyn BlockWorldAccess, pos: BlockPos) -> bool {
+    let Some(state) = world.get_block(pos) else {
+        return false;
+    };
+    let range = range_of(block_id::HOPPER);
+    (range.first.0..=range.last.0).contains(&state.to_raw())
 }
 
 /// M3 field-report fix (Rule 1, step-up/step-down gates): whether `pos`'s own ceiling

@@ -10,6 +10,7 @@ use rc_registries::generated_v776::block_state_properties::{BlockId, block_id};
 use rc_registries::generated_v776::block_states::default_state;
 
 use crate::Aabb;
+use crate::aabb::Axis;
 use crate::vec3::Vec3;
 
 /// A set of axis-aligned sub-boxes in block-local `[0,1]^3` space (Context: "VoxelShape
@@ -45,6 +46,161 @@ impl VoxelShape {
 
     pub fn is_empty(&self) -> bool {
         self.boxes.is_empty()
+    }
+
+    /// MECH-D84's per-face sturdiness predicate. `kind` names the in-plane square (Context:
+    /// `SupportKind`'s own doc comment has the exact bounds) a face's cross-section must
+    /// contain to count as sturdy for that kind.
+    ///
+    /// `Full` requires an actual box edge sitting exactly on `face`'s own literal block
+    /// boundary (`0.0`/`1.0` on the face's axis) -- e.g. an extended piston base's recessed
+    /// end (Context table: the missing 4/16 slab) never touches that boundary at all, so its
+    /// own `Full` reads `false` there regardless of how full the rest of the block is
+    /// (vanilla: nothing can rest on an open gap). `Center`/`Rigid` instead use the shape's
+    /// own *extremal* cross-section toward `face` -- the box(es) reaching closest to it,
+    /// whichever coordinate that turns out to be -- since vanilla still lets a torch/diode
+    /// attach to a block whose own hitbox merely falls a little short of the full 16px
+    /// height (a chest's 14/16-tall body) rather than genuinely leaving open air the way a
+    /// retracted-facing piston base does; MECH-D84's own worked chest example (`Full` false,
+    /// `Center`/`Rigid` true) only resolves this way, matching `SupportType`'s own three
+    /// vanilla kinds (`Block.isFaceFull`/`getFaceShape`) close enough to reproduce every
+    /// vanilla-observable case this milestone's own tier-1 table actually reaches.
+    pub fn face_sturdy(&self, face: Face, kind: SupportKind) -> bool {
+        let (axis, positive) = face.axis_and_sign();
+        let touching: Vec<&Aabb> = if kind == SupportKind::Full {
+            let boundary = if positive { 1.0 } else { 0.0 };
+            self.boxes
+                .iter()
+                .filter(|b| (face_extent(b, axis, positive) - boundary).abs() < 1e-9)
+                .collect()
+        } else {
+            let Some(extreme) = self
+                .boxes
+                .iter()
+                .map(|b| face_extent(b, axis, positive))
+                .reduce(|a, b| if positive { a.max(b) } else { a.min(b) })
+            else {
+                return false;
+            };
+            self.boxes
+                .iter()
+                .filter(|b| (face_extent(b, axis, positive) - extreme).abs() < 1e-9)
+                .collect()
+        };
+        if touching.is_empty() {
+            return false;
+        }
+        let (a1, a2) = axis.other_two();
+        let rects: Vec<(f64, f64, f64, f64)> = touching
+            .iter()
+            .map(|b| (b.min(a1), b.max(a1), b.min(a2), b.max(a2)))
+            .collect();
+        let (lo, hi) = kind.required_square();
+        rects_cover_square(&rects, lo, hi)
+    }
+}
+
+/// `b`'s own extent on `axis` in the direction `face` points -- `max` for a positive-axis
+/// face (`Up`/`South`/`East`), `min` for a negative one (`Down`/`North`/`West`).
+fn face_extent(b: &Aabb, axis: Axis, positive: bool) -> f64 {
+    if positive { b.max(axis) } else { b.min(axis) }
+}
+
+/// `true` iff the union of `rects` (each `(min_a, max_a, min_b, max_b)` on the face's own two
+/// in-plane axes) fully covers the `[lo, hi] x [lo, hi]` square -- an exact check (not a
+/// sampled approximation): every rectangle's own boundary coordinate that falls strictly
+/// inside `[lo, hi]` becomes a grid line, so testing one interior point per resulting grid
+/// cell against every rectangle is equivalent to testing the whole cell (no rectangle edge
+/// ever crosses a cell's interior).
+fn rects_cover_square(rects: &[(f64, f64, f64, f64)], lo: f64, hi: f64) -> bool {
+    let collect_lines = |pick_lo: fn(&(f64, f64, f64, f64)) -> f64,
+                         pick_hi: fn(&(f64, f64, f64, f64)) -> f64|
+     -> Vec<f64> {
+        let mut lines = vec![lo, hi];
+        for r in rects {
+            let a = pick_lo(r);
+            let b = pick_hi(r);
+            if a > lo && a < hi {
+                lines.push(a);
+            }
+            if b > lo && b < hi {
+                lines.push(b);
+            }
+        }
+        lines.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        lines.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+        lines
+    };
+    let a_lines = collect_lines(|r| r.0, |r| r.1);
+    let b_lines = collect_lines(|r| r.2, |r| r.3);
+    for a_win in a_lines.windows(2) {
+        for b_win in b_lines.windows(2) {
+            let ca = (a_win[0] + a_win[1]) / 2.0;
+            let cb = (b_win[0] + b_win[1]) / 2.0;
+            let covered = rects
+                .iter()
+                .any(|&(a0, a1, b0, b1)| a0 <= ca && ca <= a1 && b0 <= cb && cb <= b1);
+            if !covered {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The six faces of a unit block (Context: MECH-D84's per-face sturdiness predicate) -- this
+/// crate's own minimal direction vocabulary. `rc-mechanics::direction::Direction` cannot be
+/// used here: `rc-physics` sits below `rc-mechanics` in the crate graph (WS-D3), so that
+/// dependency edge would run backwards -- every caller translates its own `Direction` into
+/// this type at the call site instead (`rc-mechanics::redstone::signal::is_face_sturdy`'s own
+/// doc comment).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Face {
+    Down,
+    Up,
+    North,
+    South,
+    West,
+    East,
+}
+
+impl Face {
+    /// The axis this face is perpendicular to, and whether it sits at that axis's
+    /// positive-coordinate end (`Up`/`South`/`East`) or negative (`Down`/`North`/`West`).
+    fn axis_and_sign(self) -> (Axis, bool) {
+        match self {
+            Face::Down => (Axis::Y, false),
+            Face::Up => (Axis::Y, true),
+            Face::North => (Axis::Z, false),
+            Face::South => (Axis::Z, true),
+            Face::West => (Axis::X, false),
+            Face::East => (Axis::X, true),
+        }
+    }
+}
+
+/// Vanilla's three face-sturdiness kinds (Context/MECH-D84), each naming the minimum in-plane
+/// square a shape's cross-section at a face plane must contain (`VoxelShape::face_sturdy`'s
+/// own doc comment has the exact algorithm) -- `SupportType.FULL`/`CENTER`/`RIGID` in the
+/// reference (`Block.isFaceFull`, `CENTER_SUPPORT_SHAPE`, `RIGID_SUPPORT_SHAPE`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum SupportKind {
+    Full,
+    Center,
+    Rigid,
+}
+
+impl SupportKind {
+    /// The `[lo, hi]` bounds, on both in-plane axes, of the square this kind requires the
+    /// cross-section to contain: the whole unit square for `Full`; the centre 2x2-pixel
+    /// square (7/16..9/16) for `Center`; the inner 12x12-pixel square (2/16..14/16) for
+    /// `Rigid`.
+    fn required_square(self) -> (f64, f64) {
+        match self {
+            SupportKind::Full => (0.0, 1.0),
+            SupportKind::Center => (7.0 / 16.0, 9.0 / 16.0),
+            SupportKind::Rigid => (2.0 / 16.0, 14.0 / 16.0),
+        }
     }
 }
 
@@ -114,6 +270,14 @@ impl ShapeTable {
             .get(&block_state_id)
             .cloned()
             .unwrap_or_else(BlockPhysicsProperties::default_full_cube)
+    }
+
+    /// MECH-D84: `true` iff `block_state_id`'s own shape is sturdy on `face` for `kind` --
+    /// `VoxelShape::face_sturdy`'s own doc comment has the exact algorithm. An id with no
+    /// explicit entry falls through to `lookup`'s own `default_full_cube` fallback, whose
+    /// shape is sturdy on every face for every kind (correct for ordinary terrain).
+    pub fn is_face_sturdy(&self, block_state_id: u32, face: Face, kind: SupportKind) -> bool {
+        self.lookup(block_state_id).shape.face_sturdy(face, kind)
     }
 }
 
@@ -188,11 +352,39 @@ fn build_tier1_table() -> ShapeTable {
             max: Vec3::new(0.9375, 0.875, 0.9375),
         }])
     };
-    // Hopper: union of a top rim box and a simplified single funnel box (Context table).
+    // Hopper (M3 field-report fix, MECH-D84: the former 2-box version's own top rim box was a
+    // solid, hole-less slab -- reading as a `Full`-sturdy top face, wrongly letting dust
+    // survive on a hopper by shape alone rather than only through the dedicated hard-coded
+    // exception `WireBehavior::should_pop` now applies. `HopperBlock`'s real reference shape
+    // is the rim/funnel outline (unchanged from the former 2-box union, both boxes restated
+    // below) minus a hollow scooped out of the rim's own top -- carved here as four border
+    // strips plus the thin full-footprint floor slab beneath them, in place of one solid
+    // top box, since `VoxelShape` has no boolean subtraction: floor slab
+    // [0,1]x[0.625,0.6875]x[0,1] (the rim's own bottom 1/16, below the hollow, still solid
+    // full-footprint), then the hollow's own four remaining border strips at
+    // y:[0.6875,1.0] -- north/south full-width ([0,1]x[0,0.125] / [0.875,1]), west/east
+    // restricted to the band between them ([0,0.125]/[0.875,1] x [0.125,0.875]) -- and the
+    // funnel box, unchanged.
     let hopper_shape = VoxelShape::from_boxes(vec![
         Aabb {
             min: Vec3::new(0.0, 0.625, 0.0),
+            max: Vec3::new(1.0, 0.6875, 1.0),
+        },
+        Aabb {
+            min: Vec3::new(0.0, 0.6875, 0.0),
+            max: Vec3::new(1.0, 1.0, 0.125),
+        },
+        Aabb {
+            min: Vec3::new(0.0, 0.6875, 0.875),
             max: Vec3::new(1.0, 1.0, 1.0),
+        },
+        Aabb {
+            min: Vec3::new(0.0, 0.6875, 0.125),
+            max: Vec3::new(0.125, 1.0, 0.875),
+        },
+        Aabb {
+            min: Vec3::new(0.875, 0.6875, 0.125),
+            max: Vec3::new(1.0, 1.0, 0.875),
         },
         Aabb {
             min: Vec3::new(0.25, 0.25, 0.25),
@@ -214,6 +406,20 @@ fn build_tier1_table() -> ShapeTable {
     }
 
     const HORIZONTAL4: [&str; 4] = ["north", "south", "west", "east"];
+
+    // `(facing, axis, positive)` for every one of piston's six facings -- `axis`/`positive`
+    // give the facing's own axis (`0`=X, `1`=Y, `2`=Z) and whether it points toward that
+    // axis's positive end, shared by `piston_head_shape` (below) and the extended-base rows
+    // (MECH-D84) alike, so the two never drift apart the way the former hand-duplicated pair
+    // could.
+    const PISTON_FACINGS: [(&str, usize, bool); 6] = [
+        ("north", 2, false),
+        ("east", 0, true),
+        ("south", 2, true),
+        ("west", 0, false),
+        ("up", 1, true),
+        ("down", 1, false),
+    ];
 
     let mut entries = vec![
         // `air`'s own raw id -- an explicit entry, not left to the registry's own
@@ -287,14 +493,7 @@ fn build_tier1_table() -> ShapeTable {
     // `Immovable`) -- both ids per facing reuse the identical `piston_head_shape` call the
     // facing alone determines, kept in sync by hand with that module's own `piston_head_id`
     // and with `piston_shape_table.rs`'s own local copy.
-    for (facing, axis, positive) in [
-        ("north", 2, false),
-        ("east", 0, true),
-        ("south", 2, true),
-        ("west", 0, false),
-        ("up", 1, true),
-        ("down", 1, false),
-    ] {
+    for (facing, axis, positive) in PISTON_FACINGS {
         let shape = piston_head_shape(axis, positive);
         entries.push((
             id_of(
@@ -307,6 +506,35 @@ fn build_tier1_table() -> ShapeTable {
             id_of(
                 block_id::PISTON_HEAD,
                 &[("facing", facing), ("short", "false"), ("type", "sticky")],
+            ),
+            flat(shape),
+        ));
+    }
+
+    // Extended piston/sticky_piston bases (M3 field-report fix, MECH-D84): twelve entries, one
+    // per (block, facing) pair -- a real piston base id ever reaches `extended=true` only
+    // through this project's own writeback (`piston.rs`'s `write_base_extended`), never
+    // placement, so there is no `sticky`-crossed-with-`extended=false` case to add here.
+    // `PistonBaseBlock`'s own real reference shape (`Block.boxZ(16,4,16)` rotated per facing
+    // via `Shapes.rotateAll`): a single box, full on the two non-facing axes, and on the
+    // facing axis `[0, 0.75]` when `positive` (the missing 4/16 slab sits at that axis's far,
+    // positive end -- the piston pushed outward from there) or `[0.25, 1]` otherwise (the
+    // missing slab at the negative end) -- verified against `piston_head_shape`'s own
+    // identical per-facing `(axis, positive)` table just above, which the same twelve real ids
+    // now share.
+    for (facing, axis, positive) in PISTON_FACINGS {
+        let shape = piston_base_extended_shape(axis, positive);
+        entries.push((
+            id_of(
+                block_id::PISTON,
+                &[("extended", "true"), ("facing", facing)],
+            ),
+            flat(shape.clone()),
+        ));
+        entries.push((
+            id_of(
+                block_id::STICKY_PISTON,
+                &[("extended", "true"), ("facing", facing)],
             ),
             flat(shape),
         ));
@@ -374,6 +602,23 @@ fn build_tier1_table() -> ShapeTable {
 /// X, `1` = Y, `2` = Z. Worked reference case (`axis = 1, positive = true`, i.e. `facing = Up`):
 /// face plate `[0,1]x[0.75,1]x[0,1]`; arm `[0.375,0.625]x[0,0.75]x[0.375,0.625]` -- matches
 /// Context §D's own literal boxes exactly.
+/// An extended piston/sticky_piston base's own single-box shape (M3 field-report fix,
+/// MECH-D84): full on the two axes other than `axis`, and on `axis` itself `[0, 0.75]` when
+/// `positive` (the missing 4/16 slab at that axis's positive end) or `[0.25, 1]` otherwise (the
+/// missing slab at the negative end) -- `axis`/`positive` share `piston_head_shape`'s own
+/// convention (`0`=X, `1`=Y, `2`=Z).
+fn piston_base_extended_shape(axis: usize, positive: bool) -> VoxelShape {
+    let (lo, hi) = if positive { (0.0, 0.75) } else { (0.25, 1.0) };
+    let mut min = [0.0f64; 3];
+    let mut max = [1.0f64; 3];
+    min[axis] = lo;
+    max[axis] = hi;
+    VoxelShape::from_boxes(vec![Aabb {
+        min: Vec3::new(min[0], min[1], min[2]),
+        max: Vec3::new(max[0], max[1], max[2]),
+    }])
+}
+
 fn piston_head_shape(axis: usize, positive: bool) -> VoxelShape {
     const PLATFORM_THICKNESS: f64 = 0.25;
     const ARM_LO: f64 = 0.375;
