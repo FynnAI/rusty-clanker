@@ -748,6 +748,14 @@ Entries name the milestone that surfaced them and the code they concern.
   verification tooling (protected) and which are build/codegen tooling
   (implementation), or accept "generator in test-authoring" as the rule.
 
+- **`fetch-corpus` reuses a cached trace whenever the jar sha matches,
+  ignoring the spec.** `corpus_capture.rs` (~822) treats a matching
+  `source_jar_sha1` as "current", so editing a fixture (e.g. `max_ticks`)
+  silently keeps the stale trace and reports pass; the Opus diagnosis had to
+  delete the cache directory by hand. The manifest already carries the spec
+  sha256 — the cache key must include it. Test-tooling change; ships with the
+  next corpus changeset.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2409,21 +2417,27 @@ Entries name the milestone that surfaced them and the code they concern.
   the piston contraptions once the packet lands; closes with a future
   blueprint that models the placeholder (none scheduled).
 
-- **Two-repeater loop clock drifts out of phase against the oracle from tick 7
-  (Stream A, PLAN-D10 corpus wave).** `redstone/clock/repeater_loop_clock_
-  delay1_pulse1` (two delay-1 repeaters, 1-tick starting pulse) oscillates in
-  both engines, but a 28-tick capture shows our phase drifting from the
-  oracle's from tick 7 on; the committed fixture is trimmed to `max_ticks: 6`
-  (the exactly-matching prefix) so CI stays green — a documented, temporary
-  scoping, not a closure. The two dedicated dedup-guard probes
-  (`update_order_repeater_dedup_guard`, `update_order_torch_dedup_guard`) came
-  back green, so the coarser `is_block_tick_pending` guard is not exposed by
-  cross-tick input changes; the same-tick window (a diode whose tick already
-  ran this tick receiving a neighbour change from the other diode's tick in
-  the same game tick — vanilla's `LevelTicks.willTickThisTick`/`toRunThisTick`
-  refuses, ours sees no pending tick and schedules) is the leading suspect.
-  Root-caused and fixed by an instrumented diagnosis task in this wave; the
-  fixture returns to 28 ticks with the fix.
+- **RESOLVED — two-repeater loop clock latched at tick 7 (not a drift): the
+  scheduled-tick dedup guard answered the opposite of vanilla in one window.**
+  Vanilla keeps two structures: the chunk container's per-position set of
+  *queued* ticks (`ticksPerPosition`, a position leaves it when its tick is
+  collected) and the level runner's *run set* for the current game tick
+  (`toRunThisTick`, filled at collect, emptied as each entry is polled,
+  cleared after the tick); diodes and torches consult only the run set
+  (`willTickThisTick`). Our `is_block_tick_pending` scanned the heap, so a
+  position whose tick had been collected but not yet run answered `false`
+  and a same-tick neighbour change scheduled a duplicate tick; two ticks
+  later the duplicate re-entered the diode's unconditional turn-on branch
+  and both repeaters latched. Ported literally in `scheduled_tick.rs`
+  (`pending_block_positions`, `current_block_batch`, `run_block_tick`,
+  `end_block_tick_batch`, `will_block_tick_this_tick`; the sub-tick counter is
+  consumed before the dedup drops an entry, as `LevelAccessor.createTick`
+  does); the fixture is back to 28 ticks; corpus 59/59. Two probes
+  (`update_order_*_dedup_guard`) stay as regression locks. Open remainder,
+  M4-B06 territory: the fluid side (`is_fluid_tick_in_current_batch` never
+  removes on run nor clears at batch end; `schedule_fluid_tick` has no
+  per-position dedup) has the same class of divergence — planning to assign
+  to the fluid blueprint's field-report list.
 - **`moving_piston` placeholder: now a measured parity divergence, not only a
   wire one.** The oracle capture of a wire resting on the block a piston
   pushes pops it at trigger time (the block becomes `moving_piston`, whose
