@@ -869,6 +869,12 @@ fn bootstrap_region(world: &mut World) {
     // inserted directly below, alongside the tier-1 redstone wiring it feeds.
     rc_mechanics::stage7::ecs::bootstrap_default_stage7_resources(world);
     bootstrap_redstone_dispatch(world);
+    // M4-B04: `SpawnCycleRandom`/`RegionCensusState`/`GlobalMobCensus`/`KnownRegionIds`/
+    // `KnownPlayers` -- mirrors M3-B01/M3-B06's own established per-blueprint bootstrap-
+    // function convention. `DEBUG_WORLD_SEED` is reused for the spawn RNG's own seed
+    // exactly as `RegionDropEntropy` above already reuses it -- this project has no real
+    // world-seed concept yet outside these debug/test-only consumers (Context §K).
+    rc_mechanics::spawn::bootstrap_spawn_resources(world, HARDCODED_REGION_ID, DEBUG_WORLD_SEED);
 }
 
 /// M3 field-report fix ("production's own composition root never calls `register_tier1_
@@ -1628,6 +1634,19 @@ impl HardcodedWorld {
             // writeup -- found by M4-B04's own natural-mob-spawning darkness gate, which
             // reads real light values for the first time).
             builder.with_lighting_driver(rc_mechanics::lighting_stage_driver);
+            // M4-B04 (Context: "Tick-pipeline placement"): the natural mob-spawning cycle
+            // (`DomainGroup::RandomTick`) -- M3-B06's own `register_stage5` is never called
+            // anywhere in this composition root (a pre-existing gap this blueprint does not
+            // itself introduce or fix, final report has the full citation), so this system
+            // becomes that group's sole member; harmless either way, since the two systems'
+            // own declared access sets are disjoint.
+            rc_mechanics::spawn::register_mob_spawn_cycle(&mut builder);
+            // M4-B04: despawn -- must be called after `register_stage6b` above (and before
+            // M4-B05's own future mob-combat registration function) so this system keeps
+            // `order_tag = 1` in `DomainGroup::EntityPhysicsIntegration`, per this blueprint's
+            // own Context note (M4-B09's own future governance changeset fixes the complete
+            // three-way order).
+            rc_mechanics::spawn::register_mob_despawn(&mut builder);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );
@@ -3347,6 +3366,25 @@ impl HardcodedWorld {
                             .chain(live_ecs_entities.iter().cloned()),
                     );
                 }
+
+                // M4-B04 (Context: peer enumeration / `KnownPlayers` bridge, final report has
+                // the full citation): refreshes `rc_mechanics::spawn::KnownPlayers` from this
+                // region's own real `PlayerMarker`s, before `executor.tick_region` below runs
+                // this tick's own Stage-5 spawn cycle / Stage-6b despawn systems -- `rc-mechanics`
+                // cannot see `PlayerMarker` itself (WS-D3 rule 2), so this bridge is this
+                // composition root's own responsibility, mirroring `live_ecs_entities`'s own
+                // identical "collect via a fresh query, then assign into a resource" shape.
+                let known_players_snapshot: Vec<(i32, [f64; 3])> = {
+                    let mut player_query = region.world.query::<&PlayerMarker>();
+                    player_query
+                        .iter(&region.world)
+                        .map(|marker| (marker.network_entity_id, marker.position))
+                        .collect()
+                };
+                region
+                    .world
+                    .resource_mut::<rc_mechanics::spawn::KnownPlayers>()
+                    .0 = known_players_snapshot;
 
                 executor.tick_region(&mut region, &pool, &transport);
 
