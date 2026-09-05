@@ -144,8 +144,10 @@ fn floor_torch_on_a_ceiling_lever_pops_nondefault_case() {
     let mut h = Harness::new();
     let pos = BlockPos::new(0, 1, 0);
     h.world.set_block(pos, floor_torch_id());
-    h.world
-        .set_block(Direction::Down.apply(pos), lever_id("ceiling", "north", false));
+    h.world.set_block(
+        Direction::Down.apply(pos),
+        lever_id("ceiling", "north", false),
+    );
 
     let mut ctx = h.ctx();
     let result = torch.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
@@ -205,7 +207,8 @@ fn wall_torch_never_survives_mounted_on_a_lever_nondefault_case() {
             .0,
     );
     h.world.set_block(pos, wall_torch_facing_north);
-    h.world.set_block(mount_pos, lever_id("wall", "east", false));
+    h.world
+        .set_block(mount_pos, lever_id("wall", "east", false));
 
     let mut ctx = h.ctx();
     let result = torch.on_shape_update(&mut ctx, pos, Direction::South, BlockStateId(0));
@@ -229,7 +232,8 @@ fn floor_torch_never_survives_on_top_of_another_torch_nondefault_case() {
     let mut h = Harness::new();
     let pos = BlockPos::new(0, 1, 0);
     h.world.set_block(pos, floor_torch_id());
-    h.world.set_block(Direction::Down.apply(pos), floor_torch_id());
+    h.world
+        .set_block(Direction::Down.apply(pos), floor_torch_id());
 
     let mut ctx = h.ctx();
     let result = torch.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
@@ -252,7 +256,8 @@ fn wire_never_survives_on_top_of_a_torch_nondefault_case() {
     let mut h = Harness::new();
     let pos = BlockPos::new(0, 1, 0);
     h.world.set_block(pos, wire_id());
-    h.world.set_block(Direction::Down.apply(pos), floor_torch_id());
+    h.world
+        .set_block(Direction::Down.apply(pos), floor_torch_id());
 
     let mut ctx = h.ctx();
     let result = wire.on_shape_update(&mut ctx, pos, Direction::Down, BlockStateId(0));
