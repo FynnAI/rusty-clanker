@@ -147,7 +147,10 @@ async fn place_and_read_id(
 /// `play_redstone_field_report.rs`'s own `isolated_redstone_wire_gets_the_connected_plus_
 /// shape_not_a_bare_dot` test's `power=0` id (4591) exactly, offset here by `power*9`.
 fn isolated_wire_id_for_power(power: i32) -> i32 {
-    4011 + 1 * 432 + 1 * 144 + power * 9 + 1 * 3 + 1 * 1
+    // east=1, north=1, south=1, west=1 (each `Side`), all multiplied out by hand since
+    // clippy's identity_op lint flags a literal `1 * <stride>` even when it documents which
+    // digit a stride belongs to.
+    4011 + 432 + 144 + power * 9 + 3 + 1
 }
 
 #[tokio::test]
