@@ -231,13 +231,13 @@ fn crouching_shrinks_the_players_own_obstructing_box() {
 /// Proves the shape-emptiness short-circuit itself, at the exact function `apply_placement`
 /// calls (Context, AUTHORITATIVE RESEARCH VERDICT: "If that collision shape is EMPTY the
 /// check short-circuits to 'unobstructed' without ever looking at entities... it follows from
-/// the shape used rather than from any special case"). Driven by `VoxelShape::empty()`
-/// directly rather than through a real `PlaceableBlockKind` -- `rc_physics::tier1_shape_table()`
-/// currently gives every one of this milestone's dozen placeable kinds a small but non-empty
-/// collision box (none is registered as truly hollow yet), so no real block-kind selection
-/// could exercise this branch through the full `apply_placement` pipeline; unit-testing the
-/// predicate directly proves the short-circuit itself is shape-driven, never block-kind-driven
-/// (do not special-case block kinds), independent of that table's own current contents.
+/// the shape used rather than from any special case"). Driven by `VoxelShape::empty()` directly
+/// rather than through a real `PlaceableBlockKind` -- kept this way for the predicate-level
+/// proof independent of the table's own contents, but `redstone_wire`/`redstone_torch`/`lever`
+/// (`.noCollision()`, `Blocks.java`) now DO give `rc_physics::tier1_shape_table()` a genuinely
+/// empty collision shape (M4-B10 blueprint author's finding, MECH-D84 fix), so this exact branch
+/// is also exercised end-to-end through the full `apply_placement` pipeline, with a real
+/// `PlaceableBlockKind` selection, by `play_placement_no_collision_field_report.rs`.
 #[test]
 fn an_empty_collision_shape_short_circuits_to_unobstructed_regardless_of_player_overlap() {
     let target = BlockPos::new(0, -59, 0);

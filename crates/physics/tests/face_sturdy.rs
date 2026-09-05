@@ -23,9 +23,23 @@
 //! citation) touches `y=1` only along its outer 2px border — exactly `Rigid`'s own required
 //! frame, and nothing more — so a hopper's top face reads `Rigid`-sturdy but neither `Full`-
 //! nor `Center`-sturdy.
+//!
+//! `redstone_wire`/`redstone_torch`/`redstone_wall_torch`/`lever` (M3 field-report test-
+//! authoring, M4-B10 blueprint author's finding, re-verified against the ASSET-D18(f)
+//! reference): all four register `.noCollision()` in `Blocks.java`, and `BlockBehaviour.
+//! getCollisionShape` is `this.hasCollision ? state.getShape(...) : Shapes.empty()` --
+//! `hasCollision = false` for every one of them, so the COLLISION shape (what `getBlockSupport
+//! Shape`'s own default body reads, and therefore what `is_face_sturdy` must read) is `Shapes.
+//! empty()` regardless of each block's own non-empty visual OUTLINE (`getShape`, used only for
+//! rendering/selection, never for support): a flat box for wire, a centered post for both torch
+//! variants, a handle box for every one of the lever's 24 states. `tier1_shape_table()`'s own
+//! table must therefore resolve every reachable id in each of these four ranges to `VoxelShape::
+//! empty()` -- not merely "non-full" the way the extended-piston-base/chest/hopper cases above
+//! already are, but genuinely empty, so `is_face_sturdy` returns `false` on every face for every
+//! `SupportKind`, with no exception.
 
 use rc_physics::{Face, SupportKind, tier1_shape_table};
-use rc_registries::block_state_properties::state_id;
+use rc_registries::block_state_properties::{range_of, state_id};
 use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::default_state;
 
@@ -208,6 +222,109 @@ fn air_is_sturdy_on_no_face_for_no_kind_self_case() {
                 !table.is_face_sturdy(default_state::AIR.0, face, kind),
                 "air must never be sturdy (face={face:?}, kind={kind:?})"
             );
+        }
+    }
+}
+
+fn lever_id(face: &str, facing: &str, powered: bool) -> u32 {
+    state_id(
+        block_id::LEVER,
+        &[
+            ("face", face),
+            ("facing", facing),
+            ("powered", if powered { "true" } else { "false" }),
+        ],
+    )
+    .unwrap_or_else(|| panic!("lever face={face} facing={facing} powered={powered} must be legal"))
+    .0
+}
+
+/// M3 field-report test-authoring (M4-B10 blueprint author's finding): `redstone_wire` registers
+/// `.noCollision()` (`Blocks.java`) -- every reachable id (the full `power`x`east`x`north`x
+/// `south`x`west` cross-product, not merely the default) must resolve to `VoxelShape::empty()`,
+/// never the flat outline box `crates/physics/src/shapes.rs`'s own pre-fix table stored.
+#[test]
+fn redstone_wire_every_state_has_empty_collision_shape_orientation_case() {
+    let table = tier1_shape_table();
+    let range = range_of(block_id::REDSTONE_WIRE);
+    for id in range.first.0..=range.last.0 {
+        assert!(
+            table.lookup(id).shape.is_empty(),
+            "redstone_wire id={id}: noCollision() in the reference means Shapes.empty(), \
+             regardless of the outline's own flat 1/16-tall box"
+        );
+        for face in ALL_FACES {
+            for kind in ALL_KINDS {
+                assert!(
+                    !table.is_face_sturdy(id, face, kind),
+                    "redstone_wire id={id} face={face:?} kind={kind:?}: an empty collision \
+                     shape is never sturdy on any face"
+                );
+            }
+        }
+    }
+}
+
+/// As above, for `redstone_torch` (floor) and `redstone_wall_torch` -- both register
+/// `.noCollision()` and both share this table's own `torch_shape()` outline (the centered post),
+/// but the COLLISION shape both must resolve to is empty, not that post.
+#[test]
+fn redstone_torch_and_wall_torch_every_state_has_empty_collision_shape_orientation_case() {
+    let table = tier1_shape_table();
+    for block in [block_id::REDSTONE_TORCH, block_id::REDSTONE_WALL_TORCH] {
+        let range = range_of(block);
+        for id in range.first.0..=range.last.0 {
+            assert!(
+                table.lookup(id).shape.is_empty(),
+                "{block:?} id={id}: noCollision() in the reference means Shapes.empty(), \
+                 regardless of the outline's own centered post box"
+            );
+            for face in ALL_FACES {
+                for kind in ALL_KINDS {
+                    assert!(
+                        !table.is_face_sturdy(id, face, kind),
+                        "{block:?} id={id} face={face:?} kind={kind:?}: an empty collision \
+                         shape is never sturdy on any face"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// As above, for every one of `lever`'s real 24 states (3 `face` x 4 `facing` x 2 `powered`) --
+/// `LEVER` also registers `.noCollision()`. This is also the direct proof of the M4-B10 defect
+/// itself: a CEILING lever's own outline box touches the literal `y=1` boundary with a footprint
+/// that covers the centred 2x2-pixel square, so the pre-fix table (storing that outline as the
+/// looked-up shape) answered `is_face_sturdy(ceiling_lever_id, Face::Up, SupportKind::Center)
+/// == true` -- exactly the "a face-attached block can find a Center-sturdy face on a lever...
+/// where vanilla finds none" consequence the defect names. The fix makes every one of these 24
+/// ids resolve to `VoxelShape::empty()`, so every assertion below (including the `Face::Up`/
+/// `SupportKind::Center` case for `face=ceiling`) must read `false`.
+#[test]
+fn lever_every_state_has_empty_collision_shape_and_no_sturdy_face_orientation_case() {
+    let table = tier1_shape_table();
+    for face in ["floor", "wall", "ceiling"] {
+        for facing in ["north", "south", "west", "east"] {
+            for powered in [false, true] {
+                let id = lever_id(face, facing, powered);
+                assert!(
+                    table.lookup(id).shape.is_empty(),
+                    "lever face={face} facing={facing} powered={powered} id={id}: \
+                     noCollision() in the reference means Shapes.empty(), regardless of the \
+                     outline's own handle box"
+                );
+                for f in ALL_FACES {
+                    for kind in ALL_KINDS {
+                        assert!(
+                            !table.is_face_sturdy(id, f, kind),
+                            "lever face={face} facing={facing} powered={powered} id={id} \
+                             checked-face={f:?} kind={kind:?}: an empty collision shape is \
+                             never sturdy on any face"
+                        );
+                    }
+                }
+            }
         }
     }
 }
