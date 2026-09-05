@@ -22,7 +22,8 @@ use rusty_clanker_server::play::packets::{
     unpack_position,
 };
 use rusty_clanker_server::play::{
-    HardcodedWorld, HeldItemStub, PlaceableBlockKind, PlayerProfile, enter_play,
+    BlockActionKind, Face, HardcodedWorld, HeldItemStub, PendingBlockAction, PlaceableBlockKind,
+    PlayerProfile, enter_play,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -499,6 +500,81 @@ async fn empty_hand_click_on_plain_stone_still_produces_no_state_change() {
 
         let after = world.debug_query_block(stone_pos).await.unwrap().raw_state;
         assert_eq!(before, after, "plain stone has no on_use handler at all");
+    })
+    .await
+    .unwrap();
+}
+
+/// M3 field-report (packet-order sneak): `player_input` and `use_item_on` travel through two
+/// separate region queues that the tick loop drains at different points, so a use decoded
+/// right after a sneak toggle could be applied with the previous drain window's sneak state
+/// (seen once on CI as a delay cycle where sneak-placement was expected). Vanilla handles
+/// both packets in order on one thread. This case bypasses the wire and queues a `Place`
+/// action whose own stamped `sneaking` flag is `true` while the actor's drained
+/// `PlayerInputState` still says standing: the stamp must decide, so the click places stone
+/// above the repeater and never cycles its delay.
+#[tokio::test]
+async fn a_use_action_applies_the_sneak_state_stamped_on_the_action_not_the_drained_component_nondefault_case()
+ {
+    tokio::time::timeout(Duration::from_secs(300), async {
+        let world = HardcodedWorld::new();
+        let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
+        let mut seq = 0;
+
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Repeater))
+            .await;
+        let repeater_pos = BlockPos::new(2, -60, 0);
+        let above_pos = BlockPos::new(2, -59, 0);
+        place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(2, -61, 0), 1).await;
+        let before = world
+            .debug_query_block(repeater_pos)
+            .await
+            .unwrap()
+            .raw_state;
+        world
+            .debug_set_held_item(1, HeldItemStub::Block(PlaceableBlockKind::Stone))
+            .await;
+
+        // No `player_input` is ever sent: the actor's own drained `PlayerInputState` stays
+        // "standing" for the whole test. The action itself carries `sneaking: true`, as
+        // `enter_play` stamps it after decoding a shift-flagged `player_input`.
+        let (server, _stub_client) = connected_pair().await;
+        let (_stub_inbound, stub_handle) = spawn_connection(server, ConnectionConfig::default());
+        world
+            .queue_block_action(PendingBlockAction {
+                network_entity_id: 1,
+                connection: stub_handle,
+                kind: BlockActionKind::Place {
+                    location: repeater_pos,
+                    face: Face::Up,
+                    inside_block: false,
+                    cursor: (0.5, 0.5, 0.5),
+                },
+                sequence: 99,
+                sneaking: true,
+            })
+            .expect("the region is alive throughout this test");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut above = 0u32;
+        while tokio::time::Instant::now() < deadline {
+            above = world.debug_query_block(above_pos).await.unwrap().raw_state;
+            if above != 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            above, STONE.0,
+            "the stamped sneak state must suppress block use and place the held stone"
+        );
+        let after = world
+            .debug_query_block(repeater_pos)
+            .await
+            .unwrap()
+            .raw_state;
+        assert_eq!(before, after, "the repeater's own delay must not cycle");
     })
     .await
     .unwrap();

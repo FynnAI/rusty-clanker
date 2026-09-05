@@ -180,6 +180,7 @@ async fn broadcast_reaches_the_actor_even_when_its_own_player_marker_was_never_s
             location: BlockPos::new(0, -61, 0),
         },
         sequence: 42,
+        sneaking: false,
     });
 
     // M3 field-report test-authoring fix: the phantom's own ack and block-update, and the
