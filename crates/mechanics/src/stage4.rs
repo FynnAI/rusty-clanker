@@ -226,6 +226,12 @@ pub fn run_scheduled_phase(
 
     let due_block = scheduled.drain_due_block_ticks(current_tick);
     for entry in due_block {
+        // M3 field-report wave 3 (finding 3): vanilla's run loop drops an entry from the
+        // current game tick's run set at the moment it takes it off that queue, before the
+        // block's own tick body runs — so `will_block_tick_this_tick` is already `false` for
+        // this position throughout its own tick and that tick's whole neighbour fan-out, while
+        // it stays `true` for every entry in this batch that has not run yet.
+        scheduled.run_block_tick(entry.pos);
         dispatch_scheduled_tick(
             world,
             engine,
@@ -252,6 +258,12 @@ pub fn run_scheduled_phase(
             behaviors,
         );
     }
+
+    // M3 field-report wave 3 (finding 3): vanilla's own post-run cleanup, which empties the
+    // block run set as soon as the collected block ticks have all run — before the fluid
+    // ticks, the block-event sub-phase, or anything else later in this same game tick can
+    // consult it.
+    scheduled.end_block_tick_batch();
 
     let due_fluid = scheduled.drain_due_fluid_ticks(current_tick);
     for entry in due_fluid {

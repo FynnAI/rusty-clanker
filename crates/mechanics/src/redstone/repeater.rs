@@ -389,7 +389,14 @@ impl BlockBehavior for RepeaterBehavior {
         if !locked {
             let should = self.base_input_positive(ctx.world, pos);
             let powered = self.powered(pos);
-            if powered != should && !ctx.scheduled.is_block_tick_pending(pos) {
+            // M3 field-report wave 3 (finding 3): `will_block_tick_this_tick`, never the
+            // broader `is_block_tick_pending` — vanilla's diode refuses to schedule only while
+            // its own tick is collected-but-not-yet-run in *this* game tick. A tick already
+            // queued for a later game tick is refused one level down instead, by
+            // `schedule_block_tick`'s own per-position dedup
+            // (`will_block_tick_this_tick`'s own doc comment has the full rationale and the
+            // fixture it was root-caused against).
+            if powered != should && !ctx.scheduled.will_block_tick_this_tick(pos) {
                 let priority = if self.should_prioritize(ctx.world, pos) {
                     TickPriority::ExtremelyHigh
                 } else if powered {
