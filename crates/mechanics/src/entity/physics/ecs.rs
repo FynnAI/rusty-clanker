@@ -292,6 +292,9 @@ fn system_entity_physics_integration(
                     velocity: pushed_velocity,
                     on_ground: base.on_ground,
                     fall_distance: base.fall_distance,
+                    // M4-B05: an ephemeral per-call field (Context, "Fall damage") this
+                    // system neither reads nor persists -- always `None` at input.
+                    landed_fall_distance: None,
                 };
                 let new_state = step_living_entity_tick(
                     input_state,

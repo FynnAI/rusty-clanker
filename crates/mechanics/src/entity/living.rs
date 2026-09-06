@@ -32,4 +32,16 @@ pub struct LivingEntity {
     #[nbt(name = "sleeping_pos")]
     #[net_metadata(index = 14, kind = "OptionalPosition")]
     pub sleeping_bed_pos: Option<rc_core::BlockPos>,
+    // Added at the end of the existing field list (M4-B05 Context, "Damage pipeline" step 7
+    // and "Death"). None carry #[net_metadata(...)] (M4-B05 Context, "Player health" -- no
+    // client-render need at M4 scope); `is_dead` carries neither #[nbt(...)] nor
+    // #[net_metadata(...)] (transient runtime-only, defaulted via `Default::default()` on
+    // load per M4-B01's own `EntityNbtFields` rule 2).
+    #[nbt(name = "AbsorptionAmount")]
+    pub absorption: f32,
+    #[nbt(name = "HurtTime")]
+    pub hurt_time: i16,
+    #[nbt(name = "DeathTime")]
+    pub death_time: i16,
+    pub is_dead: bool,
 }

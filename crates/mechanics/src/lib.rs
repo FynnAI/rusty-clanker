@@ -8,6 +8,7 @@ pub mod behavior;
 pub mod block_entity;
 pub mod block_event;
 pub mod border;
+pub mod combat;
 pub mod container;
 pub mod direction;
 pub mod entity;

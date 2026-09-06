@@ -185,6 +185,10 @@ fn build_and_spawn(
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     };
     let payload = match kind {
         EntityKind::Zombie => EntityPayload::Zombie(ZombieBundle),
