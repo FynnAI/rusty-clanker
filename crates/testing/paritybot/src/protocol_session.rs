@@ -109,8 +109,8 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// survival`, held by `SURVIVAL_DIG_HOLD_TICKS` via `server_tick_wait::
 /// wait_for_server_ticks` instead, never this constant.
 const SETTLE_TICKS: usize = 10;
-/// Vanilla destroys a block by hand once `getDestroyProgress × (ticksSpentDestroying +
-/// 1) ≥ 0.7` at the STOP packet (reference `ServerPlayerGameMode.
+/// Vanilla destroys a block by hand once the destroy progress times the elapsed
+/// ticks plus one reaches 0.7 at the STOP packet (reference `ServerPlayerGameMode.
 /// handleBlockBreakAction`'s own "destroyed" branch, restated — never Mojang's own
 /// method body, ASSET-D18/D19) — hardness 1.5, no correct-tool multiplier, bare-hand
 /// speed 1.0 gives `destroySpeed ≈ 0.0222`/tick, so the gate is met at real server
@@ -121,9 +121,9 @@ const SETTLE_TICKS: usize = 10;
 /// never early, so 130 is a safety margin, not a looser threshold. Counts the
 /// OBSERVED SERVER's own real ticks (`server_tick_wait::wait_for_server_ticks`),
 /// never wall-clock time: an oracle ticking below real time on a loaded machine must
-/// never let the STOP packet release before the server has genuinely earned it
-/// (`docs/findings-for-planning.md`'s own "the survival dig is held by wall clock"
-/// finding this fix closes).
+/// never let the STOP packet release before the server has genuinely earned it —
+/// see `docs/findings-for-planning.md`'s own "the survival dig is held by wall clock"
+/// finding, which this fix closes.
 const SURVIVAL_DIG_HOLD_TICKS: u64 = 130;
 /// Safety net for `SURVIVAL_DIG_HOLD_TICKS`'s own hold — a server that stops ticking
 /// (or never sends another `set_time` at all) must fail this step loudly rather than
