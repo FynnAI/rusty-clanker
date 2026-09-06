@@ -1,0 +1,43 @@
+// M4-B10 corpus (Context, "Corpus fixtures" item 1): a wall stone button toggled directly
+// BESIDE a wire tile, mirroring `lever_toggle_powers_adjacent_wire.ron`'s own geometry exactly
+// (translated from a floor lever facing north to a wall button facing east) — pins that a
+// button's own unconditional weak-15-while-powered emission reaches an immediate neighbour
+// through the same `/setblock`-driven `updateNeighboursOnBlockSet` fan-out the lever fixture
+// already established, and that the button's own release half depowers it again.
+//
+// Geometry: a mount stone at (-1,0,0); a wall stone button at (0,0,0), `face=wall,
+// facing=east` (`mount_direction(Wall, facing) = facing.opposite()` — MECH lever precedent,
+// `crates/mechanics/src/redstone/lever.rs` — so `facing=east` mounts on the stone to its own
+// west, exactly this cell); a wire tile at (1,0,0) — directly east, the button's own immediate
+// neighbour — resting on its own separate stone at (1,-1,0).
+//
+// Every block_id/state_id below was resolved directly against the generated registry
+// (`rc_registries::block_state_properties::state_id`): `minecraft:stone` = block_id 975,
+// state_id 1; `minecraft:stone_button` = block_id 980, range `[6895,6918]` (6910 =
+// face=wall/facing=east/powered=false, 6909 = the same powered=true); `minecraft:redstone_wire`
+// = block_id 893, range `[4011,5306]` (4738 = east=side/north=none/power=0/south=none/
+// west=side, 4873 = the same at power 15 — the same straight-line-once-a-signal-source-
+// neighbour-exists connection digits `lever_toggle_powers_adjacent_wire.ron`'s own citation
+// already derives for the identical geometry, translated one axis).
+ContraptionSpec(
+    id: "redstone/qc/button_pressed_powers_adjacent_wire",
+    category: QcShowcase,
+    description: "A wall stone button (facing east) mounted on its own stone, with a redstone wire tile directly east of it on its own separate stone floor. Pressing the button raises the adjacent wire to power 15 without disturbing its connection shape; releasing it drops the wire to 0, again leaving the shape untouched.",
+    quirk: "A `/setblock` state swap of a button is `Level.setBlock(pos, state, 2|256)` followed by `ServerLevel.updateNeighboursOnBlockSet` — shape updates first, then the neighbour-changed fan-out, exactly as for the lever. The button's own `getSignal`/`getDirectSignal` are an unconditional weak 15 toward every neighbour (strong 15 only toward its own mount) while POWERED — never conditioned on `may_build` the way this codebase's own lever behaviour is (`M4-B10 Context §J item 2`).",
+    max_ticks: 6,
+    blocks: [
+        (pos: (-1, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=false]", state_id: 6910),
+        (pos: (1, -1, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:redstone_wire[east=side,north=none,power=0,south=none,west=side]", state_id: 4738),
+    ],
+    actions: [
+        // Tick 3: press the button in place (this project's own state-id-swap action
+        // convention, standing in for a real player right-click).
+        (tick: 3, pos: (0, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=true]", state_id: 6909),
+        // Tick 5: release it — pins the depower half of the same path (the corpus schema has
+        // no "use" action, so the button's own real auto-off delay is never corpus-covered;
+        // this state swap only pins the signal-semantics half, per Context §J item 3).
+        (tick: 5, pos: (0, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=false]", state_id: 6910),
+    ],
+)

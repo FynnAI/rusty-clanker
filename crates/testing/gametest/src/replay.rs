@@ -22,9 +22,9 @@ use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::piston::PistonBehavior;
 use rc_mechanics::redstone::{
-    ComparatorBehavior, ComparatorMode, ContainerSignalSource, LeverBehavior, RedstoneSignalSource,
-    RepeaterBehavior, SignalSourceRegistry, TorchAttachment, TorchBehavior, WireBehavior,
-    notify_neighbor_changed_only, register_redstone_block,
+    ComparatorBehavior, ComparatorMode, ContainerSignalSource, LeverBehavior, NoEntities,
+    RedstoneSignalSource, RepeaterBehavior, SignalSourceRegistry, TorchAttachment, TorchBehavior,
+    WireBehavior, notify_neighbor_changed_only, register_redstone_block, register_tier2_inputs,
 };
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEntityKind, BlockEntityWorldAccess, BlockEventQueue,
@@ -890,6 +890,20 @@ pub fn tier1_registry(
     behaviors.register_range(lo, hi, Arc::clone(&lever) as Arc<dyn BlockBehavior>);
     signals.register_range(lo, hi, lever as Arc<dyn RedstoneSignalSource>);
 
+    // M4-B10: buttons and pressure plates, tier 2's own two input components -- registered
+    // here (before `signals` is wrapped in its own `Arc` below), mirroring
+    // `bootstrap_redstone_dispatch`'s own identical ordering constraint
+    // (`register_tier2_inputs`'s own doc comment: it needs the plain, not-yet-`Arc`-wrapped
+    // registry, unlike `register_hopper`/`register_piston`). This replay driver has no real
+    // per-tick entity census of its own (module doc comment: it hand-reconstructs the
+    // production composition root's registration order, never its ECS-backed systems), so
+    // every pressure plate here dispatches against `NoEntities` -- a fixture that presses a
+    // plate does so via a direct `powered`/`power` state-swap action (this corpus schema has
+    // no entity-spawn action, Context §J item 3), never through `on_entity_inside`, so this is
+    // never actually consulted by any committed fixture; it exists only so the plate's own
+    // `BlockBehavior`/`RedstoneSignalSource` registration has a well-typed census to hold.
+    register_tier2_inputs(&mut behaviors, &mut signals, Arc::new(NoEntities));
+
     // Two-phase registry self-reference (Context §I½, `Tier1RedstoneHandles::bind_registry`'s
     // own identical order: wire, torch-floor, torch-wall, repeater, comparator).
     let signals = Arc::new(signals);
@@ -951,7 +965,6 @@ pub fn tier1_registry(
 /// Immediate-settle: writes `new_state` at `pos` (fanning out both signals, per
 /// `UpdateContext::set_block`), then drains the resulting `NeighborUpdateEngine`
 /// queue to a fixed point via `dispatch_one` — module doc comment.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn place_and_settle(
     world: &mut ReplayWorld,

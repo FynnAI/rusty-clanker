@@ -1,0 +1,46 @@
+// M4-B10 corpus (Context, "Corpus fixtures" item 2): a wall button's own STRONG/direct signal
+// (Context §C: "15 only toward the mount") strongly powers its own mount block, which in turn
+// strongly powers a redstone wire resting directly ON TOP of that mount — quasi-connectivity's
+// own vertical relay, already established by this project's own pre-M4-B10 `redstone/qc/*`
+// fixtures for other signal sources; this fixture is the button's own equivalent. A second,
+// otherwise-identical wire on top of a DIFFERENT stone — one beside the button rather than
+// behind it — must stay unpowered throughout, pinning that the button's own strong signal
+// really is directional (only toward its own mount), never omnidirectional the way its own
+// weak signal is.
+//
+// Geometry: a mount stone at (0,0,0); a wall stone button at (1,0,0), `face=wall,facing=east`
+// (`mount_direction(Wall, facing) = facing.opposite()` — the mount lies one cell west of the
+// button, at (0,0,0), matching); a wire directly on top of the mount at (0,1,0) — the QC
+// probe; a second, unrelated stone at (1,0,1) — south of the button, never its mount — with
+// its own control wire on top at (1,1,1), which this fixture's own action list never touches
+// and which the oracle (and this project's own replay) must both leave at power 0 the whole
+// capture through.
+//
+// Every block_id/state_id below was resolved directly against the generated registry
+// (`rc_registries::block_state_properties::state_id`): `minecraft:stone` = block_id 975,
+// state_id 1; `minecraft:stone_button` = block_id 980, range `[6895,6918]` (6910 =
+// face=wall/facing=east/powered=false, 6909 = the same powered=true); `minecraft:redstone_wire`
+// = block_id 893, range `[4011,5306]` (5171 = the fully-disconnected default, east=none/
+// north=none/power=0/south=none/west=none — the shape a lone isolated wire resting on a plain
+// conductor, with no wire or signal-source neighbour at its own Y level, naturally settles
+// into; 5306 = the same shape at power 15).
+ContraptionSpec(
+    id: "redstone/qc/button_strong_powers_mount_block_wire_on_top",
+    category: QcShowcase,
+    description: "A wall stone button (facing east) mounted on a stone block, with a redstone wire resting directly on top of that same mount stone. Pressing the button strongly powers its own mount, raising the wire on top of it to power 15; releasing the button drops it back to 0. A second, otherwise-identical wire on top of an unrelated stone beside (not behind) the button never moves off power 0.",
+    quirk: "`DiodeBlock`-style directional diodes strongly power only the one cell their own signal points toward; a `FaceAttachedHorizontalDirectionalBlock` button's own `getDirectSignal` follows the identical restriction, strongly powering only its own mount cell (`towards == mount_direction(face, facing)`, this project's own lever precedent, `crates/mechanics/src/redstone/lever.rs`, restated for buttons by `M4-B10`'s own `ButtonBehavior`). A plain conductor (stone) does not itself re-emit that strong power sideways to its own neighbours — only a wire resting directly ON TOP of it reads it, via the standard quasi-connectivity vertical check every `redstone/qc/*` fixture in this corpus already exercises for other sources.",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=false]", state_id: 6910),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:redstone_wire[east=none,north=none,power=0,south=none,west=none]", state_id: 5171),
+        (pos: (1, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (1, 1, 1), vanilla_state: "minecraft:redstone_wire[east=none,north=none,power=0,south=none,west=none]", state_id: 5171),
+    ],
+    actions: [
+        // Tick 3: press the button in place.
+        (tick: 3, pos: (1, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=true]", state_id: 6909),
+        // Tick 5: release it.
+        (tick: 5, pos: (1, 0, 0), vanilla_state: "minecraft:stone_button[face=wall,facing=east,powered=false]", state_id: 6910),
+    ],
+)

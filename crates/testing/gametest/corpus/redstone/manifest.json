@@ -15,6 +15,18 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "button_pressed_powers_adjacent_wire.ron",
+      "sha256": "46a6aa8c4b4597eefda4dd260e144ff6a9db1c6b119ad0080df814c005585d33",
+      "generator_tool_version": "manual/M4-B10",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "button_strong_powers_mount_block_wire_on_top.ron",
+      "sha256": "fb0f417391432f16c16f8435abaffda7de1cc7bd478f7f1c28448cf51d5ffb54",
+      "generator_tool_version": "manual/M4-B10",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "comparator_2tick_fixed_delay.ron",
       "sha256": "2721077bc115533ad02cd74b10e602a288eabb3f70c3717b036f8f801550afae",
       "generator_tool_version": "manual/M3-corpus-wave",
@@ -171,6 +183,12 @@
       "source_jar_sha1": "n/a"
     },
     {
+      "path": "pressure_plate_strong_powers_block_below.ron",
+      "sha256": "a54040ec7c7c6c8875f7752a0fb00e7401ed5bf0e1b5a09f4df72f1911e65f67",
+      "generator_tool_version": "manual/M4-B10",
+      "source_jar_sha1": "n/a"
+    },
+    {
       "path": "pulse_repeater_facing_side_lock_ccw.ron",
       "sha256": "2fe5e4b329f00cc4da9070047a98daaffbbde14bcc7216e0dcf52325ebe4fbc7",
       "generator_tool_version": "manual/M3-corpus-wave",
@@ -243,14 +261,14 @@
       "source_jar_sha1": "n/a"
     },
     {
-      "path": "repeater_loop_clock_delay1_pulse1.ron",
-      "sha256": "f7d9e58aa6d0738d25eba3fa7404b7650484b2f0b54bd55f5e7de8e146afd57e",
+      "path": "repeater_loop_clock_delay1_pulse_long.ron",
+      "sha256": "4c801a224ec8123626fab90e842f4f0403ed648919235c43e206961d34f760a4",
       "generator_tool_version": "manual/M3-field-report-wave-3",
       "source_jar_sha1": "n/a"
     },
     {
-      "path": "repeater_loop_clock_delay1_pulse_long.ron",
-      "sha256": "4c801a224ec8123626fab90e842f4f0403ed648919235c43e206961d34f760a4",
+      "path": "repeater_loop_clock_delay1_pulse1.ron",
+      "sha256": "f7d9e58aa6d0738d25eba3fa7404b7650484b2f0b54bd55f5e7de8e146afd57e",
       "generator_tool_version": "manual/M3-field-report-wave-3",
       "source_jar_sha1": "n/a"
     },
@@ -348,6 +366,12 @@
       "path": "update_order_torch_dedup_guard.ron",
       "sha256": "121005fa7c8cf824a55f2c4849ab8b169d375a0a00079cebb8174bd0794dc647",
       "generator_tool_version": "manual/M3-field-report-wave-3",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "weighted_plate_analog_steps_into_comparator.ron",
+      "sha256": "a75067620c29cca73a63f59df686edebb0d310d280726eb480b6430fde827b88",
+      "generator_tool_version": "manual/M4-B10",
       "source_jar_sha1": "n/a"
     },
     {

@@ -1,0 +1,52 @@
+// M4-B10 corpus (Context, "Corpus fixtures" item 3): an oak pressure plate's own STRONG/
+// direct signal reaches only `pos.below()` (Context §D: "all round; only downward" — weak
+// signal is emitted to every face while pressed, direct/strong signal only downward). A wire
+// resting beside the plate itself (never its support) pins the "all round" half directly: the
+// plate is the wire's own immediate neighbour, so its weak emission reaches it exactly the way
+// `button_pressed_powers_adjacent_wire.ron` already establishes for a button's own identical
+// weak-15-to-every-neighbour rule.
+//
+// A companion assertion this fixture deliberately does NOT make: whether a wire beside the
+// plate's own SUPPORT stone (one level down, never touching the plate directly) also lights up
+// — real-oracle capture for that exact geometry (this changeset's own research pass) shows it
+// never does, unlike the already-committed `lever_strong_powers_mount_block_wire_on_top.ron`'s
+// own mount, which does relay to a same-level neighbour. That divergence between how a lever's
+// vs. a plate's own direct/strong signal participates in a receiving conductor's quasi-
+// connectivity aggregate is a genuine, confirmed gap this changeset's own final report records
+// for planning rather than guesses a fix for here, under this corpus's own test-authoring-only
+// changeset boundary (TEST-D45/D46) — asserting the wrong expectation into a committed fixture
+// would be worse than omitting the scenario.
+//
+// Geometry: a support stone at (0,0,0); an oak pressure plate directly on top at (0,1,0); a
+// wire at (0,1,-1) — north of the PLATE itself, same Y as the plate — on its own separate
+// floor at (0,0,-1).
+//
+// Every block_id/state_id below was resolved directly against the generated registry
+// (`rc_registries::block_state_properties::state_id`): `minecraft:stone` = block_id 975,
+// state_id 1; `minecraft:oak_pressure_plate` = block_id 649, range `[6861,6862]` (6862 =
+// powered=false, 6861 = powered=true); `minecraft:redstone_wire` = block_id 893, range
+// `[4011,5306]` (5171 = the fully-disconnected default, east=none/north=none/power=0/
+// south=none/west=none, the shape this isolated wire is declared with; the real oracle
+// capture settles it into the straight-line-through shape `RedStoneWireBlock.
+// getConnectionState`'s own post-processing produces once the plate is a real, persistent
+// signal-source neighbour, the same auto-straight-line rule `lever_toggle_powers_adjacent_
+// wire.ron`'s own citation already documents).
+ContraptionSpec(
+    id: "redstone/qc/pressure_plate_strong_powers_block_below",
+    category: QcShowcase,
+    description: "An oak pressure plate on its own support stone, with a redstone wire resting beside the plate itself (not its support), on its own separate floor. Pressing the plate raises the wire to power 15 (the plate's own weak signal reaching its immediate neighbour); releasing it drops the wire back to 0.",
+    quirk: "`BasePressurePlateBlock`-style plates emit weak signal omnidirectionally while pressed (this project's own `PressurePlateBehavior::weak_signal_toward`, `M4-B10`) — sufficient on its own for any neighbour directly touching the plate, the same rule a button's own adjacent-wire fixture already exercises.",
+    max_ticks: 6,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[east=none,north=none,power=0,south=none,west=none]", state_id: 5171),
+    ],
+    actions: [
+        // Tick 3: press the plate in place (standing in for a real entity stepping onto it).
+        (tick: 3, pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=true]", state_id: 6861),
+        // Tick 5: release it.
+        (tick: 5, pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
+    ],
+)

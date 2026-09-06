@@ -1,0 +1,53 @@
+// M4-B10 corpus (Context, "Corpus fixtures" item 4): a light-weighted pressure plate feeding a
+// comparator's own back (main) input, stepping `power` through 0 -> 1 -> 8 -> 15 -> 0 — pins
+// the analog read path end to end. A comparator's own block state never distinguishes its
+// output STRENGTH (only the boolean `powered`, on/off — the real analog value lives in its own
+// block-entity NBT, outside this corpus schema's own reach, `has_analog_state` on the
+// comparator's own row below marks exactly that known, forward-compatible gap), so the analog
+// value is observed instead through a downstream wire the comparator feeds — wire `power` IS a
+// plain, fully diffable block-state property, and in `compare` mode with no side inputs the
+// comparator passes its back input through unchanged.
+//
+// Geometry: a comparator at (0,1,0), `facing=north`, on its own floor stone at (0,0,0) (a
+// comparator that lacks real floor support pops to air one tick after setup, per this
+// project's own `comparator_wire_signal_read.ron` governance note — never repeated here); the
+// comparator's own back/input face is the direction it faces (`base_diode_input_signal`,
+// `crates/mechanics/src/redstone/signal.rs`: `front = facing.apply(pos)` IS the input read
+// position, empirically confirmed against this project's own already-oracle-verified
+// `comparator_wire_signal_read.ron`), so the plate sits north of the comparator, at (0,1,-1),
+// on its own floor stone at (0,0,-1); the comparator's own output emits toward the opposite
+// cell, south, where a wire sits at (0,1,1) on its own floor stone at (0,0,1).
+//
+// Every block_id/state_id below was resolved directly against the generated registry
+// (`rc_registries::block_state_properties::state_id`): `minecraft:stone` = block_id 975,
+// state_id 1; `minecraft:light_weighted_pressure_plate` = block_id 550, range `[11231,11246]`
+// (11231 = power=0, 11232 = power=1, 11239 = power=8, 11246 = power=15); `minecraft:comparator`
+// = block_id 228, range `[11263,11278]` (11264 = facing=north/mode=compare/powered=false,
+// 11263 = the same powered=true — `compare` mode with no side input reflects the back input
+// unchanged, so `powered` tracks "back input > 0" exactly); `minecraft:redstone_wire` =
+// block_id 893, range `[4011,5306]` (5024/5033/5096/5159 = north=side/south=side at power
+// 0/1/8/15 respectively — the same connected, straight-line-through shape this project's own
+// `comparator_wire_signal_read.ron` already established for a wire fed by a comparator on one
+// side with open air on the other, state 5024 shared verbatim with that fixture's own citation
+// for the power-0 case).
+ContraptionSpec(
+    id: "redstone/qc/weighted_plate_analog_steps_into_comparator",
+    category: QcShowcase,
+    description: "A light-weighted pressure plate feeding a comparator's own back input directly, the comparator (compare mode, no side input) passing that analog value through unchanged into a wire on its output side. Stepping the plate's own power through 0, 1, 8 and 15 in turn steps the downstream wire through the identical four values, then back to 0.",
+    quirk: "`WeightedPressurePlateBlock`-style plates store their own analog reading directly as an enumerated `power` block-state property (never block-entity NBT, unlike a comparator's own output) — this project's own `weighted_plate_signal` ceil-based formula (`M4-B10 Context §D`) is what a real entity census would drive that property from; this fixture drives it directly via state swap instead, since the corpus schema has no entity-spawn action (Context §J item 3's own restriction extends to this too).",
+    max_ticks: 12,
+    blocks: [
+        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 0), vanilla_state: "minecraft:comparator[facing=north,mode=compare,powered=false]", state_id: 11264, has_analog_state: true),
+        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, -1), vanilla_state: "minecraft:light_weighted_pressure_plate[power=0]", state_id: 11231),
+        (pos: (0, 0, 1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (0, 1, 1), vanilla_state: "minecraft:redstone_wire[east=none,north=side,power=0,south=side,west=none]", state_id: 5024),
+    ],
+    actions: [
+        (tick: 2, pos: (0, 1, -1), vanilla_state: "minecraft:light_weighted_pressure_plate[power=1]", state_id: 11232),
+        (tick: 4, pos: (0, 1, -1), vanilla_state: "minecraft:light_weighted_pressure_plate[power=8]", state_id: 11239),
+        (tick: 6, pos: (0, 1, -1), vanilla_state: "minecraft:light_weighted_pressure_plate[power=15]", state_id: 11246),
+        (tick: 8, pos: (0, 1, -1), vanilla_state: "minecraft:light_weighted_pressure_plate[power=0]", state_id: 11231),
+    ],
+)
