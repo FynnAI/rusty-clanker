@@ -888,6 +888,21 @@ Entries name the milestone that surfaced them and the code they concern.
   blueprint that routes every spawn through one allocator (M4-B09's
   composition reconciliation is the natural owner) and retire the stand-in.
 
+- **Register entries that expire with M4 name gaps no M4 blueprint closes as
+  written.** The TEST-D59 register carries `expires M4` entries with
+  `closes_with M4-B01`/`M4-B02` for: re-announcing entities that already exist
+  when a player (re)joins (`add_entity`/`set_entity_data` on
+  `session/disconnect_reconnect`), the player's own metadata and attribute
+  sync (`set_entity_data` flags such as sprinting, `update_attributes` with
+  the sprint modifier, `entity_event`), item-entity position sync after a
+  drop (`entity_position_sync`), and `set_equipment`. M4-B01/B02 have landed
+  without these, so `xtask protocol-diff` will fail on expiry the moment the
+  M4 completion report exists (TEST-D59: "an expired entry is a regression in
+  disguise"). Planning: either M4-B09 owns them as its composition-root
+  reconciliation (players as `BaseEntity`/`LivingEntity`, tracking pass on
+  join, self-sync) or the entries move to a named NET-hardening changeset with
+  `expires M5` — decide before M4's acceptance run.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
