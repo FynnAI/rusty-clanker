@@ -879,6 +879,15 @@ Entries name the milestone that surfaced them and the code they concern.
   harness change must be followed by deleting the cache by hand, which
   nobody will remember.
 
+- **`NetworkEntityIdAllocator` has no production consumer.** M4-B01/B02
+  shipped the allocator (and M4-B08 its process-wide `Arc` wrapper), but every
+  wire-visible network id — tracking, drops, natural spawns, M4-B05's debug
+  spawns — derives from `RcEntityId`'s low 32 bits (`entity_tracking::
+  stand_in_network_id`), which leaves a first-id collision between two
+  `RcEntityId`s that share their low bits unresolved. Planning: name the
+  blueprint that routes every spawn through one allocator (M4-B09's
+  composition reconciliation is the natural owner) and retire the stand-in.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2716,6 +2725,23 @@ Entries name the milestone that surfaced them and the code they concern.
   matching correction; the B07 acceptance tests never ran a multi-chunk grid
   through more than one tick — a converge-then-idle assertion belongs in the
   M4-B09 harness.
+
+- **M4-B05 shipped with seven documented deviations from its blueprint
+  text.** (1) the `get_knockback_formula` worked example asserts 1.5 where its
+  own arithmetic gives 1.0 — the formula (CLAIMS rows 62–63) is right, the
+  prose example is wrong and lives outside the claims list; (2) `fall_distance`
+  has one reset site in `evaluate_movement`, not the "two existing" the
+  Deliverables name; (3) `apply_combat_step` takes `&mut bevy_ecs::World`,
+  never `&mut HardcodedWorld`; (4) `register_mob_combat_system` returns `()`
+  (registration cannot fail); (5) debug accessors are `async` like every
+  sibling; (6) `PendingMeleeAttack.target: RcEntityId` cannot name a player —
+  mob-on-player melee waits for M4-B09 Part C; (7) the test-authoring commits
+  are structurally red (new modules absent) rather than `todo!()` stubs. Also
+  two `AttributeMap` types now coexist (B03's AI map, B05's registry-keyed
+  combat map) pending M4-B09 Part B, and `LivingMotionState.
+  landed_fall_distance` is computed whenever `fall_distance > 0`, not on
+  landing — harmless until mob fall damage reads it. Planning: fold (1)–(6)
+  into the M4-B05 text at the next blueprint pass; M4-B09 owns the map merge.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
