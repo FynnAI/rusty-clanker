@@ -229,14 +229,25 @@ fn set_time_packet_encodes_game_time_then_a_varint_counted_clock_updates_list() 
     let id = VarInt::decode(&mut cursor).unwrap().get();
     assert_eq!(id, SetTime::ID);
 
-    assert_eq!(cursor.get_i64(), 12345, "game_time: plain 8-byte big-endian long, offset 0");
+    assert_eq!(
+        cursor.get_i64(),
+        12345,
+        "game_time: plain 8-byte big-endian long, offset 0"
+    );
     let count = VarInt::decode(&mut cursor).unwrap().get();
     assert_eq!(count, 1, "clock_updates: VarInt-prefixed count");
     let clock_id = VarInt::decode(&mut cursor).unwrap().get();
-    assert_eq!(clock_id, 0, "the entry's own bare holder-registry VarInt id");
+    assert_eq!(
+        clock_id, 0,
+        "the entry's own bare holder-registry VarInt id"
+    );
     let total_ticks = VarLong::decode(&mut cursor).unwrap().get();
     assert_eq!(total_ticks, 999, "total_ticks: VarLong");
-    assert_eq!(cursor.get_f32(), 0.25, "partial_tick: plain 4-byte big-endian float");
+    assert_eq!(
+        cursor.get_f32(),
+        0.25,
+        "partial_tick: plain 4-byte big-endian float"
+    );
     assert_eq!(cursor.get_f32(), 1.0, "rate: plain 4-byte big-endian float");
     assert!(
         !cursor.has_remaining(),
