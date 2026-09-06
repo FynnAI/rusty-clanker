@@ -7,15 +7,14 @@
 //! **Documented test-design note** (final report has the full citation): the blueprint's
 //! own acceptance-test text names "a fixed seed known via a short pre-computed trace to
 //! produce at least one spawn within 50 ticks." Hand-deriving such a trace is
-//! impractical without an executable reference; this test instead polls generously (up
-//! to 400 real ticks, ~20 seconds) for the first `Spawn Entity` packet naming a Zombie —
-//! `HardcodedWorld`'s own light engine is never wired into its tick loop (a pre-existing
-//! composition-root gap this blueprint does not itself introduce or fix), so every
-//! `LightColumn` stays uninitialized (`sky_light`/`block_light` both `0` everywhere),
-//! making the Monster darkness gate unconditionally permissive and a Cow's own animal
-//! light rule (`>= 9`) unconditionally impermissive in this environment — Zombie is
-//! therefore the only tier-2 species this test can observe spawn naturally here.
-
+//! impractical without an executable reference; this test instead polls generously for
+//! the first `Spawn Entity` packet naming a naturally spawnable tier-2 kind. With Stage
+//! 8's light engine wired into `HardcodedWorld` (M4-B07 field-report changeset) the
+//! superflat surface is fully sunlit, so the Monster darkness gate keeps Zombies off it
+//! and the Creature path is the one that fires: Cows are legal on the lit grass but the
+//! persistent categories only spawn on the `tick % 400 == 0` cadence, so the poll window
+//! covers more than two of those ticks (45 s); a Zombie is still accepted should the RNG
+//! land one in an unlit cell.
 use bytes::{Bytes, BytesMut};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
@@ -98,23 +97,23 @@ const TICK: Duration = Duration::from_millis(50);
 
 #[tokio::test]
 async fn natural_spawn_cycle_produces_tracked_entities_end_to_end() {
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(90), async {
         let world = HardcodedWorld::new();
         let (mut a, mut a_acc) = spawn_actor(&world, "a", 1).await;
 
         // Superflat ground (bedrock@-64, dirt -63..=-62, grass@-61, open air from -60
         // upward, M1-B05's own layer table) already gives this test a real, legal
         // `ON_GROUND` placement band -- no `debug_set_block_state` needed.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-        let mut zombie_seen = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        let zombie_id = rc_mechanics::entity::EntityKind::Zombie.registry_id().0 as i32;
+        let cow_id = rc_mechanics::entity::EntityKind::Cow.registry_id().0 as i32;
+        let mut natural_spawn_seen = false;
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(TICK, recv_clientbound(&mut a, &mut a_acc)).await {
                 Ok((id, body)) if id == SpawnEntity::ID => {
                     let spawn = decode_one::<SpawnEntity>(body).unwrap();
-                    if spawn.entity_type
-                        == rc_mechanics::entity::EntityKind::Zombie.registry_id().0 as i32
-                    {
-                        zombie_seen = true;
+                    if spawn.entity_type == zombie_id || spawn.entity_type == cow_id {
+                        natural_spawn_seen = true;
                         break;
                     }
                 }
@@ -124,9 +123,9 @@ async fn natural_spawn_cycle_produces_tracked_entities_end_to_end() {
         }
 
         assert!(
-            zombie_seen,
-            "expected at least one naturally-spawned Zombie's own Spawn Entity packet \
-             to reach the client within the poll window"
+            natural_spawn_seen,
+            "expected at least one naturally-spawned Cow's or Zombie's own Spawn Entity \
+             packet to reach the client within the poll window"
         );
     })
     .await
