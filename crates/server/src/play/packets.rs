@@ -615,6 +615,82 @@ pub struct SetHealth {
     pub saturation: f32,
 }
 
+/// M1 field-report implementation (`docs/findings-for-planning.md`'s own "First real
+/// protocol-diff inventory" entry: "every step -> `set_time` (we never sync world time --
+/// small NET item)"): vanilla's own periodic time-sync broadcast. The pinned 26.2 reference's
+/// own real, current shape (`net.minecraft.network.protocol.game.ClientboundSetTimePacket`,
+/// decompiled-source-verified) is `record ClientboundSetTimePacket(long gameTime,
+/// Map<Holder<WorldClock>, ClockNetworkState> clockUpdates)` -- there is NO separate
+/// `dayTime`/`tickDayTime` pair in this version (that shape belongs to older protocol
+/// history; this project's own earlier work order assumed it, corrected here and recorded in
+/// the completion report). `gameTime` is a plain (non-Var) `Long` (`ByteBufCodecs.LONG`);
+/// `clockUpdates` is a VarInt-counted map, each entry a `ClockUpdate` (below). Independently
+/// cross-checked against azalea's own pinned-rev `ClientboundSetTime` (`azalea-protocol/src/
+/// packets/game/c_set_time.rs`, Constraints (d)): `game_time: u64, clock_updates:
+/// IndexMap<WorldClock, ClockState>` -- identical shape. Id `0x71` -- `protocol_id` 113 in a
+/// locally-generated `reports/packets.json` for protocol 776, independently cross-checked by
+/// counting this same file's own already-established "declaration-order id" convention
+/// (`SetHealth`'s own doc comment) against azalea's own `game/mod.rs` `Clientbound` list:
+/// `set_time` is index 113 there too.
+///
+/// `MinecraftServer.forceGameTimeSynchronization` (ASSET-D18(f) reference) is the periodic
+/// caller this packet's own production send site (`world.rs`'s own `region.tick_counter % 20
+/// == 0` broadcast) mirrors exactly: called every 20 ticks (`tickCount % 20 == 0`), it
+/// constructs `new ClientboundSetTimePacket(overworld.getGameTime(), Map.of())` -- an EMPTY
+/// `clockUpdates` map, always, for this specific periodic heartbeat (a non-empty map is only
+/// ever sent by `ServerClockManager.modifyClock`/`createFullSyncPacket`, on an actual clock
+/// mutation or full resync -- neither exists in this engine yet, no world-clock system is
+/// ticked here). This engine's own periodic send therefore matches vanilla's own real wire
+/// bytes for this cadence bit-for-bit: `clock_updates` is always empty here too, never a
+/// documented deviation.
+#[derive(RcPacket, Debug, Clone, PartialEq)]
+#[packet(state = "play", bound = "client", id = 0x71)]
+pub struct SetTime {
+    pub game_time: i64,
+    #[rc(prefixed_array = "VarInt")]
+    pub clock_updates: Vec<ClockUpdate>,
+}
+
+/// One `SetTime::clock_updates` entry -- `ClockNetworkState(long totalTicks, float
+/// partialTick, float rate)`'s own `StreamCodec.composite` field order (ASSET-D18(f)
+/// reference, `net.minecraft.world.clock.ClockNetworkState`): `total_ticks` a VarLong
+/// (`ByteBufCodecs.VAR_LONG`), `partial_tick`/`rate` plain `f32` (`ByteBufCodecs.FLOAT`
+/// twice). `clock` is the map's own key -- the fixed `minecraft:world_clock` registry's bare,
+/// unoffset holder id (`ByteBufCodecs.holderRegistry`'s scheme: a plain VarInt registry
+/// index, distinct from a *dynamic* registry's `+1`-offset `holder()` codec --
+/// `CreativeSlotItem::item_id`'s own doc comment already establishes this same "fixed
+/// registry, bare VarInt" shape for this project). Never constructed by any production call
+/// site at M1 field-report scope (`SetTime`'s own doc comment: the periodic heartbeat always
+/// sends an empty `clock_updates`) -- this type exists so the wire shape is real and
+/// round-trip-tested (`play_set_time_field_report.rs`'s own packet-encoder unit tests), for
+/// the day a real world-clock system needs to populate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClockUpdate {
+    pub clock: rc_protocol::VarInt,
+    pub total_ticks: rc_protocol::VarLong,
+    pub partial_tick: f32,
+    pub rate: f32,
+}
+
+impl rc_protocol::WireWrite for ClockUpdate {
+    fn write_wire(&self, buf: &mut BytesMut) {
+        self.clock.write_wire(buf);
+        self.total_ticks.write_wire(buf);
+        self.partial_tick.write_wire(buf);
+        self.rate.write_wire(buf);
+    }
+}
+impl rc_protocol::WireRead for ClockUpdate {
+    fn read_wire(buf: &mut Bytes) -> Result<Self, rc_protocol::PacketDecodeError> {
+        Ok(ClockUpdate {
+            clock: rc_protocol::VarInt::read_wire(buf)?,
+            total_ticks: rc_protocol::VarLong::read_wire(buf)?,
+            partial_tick: f32::read_wire(buf)?,
+            rate: f32::read_wire(buf)?,
+        })
+    }
+}
+
 /// M2-B07: one block's new state, broadcast to every currently-connected player (Context:
 /// "The M1-B05 interest/broadcast seam does not exist -- resolved here").
 #[derive(RcPacket, Debug, Clone, Copy, PartialEq, Eq)]

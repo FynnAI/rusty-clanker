@@ -66,7 +66,7 @@ use super::movement::{
 use super::packets::{
     AcknowledgeBlockChange, BlockEntityInfo, BlockEvent as BlockEventPacket, BlockUpdate,
     ChunkBatchFinished, ChunkBatchStart, LEVEL_EVENT_BLOCK_BREAK, LevelChunkWithLight, LevelEvent,
-    SectionBlocksUpdate, SetBlockDestroyStage, SetChunkCacheCenter, Sound as SoundPacket,
+    SectionBlocksUpdate, SetBlockDestroyStage, SetChunkCacheCenter, SetTime, Sound as SoundPacket,
     SynchronizePlayerPosition, pack_block_in_section, pack_position, pack_section_position,
 };
 use super::persistence::PlayerSessionStore;
@@ -3396,6 +3396,29 @@ impl HardcodedWorld {
                 entity_pickup_step(&mut region.world);
                 entity_resync_step(&mut region.world, region.tick_counter);
 
+                // M1 field-report implementation (`docs/findings-for-planning.md`'s own
+                // "First real protocol-diff inventory" entry: "every step -> `set_time` (we
+                // never sync world time -- small NET item)"): vanilla's own periodic
+                // time-sync broadcast, `MinecraftServer.forceGameTimeSynchronization`
+                // (ASSET-D18(f) reference) -- called every 20 ticks (`tickCount % 20 == 0`),
+                // broadcasting `ClientboundSetTimePacket(overworld.getGameTime(), Map.of())`
+                // to every connected player. `region.tick_counter` has already been
+                // incremented for this just-completed tick by `executor.tick_region` above
+                // (`RegionState::tick_counter`'s own doc comment; `executor.rs`'s own
+                // post-increment), so this engine's own equivalent check lands on the exact
+                // same 20-tick cadence, using its own real tick counter as `game_time` --
+                // never a wall-clock value. `clock_updates` is always empty here, matching
+                // vanilla's own real wire bytes for this specific periodic heartbeat exactly
+                // (`packets::SetTime`'s own doc comment has the full citation) -- this engine
+                // has no world-clock system to report on yet.
+                if region.tick_counter % 20 == 0 {
+                    let set_time_payload = encode_payload(&SetTime {
+                        game_time: region.tick_counter as i64,
+                        clock_updates: Vec::new(),
+                    });
+                    broadcast_set_time(&region.world, set_time_payload);
+                }
+
                 // MECH-D83 (M3 field-report wave 3) -- M3 field-report wave 3 CORRECTION
                 // (PLAN-D10, moving_piston placeholder, "corrected drain order"): drains
                 // `TickBlockEventOutbox` BEFORE `TickChangedPositions` now (reversed from this
@@ -4119,6 +4142,19 @@ fn broadcast_to_all(
         payload,
         Some((actor_connection, actor_network_id)),
     );
+}
+
+/// M1 field-report implementation (`packets::SetTime`'s own doc comment): sends `payload` to
+/// every currently-connected player, unconditionally -- vanilla's own `PlayerList.
+/// broadcastAll` semantics, deliberately independent of `broadcast_to_all`'s own chunk-
+/// tracking filter and of `broadcast_within_range`'s own distance filter, since `set_time`
+/// reaches every player of the level regardless of position or view distance.
+fn broadcast_set_time(world: &World, payload: bytes::Bytes) {
+    for entity_ref in world.iter_entities() {
+        if let Some(marker) = entity_ref.get::<PlayerMarker>() {
+            let _ = marker.connection.try_send_payload(payload.clone());
+        }
+    }
 }
 
 /// As `broadcast_to_all`, excluding `exclude_network_id` entirely (Context: `Set Block
