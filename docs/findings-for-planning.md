@@ -866,6 +866,19 @@ Entries name the milestone that surfaced them and the code they concern.
   `set_time` because its tick loop mirrors none of the composition root's
   per-tick broadcasts.
 
+- **The protocol-diff oracle capture cache is keyed by the jar hash alone.**
+  `xtask protocol-diff` reuses `corpus/protocol-diff/oracle.postcard` whenever
+  the oracle jar's sha1 matches, so three consecutive local runs after the
+  world-wipe, gamerule-freeze and reconnect fixes silently diffed against a
+  capture taken before any of them (the same trap the fetch-corpus cache key
+  had, closed there with the fixture's spec hash). Deleted by hand for the
+  closing run. Planning: the key must also cover the capture code and script
+  (a fingerprint of the `protocol_diff_runner` binary or of the session
+  script's step table and settings) and the register-independent oracle
+  settings (server.properties text, freeze gamerules); until then every
+  harness change must be followed by deleting the cache by hand, which
+  nobody will remember.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
