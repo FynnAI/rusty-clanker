@@ -49,6 +49,10 @@ fn free_fall_velocity_and_position_sequence() {
         velocity: Vec3::ZERO,
         on_ground: false,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
     let input = MovementIntent::default();
     let expected = [
@@ -80,6 +84,10 @@ fn friction_stop_decays_geometrically_at_default_friction() {
         velocity: Vec3::new(1.0, 0.0, 0.0),
         on_ground: true,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
     let input = MovementIntent::default();
     let expected = [0.6, 0.36, 0.216];
@@ -102,6 +110,10 @@ fn jump_impulse_then_gravity_decelerates_the_ascent() {
         velocity: Vec3::ZERO,
         on_ground: true,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
 
     // Tick 1: a single jump key-press. Per Context's own algorithm, the jump impulse is set
