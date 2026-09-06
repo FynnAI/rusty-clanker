@@ -189,6 +189,12 @@ fn sample_living_entity() -> LivingEntity {
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): four new
+        // fields on `LivingEntity`, never asserted on by this tracking test.
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     }
 }
 
