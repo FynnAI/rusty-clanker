@@ -28,7 +28,9 @@
 #![cfg(feature = "server-systems")]
 
 use bevy_ecs::prelude::*;
-use rc_chunk_storage::{BlockStateColumn, BlockStateId, ChunkKeyTag, LightColumn, PaletteThresholds};
+use rc_chunk_storage::{
+    BlockStateColumn, BlockStateId, ChunkKeyTag, LightColumn, PaletteThresholds,
+};
 use rc_core::{ChunkKey, DimensionId};
 use rc_mechanics::entity::physics::ecs::{DimensionResource, ShapeTableResource};
 use rc_mechanics::entity::{BaseEntity, EntityPayload, LivingEntity, MobMarker};
