@@ -24,7 +24,7 @@ use rc_gametest::protocol_capture::{
 use rc_protocol::{FinishConfiguration, LoginSuccess, RcPacket};
 
 use crate::packet_capture::{PacketCaptureError, connect_and_observe_with_recorder};
-use crate::packet_recorder::PacketRecorder;
+use crate::packet_recorder::{PacketRecorder, RecordedPacket};
 use crate::placement_capture;
 
 pub const SESSION_STEPS: &[&str] = &[
@@ -163,6 +163,43 @@ fn slot_for(index: usize) -> (i32, i32, i32) {
 /// `clippy::type_complexity`'s own suggested fix over the bare 3-tuple-of-`Vec`s this
 /// function used to return.
 type RawPacketList = Vec<(i32, Vec<u8>)>;
+
+/// M3.5-B03 harness fix (`packet_recorder.rs`'s own module doc comment has the full
+/// connection-attribution rationale): drops each `RecordedPacket`'s own
+/// `connection_id`, keeping only `(packet_id, body)` — used at every call site in
+/// this module where at most one connection is ever live at a time (every step but
+/// `session/disconnect_reconnect`'s own reconnect boundary, which needs the id itself
+/// to tell a stray older connection's own trailing packets apart from the live one —
+/// `filter_to_live_connection` below, never this function).
+fn strip_connection_id(raw: Vec<RecordedPacket>) -> RawPacketList {
+    raw.into_iter().map(|p| (p.packet_id, p.body)).collect()
+}
+
+/// The highest `connection_id` present in `packets`, or `None` if empty — since
+/// `PacketRecorder::next_connection_id` hands out ids in strictly increasing order,
+/// one per accepted relay connection, and this whole session never has more than one
+/// reconnect in flight at once, this is always the identity of whichever connection
+/// was established most recently (`packet_recorder.rs`'s own doc comment).
+fn latest_connection_id(packets: &[RecordedPacket]) -> Option<u64> {
+    packets.iter().map(|p| p.connection_id).max()
+}
+
+/// Filters `packets` down to just the entries belonging to `live_connection_id`
+/// (module doc comment) — drops every packet a stray older connection's own still-
+/// draining relay task recorded into the SAME shared recorder, regardless of where in
+/// the raw stream it landed (leading, interleaved, or trailing — never just "the
+/// first N", the shape a wall-clock-only fix could only ever approximate). Preserves
+/// receipt order.
+fn filter_to_live_connection(
+    packets: Vec<RecordedPacket>,
+    live_connection_id: Option<u64>,
+) -> RawPacketList {
+    packets
+        .into_iter()
+        .filter(|p| Some(p.connection_id) == live_connection_id)
+        .map(|p| (p.packet_id, p.body))
+        .collect()
+}
 
 fn split_handshake_phases(
     packets: &[(i32, Vec<u8>)],
@@ -561,7 +598,7 @@ pub async fn run_protocol_session(
     // The Play-state remainder (from `FinishConfiguration` through the moment
     // `Event::Spawn` fired) seeds `session/spawn`'s own bucket below rather than
     // being dropped — it is a real part of the spawn step, not the handshake.
-    let handshake = recorder.snapshot();
+    let handshake = strip_connection_id(recorder.snapshot());
     recorder.clear();
     let (login_packets, configuration_packets, spawn_seed) = split_handshake_phases(&handshake);
     push_step(
@@ -584,7 +621,7 @@ pub async fn run_protocol_session(
     // traffic, entity data, ...).
     client.wait_ticks(SETTLE_TICKS).await;
     let mut spawn_packets = spawn_seed;
-    spawn_packets.extend(recorder.snapshot());
+    spawn_packets.extend(strip_connection_id(recorder.snapshot()));
     recorder.clear();
     push_step(
         &mut out,
@@ -607,7 +644,7 @@ pub async fn run_protocol_session(
         &mut out,
         only,
         "session/move",
-        recorder.snapshot(),
+        strip_connection_id(recorder.snapshot()),
         &mut step_clock,
     );
     recorder.clear();
@@ -627,7 +664,7 @@ pub async fn run_protocol_session(
         &mut out,
         only,
         "session/sneak",
-        recorder.snapshot(),
+        strip_connection_id(recorder.snapshot()),
         &mut step_clock,
     );
     recorder.clear();
@@ -655,7 +692,7 @@ pub async fn run_protocol_session(
         &mut out,
         only,
         "session/dig_stone_survival",
-        recorder.snapshot(),
+        strip_connection_id(recorder.snapshot()),
         &mut step_clock,
     );
     recorder.clear();
@@ -683,7 +720,7 @@ pub async fn run_protocol_session(
                     &mut out,
                     only,
                     &place_step,
-                    recorder.snapshot(),
+                    strip_connection_id(recorder.snapshot()),
                     &mut step_clock,
                 );
                 recorder.clear();
@@ -694,7 +731,7 @@ pub async fn run_protocol_session(
                     &mut out,
                     only,
                     &break_step,
-                    recorder.snapshot(),
+                    strip_connection_id(recorder.snapshot()),
                     &mut step_clock,
                 );
                 recorder.clear();
@@ -731,24 +768,45 @@ pub async fn run_protocol_session(
                 .client()
                 .expect("connect_and_observe_with_recorder only returns after Event::Spawn");
             reconnect_client.wait_ticks(SETTLE_TICKS).await;
+            // M3.5-B03 harness fix (`packet_recorder.rs`'s own module doc comment has
+            // the full connection-attribution rationale): `wait_for_recorder_
+            // quiescence` above narrows the race (drains most of the dying first
+            // connection's own trailing traffic before `recorder.clear()`) but never
+            // closes it — a real run still showed its own leading two packets landing
+            // in the second connection's own Login handshake. Filtering by connection
+            // identity closes it outright, independent of timing: this reconnect's
+            // own connection is definitely live by now (`reconnect_client` only
+            // exists because `Event::Spawn` already fired), so its own login+spawn
+            // handshake has definitely already recorded at least one packet under
+            // its own `connection_id` — the
+            // highest one present in the snapshot taken here, since `PacketRecorder::
+            // next_connection_id` hands out ids in strictly increasing accept order
+            // and this session establishes no third connection. Fixed here, once, and
+            // reused for both the `baseline` watermark below and the final filtered
+            // stream after the walk, so a straggling FIRST connection packet can never
+            // count toward either step's own capture, regardless of where in the raw
+            // recorder it lands.
+            let live_connection_id = latest_connection_id(&recorder.snapshot());
+
             // M3.5-B03 follow-up (second correction, `docs/findings-for-planning.md`):
             // a real run showed `session/observe_chunk`'s own capture containing a
             // byte-for-byte duplicate of every one of `session/disconnect_reconnect`'s
             // own packets even though `recorder.clear()` runs, in program order with
             // no intervening `.await`, immediately after a step's own `recorder.
             // snapshot()` call — `baseline` (this connection's own packet count right
-            // here, at the moment `session/disconnect_reconnect`'s own window ends)
-            // is recorded as a position watermark instead, and BOTH steps below read
-            // their own packets as a slice of the ONE snapshot taken after the walk
-            // completes: `[0..baseline]` and `[baseline..]` respectively. A growing
-            // recorder can only ever attribute each packet to at most one of two
-            // disjoint index ranges, so nothing either step captures can ever
-            // reappear in the other's own list, regardless of whatever late/duplicate
-            // write caused the original symptom. `recorder.clear()` remains exactly
-            // as before for every *other* step boundary in this function — none of
-            // them ever showed this symptom — this fix is scoped to the one boundary
-            // a real run proved unsafe.
-            let baseline = recorder.len();
+            // here, at the moment `session/disconnect_reconnect`'s own window ends,
+            // counting only the live connection's own packets) is recorded as a
+            // position watermark instead, and BOTH steps below read their own packets
+            // as a slice of the ONE snapshot taken after the walk completes:
+            // `[0..baseline]` and `[baseline..]` respectively. A growing recorder can
+            // only ever attribute each packet to at most one of two disjoint index
+            // ranges, so nothing either step captures can ever reappear in the
+            // other's own list, regardless of whatever late/duplicate write caused
+            // the original symptom. `recorder.clear()` remains exactly as before for
+            // every *other* step boundary in this function — none of them ever showed
+            // this symptom — this fix is scoped to the one boundary a real run proved
+            // unsafe.
+            let baseline = filter_to_live_connection(recorder.snapshot(), live_connection_id).len();
 
             // `session/observe_chunk`: walk far enough to force a genuinely new chunk
             // column to load (never observed by this session before).
@@ -770,8 +828,15 @@ pub async fn run_protocol_session(
             // resolves every packet's own name across the WHOLE reconnect+walk
             // stream in one continuous, state-tracking pass BEFORE this split — never
             // per-step-in-isolation, which would wrongly assume `session/observe_
-            // chunk`'s own slice starts fresh in Login state.
-            let full_stream = recorder.snapshot();
+            // chunk`'s own slice starts fresh in Login state. `filter_to_live_
+            // connection` runs FIRST (module doc comment): every packet handed to
+            // `resolve_multi_phase` below now genuinely belongs to this one
+            // connection, from its own real first byte, so the per-state resolver's
+            // own `ConnState::Login` starting assumption (`starting_state_for_step`'s
+            // mirror in `rc_gametest::protocol_capture`) is never violated by a stray
+            // Play-state packet the dying first connection's own relay task was still
+            // draining into this same shared recorder.
+            let full_stream = filter_to_live_connection(recorder.snapshot(), live_connection_id);
             let resolved = resolve_multi_phase(&full_stream);
             let split_at = baseline.min(resolved.len());
             let (disconnect_reconnect_packets, observe_chunk_packets) = resolved.split_at(split_at);
@@ -830,7 +895,7 @@ mod quiescence_tests {
         let writer = recorder.clone();
         tokio::spawn(async move {
             for _ in 0..3 {
-                writer.record(1, &[0u8]);
+                writer.record(0, 1, &[0u8]);
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         });
@@ -857,7 +922,7 @@ mod quiescence_tests {
         let writer = recorder.clone();
         let keep_writing = tokio::spawn(async move {
             loop {
-                writer.record(1, &[0u8]);
+                writer.record(0, 1, &[0u8]);
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
@@ -876,5 +941,120 @@ mod quiescence_tests {
             elapsed >= Duration::from_millis(150) && elapsed < Duration::from_secs(2),
             "must give up at max_wait rather than block forever against a never-quiet recorder: {elapsed:?}"
         );
+    }
+}
+
+/// M3.5-B03 harness fix: `latest_connection_id`/`filter_to_live_connection` against
+/// two INTERLEAVED fake connections — never a real relay/server/network, exactly the
+/// pure-function shape `quiescence_tests` above already established for this same
+/// module. Reproduces the real defect's own shape (`wait_for_recorder_quiescence`'s
+/// own doc comment has the full real-run citation): a dying first connection's own
+/// trailing Play-state traffic (`rotate_head`/`disconnect`) landing interleaved with
+/// — not merely before — a live second connection's own fresh Login handshake in the
+/// SAME shared recorder.
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+
+    fn recorded(connection_id: u64, packet_id: i32) -> RecordedPacket {
+        RecordedPacket {
+            connection_id,
+            packet_id,
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn latest_connection_id_picks_the_higher_id_regardless_of_interleaving() {
+        let packets = vec![
+            recorded(0, 83), // conn 0's own trailing rotate_head
+            recorded(1, 1),  // conn 1's own genuine first byte (login handshake)
+            recorded(0, 32), // conn 0's own trailing disconnect kick
+            recorded(1, 2),  // conn 1 continues
+        ];
+        assert_eq!(latest_connection_id(&packets), Some(1));
+    }
+
+    #[test]
+    fn latest_connection_id_of_an_empty_snapshot_is_none() {
+        assert_eq!(latest_connection_id(&[]), None);
+    }
+
+    #[test]
+    fn filter_to_live_connection_drops_every_stray_packet_regardless_of_position() {
+        // Mirrors the real run this fix closes (`wait_for_recorder_quiescence`'s own
+        // doc comment): the dying connection 0's own two stragglers land BEFORE and
+        // IN THE MIDDLE of connection 1's own fresh handshake, never merely as a
+        // trailing tail a fixed-length skip could account for.
+        let packets = vec![
+            recorded(0, 83),  // stray, before
+            recorded(1, 1),   // conn 1: login_finished-equivalent
+            recorded(0, 32),  // stray, interleaved
+            recorded(1, 12),  // conn 1: a Configuration-state packet
+            recorded(1, 3),   // conn 1: finish_configuration-equivalent
+            recorded(0, 101), // stray, trailing
+            recorded(1, 9),   // conn 1: first real Play-state packet
+        ];
+        let live = latest_connection_id(&packets);
+        assert_eq!(live, Some(1));
+
+        let filtered = filter_to_live_connection(packets, live);
+        assert_eq!(
+            filtered.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 12, 3, 9],
+            "every connection-0 straggler must be dropped, in every position, and \
+             connection 1's own packets must keep their own relative order"
+        );
+    }
+
+    #[test]
+    fn filter_to_live_connection_against_an_empty_snapshot_is_empty() {
+        assert!(filter_to_live_connection(Vec::new(), None).is_empty());
+    }
+
+    /// End-to-end through the real `PacketRecorder`, not hand-built fixtures: two
+    /// "fake connections" (`PacketRecorder::next_connection_id`, never a real TCP
+    /// socket) interleave their own `record` calls exactly as `pump_and_rewrite`'s own
+    /// two independent relay tasks would, and `resolve_multi_phase` must resolve the
+    /// live connection's own filtered stream starting fresh in `ConnState::Login` —
+    /// the exact mechanism `session/disconnect_reconnect`'s own defect broke (a stray
+    /// Play-state packet fed to the Login-state decoder resolves to `None`, the
+    /// `<unresolved> (id .., login state)` symptom this whole fix exists to close).
+    #[test]
+    fn a_stray_older_connection_packet_can_never_corrupt_the_live_connections_own_login_state_resolution()
+     {
+        let recorder = PacketRecorder::new();
+        let old_conn = recorder.next_connection_id();
+        let new_conn = recorder.next_connection_id();
+
+        // Old connection's own trailing traffic, landing interleaved with the new
+        // connection's own fresh bytes — `id=2` is `LoginSuccess::ID` (login_
+        // finished), a real login-state boundary packet; a stray old-connection
+        // packet landing BEFORE it in the raw stream is exactly what corrupted the
+        // pre-fix resolver's starting `ConnState::Login` assumption.
+        recorder.record(old_conn, 83, &[]); // stray Play-state rotate_head
+        recorder.record(new_conn, 2, &[9, 9]); // new connection's own login_finished
+        recorder.record(old_conn, 32, &[]); // stray Play-state disconnect
+        recorder.record(new_conn, 12, &[1, 2, 3]); // new connection's own Configuration packet
+        recorder.record(new_conn, 3, &[]); // new connection's own finish_configuration
+
+        let snapshot = recorder.snapshot();
+        let live = latest_connection_id(&snapshot);
+        assert_eq!(live, Some(new_conn));
+
+        let filtered = filter_to_live_connection(snapshot, live);
+        assert_eq!(
+            filtered.len(),
+            3,
+            "both old-connection stragglers must be dropped"
+        );
+        let resolved = resolve_multi_phase(&filtered);
+        assert_eq!(resolved.len(), 3);
+        // The resolver walks fresh from `ConnState::Login`: packet 0 (id 2,
+        // `LoginSuccess::ID`) ends Login, so packet 1 (id 12) is resolved against the
+        // Configuration table, never the stray old connection's own Play-state one.
+        assert_eq!(resolved[0].packet_id, 2);
+        assert_eq!(resolved[1].packet_id, 12);
+        assert_eq!(resolved[2].packet_id, 3);
     }
 }

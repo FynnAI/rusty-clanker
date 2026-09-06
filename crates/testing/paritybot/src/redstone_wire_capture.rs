@@ -537,16 +537,21 @@ where
     ))
     .await;
 
+    // M3.5-B03 harness fix: this module's own `recorder` only ever serves ONE
+    // connection for this whole contraption capture (never a reconnect mid-capture,
+    // unlike `protocol_session::run_protocol_session`'s own `session/disconnect_
+    // reconnect` step) — `connection_id` is dropped here rather than filtered, since
+    // there is only ever one to filter against.
     let raw = recorder.snapshot();
     recorder.clear();
     let packets: Vec<CapturedPacket> = raw
         .into_iter()
         .enumerate()
-        .map(|(i, (packet_id, body))| CapturedPacket {
+        .map(|(i, recorded)| CapturedPacket {
             index: i as u32,
-            packet_name: resolve_packet_name(packet_id, &body),
-            packet_id,
-            body,
+            packet_name: resolve_packet_name(recorded.packet_id, &recorded.body),
+            packet_id: recorded.packet_id,
+            body: recorded.body,
         })
         .collect();
 

@@ -93,9 +93,10 @@ pub async fn wait_for_server_ticks(
     loop {
         let snapshot = recorder.snapshot();
         while cursor < snapshot.len() {
-            let (packet_id, body) = &snapshot[cursor];
+            let recorded = &snapshot[cursor];
+            let (packet_id, body) = (recorded.packet_id, &recorded.body);
             cursor += 1;
-            if resolve_name(*packet_id, body).as_deref() != Some("set_time") {
+            if resolve_name(packet_id, body).as_deref() != Some("set_time") {
                 continue;
             }
             let Some(game_time) = decode_set_time_game_time(body) else {
@@ -147,7 +148,7 @@ mod tests {
         let writer = recorder.clone();
         tokio::spawn(async move {
             for tick in [1000u64, 1020, 1040, 1060] {
-                writer.record(99, &tick.to_be_bytes());
+                writer.record(0, 99, &tick.to_be_bytes());
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
@@ -165,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_that_stops_ticking_fails_loudly_rather_than_under_holding() {
         let recorder = PacketRecorder::new();
-        recorder.record(99, &1000u64.to_be_bytes());
+        recorder.record(0, 99, &1000u64.to_be_bytes());
         let start = Instant::now();
         let result = wait_for_server_ticks(
             &recorder,
@@ -184,9 +185,9 @@ mod tests {
     #[tokio::test]
     async fn a_non_set_time_packet_is_ignored() {
         let recorder = PacketRecorder::new();
-        recorder.record(99, &1000u64.to_be_bytes()); // baseline
-        recorder.record(1, &[0, 0]); // some other packet — must not reset or advance anything.
-        recorder.record(99, &1020u64.to_be_bytes()); // +20 from the real baseline
+        recorder.record(0, 99, &1000u64.to_be_bytes()); // baseline
+        recorder.record(0, 1, &[0, 0]); // some other packet — must not reset or advance anything.
+        recorder.record(0, 99, &1020u64.to_be_bytes()); // +20 from the real baseline
         let result = wait_for_server_ticks(
             &recorder,
             0,
@@ -222,10 +223,10 @@ mod tests {
         // wait's own leftover traffic) must never seed the baseline — only a
         // `set_time` at or after `skip` may.
         let recorder = PacketRecorder::new();
-        recorder.record(99, &1000u64.to_be_bytes()); // index 0, before skip.
+        recorder.record(0, 99, &1000u64.to_be_bytes()); // index 0, before skip.
         let skip = recorder.len();
-        recorder.record(99, &5000u64.to_be_bytes()); // index 1, the real baseline.
-        recorder.record(99, &5010u64.to_be_bytes()); // index 2, +10 from the real baseline.
+        recorder.record(0, 99, &5000u64.to_be_bytes()); // index 1, the real baseline.
+        recorder.record(0, 99, &5010u64.to_be_bytes()); // index 2, +10 from the real baseline.
 
         // Asking for 10 ticks must succeed (5000 -> 5010), proving the baseline came
         // from index 1, not index 0 (which would already have satisfied +10 on its

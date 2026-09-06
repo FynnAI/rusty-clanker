@@ -108,6 +108,15 @@ async fn pump_and_rewrite(
     mut client_write: tokio::net::tcp::OwnedWriteHalf,
     recorder: Option<crate::packet_recorder::PacketRecorder>,
 ) {
+    // M3.5-B03 harness fix (`packet_recorder.rs`'s own module doc comment has the full
+    // race citation): allocated exactly once, right here, at the top of this exact
+    // relay connection's own pump task — this is the one point of truth for "which
+    // physical TCP connection is this", stamped on every packet this task ever
+    // records below (`PacketRecorder::next_connection_id`'s own doc comment).
+    let connection_id = recorder
+        .as_ref()
+        .map(|r| r.next_connection_id())
+        .unwrap_or(0);
     let mut accumulator = BytesMut::new();
     let mut read_chunk = [0u8; 8192];
     let mut compression = CompressionState::Disabled;
@@ -147,7 +156,7 @@ async fn pump_and_rewrite(
             if let Some(recorder) = recorder.as_ref() {
                 let mut probe = payload.clone();
                 if let Ok(id) = VarInt::decode(&mut probe).map(|v| v.get()) {
-                    recorder.record(id, &probe);
+                    recorder.record(connection_id, id, &probe);
                 }
             }
 
