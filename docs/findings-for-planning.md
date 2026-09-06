@@ -852,6 +852,20 @@ Entries name the milestone that surfaced them and the code they concern.
   advance in `set_time`), not seconds; until then the step's verdict is a
   load artefact. Harness follow-up, M3.5-B03.
 
+- **`set_time` now ships; the clock map's wire shape is confirmed.** The
+  server sends `set_time` every twenty ticks (game time = the region tick
+  counter, an empty clock-update map, exactly what vanilla's periodic
+  synchronization sends); the M1 join sequence never carried it. The reference
+  confirms `ClientboundSetTimePacket(long gameTime, Map<Holder<WorldClock>,
+  ClockNetworkState>)` with `ClockNetworkState(long totalTicks, float
+  partialTick, float rate)` (varint holder id, varlong, f32, f32), so the
+  protocol-diff normalizer's whole-map masking of `set_time` can be tightened
+  to values-only masking. Planning: a day/night cycle (the clock map with the
+  overworld clock, `sky_darken` for the spawn gates, the daylight game rule)
+  has no owning blueprint; `TwoRegionWorld` (M4-B08 harness) sends no
+  `set_time` because its tick loop mirrors none of the composition root's
+  per-tick broadcasts.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
