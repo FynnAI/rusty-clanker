@@ -38,6 +38,16 @@ pub struct LivingMotionState {
     pub velocity: Vec3,
     pub on_ground: bool,
     pub fall_distance: f64,
+    /// M4-B05 (Context, "Fall damage" -- mirrors `rusty-clanker-server::play::movement::
+    /// PlayerMotion`'s own identical addition, kept symmetric across both fall-tracking call
+    /// sites even though this blueprint's own production systems only ever read the
+    /// `PlayerMotion` copy, M4-B05 Context "Mob fall damage -- deferred"). `Some(d)` for
+    /// exactly one tick after `fall_distance` was positive and is now being reset to zero,
+    /// else `None` -- this field is inert in production today (no Stage-6b system reads it;
+    /// mob fall damage is instead driven by `PendingEnvironmentalDamage::FallImpact`, which
+    /// `crate::entity::physics::ecs::system_entity_physics_integration` (M4-B02, already
+    /// landed) computes independently of this field).
+    pub landed_fall_distance: Option<f64>,
 }
 
 /// `moveRelative`: rotates `(strafe, forward)` by `yaw_degrees` via the `Mth` sin/cos table,
@@ -156,6 +166,15 @@ pub fn step_living_entity_tick(
     if resolved_delta.y < 0.0 {
         fall_distance -= resolved_delta.y;
     }
+    // M4-B05 (Context, "Fall damage" -- additive, does not change any existing golden-vector
+    // test's asserted position/velocity/on_ground fields): captured immediately before the
+    // existing `fall_distance = 0.0` reset below, so a landing with a positive prior distance
+    // is observable for exactly one tick.
+    let landed_fall_distance = if fall_distance > 0.0 {
+        Some(fall_distance)
+    } else {
+        None
+    };
     if new_on_ground {
         fall_distance = 0.0;
     }
@@ -165,5 +184,6 @@ pub fn step_living_entity_tick(
         velocity: next_velocity,
         on_ground: new_on_ground,
         fall_distance,
+        landed_fall_distance,
     }
 }
