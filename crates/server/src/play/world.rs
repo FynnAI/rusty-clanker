@@ -3411,7 +3411,7 @@ impl HardcodedWorld {
                 // vanilla's own real wire bytes for this specific periodic heartbeat exactly
                 // (`packets::SetTime`'s own doc comment has the full citation) -- this engine
                 // has no world-clock system to report on yet.
-                if region.tick_counter % 20 == 0 {
+                if region.tick_counter.is_multiple_of(20) {
                     let set_time_payload = encode_payload(&SetTime {
                         game_time: region.tick_counter as i64,
                         clock_updates: Vec::new(),

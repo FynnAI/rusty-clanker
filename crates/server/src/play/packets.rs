@@ -634,8 +634,9 @@ pub struct SetHealth {
 /// `set_time` is index 113 there too.
 ///
 /// `MinecraftServer.forceGameTimeSynchronization` (ASSET-D18(f) reference) is the periodic
-/// caller this packet's own production send site (`world.rs`'s own `region.tick_counter % 20
-/// == 0` broadcast) mirrors exactly: called every 20 ticks (`tickCount % 20 == 0`), it
+/// caller this packet's own production send site (`world.rs`'s own `region.tick_counter.
+/// is_multiple_of(20)` broadcast) mirrors exactly: called every 20 ticks (`tickCount % 20 ==
+/// 0`), it
 /// constructs `new ClientboundSetTimePacket(overworld.getGameTime(), Map.of())` -- an EMPTY
 /// `clockUpdates` map, always, for this specific periodic heartbeat (a non-empty map is only
 /// ever sent by `ServerClockManager.modifyClock`/`createFullSyncPacket`, on an actual clock
