@@ -293,7 +293,6 @@ fn spawn_from_snapshot(
 
 #[cfg(feature = "server-systems")]
 pub mod ecs {
-    use bevy_ecs::prelude::*;
     use rc_scheduler::{DomainGroup, RcExecutorBuilder, RegionMessageOutbox, SystemFactory};
 
     use super::*;
