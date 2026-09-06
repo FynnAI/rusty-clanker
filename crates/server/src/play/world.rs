@@ -1734,6 +1734,15 @@ impl HardcodedWorld {
                 local: Address::Region(HARDCODED_REGION_ID),
                 resolve: Box::new(|_key: ChunkKey| Address::Region(HARDCODED_REGION_ID)),
             });
+            // M4-B04 field-report fix: `GameRules` (`rc_mechanics::game_rules::GameRules`'s
+            // own doc comment has the full MECH-D64 scoping note) has no sensible
+            // per-region-agnostic default construction the way `RegionOwnership`'s own
+            // `resolve` closure does not either -- inserted here, once, immediately after
+            // `spawn_region` returns, from this call's own `config.game_rules` (itself
+            // sourced from `[world.game_rules]`/`--gamerule`, `run`'s own doc comment in
+            // `crates/server/src/main.rs`). `system_mob_spawn_cycle` is this resource's
+            // sole reader today.
+            region.world.insert_resource(config.game_rules);
 
             let transport = InProcessTransport::new(InProcessTransportConfig::default());
             transport.register_region(HARDCODED_REGION_ID);

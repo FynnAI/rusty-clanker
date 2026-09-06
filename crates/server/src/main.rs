@@ -26,6 +26,17 @@
 //! acceptance-harness flags) behaves exactly as before — every override stays
 //! `None`, and `rusty-clanker.toml`'s own `[world]` table remains the sole source of
 //! truth for `world_dir`/`save_interval_secs`.
+//!
+//! M4-B04 field-report fix: `--gamerule <name>=<value>` (repeatable — once per rule
+//! being overridden) overrides one key of `WorldConfig::game_rules`
+//! (`rc_mechanics::game_rules::GameRules`) on top of whatever `rusty-clanker.toml`'s own
+//! `[world.game_rules]` table set. Recognized `<name>`s: `spawn_mobs`/`advance_weather`
+//! (`true`/`false`) and `random_tick_speed` (a `u32`) — an unrecognized name, a value
+//! that fails to parse for its rule's own type, or a bare `--gamerule` with no following
+//! value all fail loud (this file's own "fail loud, not silent" convention, restated in
+//! `parse_args`'s own doc comment). Absent, every `WorldConfig::game_rules` field keeps
+//! whatever `rusty-clanker.toml` (or `GameRules::default()`, absent that too) already
+//! set — an ordinary operator run behaves exactly as before this flag existed.
 
 use std::sync::Arc;
 
@@ -48,8 +59,23 @@ fn main() -> std::process::ExitCode {
     runtime.block_on(run(parsed))
 }
 
+/// M4-B04 field-report fix: the accumulated per-key overrides `--gamerule
+/// <name>=<value>` builds up across however many times the flag repeats (this file's
+/// own module doc comment has the full flag contract). Every field defaults to `None`
+/// (unset) — `run` below only overwrites `WorldConfig::game_rules`'s matching field
+/// when `Some`, so an ordinary run naming none of these three keys changes nothing.
+#[derive(Debug, Default)]
+struct GameRuleOverrides {
+    spawn_mobs: Option<bool>,
+    random_tick_speed: Option<u32>,
+    advance_weather: Option<bool>,
+}
+
 /// `main.rs`'s own doc comment lists every recognized flag; every M2 field defaults
-/// to `None` (unset), matching `WorldConfig`'s own `None`-default overrides.
+/// to `None` (unset), matching `WorldConfig`'s own `None`-default overrides. `Debug`
+/// is derived only so `parse_args`'s own error-path unit tests (`mod tests`, below)
+/// can call `Result::expect_err` on it — never printed or inspected in production.
+#[derive(Debug)]
 struct ParsedArgs {
     bind_addr: String,
     offline: bool,
@@ -62,6 +88,9 @@ struct ParsedArgs {
     /// `debug-gamemode`; every other line's handling is byte-for-byte unchanged
     /// whether this is set or not.
     debug_hooks: bool,
+    /// M4-B04 field-report fix: `--gamerule <name>=<value>` (repeatable) — this file's
+    /// own module doc comment has the full flag contract.
+    gamerule_overrides: GameRuleOverrides,
 }
 
 /// `Err(message)` on an unrecognized argument or a value-taking flag missing its
@@ -79,6 +108,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
     let mut save_event_log = None;
     let mut tick_log = None;
     let mut debug_hooks = false;
+    let mut gamerule_overrides = GameRuleOverrides::default();
 
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -143,6 +173,46 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
             // (f)) — see the stdin-line reader task in `run` below for what this
             // actually widens.
             "--debug-hooks" => debug_hooks = true,
+            // M4-B04 field-report fix: this file's own module doc comment has the full
+            // `--gamerule <name>=<value>` contract.
+            "--gamerule" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--gamerule requires a value".to_string())?;
+                let (name, raw_value) = value.split_once('=').ok_or_else(|| {
+                    format!("--gamerule value {value:?} must be of the form <name>=<value>")
+                })?;
+                match name {
+                    "spawn_mobs" => {
+                        let parsed: bool = raw_value.parse().map_err(|_| {
+                            format!("--gamerule spawn_mobs value {raw_value:?} is not a valid bool")
+                        })?;
+                        gamerule_overrides.spawn_mobs = Some(parsed);
+                    }
+                    "random_tick_speed" => {
+                        let parsed: u32 = raw_value.parse().map_err(|_| {
+                            format!(
+                                "--gamerule random_tick_speed value {raw_value:?} is not a valid u32"
+                            )
+                        })?;
+                        gamerule_overrides.random_tick_speed = Some(parsed);
+                    }
+                    "advance_weather" => {
+                        let parsed: bool = raw_value.parse().map_err(|_| {
+                            format!(
+                                "--gamerule advance_weather value {raw_value:?} is not a valid bool"
+                            )
+                        })?;
+                        gamerule_overrides.advance_weather = Some(parsed);
+                    }
+                    other => {
+                        return Err(format!(
+                            "--gamerule {other:?} is not a recognized game rule (expected one \
+                             of: spawn_mobs, random_tick_speed, advance_weather)"
+                        ));
+                    }
+                }
+            }
             other => return Err(format!("unrecognized argument {other:?}")),
         }
     }
@@ -156,6 +226,7 @@ fn parse_args(args: Vec<String>) -> Result<ParsedArgs, String> {
         save_event_log,
         tick_log,
         debug_hooks,
+        gamerule_overrides,
     })
 }
 
@@ -168,6 +239,7 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
         save_event_log,
         tick_log,
         debug_hooks,
+        gamerule_overrides,
     } = parsed;
     let key_pair = match rc_auth::ServerKeyPair::generate() {
         Ok(key_pair) => Arc::new(key_pair),
@@ -192,6 +264,19 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
         world_config.save_event_log = Some(log_path);
     }
     world_config.tick_log = tick_log;
+    // M4-B04 field-report fix: `--gamerule <name>=<value>` overrides win over whatever
+    // `rusty-clanker.toml`'s own `[world.game_rules]` table (or `GameRules::default()`,
+    // absent that too) already set -- an ordinary run naming none of these three keys
+    // changes nothing (this file's own module doc comment has the full flag contract).
+    if let Some(spawn_mobs) = gamerule_overrides.spawn_mobs {
+        world_config.game_rules.spawn_mobs = spawn_mobs;
+    }
+    if let Some(random_tick_speed) = gamerule_overrides.random_tick_speed {
+        world_config.game_rules.random_tick_speed = random_tick_speed;
+    }
+    if let Some(advance_weather) = gamerule_overrides.advance_weather {
+        world_config.game_rules.advance_weather = advance_weather;
+    }
     // World construction deliberately precedes the listener bind: M3-B08's stdout
     // contract prints exactly one `RC_REGION_COUNT=<n>` line immediately BEFORE the
     // listening socket binds (so a harness that waits for TCP readiness is guaranteed
@@ -416,8 +501,7 @@ mod tests {
 
     #[test]
     fn gamerule_flag_absent_leaves_every_override_none() {
-        let parsed =
-            parse_args(vec!["--offline".to_string()]).expect("--offline alone must parse");
+        let parsed = parse_args(vec!["--offline".to_string()]).expect("--offline alone must parse");
         assert_eq!(parsed.gamerule_overrides.spawn_mobs, None);
         assert_eq!(parsed.gamerule_overrides.random_tick_speed, None);
         assert_eq!(parsed.gamerule_overrides.advance_weather, None);
@@ -429,9 +513,7 @@ mod tests {
             "--gamerule".to_string(),
             "no_such_rule=false".to_string(),
         ])
-        .expect_err(
-            "an unrecognized gamerule name must fail loud, per this parser's own contract",
-        );
+        .expect_err("an unrecognized gamerule name must fail loud, per this parser's own contract");
         assert!(err.contains("no_such_rule"));
     }
 
@@ -444,8 +526,11 @@ mod tests {
 
     #[test]
     fn gamerule_flag_rejects_a_non_boolean_value_for_a_boolean_rule() {
-        let err = parse_args(vec!["--gamerule".to_string(), "spawn_mobs=nope".to_string()])
-            .expect_err("a non-bool value for a boolean gamerule must fail loud");
+        let err = parse_args(vec![
+            "--gamerule".to_string(),
+            "spawn_mobs=nope".to_string(),
+        ])
+        .expect_err("a non-bool value for a boolean gamerule must fail loud");
         assert!(err.contains("spawn_mobs"));
     }
 

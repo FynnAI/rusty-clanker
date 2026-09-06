@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rc_mechanics::game_rules::GameRules;
+
 /// ARCH-D7's fixed simulation tick period, restated (not re-derived from `rc-scheduler` --
 /// Context's dependency-graph note keeps this crate's config parsing decoupled).
 pub const TICK_PERIOD_MS: u64 = 50;
@@ -46,6 +48,15 @@ pub struct WorldConfig {
     /// config option.
     #[serde(skip)]
     pub tick_log: Option<PathBuf>,
+    /// M4-B04 field-report fix: an optional `[world.game_rules]` TOML sub-table
+    /// (`GameRules`'s own `#[serde(default)]` fills any absent key, or the whole table,
+    /// with vanilla's own defaults). Also overridable per-key from `main.rs`'s own
+    /// repeatable `--gamerule <name>=<value>` flag. `HardcodedWorld::with_config`
+    /// inserts one `bevy_ecs::Resource` instance per region from this field, once, at
+    /// world construction — `GameRules`'s own doc comment has the full MECH-D64
+    /// scoping note (this is not yet MECH-D64's real, live-mutable resource).
+    #[serde(default)]
+    pub game_rules: GameRules,
 }
 
 impl Default for WorldConfig {
@@ -57,6 +68,7 @@ impl Default for WorldConfig {
             save_interval_ticks_override: None,
             save_event_log: None,
             tick_log: None,
+            game_rules: GameRules::default(),
         }
     }
 }

@@ -13,6 +13,7 @@ pub mod container;
 pub mod direction;
 pub mod entity;
 pub mod fluid;
+pub mod game_rules;
 pub mod item_stack;
 pub mod light;
 pub mod neighbor_update;

@@ -42,6 +42,7 @@ use rc_scheduler::{
 use crate::entity::physics::ecs::{DimensionResource, ShapeTableResource};
 use crate::entity::{BaseEntity, EntityKind, EntityPayload, LivingEntity, MobMarker};
 use crate::fluid::FluidTables;
+use crate::game_rules::GameRules;
 use crate::light::{light_local_y, light_nibble_index, light_section_index_for_y, nibble_at};
 use crate::spawn::category::MobCategory;
 use crate::spawn::census::{
@@ -317,6 +318,17 @@ pub fn bootstrap_spawn_resources(world: &mut World, region_id: RegionId, spawn_r
 /// (MECH-D35's own gossip cadence — always a no-op in this project's current,
 /// single-region-only composition root, since `KnownRegionIds` is never refreshed there;
 /// final report has the full citation).
+///
+/// M4-B04 field-report fix: `GameRules.spawn_mobs` (`crate::game_rules::GameRules`'s own
+/// doc comment has the full reference citation) gates only the `run_spawn_cycle` call
+/// below — mirrors the pinned reference's own `ServerChunkCache.tickChunks`, which sets
+/// its own `spawningCategories` list empty whenever this rule reads false rather than
+/// gating inside `NaturalSpawner` itself. Every other step (draining `MobCensusInbox`,
+/// rebuilding `RegionCensusState`/`GlobalMobCensus`, the `tick % 20` gossip emit) keeps
+/// running unconditionally, exactly as the reference's own `NaturalSpawner.createState`
+/// (this codebase's census equivalent) is built before that same rule is even read —
+/// `system_mob_despawn`, a wholly separate system, is untouched by this gate, matching
+/// the reference's own `Mob.checkDespawn`, which never reads any gamerule at all.
 #[allow(clippy::too_many_arguments)]
 fn system_mob_spawn_cycle(
     live_mob_query: Query<(
@@ -336,6 +348,7 @@ fn system_mob_spawn_cycle(
     known_players: Res<KnownPlayers>,
     known_regions: Res<KnownRegionIds>,
     current_tick: Res<CurrentTick>,
+    game_rules: Res<GameRules>,
     mut spawn_rng: ResMut<SpawnCycleRandom>,
     mut census: ResMut<RegionCensusState>,
     mut global_census: ResMut<GlobalMobCensus>,
@@ -367,7 +380,7 @@ fn system_mob_spawn_cycle(
 
     let eligible_chunk_count = world.spawn_candidate_chunks().len() as u32;
 
-    {
+    if game_rules.spawn_mobs {
         let global_census_ref = &*global_census;
         let global_cap_ok = |category: MobCategory| {
             global_census_ref.aggregate(category) < global_cap(category, eligible_chunk_count)
