@@ -2743,6 +2743,19 @@ Entries name the milestone that surfaced them and the code they concern.
   landing — harmless until mob fall damage reads it. Planning: fold (1)–(6)
   into the M4-B05 text at the next blueprint pass; M4-B09 owns the map merge.
 
+- **Game rules exist only as a static world setting.** The M4-B04 field-report
+  changeset adds `GameRules { spawn_mobs, random_tick_speed, advance_weather }`
+  (config key plus a repeatable `--gamerule name=value` flag), read once at
+  world construction; `spawn_mobs` gates the natural spawn attempts exactly as
+  the reference's chunk tick does (census and despawn stay unconditional), the
+  other two are stored with no consumer (no random-tick receivers, no weather).
+  No `/gamerule` command and no live mutation (MECH-D64's full semantics, and
+  MECH-D3's command dispatch) exist yet; vanilla's rule also gates
+  chunk-generation spawns and spawner blocks, neither of which this server has.
+  Planning: the blueprint that adds commands owns the live path; the
+  protocol-diff harness now starts our side with the same three rules the
+  oracle is frozen with.
+
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
 - **M4 TEST-D57 research pass (2026-09-03) — 663 claims verified, 122 wrong,
