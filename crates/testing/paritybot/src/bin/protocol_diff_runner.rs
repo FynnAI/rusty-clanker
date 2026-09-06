@@ -13,6 +13,17 @@
 //! console commands (`/gamemode`, `/setblock`) sent via `send_console_command`,
 //! exactly as `corpus_capture.rs` already does.
 //!
+//! M4-B04 field-report fix: the `ours` side also freezes the identical three
+//! gamerules the oracle side freezes via `FREEZE_COMMANDS` below, so both sides run
+//! a session with zero background-simulation noise (our own natural mob spawning
+//! previously always ran unconditionally, `crates/mechanics/src/spawn/ecs.rs`'s own
+//! `system_mob_spawn_cycle` — a real, own-animal source of protocol-diff
+//! nondeterminism this pass could neither compare nor honestly register). Passed as
+//! `ManagedServerConfig::extra_args`, `main.rs`'s own repeatable `--gamerule
+//! <name>=<value>` flag (M4-B04 field-report fix there) — `ours_side_gamerule_args`
+//! derives the exact `--gamerule` pairs from `FREEZE_COMMANDS` itself, so the two
+//! tables can never silently drift apart.
+//!
 //! Usage:
 //! ```text
 //! protocol_diff_runner oracle <jar_path> <work_dir> <out_capture_path> <source_jar_sha1> [--debug-hooks] [only_step]
@@ -104,6 +115,31 @@ const FREEZE_COMMANDS: [(&str, &str); 3] = [
         "Gamerule advance_weather is now set to: false",
     ),
 ];
+
+/// M4-B04 field-report fix (module doc comment has the full citation): the `--gamerule
+/// <name>=<value>` arguments `run_ours_side` passes to `rusty-clanker-server`
+/// (`ManagedServerConfig::extra_args`) so `ours` freezes the identical three gamerules
+/// `FREEZE_COMMANDS` sends the oracle via its own console — one `--gamerule`/`<name>=
+/// <value>` pair per `FREEZE_COMMANDS` entry, in the same order, reshaping each entry's
+/// own `"gamerule <name> <value>"` console-command text into `main.rs`'s own CLI form
+/// rather than restating the three names/values a second time, so the two tables can
+/// never silently drift apart. Pure (no process spawn) — unit-tested below without a
+/// live binary.
+fn ours_side_gamerule_args() -> Vec<String> {
+    let mut args = Vec::with_capacity(FREEZE_COMMANDS.len() * 2);
+    for (command, _acknowledgement) in FREEZE_COMMANDS {
+        let rest = command.strip_prefix("gamerule ").expect(
+            "every FREEZE_COMMANDS entry starts with \"gamerule \" \
+             (freeze_commands_tests::exactly_three_gamerules_and_none_are_the_clock)",
+        );
+        let (name, value) = rest
+            .split_once(' ')
+            .expect("a gamerule console command always has exactly a name and a value");
+        args.push("--gamerule".to_string());
+        args.push(format!("{name}={value}"));
+    }
+    args
+}
 
 fn single_line(text: impl std::fmt::Display) -> String {
     text.to_string().replace('\n', " ")
@@ -415,6 +451,9 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
     let mut config = rc_test_harness::process::ManagedServerConfig::new(server_bin);
     config.world_dir = Some(world_dir);
     config.debug_hooks = tail.debug_hooks;
+    // M4-B04 field-report fix (module doc comment has the full citation): freezes the
+    // identical three gamerules the oracle side freezes via its own console commands.
+    config.extra_args = ours_side_gamerule_args();
     config.startup_timeout = Duration::from_secs(90);
     let managed = rc_test_harness::process::spawn_server_with_world_dir(config)
         .map_err(|err| format!("failed to spawn rusty-clanker-server: {err}"))?;
@@ -517,7 +556,35 @@ async fn run_ours_side(args: &[String], specs: &[(usize, ContraptionSpec)]) -> R
 /// harness plumbing, not world-interacting game mechanics.
 #[cfg(test)]
 mod freeze_commands_tests {
-    use super::FREEZE_COMMANDS;
+    use super::{FREEZE_COMMANDS, ours_side_gamerule_args};
+
+    // M4-B04 field-report test-authoring: `ours_side_gamerule_args` (pure — no process
+    // spawn) derives `main.rs`'s own `--gamerule <name>=<value>` pairs directly from
+    // `FREEZE_COMMANDS`, so this pins the resulting argument list rather than the
+    // (already-drift-proof-by-construction) derivation itself.
+    #[test]
+    fn ours_side_gamerule_args_match_freeze_commands_in_order() {
+        assert_eq!(
+            ours_side_gamerule_args(),
+            vec![
+                "--gamerule".to_string(),
+                "spawn_mobs=false".to_string(),
+                "--gamerule".to_string(),
+                "random_tick_speed=0".to_string(),
+                "--gamerule".to_string(),
+                "advance_weather=false".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ours_side_gamerule_args_has_one_name_value_pair_per_freeze_command() {
+        assert_eq!(
+            ours_side_gamerule_args().len(),
+            FREEZE_COMMANDS.len() * 2,
+            "one \"--gamerule\" flag plus one \"<name>=<value>\" value per FREEZE_COMMANDS entry"
+        );
+    }
 
     #[test]
     fn exactly_three_gamerules_and_none_are_the_clock() {
