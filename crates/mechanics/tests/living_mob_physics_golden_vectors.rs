@@ -49,6 +49,10 @@ fn zombie_with_default_intent_falls_straight_down() {
         velocity: Vec3::ZERO,
         on_ground: false,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
     let intent = MovementIntent::default();
 
@@ -76,6 +80,10 @@ fn cow_on_ground_with_default_intent_stays_perfectly_still() {
         velocity: Vec3::ZERO,
         on_ground: true,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
     let intent = MovementIntent::default();
 

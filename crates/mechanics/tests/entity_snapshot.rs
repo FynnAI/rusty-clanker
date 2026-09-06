@@ -38,6 +38,13 @@ fn sample_living() -> LivingEntity {
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): four new
+        // fields on `LivingEntity`, round-tripped like every other field `PartialEq`
+        // already covers here.
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     }
 }
 

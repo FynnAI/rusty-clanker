@@ -49,6 +49,14 @@ fn living_entity_metadata_indices_match_living_entity_java() {
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): four new
+        // required fields on `LivingEntity` (Context, "Damage pipeline" step 7 and "Death"),
+        // none carrying `#[net_metadata(...)]` -- this test's own metadata-index assertion
+        // below is unaffected.
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     };
     let indices: Vec<u8> = living.metadata_entries().iter().map(|(i, _)| *i).collect();
     assert_eq!(indices, vec![8, 9, 12, 13, 14]);

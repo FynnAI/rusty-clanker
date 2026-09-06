@@ -39,6 +39,14 @@ fn sample_living_entity(health: f32) -> LivingEntity {
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): four new
+        // fields on `LivingEntity`; `absorption`/`hurt_time`/`death_time` carry `#[nbt(...)]`
+        // and round-trip like every other field this test already exercises, `is_dead` does
+        // not and is never asserted on here.
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     }
 }
 
@@ -163,6 +171,13 @@ fn unmodeled_fields_survive_a_load_then_resave_cycle() {
     hand_built.insert("PersistenceRequired", false);
     // `LivingEntity`'s own required field.
     hand_built.insert("Health", 20.0f32);
+    // M4-B05 (test-authoring changeset, additive, non-assertion-changing): three new
+    // `#[nbt(name = ...)]`-tagged `LivingEntity` fields, hard-required by `from_nbt_field`
+    // exactly like the pre-existing `Health` field just above (this file's own established
+    // pattern -- no `#[nbt(...)]`-tagged field defaults on absence in this codebase).
+    hand_built.insert("AbsorptionAmount", 0.0f32);
+    hand_built.insert("HurtTime", 0i16);
+    hand_built.insert("DeathTime", 0i16);
 
     let bytes = rc_nbt::write_owned(&owned::BaseNbt::new("", hand_built));
     let read = rc_nbt::read_borrowed_strict(&bytes).expect("read_borrowed_strict must succeed");
@@ -192,6 +207,13 @@ fn mob_persistence_fields_default_to_false_when_absent_from_a_loaded_compound() 
         sample_base_entity(0x6666_7777_8888_9999_aaaa_bbbb_cccc_dddd).to_nbt_hand_built();
     hand_built.insert("id", "minecraft:zombie");
     hand_built.insert("Health", 20.0f32);
+    // M4-B05 (test-authoring changeset, additive, non-assertion-changing): three new
+    // `#[nbt(name = ...)]`-tagged `LivingEntity` fields, hard-required by `from_nbt_field`
+    // exactly like the pre-existing `Health` field just above (this file's own established
+    // pattern -- no `#[nbt(...)]`-tagged field defaults on absence in this codebase).
+    hand_built.insert("AbsorptionAmount", 0.0f32);
+    hand_built.insert("HurtTime", 0i16);
+    hand_built.insert("DeathTime", 0i16);
     // `CanPickUpLoot`/`PersistenceRequired` deliberately omitted.
 
     let bytes = rc_nbt::write_owned(&owned::BaseNbt::new("", hand_built));
@@ -224,6 +246,13 @@ fn custom_name_round_trips_the_compound_form_verbatim() {
         sample_base_entity(0x7777_8888_9999_aaaa_bbbb_cccc_dddd_eeee).to_nbt_hand_built();
     hand_built.insert("id", "minecraft:zombie");
     hand_built.insert("Health", 20.0f32);
+    // M4-B05 (test-authoring changeset, additive, non-assertion-changing): three new
+    // `#[nbt(name = ...)]`-tagged `LivingEntity` fields, hard-required by `from_nbt_field`
+    // exactly like the pre-existing `Health` field just above (this file's own established
+    // pattern -- no `#[nbt(...)]`-tagged field defaults on absence in this codebase).
+    hand_built.insert("AbsorptionAmount", 0.0f32);
+    hand_built.insert("HurtTime", 0i16);
+    hand_built.insert("DeathTime", 0i16);
     hand_built.insert("CanPickUpLoot", false);
     hand_built.insert("PersistenceRequired", false);
     hand_built.insert("CustomName", owned::NbtTag::Compound(rich_name.clone()));

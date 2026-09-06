@@ -249,6 +249,10 @@ fn living_entity_fluid_push_displaces_position_within_the_same_tick() {
         velocity: pushed_velocity,
         on_ground: false,
         fall_distance: 0.0,
+        // M4-B05 (test-authoring changeset, additive, non-assertion-changing): one new
+        // required field on `LivingMotionState` (Context, "Fall damage") — `None` is this
+        // field's own inert-at-input value, never read by this pre-existing test.
+        landed_fall_distance: None,
     };
     let after_tick =
         rc_physics::step_living_entity_tick(state, MovementIntent::default(), 0.6, &shapes);
