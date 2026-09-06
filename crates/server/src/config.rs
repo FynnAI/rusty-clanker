@@ -142,6 +142,65 @@ mod tests {
         assert_eq!(cfg.world_dir, PathBuf::from("world"));
     }
 
+    // M4-B04 field-report test-authoring: `WorldConfig.game_rules` (`rc_mechanics::
+    // game_rules::GameRules`) — an optional `[world.game_rules]` TOML sub-table
+    // defaulting to vanilla's own three defaults (`spawn_mobs: true`,
+    // `random_tick_speed: 3`, `advance_weather: true`) when the table, or any individual
+    // key within it, is absent (`GameRules`'s own `#[serde(default)]`).
+
+    #[test]
+    fn game_rules_default_when_absent_matches_vanilla_defaults() {
+        let cfg = WorldConfig::load(Path::new("this/path/does/not/exist/rusty-clanker.toml"));
+        assert!(cfg.game_rules.spawn_mobs);
+        assert_eq!(cfg.game_rules.random_tick_speed, 3);
+        assert!(cfg.game_rules.advance_weather);
+    }
+
+    #[test]
+    fn load_parses_the_game_rules_table() {
+        let dir = std::env::temp_dir().join(format!(
+            "rc-m4b04-gamerules-config-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rusty-clanker.toml");
+        std::fs::write(
+            &path,
+            "[world.game_rules]\nspawn_mobs = false\nrandom_tick_speed = 0\nadvance_weather = false\n",
+        )
+        .unwrap();
+
+        let cfg = WorldConfig::load(&path);
+        assert!(!cfg.game_rules.spawn_mobs);
+        assert_eq!(cfg.game_rules.random_tick_speed, 0);
+        assert!(!cfg.game_rules.advance_weather);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_parses_a_partial_game_rules_table_defaulting_the_rest() {
+        let dir = std::env::temp_dir().join(format!(
+            "rc-m4b04-gamerules-partial-config-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rusty-clanker.toml");
+        std::fs::write(&path, "[world.game_rules]\nspawn_mobs = false\n").unwrap();
+
+        let cfg = WorldConfig::load(&path);
+        assert!(!cfg.game_rules.spawn_mobs);
+        assert_eq!(
+            cfg.game_rules.random_tick_speed, 3,
+            "an absent key within a present [world.game_rules] table must still default"
+        );
+        assert!(cfg.game_rules.advance_weather);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn load_parses_the_world_table() {
         let dir = std::env::temp_dir().join(format!(

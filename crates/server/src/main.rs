@@ -388,3 +388,81 @@ async fn handle_debug_hook_line(world: &rusty_clanker_server::play::HardcodedWor
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // M4-B04 field-report test-authoring: `--gamerule <name>=<value>` (repeatable) --
+    // parses into `ParsedArgs.gamerule_overrides`, later folded into `WorldConfig.
+    // game_rules` by `run` (this file's own module doc comment gains this flag's own
+    // entry in the implementation changeset that makes these tests pass).
+
+    #[test]
+    fn gamerule_flag_parses_all_three_recognized_keys() {
+        let parsed = parse_args(vec![
+            "--gamerule".to_string(),
+            "spawn_mobs=false".to_string(),
+            "--gamerule".to_string(),
+            "random_tick_speed=0".to_string(),
+            "--gamerule".to_string(),
+            "advance_weather=false".to_string(),
+        ])
+        .expect("all three recognized gamerule keys must parse");
+        assert_eq!(parsed.gamerule_overrides.spawn_mobs, Some(false));
+        assert_eq!(parsed.gamerule_overrides.random_tick_speed, Some(0));
+        assert_eq!(parsed.gamerule_overrides.advance_weather, Some(false));
+    }
+
+    #[test]
+    fn gamerule_flag_absent_leaves_every_override_none() {
+        let parsed =
+            parse_args(vec!["--offline".to_string()]).expect("--offline alone must parse");
+        assert_eq!(parsed.gamerule_overrides.spawn_mobs, None);
+        assert_eq!(parsed.gamerule_overrides.random_tick_speed, None);
+        assert_eq!(parsed.gamerule_overrides.advance_weather, None);
+    }
+
+    #[test]
+    fn gamerule_flag_rejects_an_unrecognized_rule_name() {
+        let err = parse_args(vec![
+            "--gamerule".to_string(),
+            "no_such_rule=false".to_string(),
+        ])
+        .expect_err(
+            "an unrecognized gamerule name must fail loud, per this parser's own contract",
+        );
+        assert!(err.contains("no_such_rule"));
+    }
+
+    #[test]
+    fn gamerule_flag_rejects_a_value_missing_the_equals_separator() {
+        let err = parse_args(vec!["--gamerule".to_string(), "spawn_mobs".to_string()])
+            .expect_err("a value missing '<name>=<value>' must fail loud");
+        assert!(err.contains("spawn_mobs"));
+    }
+
+    #[test]
+    fn gamerule_flag_rejects_a_non_boolean_value_for_a_boolean_rule() {
+        let err = parse_args(vec!["--gamerule".to_string(), "spawn_mobs=nope".to_string()])
+            .expect_err("a non-bool value for a boolean gamerule must fail loud");
+        assert!(err.contains("spawn_mobs"));
+    }
+
+    #[test]
+    fn gamerule_flag_rejects_a_non_integer_value_for_random_tick_speed() {
+        let err = parse_args(vec![
+            "--gamerule".to_string(),
+            "random_tick_speed=nope".to_string(),
+        ])
+        .expect_err("a non-u32 value for random_tick_speed must fail loud");
+        assert!(err.contains("random_tick_speed"));
+    }
+
+    #[test]
+    fn gamerule_flag_missing_its_value_fails_loud() {
+        let err = parse_args(vec!["--gamerule".to_string()])
+            .expect_err("--gamerule with no following value must fail loud");
+        assert!(err.contains("--gamerule"));
+    }
+}
