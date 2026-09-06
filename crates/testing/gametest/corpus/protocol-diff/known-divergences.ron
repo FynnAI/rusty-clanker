@@ -130,6 +130,17 @@
     (steps: "session/disconnect_reconnect", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    // The survival dig's own dropped item (decoded: `add_entity` entity type 71,
+    // `minecraft:item`, plus its `set_entity_data` stack) is re-sent by the oracle
+    // to the rejoining player; our tracking pass never re-announces an item that
+    // already existed before the join.
+    (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    // The bot sprints while observing: vanilla syncs the player's own sprint state
+    // (decoded: entity flags byte 0x08 in `set_entity_data`, the sprinting
+    // `movement_speed` modifier in `update_attributes`, both for the bot's own
+    // entity id) — self-entity metadata and attribute sync are M4-B01's gap.
+    (steps: "session/observe_chunk", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/observe_chunk", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Body, closes_with: Some("M4-B01"), expires: Some("M4")),
 
     // --- Redstone-corpus-over-the-wire entity/join-sequence backlog — every
