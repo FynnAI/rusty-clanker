@@ -11,7 +11,7 @@ use rc_mechanics::stage4::{run_block_event_subphase, run_scheduled_phase};
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
     BorderHalo, LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
-    TickPriority, UpdateContext,
+    SoundRequest, TickPriority, UpdateContext,
 };
 use rc_messaging::{Address, RegionId, RegionMessage};
 
@@ -74,6 +74,7 @@ fn harness() -> (
     Vec<(Address, RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
     LightDirtyQueue,
+    Vec<SoundRequest>,
     RegionOwnership,
 ) {
     (
@@ -84,6 +85,7 @@ fn harness() -> (
         Vec::new(),
         Vec::new(),
         LightDirtyQueue::new(),
+        Vec::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -158,6 +160,7 @@ fn set_block_fans_out_both_signals_locally() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
@@ -174,6 +177,7 @@ fn set_block_fans_out_both_signals_locally() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 
@@ -264,6 +268,7 @@ fn scheduled_phase_settles_neighbor_updates_between_each_due_tick() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     // pos_a scheduled first, at a strictly higher priority than pos_b -- both due at tick 5.
@@ -282,6 +287,7 @@ fn scheduled_phase_settles_neighbor_updates_between_each_due_tick() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         5,
     );
 
@@ -333,6 +339,7 @@ fn block_before_fluid_ordering() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     // A naive combined-priority merge would drain fluid first (ExtremelyHigh < ExtremelyLow).
@@ -351,6 +358,7 @@ fn block_before_fluid_ordering() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 
@@ -406,6 +414,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     scheduled.schedule_block_tick(pos, 0, TickPriority::Normal, 0);
@@ -422,6 +431,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
     assert!(
@@ -439,6 +449,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
     assert!(
@@ -457,6 +468,7 @@ fn block_event_from_scheduled_tick_waits_for_the_next_stage4_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         1,
     );
     assert_eq!(
@@ -514,6 +526,7 @@ fn block_event_emitted_during_subphase_fires_within_the_same_call() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     events.emit(BlockEvent {
@@ -533,6 +546,7 @@ fn block_event_emitted_during_subphase_fires_within_the_same_call() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
     assert_eq!(
@@ -626,6 +640,7 @@ fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     events.emit(BlockEvent {
@@ -645,6 +660,7 @@ fn two_adjacent_positions_cascade_within_the_same_block_event_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 
@@ -725,6 +741,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     // Simulates steady-state, mid-driver-loop conditions (`BlockEventQueue::active`'s own doc
@@ -743,6 +760,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
     assert!(log.lock().unwrap().is_empty());
@@ -760,6 +778,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         1,
     );
 
@@ -784,6 +803,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         1,
     );
     assert_eq!(
@@ -804,6 +824,7 @@ fn block_event_from_scheduled_phase_waits_for_the_next_block_event_pass() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         2,
     );
     assert_eq!(

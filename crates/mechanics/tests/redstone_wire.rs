@@ -12,7 +12,7 @@ use rc_mechanics::redstone::wire::WireConnections;
 use rc_mechanics::redstone::{RedstoneSignalSource, SignalSourceRegistry, WireBehavior};
 use rc_mechanics::{
     BlockBehavior, BlockEventQueue, BlockWorldAccess, LightDirtyQueue, NeighborUpdateEngine,
-    PendingUpdate, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    PendingUpdate, RegionOwnership, ScheduledTickQueue, SoundRequest, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 
@@ -81,6 +81,7 @@ struct Harness {
     outbound: Vec<(Address, RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
     light_dirty: LightDirtyQueue,
+    sounds: Vec<SoundRequest>,
     ownership: RegionOwnership,
 }
 
@@ -96,6 +97,7 @@ impl Harness {
             outbound: Vec::new(),
             changed: Vec::new(),
             light_dirty: LightDirtyQueue::new(),
+            sounds: Vec::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -111,6 +113,7 @@ impl Harness {
             ownership: &self.ownership,
             current_tick: 0,
             light_dirty: &mut self.light_dirty,
+            sounds: &mut self.sounds,
         }
     }
 }
@@ -143,6 +146,7 @@ fn wire_signal_falloff_along_a_straight_line_composition_case() {
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -157,6 +161,7 @@ fn wire_signal_falloff_along_a_straight_line_composition_case() {
                 outbound,
                 changed,
                 light_dirty,
+                sounds,
                 ownership,
                 current_tick: 0,
             };
@@ -222,6 +227,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
     } = &mut h;
     engine.drain(&mut |eng, item| {
@@ -236,6 +242,7 @@ fn wire_chain_decays_correctly_once_neighbors_are_shape_connected() {
                 outbound,
                 changed,
                 light_dirty,
+                sounds,
                 ownership,
                 current_tick: 0,
             };

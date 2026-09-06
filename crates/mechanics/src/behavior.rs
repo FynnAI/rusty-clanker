@@ -50,6 +50,11 @@ pub struct UpdateContext<'a> {
     /// enqueue seam into Stage 8's light recompute. `set_block` records every
     /// genuine state change here; nothing else in this crate writes to it.
     pub light_dirty: &'a mut LightDirtyQueue,
+    /// M4-B10 (Context §F): the Stage-4-reachable sound outbox -- threaded exactly like
+    /// `changed`/`light_dirty`; merged into `stage4::ecs::TickSoundOutbox` by every Stage-4
+    /// system and drained once per tick by `crates/server/src/play/world.rs`. Absorbs
+    /// `UseUpdateContext`'s own former duplicate outbox -- there is now exactly one.
+    pub sounds: &'a mut Vec<SoundRequest>,
 }
 
 impl<'a> UpdateContext<'a> {
@@ -156,6 +161,13 @@ impl<'a> UpdateContext<'a> {
     pub fn confirm_block_event(&mut self, event: &BlockEvent) {
         self.events.confirm(*event);
     }
+
+    /// M4-B10 (Context §F): queues one clientbound `sound` packet request -- the direct
+    /// counterpart of `UseUpdateContext::request_sound`, reachable from a scheduled tick or
+    /// the entity-inside dispatch (neither of which carries a `UseUpdateContext`).
+    pub fn request_sound(&mut self, request: SoundRequest) {
+        self.sounds.push(request);
+    }
 }
 
 /// New (M3-B06): a random-tick handler's own context — `UpdateContext`'s full mutation
@@ -240,17 +252,18 @@ pub enum UseOutcome {
 }
 
 /// MECH-D82 (M3 field-report wave 3): the block-use dispatch's own extended update context --
-/// `UpdateContext`'s full mutation surface (via `base`) plus a per-call sound-request outbox
-/// (`sounds`, B3's own clientbound `sound` packet concern) -- mirrors `RandomTickContext`'s
-/// own identical "wrap `UpdateContext`, add exactly the one extra per-hook-kind capability"
-/// shape, for the same reason: adding a new REQUIRED field to `UpdateContext` itself would
-/// break every one of this workspace's dozen-plus pre-existing direct `UpdateContext { .. }`
-/// struct-literal construction sites (test files this changeset must not touch, plus
-/// `crates/testing/gametest/src/replay.rs`). `on_use` is a brand-new hook this same changeset
-/// introduces, so its own context type carries no such backward-compatibility burden at all.
+/// `UpdateContext`'s full mutation surface (via `base`), for the same reason `RandomTickContext`
+/// wraps it: `on_use` is a brand-new hook this same changeset introduces, so its own context type
+/// carries no backward-compatibility burden of its own. M4-B10 (Context §F): the `sounds` field
+/// this type used to carry its own separate copy of is REMOVED -- `UpdateContext` itself now
+/// carries the one real sound outbox (`behavior.rs`'s own doc comment on that field), and
+/// `request_sound` below simply forwards to it, so every pre-existing caller of this type's own
+/// public method surface keeps compiling unchanged.
 pub struct UseUpdateContext<'a, 'b> {
     pub base: UpdateContext<'a>,
-    pub sounds: &'b mut Vec<SoundRequest>,
+    /// Retains the `'b` lifetime parameter with no real field of its own (Context/module doc
+    /// comment above) -- every construction site sets this to `std::marker::PhantomData`.
+    pub _sounds_lifetime: std::marker::PhantomData<&'b ()>,
 }
 
 impl<'a, 'b> UseUpdateContext<'a, 'b> {
@@ -269,9 +282,21 @@ impl<'a, 'b> UseUpdateContext<'a, 'b> {
     /// Queues one clientbound `sound` packet request (B3) -- drained by whichever direct-action
     /// call site dispatched this `on_use` call in the first place (`crates/server/src/play/
     /// world.rs`'s own `BlockActionKind::Place` handling), never by a per-tick Stage-4 system.
+    /// M4-B10 (Context §F): forwards to `self.base.request_sound` -- there is now exactly one
+    /// sound outbox, not two.
     pub fn request_sound(&mut self, request: SoundRequest) {
-        self.sounds.push(request);
+        self.base.request_sound(request);
     }
+}
+
+/// M4-B10 (Context §E): one entity touching a block cell, as `on_entity_inside` sees it.
+/// Carries no ECS handle and no `rc-core` entity id: a `BlockBehavior` never addresses an
+/// entity, it only learns that one is present, and the census (`EntityPresenceSource`) answers
+/// everything else.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct EntityTouch {
+    pub aabb: rc_physics::Aabb,
+    pub is_living: bool,
 }
 
 /// The dispatch target for one block-state range (Context: "tier-1 registry"). Every method
@@ -328,6 +353,10 @@ pub trait BlockBehavior: Send + Sync {
     ) -> UseOutcome {
         UseOutcome::Pass
     }
+    /// M4-B10 (Context §E): `BlockState.entityInside`. Called once per (entity, intersected
+    /// cell) pair per tick by `rusty-clanker-server::play::entity_presence::entity_inside_step`.
+    /// Default no-op — additive and backward-compatible, mirroring `on_random_tick`/`on_use`.
+    fn on_entity_inside(&self, _ctx: &mut UpdateContext, _pos: BlockPos, _entity: &EntityTouch) {}
 }
 
 /// The tier-1 default: every method's default no-op body, shared by every unregistered

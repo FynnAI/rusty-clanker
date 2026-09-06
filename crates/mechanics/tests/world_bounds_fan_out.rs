@@ -33,8 +33,8 @@ use rc_mechanics::redstone::signal::SignalSourceRegistry;
 use rc_mechanics::stage4::ecs::{ChunkIndex, bootstrap_default_stage4_resources, register_stage4};
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
-    LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority,
-    UpdateContext,
+    LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, SoundRequest,
+    TickPriority, UpdateContext,
 };
 use rc_messaging::{Address, Message, RegionId, RegionMessage, Transport, TransportError};
 use rc_scheduler::RcExecutorBuilder;
@@ -281,6 +281,7 @@ fn piston_extend_at_the_world_floor_does_not_panic_on_a_beyond_world_write() {
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     let mut ctx = UpdateContext {
         world: &mut world,
         engine: &mut engine,
@@ -291,6 +292,7 @@ fn piston_extend_at_the_world_floor_does_not_panic_on_a_beyond_world_write() {
         ownership: &ownership,
         current_tick: 0,
         light_dirty: &mut light_dirty,
+        sounds: &mut sounds,
     };
 
     // Resolves the (empty) push plan and schedules the delayed commit (Context, `on_block_

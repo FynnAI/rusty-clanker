@@ -15,7 +15,7 @@ use rc_mechanics::redstone::{
 };
 use rc_mechanics::{
     BlockEventQueue, LightDirtyQueue, NeighborUpdateEngine, PendingUpdate, RegionOwnership,
-    ScheduledTickQueue, UpdateContext,
+    ScheduledTickQueue, SoundRequest, UpdateContext,
 };
 
 use support::{FakeWorld, TestSignalSource};
@@ -129,6 +129,7 @@ fn notify_relays_through_a_conductor_neighbor_to_its_own_far_side() {
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     let ownership = RegionOwnership::always_local(local);
     let mut ctx = UpdateContext {
         world: &mut world,
@@ -138,6 +139,7 @@ fn notify_relays_through_a_conductor_neighbor_to_its_own_far_side() {
         outbound: &mut outbound,
         changed: &mut changed,
         light_dirty: &mut light_dirty,
+        sounds: &mut sounds,
         ownership: &ownership,
         current_tick: 0,
     };

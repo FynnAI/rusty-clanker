@@ -28,7 +28,8 @@ use crate::container::{DefaultMaxStackSize, MaxStackSizeResource, TierOneContain
 use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::scheduled_tick::ScheduledTickQueue;
-use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld, TickChangedPositions};
+use crate::sound_request::SoundRequest;
+use crate::stage4::ecs::{ChunkIndex, EcsBlockWorld, TickChangedPositions, TickSoundOutbox};
 
 type BlockEntityQueryData = (
     Entity,
@@ -244,10 +245,12 @@ fn system_container_signal_notify(
     container_signals: ResMut<ContainerSignalsResource>,
     mut tick_changed: ResMut<TickChangedPositions>,
     mut light_dirty: ResMut<LightDirtyQueue>,
+    mut tick_sounds: ResMut<TickSoundOutbox>,
 ) {
     let mut world = EcsBlockWorld::new(query, &chunk_index, &ownership);
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
 
     crate::stage7::run_container_signal_notify(
         &mut world,
@@ -259,6 +262,7 @@ fn system_container_signal_notify(
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         current_tick.0,
         container_signals.0.as_ref(),
     );
@@ -267,6 +271,7 @@ fn system_container_signal_notify(
         region_outbox.send(to, msg);
     }
     tick_changed.merge(changed);
+    tick_sounds.merge(sounds);
 }
 
 fn container_signal_notify_factory() -> SystemFactory {

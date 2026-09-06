@@ -12,7 +12,7 @@ use rc_mechanics::random_tick::{WorldSeed, random_tick_chunk};
 use rc_mechanics::stage5::run_random_tick_phase;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
-    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, SoundRequest,
 };
 use rc_messaging::{Address, RegionId, RegionMessage};
 
@@ -58,6 +58,7 @@ fn harness() -> (
     Vec<(Address, RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
     LightDirtyQueue,
+    Vec<SoundRequest>,
     RegionOwnership,
 ) {
     (
@@ -67,6 +68,7 @@ fn harness() -> (
         Vec::new(),
         Vec::new(),
         LightDirtyQueue::new(),
+        Vec::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -117,6 +119,7 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
 
@@ -133,6 +136,7 @@ fn every_drawn_position_is_dispatched_to_its_resolved_behavior() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         &ownership,
     );
 
@@ -160,6 +164,7 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
 
@@ -176,6 +181,7 @@ fn unregistered_positions_resolve_to_noop_without_panicking() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         &ownership,
     );
 
@@ -209,6 +215,7 @@ fn multiple_chunks_are_visited_in_ascending_order() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
 
@@ -226,6 +233,7 @@ fn multiple_chunks_are_visited_in_ascending_order() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         &ownership,
     );
 

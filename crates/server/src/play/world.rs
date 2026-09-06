@@ -2423,6 +2423,13 @@ impl HardcodedWorld {
                                 );
                                 let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> =
                                     Vec::new();
+                                // M4-B10 (Context §F): `finalize_break`'s own neighbour-update
+                                // settle can, in principle, reach a `BlockBehavior::
+                                // on_shape_update`/`on_neighbor_changed` that requests a sound
+                                // (none does today -- a button/plate pop is silent, matching
+                                // vanilla) -- collected and broadcast here for the same reason
+                                // every other direct-action call site now carries its own outbox.
+                                let mut break_sounds: Vec<rc_mechanics::SoundRequest> = Vec::new();
                                 let outcome = mining::finalize_break(
                                     &mut DirectBlockWorld {
                                         world: &mut region.world,
@@ -2435,6 +2442,7 @@ impl HardcodedWorld {
                                     &mut mining_outbound,
                                     &mut direct_changed,
                                     &mut light_dirty,
+                                    &mut break_sounds,
                                     &mining_ownership,
                                     &behaviors,
                                     current_tick,
@@ -2448,6 +2456,13 @@ impl HardcodedWorld {
                                     &direct_changed,
                                     Some(location),
                                 );
+                                for request in break_sounds {
+                                    broadcast_sound_request(
+                                        &region.world,
+                                        action.network_entity_id,
+                                        request,
+                                    );
+                                }
                                 despawn_block_entity_if_needed(
                                     &mut region.world,
                                     outcome,
@@ -2492,6 +2507,10 @@ impl HardcodedWorld {
                                     );
                                     let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> =
                                         Vec::new();
+                                    // M4-B10 (Context §F): see the `instabuild` branch's own
+                                    // identical doc comment above.
+                                    let mut break_sounds: Vec<rc_mechanics::SoundRequest> =
+                                        Vec::new();
                                     let outcome = mining::finalize_break(
                                         &mut DirectBlockWorld {
                                             world: &mut region.world,
@@ -2504,6 +2523,7 @@ impl HardcodedWorld {
                                         &mut mining_outbound,
                                         &mut direct_changed,
                                         &mut light_dirty,
+                                        &mut break_sounds,
                                         &mining_ownership,
                                         &behaviors,
                                         current_tick,
@@ -2517,6 +2537,13 @@ impl HardcodedWorld {
                                         &direct_changed,
                                         Some(location),
                                     );
+                                    for request in break_sounds {
+                                        broadcast_sound_request(
+                                            &region.world,
+                                            action.network_entity_id,
+                                            request,
+                                        );
+                                    }
                                     despawn_block_entity_if_needed(
                                         &mut region.world,
                                         outcome,
@@ -2565,6 +2592,10 @@ impl HardcodedWorld {
                                     );
                                     let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> =
                                         Vec::new();
+                                    // M4-B10 (Context §F): see the `StartDestroy`/`instabuild`
+                                    // branch's own identical doc comment above.
+                                    let mut break_sounds: Vec<rc_mechanics::SoundRequest> =
+                                        Vec::new();
                                     let outcome = mining::finalize_break(
                                         &mut DirectBlockWorld {
                                             world: &mut region.world,
@@ -2577,6 +2608,7 @@ impl HardcodedWorld {
                                         &mut mining_outbound,
                                         &mut direct_changed,
                                         &mut light_dirty,
+                                        &mut break_sounds,
                                         &mining_ownership,
                                         &behaviors,
                                         current_tick,
@@ -2590,6 +2622,13 @@ impl HardcodedWorld {
                                         &direct_changed,
                                         Some(location),
                                     );
+                                    for request in break_sounds {
+                                        broadcast_sound_request(
+                                            &region.world,
+                                            action.network_entity_id,
+                                            request,
+                                        );
+                                    }
                                     despawn_block_entity_if_needed(
                                         &mut region.world,
                                         outcome,
@@ -2700,6 +2739,7 @@ impl HardcodedWorld {
                                     &mut mining_outbound,
                                     &mut direct_changed,
                                     &mut light_dirty,
+                                    &mut sound_requests,
                                     &mining_ownership,
                                     &behaviors,
                                     current_tick,
@@ -2717,7 +2757,7 @@ impl HardcodedWorld {
                                     // above (this tick loop's own pre-existing reach-check input,
                                     // `PlayerInputState.sneaking`), reused here unchanged.
                                     crouching,
-                                    Some(&redstone_registry),
+                                    Some(redstone_registry.as_ref()),
                                 ),
                             };
                             let outcome_pos = match outcome {
@@ -2883,6 +2923,9 @@ impl HardcodedWorld {
                             );
                             let mut direct_changed: Vec<(BlockPos, StorageBlockStateId)> =
                                 Vec::new();
+                            // M4-B10 (Context §F): see the `StartDestroy`/`instabuild` branch's
+                            // own identical doc comment above.
+                            let mut break_sounds: Vec<rc_mechanics::SoundRequest> = Vec::new();
                             let outcome = mining::finalize_break(
                                 &mut DirectBlockWorld {
                                     world: &mut region.world,
@@ -2895,6 +2938,7 @@ impl HardcodedWorld {
                                 &mut mining_outbound,
                                 &mut direct_changed,
                                 &mut light_dirty,
+                                &mut break_sounds,
                                 &mining_ownership,
                                 &behaviors,
                                 current_tick,
@@ -2912,6 +2956,9 @@ impl HardcodedWorld {
                                 );
                             }
                             broadcast_changed_positions(&region.world, &direct_changed, Some(pos));
+                            for request in break_sounds {
+                                broadcast_sound_request(&region.world, network_entity_id, request);
+                            }
                             despawn_block_entity_if_needed(&mut region.world, outcome, pre_break);
                             spawn_drop_if_needed(
                                 &mut region.world,
@@ -5017,6 +5064,7 @@ mod direct_block_world_bounds {
         let mut outbound = Vec::new();
         let mut changed = Vec::new();
         let mut light_dirty = rc_mechanics::LightDirtyQueue::new();
+        let mut sounds: Vec<rc_mechanics::SoundRequest> = Vec::new();
         let behaviors = rc_mechanics::BlockBehaviorRegistry::new();
         let mut direct = DirectBlockWorld {
             world: &mut ecs_world,
@@ -5037,6 +5085,7 @@ mod direct_block_world_bounds {
             &mut outbound,
             &mut changed,
             &mut light_dirty,
+            &mut sounds,
             &ownership,
             &behaviors,
             0,

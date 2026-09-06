@@ -54,7 +54,7 @@ use super::item::{ITEM_HALF_WIDTH, ITEM_HEIGHT, ItemMotionState, step_item_entit
 use super::world_bridge::ReadOnlyBlockWorld;
 use super::{PendingEnvironmentalDamage, PendingEnvironmentalDamageQueue};
 use crate::entity::pickup::{DESPAWN_AGE_TICKS, MERGE_RADIUS, stacks_can_combine};
-use crate::entity::{BaseEntity, EntityKind, EntityPayload, ItemStackRecord, LivingEntity};
+use crate::entity::{BaseEntity, EntityPayload, ItemStackRecord, LivingEntity};
 use crate::fluid::{FluidKind, FluidTables};
 use crate::stage4::ecs::ChunkIndex;
 use crate::world_access::BlockWorldAccess;
@@ -63,19 +63,10 @@ use crate::world_access::BlockWorldAccess;
 const TOTAL_AIR_SUPPLY: i32 = 300;
 const AIR_FLOOR: i32 = -20;
 
-/// Context §D's per-kind (half_width, height) table — restated here since `rc_physics::
-/// step_living_entity_tick` itself has no per-kind dimension parameter (this file's own
-/// module doc comment, deviation 2's sibling note): every AABB *this file* builds directly
-/// (fluid scan, eye position) uses the entity's own real dimensions; only the sealed
-/// `step_living_entity_tick` call itself falls back to that function's own internal
-/// player-shaped geometry.
-fn living_dimensions(kind: EntityKind) -> (f64, f64) {
-    match kind {
-        EntityKind::Zombie | EntityKind::Villager => (0.3, 1.95),
-        EntityKind::Cow => (0.45, 1.4),
-        EntityKind::Item => (ITEM_HALF_WIDTH, ITEM_HEIGHT),
-    }
-}
+/// M4-B10 (Context §E): `super::entity_dimensions`, the promoted public form of this file's
+/// own former private `living_dimensions` -- reused directly (behaviour-preserving, no value
+/// changed).
+use super::entity_dimensions as living_dimensions;
 
 fn eye_height(height: f64) -> f64 {
     height * 0.85

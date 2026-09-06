@@ -16,7 +16,7 @@ use rc_mechanics::direction::Direction;
 use rc_mechanics::redstone::SignalSourceRegistry;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
-    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, SoundRequest, UpdateContext,
 };
 
 use support::{FakeWorld, TestSignalSource};
@@ -39,6 +39,7 @@ struct Scratch {
     outbound: Vec<(rc_messaging::Address, rc_messaging::RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
     light_dirty: LightDirtyQueue,
+    sounds: Vec<SoundRequest>,
     ownership: RegionOwnership,
 }
 
@@ -51,6 +52,7 @@ impl Scratch {
             outbound: Vec::new(),
             changed: Vec::new(),
             light_dirty: LightDirtyQueue::new(),
+            sounds: Vec::new(),
             ownership: RegionOwnership::always_local(local),
         }
     }
@@ -66,6 +68,7 @@ impl Scratch {
             ownership: &self.ownership,
             current_tick: 0,
             light_dirty: &mut self.light_dirty,
+            sounds: &mut self.sounds,
         }
     }
 }

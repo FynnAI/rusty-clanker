@@ -46,6 +46,7 @@ use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::redstone::notify_neighbor_changed_only;
 use crate::scheduled_tick::ScheduledTickQueue;
+use crate::sound_request::SoundRequest;
 use crate::world_access::BlockWorldAccess;
 
 pub fn run_block_entity_tick(
@@ -167,6 +168,7 @@ pub fn run_container_signal_notify(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     current_tick: u64,
     container_signals: &Tier1ContainerSignalSource,
 ) {
@@ -181,6 +183,7 @@ pub fn run_container_signal_notify(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         notify_neighbor_changed_only(&mut ctx, pos);
     }
@@ -192,6 +195,7 @@ pub fn run_container_signal_notify(
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
         current_tick,
         behaviors,

@@ -20,6 +20,20 @@ pub use item::{
 #[cfg(feature = "server-systems")]
 pub use ecs::register_stage6b;
 
+/// M4-B02's own per-kind `(half_width, height)` table, promoted from `ecs.rs`'s former
+/// private `living_dimensions` (M4-B10, Context §E) so `rusty-clanker-server`'s entity census
+/// (`play::entity_presence`) can build the same AABBs for item entities and mobs alike.
+/// Values unchanged: Zombie/Villager `(0.3, 1.95)`, Cow `(0.45, 1.4)`, Item `(ITEM_HALF_WIDTH,
+/// ITEM_HEIGHT)`.
+pub fn entity_dimensions(kind: crate::entity::EntityKind) -> (f64, f64) {
+    use crate::entity::EntityKind;
+    match kind {
+        EntityKind::Zombie | EntityKind::Villager => (0.3, 1.95),
+        EntityKind::Cow => (0.45, 1.4),
+        EntityKind::Item => (ITEM_HALF_WIDTH, ITEM_HEIGHT),
+    }
+}
+
 /// Context §H — the shared fall-damage/drowning hook queue. This blueprint's own Stage 6b
 /// system only ever appends to it (never drains) — whichever future blueprint owns
 /// combat/damage (named B05 throughout this project's own current planning) drains it.

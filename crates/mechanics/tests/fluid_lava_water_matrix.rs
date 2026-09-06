@@ -21,7 +21,7 @@ use rc_mechanics::fluid::{
 };
 use rc_mechanics::neighbor_update::NeighborUpdateEngine;
 use rc_mechanics::scheduled_tick::ScheduledTickQueue;
-use rc_mechanics::{BlockWorldAccess, LightDirtyQueue, UpdateContext};
+use rc_mechanics::{BlockWorldAccess, LightDirtyQueue, SoundRequest, UpdateContext};
 use rc_messaging::{Address, RegionId, RegionMessage};
 
 const AIR: BlockStateId = BlockStateId(0);
@@ -130,6 +130,7 @@ macro_rules! with_ctx {
         let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
         let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
         let mut light_dirty = LightDirtyQueue::new();
+        let mut sounds: Vec<SoundRequest> = Vec::new();
         let mut $ctx = UpdateContext {
             world: &mut $world,
             engine: &mut engine,
@@ -138,6 +139,7 @@ macro_rules! with_ctx {
             outbound: &mut outbound,
             changed: &mut changed,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             ownership: &ownership,
             current_tick: $current_tick,
         };

@@ -23,7 +23,8 @@ use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::random_tick::WorldSeed;
 use crate::scheduled_tick::ScheduledTickQueue;
-use crate::stage4::ecs::{ChunkIndex, TickChangedPositions};
+use crate::sound_request::SoundRequest;
+use crate::stage4::ecs::{ChunkIndex, TickChangedPositions, TickSoundOutbox};
 use crate::world_access::BlockWorldAccess;
 
 struct Stage5BlockWorld<'w, 's> {
@@ -111,7 +112,8 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                   chunk_index: Res<ChunkIndex>,
                   query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
                   mut tick_changed: ResMut<TickChangedPositions>,
-                  mut light_dirty: ResMut<LightDirtyQueue>| {
+                  mut light_dirty: ResMut<LightDirtyQueue>,
+                  mut tick_sounds: ResMut<TickSoundOutbox>| {
                 let mut chunks: Vec<(i32, i32)> =
                     chunk_index.0.keys().map(|k| (k.x, k.z)).collect();
                 chunks.sort_unstable();
@@ -123,6 +125,7 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                 };
                 let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
                 let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
+                let mut sounds: Vec<SoundRequest> = Vec::new();
 
                 crate::stage5::run_random_tick_phase(
                     &mut world,
@@ -137,6 +140,7 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                     &mut outbound,
                     &mut changed,
                     &mut light_dirty,
+                    &mut sounds,
                     &ownership,
                 );
 
@@ -144,6 +148,7 @@ fn random_tick_factory(random_tick_speed: u32) -> SystemFactory {
                     region_outbox.send(to, msg);
                 }
                 tick_changed.merge(changed);
+                tick_sounds.merge(sounds);
             },
         )) as Box<dyn System<In = (), Out = ()>>
     })

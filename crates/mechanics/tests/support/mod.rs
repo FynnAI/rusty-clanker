@@ -23,7 +23,7 @@ use rc_mechanics::redstone::RedstoneSignalSource;
 use rc_mechanics::stage4::run_scheduled_phase;
 use rc_mechanics::{
     BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo, NeighborUpdateEngine,
-    ScheduledTickQueue,
+    ScheduledTickQueue, SoundRequest,
 };
 use rc_messaging::{Address, RegionId};
 
@@ -147,6 +147,7 @@ pub fn settle_fluids(
         let mut outbound = Vec::new();
         let mut changed = Vec::new();
         let mut light_dirty = LightDirtyQueue::new();
+        let mut sounds: Vec<SoundRequest> = Vec::new();
         run_scheduled_phase(
             world,
             &[],
@@ -159,6 +160,7 @@ pub fn settle_fluids(
             &mut outbound,
             &mut changed,
             &mut light_dirty,
+            &mut sounds,
             current_tick,
         );
     }

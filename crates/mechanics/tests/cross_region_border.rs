@@ -11,8 +11,8 @@ use rc_mechanics::stage4::ecs::{ChunkIndex, bootstrap_default_stage4_resources, 
 use rc_mechanics::stage4::run_scheduled_phase;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, BorderHalo,
-    LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, TickPriority,
-    UpdateContext,
+    LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, SoundRequest,
+    TickPriority, UpdateContext,
 };
 use rc_messaging::{
     Address, BorderUpdateEvent, BorderUpdateKind, Message, RegionId, RegionMessage, Transport,
@@ -132,6 +132,7 @@ fn border_event_targets_the_owning_region_not_local() {
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     scheduled.schedule_block_tick(origin, 0, TickPriority::Normal, 0);
 
     run_scheduled_phase(
@@ -146,6 +147,7 @@ fn border_event_targets_the_owning_region_not_local() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 
@@ -225,6 +227,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
     let mut outbound = Vec::new();
     let mut changed = Vec::new();
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
 
     run_scheduled_phase(
         &mut world,
@@ -238,6 +241,7 @@ fn inbound_border_event_updates_halo_and_fans_out_locally_only() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 

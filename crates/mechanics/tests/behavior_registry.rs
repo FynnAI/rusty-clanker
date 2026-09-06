@@ -8,7 +8,7 @@ use rc_core::{BlockPos, ChunkKey, DimensionId};
 use rc_mechanics::direction::Direction;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEventQueue, BlockWorldAccess, LightDirtyQueue,
-    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, UpdateContext,
+    NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue, SoundRequest, UpdateContext,
 };
 use rc_messaging::{Address, RegionId};
 
@@ -59,6 +59,7 @@ fn harness() -> (
     Vec<(Address, rc_messaging::RegionMessage)>,
     Vec<(BlockPos, BlockStateId)>,
     LightDirtyQueue,
+    Vec<SoundRequest>,
     RegionOwnership,
 ) {
     (
@@ -71,6 +72,7 @@ fn harness() -> (
         Vec::new(),
         Vec::new(),
         LightDirtyQueue::new(),
+        Vec::new(),
         RegionOwnership::always_local(Address::Region(RegionId(0))),
     )
 }
@@ -88,6 +90,7 @@ fn unregistered_state_resolves_to_noop() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
     world.blocks.insert(target, BlockStateId(999));
@@ -102,6 +105,7 @@ fn unregistered_state_resolves_to_noop() {
             outbound: &mut outbound,
             changed: &mut changed,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -132,6 +136,7 @@ fn register_range_dispatches_correctly() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
 
@@ -146,6 +151,7 @@ fn register_range_dispatches_correctly() {
             outbound: &mut outbound,
             changed: &mut changed,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -164,6 +170,7 @@ fn register_range_dispatches_correctly() {
             outbound: &mut outbound,
             changed: &mut changed,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -207,6 +214,7 @@ fn register_one_is_a_width_one_range() {
         mut outbound,
         mut changed,
         mut light_dirty,
+        mut sounds,
         ownership,
     ) = harness();
 
@@ -220,6 +228,7 @@ fn register_one_is_a_width_one_range() {
             outbound: &mut outbound,
             changed: &mut changed,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             ownership: &ownership,
             current_tick: 0,
         };
@@ -236,6 +245,7 @@ fn register_one_is_a_width_one_range() {
         outbound: &mut outbound,
         changed: &mut changed,
         light_dirty: &mut light_dirty,
+        sounds: &mut sounds,
         ownership: &ownership,
         current_tick: 0,
     };

@@ -32,8 +32,8 @@ pub mod stage7;
 pub mod world_access;
 
 pub use behavior::{
-    BlockBehavior, BlockBehaviorRegistry, NoOpBehavior, RandomTickContext, UpdateContext,
-    UseContext, UseOutcome, UseUpdateContext,
+    BlockBehavior, BlockBehaviorRegistry, EntityTouch, NoOpBehavior, RandomTickContext,
+    UpdateContext, UseContext, UseOutcome, UseUpdateContext,
 };
 pub use block_entity::{
     BlockEntityHeader, BlockEntityKind, BlockEntityWorldAccess,

@@ -24,7 +24,7 @@ use rc_mechanics::neighbor_update::NeighborUpdateEngine;
 use rc_mechanics::stage4::run_scheduled_phase;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockWorldAccess, RcRandom, ScheduledTickQueue,
-    TickPriority, UpdateContext,
+    SoundRequest, TickPriority, UpdateContext,
 };
 use rc_messaging::{Address, RegionId, RegionMessage};
 use support::FluidFakeWorld;
@@ -178,6 +178,7 @@ fn willtickthisitick_guard_blocks_duplicate_rearm_within_the_same_batch() {
     let before = scheduled.fluid_len();
     {
         let mut light_dirty = LightDirtyQueue::new();
+        let mut sounds: Vec<SoundRequest> = Vec::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -187,6 +188,7 @@ fn willtickthisitick_guard_blocks_duplicate_rearm_within_the_same_batch() {
             changed: &mut changed,
             ownership: &ownership,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             current_tick: 5,
         };
         behavior.on_neighbor_changed(&mut ctx, pos, Direction::East);
@@ -234,6 +236,7 @@ fn willtickthisitick_guard_does_not_block_the_ticks_own_self_reschedule() {
     // Not pending yet from `pos`'s own perspective until the dispatch below re-arms it --
     // `drain_due_fluid_ticks` (called inside `run_scheduled_phase`) will pop this exact entry.
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     run_scheduled_phase(
         &mut world,
         &[],
@@ -246,6 +249,7 @@ fn willtickthisitick_guard_does_not_block_the_ticks_own_self_reschedule() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
     // The dispatched entry's own unconditional self-reschedule (Context §K: never guarded at
@@ -320,6 +324,7 @@ fn block_ticks_fully_drain_before_fluid_ticks_begin() {
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
 
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     run_scheduled_phase(
         &mut world,
         &[],
@@ -332,6 +337,7 @@ fn block_ticks_fully_drain_before_fluid_ticks_begin() {
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         0,
     );
 

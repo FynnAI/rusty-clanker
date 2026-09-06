@@ -18,6 +18,7 @@ use crate::border::{BorderHalo, RegionOwnership, apply_inbound_border_event};
 use crate::light::LightDirtyQueue;
 use crate::neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 use crate::scheduled_tick::ScheduledTickQueue;
+use crate::sound_request::SoundRequest;
 use crate::world_access::BlockWorldAccess;
 
 /// Bundles the eight `&mut`/`&` pieces `UpdateContext` needs into one value, freshly, at
@@ -36,6 +37,7 @@ fn make_ctx<'a>(
     outbound: &'a mut Vec<(Address, RegionMessage)>,
     changed: &'a mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &'a mut LightDirtyQueue,
+    sounds: &'a mut Vec<SoundRequest>,
     ownership: &'a RegionOwnership,
     current_tick: u64,
 ) -> UpdateContext<'a> {
@@ -49,6 +51,7 @@ fn make_ctx<'a>(
         ownership,
         current_tick,
         light_dirty,
+        sounds,
     }
 }
 
@@ -70,6 +73,7 @@ pub(crate) fn drain_engine(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -83,6 +87,7 @@ pub(crate) fn drain_engine(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
         );
@@ -146,6 +151,7 @@ fn dispatch_scheduled_tick(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -163,6 +169,7 @@ fn dispatch_scheduled_tick(
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
         current_tick,
     );
@@ -194,6 +201,7 @@ pub fn run_scheduled_phase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     current_tick: u64,
 ) {
     events.begin_scheduled_phase_dispatch();
@@ -206,6 +214,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
         );
@@ -218,6 +227,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,
@@ -240,6 +250,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,
@@ -253,6 +264,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,
@@ -275,6 +287,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,
@@ -288,6 +301,7 @@ pub fn run_scheduled_phase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,
@@ -334,6 +348,7 @@ pub fn run_block_event_subphase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     current_tick: u64,
 ) {
     events.begin_pass();
@@ -384,6 +399,7 @@ pub fn run_block_event_subphase(
                 outbound,
                 changed,
                 light_dirty,
+                sounds,
                 ownership,
                 current_tick,
             );
@@ -397,6 +413,7 @@ pub fn run_block_event_subphase(
             outbound,
             changed,
             light_dirty,
+            sounds,
             ownership,
             current_tick,
             behaviors,

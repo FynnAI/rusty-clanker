@@ -115,8 +115,9 @@ impl Harness {
                 ownership: &self.ownership,
                 current_tick: 0,
                 light_dirty: &mut self.light_dirty,
+                sounds: &mut self.sounds,
             },
-            sounds: &mut self.sounds,
+            _sounds_lifetime: std::marker::PhantomData,
         }
     }
 
@@ -131,6 +132,7 @@ impl Harness {
         let outbound = &mut self.outbound;
         let changed = &mut self.changed;
         let light_dirty = &mut self.light_dirty;
+        let sounds = &mut self.sounds;
         let ownership = &self.ownership;
         self.engine.drain(&mut |eng, item| {
             let mut ctx = UpdateContext {
@@ -143,6 +145,7 @@ impl Harness {
                 ownership,
                 current_tick: 0,
                 light_dirty,
+                sounds,
             };
             match item {
                 PendingUpdate::NeighborChanged { pos, from } => {

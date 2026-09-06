@@ -15,7 +15,7 @@ use rc_mechanics::redstone::{PistonBehavior, RedstoneSignalSource, SignalSourceR
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
     BorderHalo, LightDirtyQueue, NeighborUpdateEngine, RegionOwnership, ScheduledTickQueue,
-    UpdateContext, stage4,
+    SoundRequest, UpdateContext, stage4,
 };
 use rc_messaging::{Address, RegionMessage};
 use rc_registries::block_state_properties::state_id;
@@ -132,6 +132,7 @@ struct Harness {
     outbound: Vec<(Address, RegionMessage)>,
     changed: Vec<(BlockPos, BlockStateId)>,
     light_dirty: LightDirtyQueue,
+    sounds: Vec<SoundRequest>,
     ownership: RegionOwnership,
     behaviors: BlockBehaviorRegistry,
 }
@@ -149,6 +150,7 @@ impl Harness {
             outbound: Vec::new(),
             changed: Vec::new(),
             light_dirty: LightDirtyQueue::new(),
+            sounds: Vec::new(),
             ownership: RegionOwnership::always_local(local),
             behaviors,
         }
@@ -165,6 +167,7 @@ impl Harness {
             ownership: &self.ownership,
             current_tick,
             light_dirty: &mut self.light_dirty,
+            sounds: &mut self.sounds,
         }
     }
 
@@ -179,6 +182,7 @@ impl Harness {
             &mut self.outbound,
             &mut self.changed,
             &mut self.light_dirty,
+            &mut self.sounds,
             current_tick,
         );
     }
@@ -196,6 +200,7 @@ impl Harness {
             &mut self.outbound,
             &mut self.changed,
             &mut self.light_dirty,
+            &mut self.sounds,
             current_tick,
         );
     }

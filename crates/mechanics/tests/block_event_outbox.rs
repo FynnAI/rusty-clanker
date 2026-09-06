@@ -19,7 +19,7 @@ use rc_mechanics::border::RegionOwnership;
 use rc_mechanics::stage4::run_block_event_subphase;
 use rc_mechanics::{
     BlockBehavior, BlockBehaviorRegistry, BlockEvent, BlockEventQueue, BlockWorldAccess,
-    LightDirtyQueue, NeighborUpdateEngine, ScheduledTickQueue, UpdateContext,
+    LightDirtyQueue, NeighborUpdateEngine, ScheduledTickQueue, SoundRequest, UpdateContext,
 };
 use rc_messaging::{Address, RegionMessage};
 use rc_registries::generated_v776::block_states::default_state::{PISTON, STONE};
@@ -63,6 +63,7 @@ fn run_one_pass(
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     run_block_event_subphase(
         world,
         ownership,
@@ -73,6 +74,7 @@ fn run_one_pass(
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         current_tick,
     );
 }

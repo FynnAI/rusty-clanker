@@ -31,7 +31,7 @@ use rc_mechanics::{
     BlockWorldAccess, BorderHalo, ChestBlockEntity, DefaultMaxStackSize, FuelTable,
     FurnaceBlockEntity, FurnaceLitStateResolver, HopperBlockEntity, LightDirtyQueue,
     NeighborUpdateEngine, PendingUpdate, RegionOwnership, ScheduledTickQueue, SmeltingRecipeTable,
-    Tier1ContainerSignalSource, TierOneContainer, UpdateContext,
+    SoundRequest, Tier1ContainerSignalSource, TierOneContainer, UpdateContext,
 };
 use rc_mechanics::{stage4, stage7};
 use rc_messaging::{Address, RegionId, RegionMessage};
@@ -228,6 +228,11 @@ pub fn replay_contraption(
     // back (no light engine runs in this replay path at M4's own scope), matching
     // `changed`'s own identical "harness stays byte-identical" treatment above.
     let mut light_dirty = LightDirtyQueue::new();
+    // M4-B10 (Context §F): this replay harness only supplies the sound outbox (every
+    // construction/call site below) -- it never drains or broadcasts it (no client
+    // connection exists in this replay path), matching `light_dirty`'s own identical
+    // "harness stays byte-identical" treatment above.
+    let mut sounds: Vec<SoundRequest> = Vec::new();
 
     // M3 fix-agent brief ("bring the three container fixtures into the replay"): the Stage-7
     // block-entity world this replay now drives alongside Stage 4, plus the minimal fixed tables
@@ -254,6 +259,7 @@ pub fn replay_contraption(
             &mut outbound,
             &mut changed,
             &mut light_dirty,
+            &mut sounds,
             &ownership,
             0,
             behaviors,
@@ -304,6 +310,7 @@ pub fn replay_contraption(
                 &mut outbound,
                 &mut changed,
                 &mut light_dirty,
+                &mut sounds,
                 &ownership,
                 t - 1,
                 behaviors,
@@ -325,6 +332,7 @@ pub fn replay_contraption(
             &mut outbound,
             &mut changed,
             &mut light_dirty,
+            &mut sounds,
             t,
         );
         stage4::run_block_event_subphase(
@@ -337,6 +345,7 @@ pub fn replay_contraption(
             &mut outbound,
             &mut changed,
             &mut light_dirty,
+            &mut sounds,
             t,
         );
 
@@ -378,6 +387,7 @@ pub fn replay_contraption(
                 ownership: &ownership,
                 current_tick: t,
                 light_dirty: &mut light_dirty,
+                sounds: &mut sounds,
             };
             notify_neighbor_changed_only(&mut ctx, pos);
         }
@@ -392,6 +402,7 @@ pub fn replay_contraption(
                 ownership: &ownership,
                 current_tick: t,
                 light_dirty: &mut light_dirty,
+                sounds: &mut sounds,
             };
             dispatch_one(&mut ctx, behaviors, item);
         });
@@ -941,6 +952,7 @@ pub fn tier1_registry(
 /// `UpdateContext::set_block`), then drains the resulting `NeighborUpdateEngine`
 /// queue to a fixed point via `dispatch_one` — module doc comment.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn place_and_settle(
     world: &mut ReplayWorld,
     engine: &mut NeighborUpdateEngine,
@@ -949,6 +961,7 @@ fn place_and_settle(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     current_tick: u64,
     behaviors: &BlockBehaviorRegistry,
@@ -966,6 +979,7 @@ fn place_and_settle(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         ctx.set_block(pos, state);
         // M3 field-report fix (Task 2): every `place_and_settle` call is a real placement (both
@@ -990,6 +1004,7 @@ fn place_and_settle(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         dispatch_one(&mut ctx, behaviors, item);
     });

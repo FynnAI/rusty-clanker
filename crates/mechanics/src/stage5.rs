@@ -19,6 +19,7 @@ use crate::neighbor_update::{NeighborUpdateEngine, PendingUpdate};
 use crate::random::RcRandom;
 use crate::random_tick::{WorldSeed, draw_random_tick_positions};
 use crate::scheduled_tick::ScheduledTickQueue;
+use crate::sound_request::SoundRequest;
 use crate::world_access::BlockWorldAccess;
 
 /// `system_random_tick`'s ECS-agnostic core (Context: "one system, sequential chunk loop").
@@ -44,6 +45,7 @@ pub fn run_random_tick_phase(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, BlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
 ) {
     for &(chunk_x, chunk_z) in chunks {
@@ -78,6 +80,7 @@ pub fn run_random_tick_phase(
                 ownership,
                 current_tick: tick_counter,
                 light_dirty,
+                sounds,
             };
             let mut ctx = RandomTickContext {
                 base,
@@ -96,6 +99,7 @@ pub fn run_random_tick_phase(
                     ownership,
                     current_tick: tick_counter,
                     light_dirty,
+                    sounds,
                 };
                 dispatch_pending_update(&mut item_ctx, behaviors, item);
             });

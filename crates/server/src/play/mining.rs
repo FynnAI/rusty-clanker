@@ -1839,6 +1839,7 @@ pub fn settle_neighbor_updates(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -1854,6 +1855,7 @@ pub fn settle_neighbor_updates(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         match item {
             PendingUpdate::NeighborChanged { pos, from } => {
@@ -1898,6 +1900,7 @@ pub fn finalize_break(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -1934,6 +1937,7 @@ pub fn finalize_break(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         ctx.set_block(pos, to_storage_id(AIR.0));
     }
@@ -1945,6 +1949,7 @@ pub fn finalize_break(
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
         behaviors,
         current_tick,
@@ -2019,8 +2024,9 @@ pub fn apply_block_use(
                 ownership,
                 current_tick,
                 light_dirty,
+                sounds,
             },
-            sounds,
+            _sounds_lifetime: std::marker::PhantomData,
         };
         behavior.on_use(&mut ctx, location, &use_context)
     };
@@ -2037,6 +2043,7 @@ pub fn apply_block_use(
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
         behaviors,
         current_tick,
@@ -2123,7 +2130,11 @@ pub fn apply_placement(
     // discarded instead, mirroring `crates/testing/gametest/src/replay.rs`'s own
     // identical "harness mechanically supplies it, never drains or reads it back"
     // treatment (no light engine runs behind this call path at M4's own scope either).
+    // M4-B10 (Context §F): `sounds` is frozen the same way, for the same reason -- a fresh,
+    // throwaway `Vec` is discarded rather than broadcast, since no direct-action call site
+    // through this frozen wrapper has a real per-tick outbox to merge into.
     let mut light_dirty = LightDirtyQueue::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
     apply_placement_with_redstone(
         ctx_world,
         engine,
@@ -2132,6 +2143,7 @@ pub fn apply_placement(
         outbound,
         changed,
         &mut light_dirty,
+        &mut sounds,
         ownership,
         behaviors,
         current_tick,
@@ -2162,6 +2174,7 @@ pub fn apply_placement_with_redstone(
     outbound: &mut Vec<(Address, RegionMessage)>,
     changed: &mut Vec<(BlockPos, StorageBlockStateId)>,
     light_dirty: &mut LightDirtyQueue,
+    sounds: &mut Vec<SoundRequest>,
     ownership: &RegionOwnership,
     behaviors: &BlockBehaviorRegistry,
     current_tick: u64,
@@ -2366,6 +2379,7 @@ pub fn apply_placement_with_redstone(
             ownership,
             current_tick,
             light_dirty,
+            sounds,
         };
         let state = to_storage_id(raw_state);
         ctx.set_block(target, state);
@@ -2466,6 +2480,7 @@ pub fn apply_placement_with_redstone(
         outbound,
         changed,
         light_dirty,
+        sounds,
         ownership,
         behaviors,
         current_tick,

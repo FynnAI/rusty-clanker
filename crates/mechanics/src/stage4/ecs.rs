@@ -20,6 +20,7 @@ use crate::border::{BorderHalo, RegionOwnership};
 use crate::light::LightDirtyQueue;
 use crate::neighbor_update::NeighborUpdateEngine;
 use crate::scheduled_tick::ScheduledTickQueue;
+use crate::sound_request::SoundRequest;
 use crate::world_access::BlockWorldAccess;
 
 /// Chunk-key -> entity index, mirroring M2-B07's own `ChunkIndex` shape (a region-scoped
@@ -87,6 +88,24 @@ impl TickBlockEventOutbox {
     /// Drains every accumulated event, in first-confirmed order, leaving this resource empty
     /// for the next tick.
     pub fn drain(&mut self) -> Vec<BlockEvent> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+/// M4-B10 (Context §F): tick-wide accumulation of every `SoundRequest` any Stage-4 system
+/// queued this tick, merged from each system's own local collector -- mirrors
+/// `TickChangedPositions`/`TickBlockEventOutbox` exactly.
+#[derive(Resource, Default)]
+pub struct TickSoundOutbox(pub Vec<SoundRequest>);
+
+impl TickSoundOutbox {
+    pub fn merge(&mut self, incoming: Vec<SoundRequest>) {
+        self.0.extend(incoming);
+    }
+
+    /// Drains every accumulated request, in first-queued order, leaving this resource empty
+    /// for the next tick.
+    pub fn drain(&mut self) -> Vec<SoundRequest> {
         std::mem::take(&mut self.0)
     }
 }
@@ -207,6 +226,7 @@ fn system_scheduled_phase(
     query: Query<(&'static ChunkKeyTag, &'static mut BlockStateColumn)>,
     mut tick_changed: ResMut<TickChangedPositions>,
     mut light_dirty: ResMut<LightDirtyQueue>,
+    mut tick_sounds: ResMut<TickSoundOutbox>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -215,6 +235,7 @@ fn system_scheduled_phase(
     };
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
 
     crate::stage4::run_scheduled_phase(
         &mut world,
@@ -228,6 +249,7 @@ fn system_scheduled_phase(
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         current_tick.0,
     );
 
@@ -235,6 +257,7 @@ fn system_scheduled_phase(
         region_outbox.send(to, msg);
     }
     tick_changed.merge(changed);
+    tick_sounds.merge(sounds);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -251,6 +274,7 @@ fn system_block_event_subphase(
     mut tick_changed: ResMut<TickChangedPositions>,
     mut light_dirty: ResMut<LightDirtyQueue>,
     mut block_event_outbox: ResMut<TickBlockEventOutbox>,
+    mut tick_sounds: ResMut<TickSoundOutbox>,
 ) {
     let mut world = EcsBlockWorld {
         query,
@@ -259,6 +283,7 @@ fn system_block_event_subphase(
     };
     let mut outbound: Vec<(Address, RegionMessage)> = Vec::new();
     let mut changed: Vec<(BlockPos, BlockStateId)> = Vec::new();
+    let mut sounds: Vec<SoundRequest> = Vec::new();
 
     crate::stage4::run_block_event_subphase(
         &mut world,
@@ -270,6 +295,7 @@ fn system_block_event_subphase(
         &mut outbound,
         &mut changed,
         &mut light_dirty,
+        &mut sounds,
         current_tick.0,
     );
 
@@ -277,6 +303,7 @@ fn system_block_event_subphase(
         region_outbox.send(to, msg);
     }
     tick_changed.merge(changed);
+    tick_sounds.merge(sounds);
     // MECH-D83 (M3 field-report wave 3): drains whatever `events` (`BlockEventQueue`'s own
     // confirmed outbox) accumulated this call into the tick-wide `TickBlockEventOutbox` --
     // mirrors `tick_changed.merge(changed)` immediately above.
@@ -299,12 +326,13 @@ fn block_event_subphase_factory() -> SystemFactory {
 
 /// Registers this blueprint's two Stage-4 systems (`order_tag` 0 then 1, Context: "Sequential
 /// collapse") into `builder`. As a documented side effect the caller must account for, every
-/// region's `World` needs ten resources present before Stage 4 first runs (M3 field-report fix,
-/// this doc comment corrected to match `bootstrap_default_stage4_resources`'s own already-longer
-/// real body -- it undercounted even before this changeset, missing `LightDirtyQueue`):
+/// region's `World` needs eleven resources present before Stage 4 first runs (M3 field-report
+/// fix, this doc comment corrected to match `bootstrap_default_stage4_resources`'s own
+/// already-longer real body -- it undercounted even before this changeset, missing
+/// `LightDirtyQueue`; M4-B10 adds `TickSoundOutbox` as the eleventh):
 /// `ChunkIndex`/`NeighborUpdateEngine`/`ScheduledTickQueue`/`BlockEventQueue`/
 /// `BlockBehaviorRegistry`/`BorderHalo`/`TickChangedPositions`/`TickBlockEventOutbox`/
-/// `LightDirtyQueue` (all `Default`) plus `RegionOwnership` (no `Default` — its `resolve`
+/// `LightDirtyQueue`/`TickSoundOutbox` (all `Default`) plus `RegionOwnership` (no `Default` — its `resolve`
 /// closure is inherently per-region data).
 /// `bootstrap_default_stage4_resources` (below) inserts the nine `Default`-able ones and is
 /// meant to be called from the plain `fn(&mut World)` passed to `RcExecutorBuilder::new` — that
@@ -350,4 +378,8 @@ pub fn bootstrap_default_stage4_resources(world: &mut World) {
     // Stage 8's light recompute needs this resource present before Stage 4 first
     // runs, exactly like every other resource this function inserts.
     world.insert_resource(LightDirtyQueue::default());
+    // M4-B10 (Context §F): `TickSoundOutbox` -- both Stage-4 systems' own per-call `sounds`
+    // collector merges into this resource; needs to be present before Stage 4 first runs,
+    // exactly like every other resource this function inserts.
+    world.insert_resource(TickSoundOutbox::default());
 }

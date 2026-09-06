@@ -19,7 +19,7 @@ use rc_mechanics::fluid::waterlog::{
 use rc_mechanics::fluid::{FluidBlockRanges, FluidDimensionProfile, FluidTables, ReactionBlocks};
 use rc_mechanics::neighbor_update::NeighborUpdateEngine;
 use rc_mechanics::scheduled_tick::ScheduledTickQueue;
-use rc_mechanics::{BlockWorldAccess, UpdateContext};
+use rc_mechanics::{BlockWorldAccess, SoundRequest, UpdateContext};
 use rc_messaging::{Address, RegionId, RegionMessage};
 
 const AIR: BlockStateId = BlockStateId(0);
@@ -141,6 +141,7 @@ fn spread_to_waterlogs_a_registered_target_instead_of_overwriting() {
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
     {
         let mut light_dirty = LightDirtyQueue::new();
+        let mut sounds: Vec<SoundRequest> = Vec::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -150,6 +151,7 @@ fn spread_to_waterlogs_a_registered_target_instead_of_overwriting() {
             changed: &mut changed,
             ownership: &ownership,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             current_tick: 0,
         };
         spread_to(
@@ -191,6 +193,7 @@ fn spread_to_hard_overwrites_an_unregistered_non_air_target() {
     let ownership = RegionOwnership::always_local(Address::Region(RegionId(0)));
     {
         let mut light_dirty = LightDirtyQueue::new();
+        let mut sounds: Vec<SoundRequest> = Vec::new();
         let mut ctx = UpdateContext {
             world: &mut world,
             engine: &mut engine,
@@ -200,6 +203,7 @@ fn spread_to_hard_overwrites_an_unregistered_non_air_target() {
             changed: &mut changed,
             ownership: &ownership,
             light_dirty: &mut light_dirty,
+            sounds: &mut sounds,
             current_tick: 0,
         };
         spread_to(
