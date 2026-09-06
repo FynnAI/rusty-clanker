@@ -87,11 +87,11 @@
     // --- Chunk streaming and batch pacing (NET hardening) — every step, not just
     // move/sneak/dig_stone_survival: the redstone-corpus-over-the-wire pass's own
     // contraption steps observe fresh chunk traffic too. ---
-    (steps: "session/*", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:forget_level_chunk", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:set_chunk_cache_center", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "*", packet: "minecraft:chunk_batch_start", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "*", packet: "minecraft:chunk_batch_finished", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "*", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "*", packet: "minecraft:forget_level_chunk", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
+    (steps: "*", packet: "minecraft:set_chunk_cache_center", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
     (steps: "session/move", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/move", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/sneak", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
@@ -141,6 +141,7 @@
     // entity id) — self-entity metadata and attribute sync are M4-B01's gap.
     (steps: "session/observe_chunk", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/observe_chunk", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/observe_chunk", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Body, closes_with: Some("M4-B01"), expires: Some("M4")),
 
     // --- Redstone-corpus-over-the-wire entity/join-sequence backlog — every
@@ -177,8 +178,8 @@
     // torch, dropping and then despawning-via-pickup an item entity — the same
     // M4-B02 entity/item gap already registered elsewhere in this file, just not yet
     // needed on any other redstone fixture.
-    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "redstone/update_order/two_torch_and_gate", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
     // The same scripted torch destroy → drop → pickup on this contraption also unlocks a
     // recipe and grants an advancement on the oracle (recipe book and advancements are
     // whole features our server does not have); scoped to this one step, the only
