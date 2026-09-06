@@ -5,13 +5,17 @@
 use std::sync::Arc;
 
 use rc_chunk_storage::BlockStateId;
+use rc_registries::block_state_properties::range_of;
 use rc_registries::generated_v776::block_states::default_state;
 
 use crate::behavior::{BlockBehavior, BlockBehaviorRegistry};
 use crate::direction::Direction;
 
+use super::button::{BUTTON_BLOCKS, ButtonBehavior};
 use super::comparator::{ComparatorBehavior, ContainerSignalSource};
+use super::entity_presence::EntityPresenceSource;
 use super::lever::LeverBehavior;
+use super::pressure_plate::{PRESSURE_PLATE_BLOCKS, PressurePlateBehavior};
 use super::redstone_block::RedstoneBlockSource;
 use super::repeater::RepeaterBehavior;
 use super::signal::{RedstoneSignalSource, SignalSourceRegistry};
@@ -210,4 +214,56 @@ pub fn register_redstone_block(signals: &mut SignalSourceRegistry) {
         BlockStateId(REDSTONE_BLOCK_STATE_ID.0 + 1),
         Arc::new(RedstoneBlockSource) as Arc<dyn RedstoneSignalSource>,
     );
+}
+
+/// Context §B: constructs one `ButtonBehavior` per `BUTTON_BLOCKS` row and one
+/// `PressurePlateBehavior` per `PRESSURE_PLATE_BLOCKS` row, registering each into both
+/// registries over that block's own `range_of` span. Call once per region, in any order
+/// relative to `register_tier1_redstone`/`register_piston`/`register_hopper` — these
+/// behaviours need no `SignalSourceRegistry` back-reference (nothing they compute depends on
+/// a neighbour's signal), so they take no part in `Tier1RedstoneHandles::bind_registry` and
+/// return no handle, exactly like the lever. `entities` is cloned once per plate row — every
+/// plate shares the same census.
+pub fn register_tier2_inputs(
+    behaviors: &mut BlockBehaviorRegistry,
+    signals: &mut SignalSourceRegistry,
+    entities: Arc<dyn EntityPresenceSource>,
+) {
+    for &(block, config) in BUTTON_BLOCKS {
+        let range = range_of(block);
+        let start = BlockStateId(range.first.0);
+        let end_exclusive = BlockStateId(range.last.0 + 1);
+        let behavior = Arc::new(ButtonBehavior::new(config, block));
+        behaviors.register_range(
+            start,
+            end_exclusive,
+            Arc::clone(&behavior) as Arc<dyn BlockBehavior>,
+        );
+        signals.register_range(
+            start,
+            end_exclusive,
+            behavior as Arc<dyn RedstoneSignalSource>,
+        );
+    }
+
+    for &(block, config) in PRESSURE_PLATE_BLOCKS {
+        let range = range_of(block);
+        let start = BlockStateId(range.first.0);
+        let end_exclusive = BlockStateId(range.last.0 + 1);
+        let behavior = Arc::new(PressurePlateBehavior::new(
+            config,
+            block,
+            Arc::clone(&entities),
+        ));
+        behaviors.register_range(
+            start,
+            end_exclusive,
+            Arc::clone(&behavior) as Arc<dyn BlockBehavior>,
+        );
+        signals.register_range(
+            start,
+            end_exclusive,
+            behavior as Arc<dyn RedstoneSignalSource>,
+        );
+    }
 }

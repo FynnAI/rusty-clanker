@@ -243,6 +243,18 @@ impl ScheduledTickQueue {
         self.pending_block_positions.contains(&pos)
     }
 
+    /// M4-B10, test/diagnostic only (`debug_pending_block_tick_delay`'s own doc comment): the
+    /// `trigger_tick` of the currently-queued block tick at `pos`, if any -- mirrors
+    /// `is_fluid_tick_pending`'s own identical `.iter()` scan, safe here for the same reason:
+    /// `schedule_block_tick`'s own dedup guarantees at most one queued block tick per position,
+    /// so at most one entry ever matches.
+    pub fn pending_block_tick_trigger(&self, pos: BlockPos) -> Option<u64> {
+        self.block_heap
+            .iter()
+            .find(|Reverse(HeapEntry(e))| e.pos == pos)
+            .map(|Reverse(HeapEntry(e))| e.trigger_tick)
+    }
+
     pub fn is_fluid_tick_pending(&self, pos: BlockPos) -> bool {
         self.fluid_heap
             .iter()

@@ -678,6 +678,56 @@ fn build_tier1_table() -> ShapeTable {
             .map(|id| (id, BlockPhysicsProperties::air())),
     );
 
+    // --- Buttons and pressure plates (M4-B10, Context §G) — own clearly delimited section,
+    // placed at the end for the same "sibling changeset's own additions elsewhere merge
+    // cleanly" reason `moving_piston`'s own section above already documents. Every button and
+    // every pressure plate is registered `.noCollision()` in the reference: `getCollisionShape`
+    // returns an empty shape whenever a block was built `noCollision`, `getBlockSupportShape`
+    // defaults to the collision shape, and all three `SupportType` variants evaluate against
+    // it -- so a button or a plate is sturdy on no face for any support kind and collides with
+    // nothing, exactly like the lever/wire/torch rows above. An explicit row per state is
+    // mandatory, not optional: `ShapeTable::lookup`'s fallback for an unregistered id is
+    // `default_full_cube()`, which would make an unregistered button or plate a solid,
+    // `Full`-sturdy cube -- the worst possible wrong answer.
+    const NON_COLLIDING_INPUT_BLOCK_IDS: &[BlockId] = &[
+        block_id::STONE_BUTTON,
+        block_id::POLISHED_BLACKSTONE_BUTTON,
+        block_id::OAK_BUTTON,
+        block_id::SPRUCE_BUTTON,
+        block_id::BIRCH_BUTTON,
+        block_id::JUNGLE_BUTTON,
+        block_id::ACACIA_BUTTON,
+        block_id::DARK_OAK_BUTTON,
+        block_id::PALE_OAK_BUTTON,
+        block_id::MANGROVE_BUTTON,
+        block_id::CHERRY_BUTTON,
+        block_id::BAMBOO_BUTTON,
+        block_id::CRIMSON_BUTTON,
+        block_id::WARPED_BUTTON,
+        block_id::STONE_PRESSURE_PLATE,
+        block_id::POLISHED_BLACKSTONE_PRESSURE_PLATE,
+        block_id::OAK_PRESSURE_PLATE,
+        block_id::SPRUCE_PRESSURE_PLATE,
+        block_id::BIRCH_PRESSURE_PLATE,
+        block_id::JUNGLE_PRESSURE_PLATE,
+        block_id::ACACIA_PRESSURE_PLATE,
+        block_id::DARK_OAK_PRESSURE_PLATE,
+        block_id::PALE_OAK_PRESSURE_PLATE,
+        block_id::MANGROVE_PRESSURE_PLATE,
+        block_id::CHERRY_PRESSURE_PLATE,
+        block_id::BAMBOO_PRESSURE_PLATE,
+        block_id::CRIMSON_PRESSURE_PLATE,
+        block_id::WARPED_PRESSURE_PLATE,
+        block_id::LIGHT_WEIGHTED_PRESSURE_PLATE,
+        block_id::HEAVY_WEIGHTED_PRESSURE_PLATE,
+    ];
+    for &input_block in NON_COLLIDING_INPUT_BLOCK_IDS {
+        let range = range_of(input_block);
+        entries
+            .extend((range.first.0..=range.last.0).map(|id| (id, BlockPhysicsProperties::air())));
+    }
+    // --- end buttons and pressure plates ------------------------------------------------------
+
     ShapeTable::from_entries(entries)
 }
 

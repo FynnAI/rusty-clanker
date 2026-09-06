@@ -17,6 +17,11 @@ mod connection;
 mod entity_drops;
 mod entity_packets;
 mod entity_persistence;
+/// M4-B10 (Context §E): the entity-presence census + `on_entity_inside` trigger driver, `pub`
+/// for the same reason `mining`'s own deliverables are re-exported piecemeal below — its own
+/// three pure types (`EntityPresenceRecord`/`RegionEntityPresence`/`EntityPresenceResource`)
+/// and its one manual tick-loop step (`entity_inside_step`) are consumed directly by `world.rs`.
+pub mod entity_presence;
 mod entity_tracking;
 mod keepalive;
 mod mining;

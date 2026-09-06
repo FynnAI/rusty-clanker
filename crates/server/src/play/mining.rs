@@ -57,7 +57,9 @@ use rc_registries::block_state_properties::{properties, range_of, state_id};
 use rc_registries::generated_v776::block_state_properties::block_id;
 use rc_registries::generated_v776::block_states::BlockStateId as GenStateId;
 use rc_registries::generated_v776::block_states::default_state::{
-    AIR, BEDROCK, DIRT, GRASS_BLOCK, HOPPER, REDSTONE_TORCH, REDSTONE_WIRE, STONE,
+    AIR, BEDROCK, DIRT, GRASS_BLOCK, HEAVY_WEIGHTED_PRESSURE_PLATE, HOPPER,
+    LIGHT_WEIGHTED_PRESSURE_PLATE, OAK_PRESSURE_PLATE, REDSTONE_TORCH, REDSTONE_WIRE, STONE,
+    STONE_PRESSURE_PLATE,
 };
 
 use super::block_action::{Face, resolve_place_position, to_storage_id};
@@ -81,6 +83,20 @@ pub enum PlaceableBlockKind {
     Hopper,
     /// PLAN-D10/MECH-D13 (M3 field-report wave 3): tier 1's manual input, the lever.
     Lever,
+    /// M4-B10 (Context §H): the six-kind representative placement subset -- every other
+    /// button/plate block still has full behaviour, signals, shapes and dispatch, only its own
+    /// creative-slot placement row is absent (this module's own doc comment, "Two resolved
+    /// ambiguities" precedent: `HeldItemStub`'s own 13-item universe). `StoneButton`: 20-tick,
+    /// no arrows, stone sounds. `OakButton`: 30-tick, arrow-capable, wooden sounds.
+    StoneButton,
+    OakButton,
+    /// `StonePressurePlate`: boolean plate, `MOBS` sensitivity. `OakPressurePlate`: boolean
+    /// plate, `EVERYTHING` sensitivity. `LightWeightedPressurePlate`: analog, `max_weight` 15,
+    /// 10-tick cadence. `HeavyWeightedPressurePlate`: analog, `max_weight` 150.
+    StonePressurePlate,
+    OakPressurePlate,
+    LightWeightedPressurePlate,
+    HeavyWeightedPressurePlate,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -186,6 +202,13 @@ pub fn placeable_kind_for_item_id(item_id: i32) -> Option<PlaceableBlockKind> {
     const SMOKER_ITEM: i32 = item::SMOKER.0 as i32;
     const HOPPER_ITEM: i32 = item::HOPPER.0 as i32;
     const LEVER_ITEM: i32 = item::LEVER.0 as i32;
+    // M4-B10 (Context §H): the six-kind representative placement subset's own item ids.
+    const STONE_BUTTON_ITEM: i32 = item::STONE_BUTTON.0 as i32;
+    const OAK_BUTTON_ITEM: i32 = item::OAK_BUTTON.0 as i32;
+    const STONE_PRESSURE_PLATE_ITEM: i32 = item::STONE_PRESSURE_PLATE.0 as i32;
+    const OAK_PRESSURE_PLATE_ITEM: i32 = item::OAK_PRESSURE_PLATE.0 as i32;
+    const LIGHT_WEIGHTED_PRESSURE_PLATE_ITEM: i32 = item::LIGHT_WEIGHTED_PRESSURE_PLATE.0 as i32;
+    const HEAVY_WEIGHTED_PRESSURE_PLATE_ITEM: i32 = item::HEAVY_WEIGHTED_PRESSURE_PLATE.0 as i32;
 
     match item_id {
         STONE_ITEM => Some(PlaceableBlockKind::Stone),
@@ -201,6 +224,12 @@ pub fn placeable_kind_for_item_id(item_id: i32) -> Option<PlaceableBlockKind> {
         SMOKER_ITEM => Some(PlaceableBlockKind::Smoker),
         HOPPER_ITEM => Some(PlaceableBlockKind::Hopper),
         LEVER_ITEM => Some(PlaceableBlockKind::Lever),
+        STONE_BUTTON_ITEM => Some(PlaceableBlockKind::StoneButton),
+        OAK_BUTTON_ITEM => Some(PlaceableBlockKind::OakButton),
+        STONE_PRESSURE_PLATE_ITEM => Some(PlaceableBlockKind::StonePressurePlate),
+        OAK_PRESSURE_PLATE_ITEM => Some(PlaceableBlockKind::OakPressurePlate),
+        LIGHT_WEIGHTED_PRESSURE_PLATE_ITEM => Some(PlaceableBlockKind::LightWeightedPressurePlate),
+        HEAVY_WEIGHTED_PRESSURE_PLATE_ITEM => Some(PlaceableBlockKind::HeavyWeightedPressurePlate),
         _ => None,
     }
 }
@@ -263,6 +292,19 @@ pub fn dig_properties(kind: PlaceableBlockKind) -> DigProperties {
         // row's identical `min_tier_for_drops: None` shape (this module's own doc comment,
         // "Two resolved ambiguities": a `None` bypasses the tool-kind check too, not only tier).
         PlaceableBlockKind::Lever => DigProperties {
+            hardness: 0.5,
+            effective_tool: ToolKind::None,
+            min_tier_for_drops: None,
+        },
+        // M4-B10 (Context §H): all six rows identical -- `strength(0.5F)` for every button and
+        // plate, and neither sets `requiresCorrectToolForDrops` (a stone button and a stone
+        // pressure plate both drop from a bare hand), mirroring the lever's own identical row.
+        PlaceableBlockKind::StoneButton
+        | PlaceableBlockKind::OakButton
+        | PlaceableBlockKind::StonePressurePlate
+        | PlaceableBlockKind::OakPressurePlate
+        | PlaceableBlockKind::LightWeightedPressurePlate
+        | PlaceableBlockKind::HeavyWeightedPressurePlate => DigProperties {
             hardness: 0.5,
             effective_tool: ToolKind::None,
             min_tier_for_drops: None,
@@ -959,7 +1001,13 @@ pub fn resolve_orientation(
         // `mount_direction`'s doc comment in `rc_mechanics::redstone::lever`) -- never `Center`,
         // unlike the floor torch. The FIRST valid candidate wins; if none is valid, placement
         // fails.
-        PlaceableBlockKind::Lever => {
+        // M4-B10 (Context §H): buttons use `FaceAttachedHorizontalDirectionalBlock.
+        // getStateForPlacement`, the SAME function the lever uses -- this arm is widened
+        // verbatim (`kind` is the caller-supplied parameter, not re-derived from the pattern,
+        // so it already carries whichever of the three variants actually matched).
+        PlaceableBlockKind::Lever
+        | PlaceableBlockKind::StoneButton
+        | PlaceableBlockKind::OakButton => {
             let look = look_vector(yaw_degrees, pitch_degrees);
             let mut order = ordered_by_nearest(look);
             move_to_front(&mut order, face_to_direction(clicked_face).opposite());
@@ -1005,6 +1053,20 @@ pub fn resolve_orientation(
             }
             Err(RejectReason::InvalidLeverFace)
         }
+        // M4-B10 (Context §H): plates carry no orientation property at all -- resolved
+        // unconditionally with no look input and no candidate loop; the placement-time support
+        // check (`Rigid || Center` below the target) lives in `apply_placement_with_redstone`,
+        // not here (mirrors the lever/torch shape, whose own support refusal instead lives
+        // inside this same candidate loop).
+        PlaceableBlockKind::StonePressurePlate
+        | PlaceableBlockKind::OakPressurePlate
+        | PlaceableBlockKind::LightWeightedPressurePlate
+        | PlaceableBlockKind::HeavyWeightedPressurePlate => Ok(PlacementSelection {
+            kind,
+            orientation: Orientation::None,
+            is_wall_variant: false,
+            chest_merge: None,
+        }),
     }
 }
 
@@ -1438,6 +1500,63 @@ fn tier1_oriented_entries() -> Vec<((PlaceableBlockKind, Orientation), u32)> {
             ));
         }
     }
+
+    // M4-B10 (Context §H): the two representative buttons -- 24 rows (2 kinds x 3 faces x 4
+    // facings, `powered=false` only -- a freshly placed button is never pressed; `on_use`
+    // writes the pressed sibling through `with_property`, never through this table). Mirrors
+    // the lever's own identical loop shape exactly.
+    for (placeable_kind, button_block) in [
+        (PlaceableBlockKind::StoneButton, block_id::STONE_BUTTON),
+        (PlaceableBlockKind::OakButton, block_id::OAK_BUTTON),
+    ] {
+        for face in ["floor", "wall", "ceiling"] {
+            let attach_face = match face {
+                "floor" => AttachFace::Floor,
+                "wall" => AttachFace::Wall,
+                "ceiling" => AttachFace::Ceiling,
+                _ => unreachable!(),
+            };
+            for dir in HORIZONTAL4 {
+                entries.push((
+                    (placeable_kind, Orientation::Attached(attach_face, dir)),
+                    id_of(
+                        button_block,
+                        &[
+                            ("face", face),
+                            ("facing", direction_str(dir)),
+                            ("powered", "false"),
+                        ],
+                    ),
+                ));
+            }
+        }
+    }
+
+    // M4-B10 (Context §H): the four representative pressure plates -- `Orientation::None` ->
+    // each plate's own generated default state (`powered=false` / `power=0`) directly, exactly
+    // like hopper's own `Full(Down)` row above reuses its own generated default id.
+    entries.push((
+        (PlaceableBlockKind::StonePressurePlate, Orientation::None),
+        STONE_PRESSURE_PLATE.0,
+    ));
+    entries.push((
+        (PlaceableBlockKind::OakPressurePlate, Orientation::None),
+        OAK_PRESSURE_PLATE.0,
+    ));
+    entries.push((
+        (
+            PlaceableBlockKind::LightWeightedPressurePlate,
+            Orientation::None,
+        ),
+        LIGHT_WEIGHTED_PRESSURE_PLATE.0,
+    ));
+    entries.push((
+        (
+            PlaceableBlockKind::HeavyWeightedPressurePlate,
+            Orientation::None,
+        ),
+        HEAVY_WEIGHTED_PRESSURE_PLATE.0,
+    ));
 
     // Piston/sticky_piston: `extended` is always `false` at placement (a freshly-placed piston
     // is never mid-extend); `PISTON`/`STICKY_PISTON`'s own generated default is already
@@ -2325,6 +2444,44 @@ pub fn apply_placement_with_redstone(
         let hopper_below = matches!(kind, PlaceableBlockKind::RedstoneWire)
             && below_raw.is_some_and(|raw| (HOPPER.0..=HOPPER.0 + 4).contains(&raw));
         if !sturdy_below && !hopper_below {
+            return PlaceOutcome::Rejected {
+                pos: target,
+                reason: RejectReason::NoSolidSupportBelow,
+                current_state: Some(current.to_raw()),
+                clicked_pos: location,
+                clicked_state: clicked_state_before,
+            };
+        }
+    }
+
+    // M4-B10 (Context §H): the four representative pressure plate kinds need the identical
+    // `NoSolidSupportBelow` gate, but with `canSurvive`'s own two-kind OR (`Rigid || Center`,
+    // MECH-D84) -- a second, additive block beside the one above, using the same
+    // `signal::is_face_sturdy` the engine-side pop check (`PressurePlateBehavior::
+    // on_shape_update`) uses, so placement and pop can never disagree. Buttons need no such
+    // block here -- their own refusal is already inside `resolve_orientation`'s candidate loop,
+    // exactly like the lever's and the torch's.
+    if matches!(
+        kind,
+        PlaceableBlockKind::StonePressurePlate
+            | PlaceableBlockKind::OakPressurePlate
+            | PlaceableBlockKind::LightWeightedPressurePlate
+            | PlaceableBlockKind::HeavyWeightedPressurePlate
+    ) {
+        let below = BlockPos::new(target.x, target.y - 1, target.z);
+        let rigid = rc_mechanics::redstone::signal::is_face_sturdy(
+            ctx_world,
+            below,
+            Direction::Up,
+            rc_physics::SupportKind::Rigid,
+        );
+        let center = rc_mechanics::redstone::signal::is_face_sturdy(
+            ctx_world,
+            below,
+            Direction::Up,
+            rc_physics::SupportKind::Center,
+        );
+        if !rigid && !center {
             return PlaceOutcome::Rejected {
                 pos: target,
                 reason: RejectReason::NoSolidSupportBelow,

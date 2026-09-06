@@ -60,6 +60,8 @@ use super::combat::{
 };
 use super::connection::SPAWN_POSITION;
 use super::entity_drops;
+use super::entity_presence;
+use super::entity_presence::entity_inside_step;
 use super::entity_tracking::{entity_pickup_step, entity_resync_step};
 use super::mining::{
     self, BLOCK_INTERACTION_RANGE_CREATIVE, BLOCK_INTERACTION_RANGE_SURVIVAL, BreakOutcome,
@@ -937,6 +939,19 @@ fn bootstrap_redstone_dispatch(world: &mut World) {
         &tier1_ids,
         Arc::clone(&container_signals) as Arc<dyn rc_mechanics::redstone::ContainerSignalSource>,
     );
+
+    // M4-B10 (Context §B): the button/pressure-plate family -- callable in any order relative
+    // to `register_tier1_redstone`/`register_piston`/`register_hopper` (neither behaviour needs
+    // a `SignalSourceRegistry` back-reference), but it must run here, while `signals` is still
+    // the plain, mutable `SignalSourceRegistry` these behaviours also register signal sources
+    // into -- before the `Arc::new(signals)` wrap below turns it read-only.
+    let entity_presence = Arc::new(super::entity_presence::RegionEntityPresence::new());
+    rc_mechanics::redstone::register_tier2_inputs(
+        &mut behaviors,
+        &mut signals,
+        Arc::clone(&entity_presence) as Arc<dyn rc_mechanics::redstone::EntityPresenceSource>,
+    );
+
     let signals = Arc::new(signals);
     handles.bind_registry(Arc::clone(&signals));
 
@@ -972,6 +987,11 @@ fn bootstrap_redstone_dispatch(world: &mut World) {
     world.insert_resource(behaviors);
     world.insert_resource(rc_mechanics::ContainerSignalsResource(container_signals));
     world.insert_resource(SignalRegistryResource(signals_for_placement));
+    // M4-B10 (Context §E): the census `entity_inside_step` refreshes every tick and every
+    // `PressurePlateBehavior` reads through the other `Arc` clone above.
+    world.insert_resource(super::entity_presence::EntityPresenceResource(
+        entity_presence,
+    ));
 }
 
 /// `bootstrap_redstone_dispatch`'s own doc comment above ("Also constructs...") has the full
@@ -1228,10 +1248,14 @@ impl BlockEntitySpawner for ProductionBlockEntitySpawner {
 /// `owner_of`/`local_identity` honestly at this milestone's own single-region scope (Context:
 /// "M2 stays inside M1-B05's single `HARDCODED_REGION_ID`", still true) without needing a
 /// real `RegionOwnership` instance threaded through here too.
-struct DirectBlockWorld<'w> {
-    world: &'w mut World,
-    dimension: DimensionId,
-    local: Address,
+/// M4-B10: `pub(crate)` (was private) so `entity_presence::entity_inside_step` -- a sibling
+/// module inside this same crate that needs the identical "manual tick-loop step, no
+/// `bevy_ecs::System`" `BlockWorldAccess` bridge -- can construct one too, mirroring this same
+/// type's own established role for every other manual tick-loop step in this file.
+pub(crate) struct DirectBlockWorld<'w> {
+    pub(crate) world: &'w mut World,
+    pub(crate) dimension: DimensionId,
+    pub(crate) local: Address,
 }
 
 /// `true` iff `world_y` falls inside the pinned world's vertical bounds (`WORLD_MIN_Y ..
@@ -1379,6 +1403,18 @@ pub struct HardcodedWorld {
     /// M4-B07 field-report implementation, test/diagnostic only -- `debug_query_light`'s own
     /// doc comment (this struct's own method, below), mirrors `query_tx` exactly.
     light_query_tx: LightQuerySender,
+    /// M4-B10, test/diagnostic only -- `debug_query_input_signal`'s own doc comment.
+    debug_input_signal_tx:
+        tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<u8>>)>,
+    /// M4-B10, test/diagnostic only -- `debug_pending_block_tick_delay`'s own doc comment.
+    debug_pending_tick_tx:
+        tokio::sync::mpsc::UnboundedSender<(BlockPos, oneshot::Sender<Option<u64>>)>,
+    /// M4-B10, test/diagnostic only -- `debug_entity_census`'s own doc comment.
+    debug_entity_census_tx: tokio::sync::mpsc::UnboundedSender<(
+        rc_physics::Aabb,
+        rc_mechanics::redstone::EntityClassFilter,
+        oneshot::Sender<usize>,
+    )>,
     next_network_entity_id: Arc<AtomicI32>,
     /// New (M2-B05): signals the region thread to stop after finishing its current round
     /// (`shutdown`'s own doc comment).
@@ -1534,6 +1570,18 @@ impl HardcodedWorld {
         // own doc comment (this struct's own method, below), mirrors `query_tx` exactly.
         let (light_query_tx, mut light_query_rx) =
             tokio::sync::mpsc::unbounded_channel::<(BlockPos, oneshot::Sender<Option<(u8, u8)>>)>();
+        // M4-B10, test/diagnostic only -- `debug_query_input_signal`/`debug_pending_block_tick_
+        // delay`/`debug_entity_census`'s own doc comments.
+        let (debug_input_signal_tx, mut debug_input_signal_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(BlockPos, oneshot::Sender<Option<u8>>)>();
+        let (debug_pending_tick_tx, mut debug_pending_tick_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(BlockPos, oneshot::Sender<Option<u64>>)>();
+        let (debug_entity_census_tx, mut debug_entity_census_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(
+                rc_physics::Aabb,
+                rc_mechanics::redstone::EntityClassFilter,
+                oneshot::Sender<usize>,
+            )>();
         let (chunk_grid_tx, mut chunk_grid_rx) =
             tokio::sync::mpsc::unbounded_channel::<ChunkGridRequest>();
         let (debug_held_item_tx, mut debug_held_item_rx) =
@@ -3543,6 +3591,36 @@ impl HardcodedWorld {
                     ));
                 }
 
+                // M4-B10, test/diagnostic only -- `debug_query_input_signal`'s own doc comment.
+                while let Ok((pos, reply)) = debug_input_signal_rx.try_recv() {
+                    let raw = read_raw_state(
+                        &region.world,
+                        region.world.resource::<ChunkIndex>(),
+                        DimensionId::OVERWORLD,
+                        pos,
+                    );
+                    let _ = reply.send(decode_input_signal_from_raw(raw));
+                }
+
+                // M4-B10, test/diagnostic only -- `debug_pending_block_tick_delay`'s own doc
+                // comment.
+                while let Ok((pos, reply)) = debug_pending_tick_rx.try_recv() {
+                    let scheduled = region.world.resource::<rc_mechanics::ScheduledTickQueue>();
+                    let delay = scheduled
+                        .pending_block_tick_trigger(pos)
+                        .map(|trigger_tick| trigger_tick.saturating_sub(region.tick_counter));
+                    let _ = reply.send(delay);
+                }
+
+                // M4-B10, test/diagnostic only -- `debug_entity_census`'s own doc comment.
+                while let Ok((region_box, filter, reply)) = debug_entity_census_rx.try_recv() {
+                    use rc_mechanics::redstone::EntityPresenceSource;
+                    let presence = region
+                        .world
+                        .resource::<entity_presence::EntityPresenceResource>();
+                    let _ = reply.send(presence.0.count_entities_in(region_box, filter));
+                }
+
                 while let Ok(reply) = stage4_counters_rx.try_recv() {
                     let engine = region
                         .world
@@ -3759,6 +3837,13 @@ impl HardcodedWorld {
                 entity_pickup_step(&mut region.world);
                 entity_resync_step(&mut region.world, region.tick_counter);
 
+                // M4-B10 (Context §E): the entity-presence census + `on_entity_inside` trigger
+                // driver -- positioned after the two steps above (so it observes this tick's
+                // own fresh Stage 6b physics output, exactly like they do) and before the
+                // `TickBlockEventOutbox`/`TickChangedPositions` drains just below (so anything
+                // it changes is broadcast this same tick with no call-site change).
+                entity_inside_step(&mut region.world, region.tick_counter);
+
                 // M1 field-report implementation (`docs/findings-for-planning.md`'s own
                 // "First real protocol-diff inventory" entry: "every step -> `set_time` (we
                 // never sync world time -- small NET item)"): vanilla's own periodic
@@ -3813,6 +3898,22 @@ impl HardcodedWorld {
                     .drain();
                 for event in tick_block_events {
                     broadcast_block_event(&region.world, event);
+                }
+
+                // M4-B10 (Context §F): drains `TickSoundOutbox` once per tick, immediately
+                // after the `TickBlockEventOutbox` drain above -- every sound a scheduled tick
+                // or the entity-inside dispatch queued this tick (a button's own release
+                // click, a pressure plate's press/release click) reaches every client through
+                // the same `broadcast_sound_request` a direct-action call site already uses.
+                // Actor id `-1`: no acting connection produced these requests, and every one of
+                // them carries `except_actor: false` (§C/§D's own release/re-evaluate rule), so
+                // the id is never actually consulted -- a sentinel, not a lookup.
+                let tick_sounds = region
+                    .world
+                    .resource_mut::<rc_mechanics::stage4::ecs::TickSoundOutbox>()
+                    .drain();
+                for request in tick_sounds {
+                    broadcast_sound_request(&region.world, -1, request);
                 }
 
                 // M3 field-report fix ("block-state changes made outside a direct player
@@ -3927,6 +4028,9 @@ impl HardcodedWorld {
             debug_deal_damage_tx,
             debug_override_attribute_tx,
             debug_query_entity_tx,
+            debug_input_signal_tx,
+            debug_pending_tick_tx,
+            debug_entity_census_tx,
         }
     }
 
@@ -4096,6 +4200,48 @@ impl HardcodedWorld {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.light_query_tx.send((pos, reply_tx)).ok()?;
         reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B10, test/diagnostic only -- mirrors `debug_query_block`'s own established
+    /// precedent. Current `powered`/`power` value decoded from whatever is stored at `pos`;
+    /// `None` if the stored id is not a button or plate. Deliberately deviates from this
+    /// blueprint's own literal synchronous signature (Deliverables) -- `HardcodedWorld` is a
+    /// thin async handle around channels to the region's own tick-loop thread, exactly like
+    /// every other `debug_*` accessor this file already ships, and none of them can read
+    /// `region.world` directly from the caller's own thread.
+    pub async fn debug_query_input_signal(&self, pos: BlockPos) -> Option<u8> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_input_signal_tx.send((pos, reply_tx)).ok()?;
+        reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B10, test/diagnostic only. Ticks until `pos`'s own queued block tick fires; `None`
+    /// if none is queued. Same async-handle deviation as `debug_query_input_signal` above.
+    pub async fn debug_pending_block_tick_delay(&self, pos: BlockPos) -> Option<u64> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_pending_tick_tx.send((pos, reply_tx)).ok()?;
+        reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B10, test/diagnostic only. Current entity census size intersecting `region` -- the
+    /// plate's own input, exposed so a test can assert the census, not only its consequence.
+    /// Same async-handle deviation as `debug_query_input_signal` above; `0` (never `None`) on a
+    /// dead tick-loop thread, matching this method's own non-`Option` return contract.
+    pub async fn debug_entity_census(
+        &self,
+        region: rc_physics::Aabb,
+        filter: rc_mechanics::redstone::EntityClassFilter,
+    ) -> usize {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .debug_entity_census_tx
+            .send((region, filter, reply_tx))
+            .is_ok()
+        {
+            reply_rx.await.unwrap_or(0)
+        } else {
+            0
+        }
     }
 
     /// New (M2 integration): registers a real ticket for `network_entity_id` centered on
@@ -4478,6 +4624,51 @@ fn read_raw_state(world: &World, index: &ChunkIndex, dimension: DimensionId, pos
             column.get(lx, pos.y, lz).to_raw()
         })
         .unwrap_or(AIR.0)
+}
+
+/// M4-B10, test/diagnostic only (`debug_query_input_signal`'s own doc comment): decodes `raw`'s
+/// own `powered`/`power` value into the `15`/`0` (boolean) or direct (analog) signal it stores,
+/// `None` if `raw` falls outside every button and pressure-plate range -- a self-contained
+/// re-decode (not a `RedstoneSignalSource::weak_signal_toward` call) since the caller has
+/// already read `raw` off the world directly and this needs no `BlockWorldAccess` of its own.
+fn decode_input_signal_from_raw(raw: u32) -> Option<u8> {
+    use rc_registries::block_state_properties::{properties, range_of};
+    use rc_registries::generated_v776::block_states::BlockStateId as GenStateId;
+
+    for &(block, _) in rc_mechanics::redstone::BUTTON_BLOCKS {
+        let range = range_of(block);
+        if (range.first.0..=range.last.0).contains(&raw) {
+            let props = properties(GenStateId(raw));
+            let powered = props
+                .iter()
+                .find(|(name, _)| *name == "powered")
+                .map(|(_, value)| *value == "true")
+                .unwrap_or(false);
+            return Some(if powered { 15 } else { 0 });
+        }
+    }
+    for &(block, config) in rc_mechanics::redstone::PRESSURE_PLATE_BLOCKS {
+        let range = range_of(block);
+        if (range.first.0..=range.last.0).contains(&raw) {
+            let props = properties(GenStateId(raw));
+            return Some(match config.model {
+                rc_mechanics::redstone::PlateSignalModel::Boolean { .. } => {
+                    let powered = props
+                        .iter()
+                        .find(|(name, _)| *name == "powered")
+                        .map(|(_, value)| *value == "true")
+                        .unwrap_or(false);
+                    if powered { 15 } else { 0 }
+                }
+                rc_mechanics::redstone::PlateSignalModel::Weighted { .. } => props
+                    .iter()
+                    .find(|(name, _)| *name == "power")
+                    .and_then(|(_, value)| value.parse::<u8>().ok())
+                    .unwrap_or(0),
+            });
+        }
+    }
+    None
 }
 
 /// M3 field-report fix ("block-state changes made outside a direct player action never reach

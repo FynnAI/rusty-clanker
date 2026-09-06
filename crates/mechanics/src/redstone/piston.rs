@@ -183,7 +183,7 @@ use std::sync::{Arc, Mutex};
 use rc_chunk_storage::{BlockStateId, RegistryId};
 use rc_core::BlockPos;
 use rc_registries::block_state_properties::{block_of, properties, range_of, state_id};
-use rc_registries::generated_v776::block_state_properties::block_id;
+use rc_registries::generated_v776::block_state_properties::{BlockId, block_id};
 use rc_registries::generated_v776::block_states::{BlockStateId as GenStateId, default_state};
 
 use crate::behavior::{BlockBehavior, BlockBehaviorRegistry, UpdateContext};
@@ -243,6 +243,45 @@ const DESTROY_IDS: [u32; 5] = [
     default_state::REDSTONE_WALL_TORCH.0,
     default_state::REPEATER.0,
     default_state::COMPARATOR.0,
+];
+
+/// Context §I: the lever plus all 14 button and all 16 pressure-plate block ids, each
+/// contributing its own whole generated `range_of` span to `classify`'s own `PushClass::
+/// Destroy` set (`PushReaction.DESTROY` for every one of them) — replaces the single
+/// hard-coded lever range check the lever's own M3 field-report wave 3 landing added.
+/// `DESTROY_IDS` (five default-substate-only literals) is untouched.
+pub const DESTROY_RANGE_BLOCK_IDS: &[BlockId] = &[
+    block_id::LEVER,
+    block_id::STONE_BUTTON,
+    block_id::POLISHED_BLACKSTONE_BUTTON,
+    block_id::OAK_BUTTON,
+    block_id::SPRUCE_BUTTON,
+    block_id::BIRCH_BUTTON,
+    block_id::JUNGLE_BUTTON,
+    block_id::ACACIA_BUTTON,
+    block_id::DARK_OAK_BUTTON,
+    block_id::PALE_OAK_BUTTON,
+    block_id::MANGROVE_BUTTON,
+    block_id::CHERRY_BUTTON,
+    block_id::BAMBOO_BUTTON,
+    block_id::CRIMSON_BUTTON,
+    block_id::WARPED_BUTTON,
+    block_id::STONE_PRESSURE_PLATE,
+    block_id::POLISHED_BLACKSTONE_PRESSURE_PLATE,
+    block_id::OAK_PRESSURE_PLATE,
+    block_id::SPRUCE_PRESSURE_PLATE,
+    block_id::BIRCH_PRESSURE_PLATE,
+    block_id::JUNGLE_PRESSURE_PLATE,
+    block_id::ACACIA_PRESSURE_PLATE,
+    block_id::DARK_OAK_PRESSURE_PLATE,
+    block_id::PALE_OAK_PRESSURE_PLATE,
+    block_id::MANGROVE_PRESSURE_PLATE,
+    block_id::CHERRY_PRESSURE_PLATE,
+    block_id::BAMBOO_PRESSURE_PLATE,
+    block_id::CRIMSON_PRESSURE_PLATE,
+    block_id::WARPED_PRESSURE_PLATE,
+    block_id::LIGHT_WEIGHTED_PRESSURE_PLATE,
+    block_id::HEAVY_WEIGHTED_PRESSURE_PLATE,
 ];
 
 /// The tier-1 block-entity `Immovable` ids (Context §C): chest/furnace/blast_furnace/smoker/
@@ -498,14 +537,18 @@ pub fn classify(world: &dyn BlockWorldAccess, pos: BlockPos, ownership_local: bo
     {
         return PushClass::Immovable;
     }
-    // PLAN-D10/MECH-D13 (M3 field-report wave 3): the lever's own full reachable range joins
-    // the tier-1 `Destroy`-class set (`DESTROY_IDS`'s own doc comment) — vanilla's
-    // `PushReaction.DESTROY` for `minecraft:lever` — as a real generated-registry range rather
-    // than a single default-state literal, since (unlike `DESTROY_IDS`'s own five entries, each
-    // a deliberate M3.5-B02 exact-equality-preserving swap) no prior hand-authored placeholder
-    // ever covered the lever at all; nothing here narrows this to the default substate only.
-    let lever_range = range_of(block_id::LEVER);
-    if DESTROY_IDS.contains(&raw) || (lever_range.first.0..=lever_range.last.0).contains(&raw) {
+    // PLAN-D10/MECH-D13 (M3 field-report wave 3; generalized M4-B10, Context §I): every block
+    // in `DESTROY_RANGE_BLOCK_IDS`'s own full reachable range joins the tier-1 `Destroy`-class
+    // set (`DESTROY_IDS`'s own doc comment) — vanilla's `PushReaction.DESTROY` for the lever
+    // and, now, every button and pressure plate — as real generated-registry ranges rather than
+    // single default-state literals, since (unlike `DESTROY_IDS`'s own five entries, each a
+    // deliberate M3.5-B02 exact-equality-preserving swap) no prior hand-authored placeholder
+    // ever covered any of them at all; nothing here narrows this to the default substate only.
+    let in_destroy_range_block = DESTROY_RANGE_BLOCK_IDS.iter().any(|&block| {
+        let range = range_of(block);
+        (range.first.0..=range.last.0).contains(&raw)
+    });
+    if DESTROY_IDS.contains(&raw) || in_destroy_range_block {
         return PushClass::Destroy;
     }
     PushClass::Normal
