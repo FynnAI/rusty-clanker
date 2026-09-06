@@ -23,9 +23,16 @@ use rc_mechanics::block_entity::{
     BlockEntityHeader, chest::ChestBlockEntity, furnace::FurnaceBlockEntity,
     hopper::HopperBlockEntity,
 };
+use rc_mechanics::combat::{
+    AttributeKind, CombatRuntimeState, Difficulty, FoodStats, GlobalDifficulty,
+    default_attributes_for,
+};
 use rc_mechanics::entity::physics::ecs::{DimensionResource, ShapeTableResource};
 use rc_mechanics::entity::physics::{PendingEnvironmentalDamageQueue, register_stage6b};
-use rc_mechanics::entity::{NetworkEntityIdAllocator, PickedUpItems, loot::RandomSequenceStore};
+use rc_mechanics::entity::{
+    BaseEntity, EntityPayload, EntityUuid, NetworkEntityIdAllocator, PickedUpItems, Pose,
+    loot::RandomSequenceStore,
+};
 use rc_mechanics::fluid::{FluidBlockRanges, FluidDimensionProfile, FluidTables, ReactionBlocks};
 use rc_mechanics::random::RcRandom;
 use rc_messaging::{Address, RegionId, RegionMessage, RegionMessageBus};
@@ -46,6 +53,10 @@ use tokio::sync::oneshot;
 use super::block_action::{
     BlockActionKind, ChunkIndex, DebugBlockInfo, PendingBlockAction, debug_query_block,
     debug_query_light, target_position, to_storage_biome_id, to_storage_id,
+};
+use super::combat::{
+    self, AMBIENT_COMBAT_RNG_SEED, AmbientCombatRandom, EntityIndex, NetworkEntityIndex,
+    PendingAttack, PlayerCombatState,
 };
 use super::connection::SPAWN_POSITION;
 use super::entity_drops;
@@ -875,6 +886,15 @@ fn bootstrap_region(world: &mut World) {
     // exactly as `RegionDropEntropy` above already reuses it -- this project has no real
     // world-seed concept yet outside these debug/test-only consumers (Context §K).
     rc_mechanics::spawn::bootstrap_spawn_resources(world, HARDCODED_REGION_ID, DEBUG_WORLD_SEED);
+    // M4-B05: `EntityIndex`/`NetworkEntityIndex`/`AmbientCombatRandom`/`GlobalDifficulty`
+    // (Context, "Mob spawning -- a debug-only entry point" / "Ambient combat RNG" /
+    // "Difficulty scaling") -- the two new indices `debug_spawn_mob` and every combat system
+    // depend on, the fixed-seed RNG stream knockback's degenerate-direction fallback and
+    // `FixedTierTwoLoot` consume, and the one-per-world difficulty resource, default `Normal`.
+    world.insert_resource(EntityIndex::default());
+    world.insert_resource(NetworkEntityIndex::default());
+    world.insert_resource(AmbientCombatRandom(RcRandom::new(AMBIENT_COMBAT_RNG_SEED)));
+    world.insert_resource(GlobalDifficulty(Difficulty::default()));
 }
 
 /// M3 field-report fix ("production's own composition root never calls `register_tier1_
@@ -1337,6 +1357,10 @@ pub struct HardcodedWorld {
     /// at this region's own Stage-3-equivalent manual step (Context, "Which pipeline
     /// stage").
     block_action_tx: tokio::sync::mpsc::UnboundedSender<PendingBlockAction>,
+    /// New (M4-B05): enqueued by `connection.rs`'s inbound dispatch on every decoded
+    /// `Attack` packet, drained once per tick by `combat::apply_combat_step` -- mirrors
+    /// `block_action_tx`'s own established shape exactly.
+    attack_tx: tokio::sync::mpsc::UnboundedSender<PendingAttack>,
     /// M3-B02 (superseding the M2 field-report movement-application fix's own
     /// `PendingMovementUpdate`-typed channel): enqueued by `connection.rs`'s inbound
     /// dispatch on every decoded movement packet -- the four serverbound movement packets
@@ -1405,7 +1429,31 @@ pub struct HardcodedWorld {
     )>,
     /// New (M4-B01), test/diagnostic only -- `debug_teleport_player`'s own doc comment.
     debug_teleport_tx: tokio::sync::mpsc::UnboundedSender<(i32, [f64; 3], oneshot::Sender<()>)>,
+    /// New (M4-B05), test/diagnostic only -- `debug_spawn_mob`'s own doc comment.
+    debug_spawn_mob_tx: tokio::sync::mpsc::UnboundedSender<DebugSpawnMobMsg>,
+    /// New (M4-B05), test/diagnostic only -- `debug_set_difficulty`'s own doc comment.
+    debug_difficulty_tx: tokio::sync::mpsc::UnboundedSender<(Difficulty, oneshot::Sender<()>)>,
+    /// New (M4-B05), test/diagnostic only -- `debug_deal_damage`'s own doc comment.
+    debug_deal_damage_tx: tokio::sync::mpsc::UnboundedSender<(i32, f32, oneshot::Sender<bool>)>,
+    /// New (M4-B05), test/diagnostic only -- `debug_override_attribute`'s own doc comment.
+    debug_override_attribute_tx: tokio::sync::mpsc::UnboundedSender<DebugOverrideAttributeMsg>,
+    /// New (M4-B05), test/diagnostic only -- `debug_query_entity`'s own doc comment.
+    debug_query_entity_tx:
+        tokio::sync::mpsc::UnboundedSender<(i32, oneshot::Sender<Option<DebugEntityInfo>>)>,
 }
+
+/// M4-B05, test/diagnostic only -- `HardcodedWorld::debug_spawn_mob`'s own channel message
+/// shape, factored into a named alias per `clippy::type_complexity` (mirrors
+/// `DebugEntitySpawnMsg`'s own identical rationale).
+type DebugSpawnMobMsg = (
+    rc_mechanics::entity::EntityKind,
+    [f64; 3],
+    oneshot::Sender<(rc_core::RcEntityId, i32)>,
+);
+
+/// M4-B05, test/diagnostic only -- `HardcodedWorld::debug_override_attribute`'s own channel
+/// message shape.
+type DebugOverrideAttributeMsg = (i32, AttributeKind, f64, oneshot::Sender<()>);
 
 /// M3 field-report fix (symptom 2): `HardcodedWorld`'s per-connection channel methods
 /// (`queue_join`/`queue_block_action`/`queue_movement_packet`/`queue_player_input`/
@@ -1473,6 +1521,7 @@ impl HardcodedWorld {
             tokio::sync::mpsc::unbounded_channel::<(PendingJoin, oneshot::Sender<()>)>();
         let (block_action_tx, mut block_action_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingBlockAction>();
+        let (attack_tx, mut attack_rx) = tokio::sync::mpsc::unbounded_channel::<PendingAttack>();
         let (movement_tx, mut movement_rx) =
             tokio::sync::mpsc::unbounded_channel::<PendingMovementPacket>();
         let (player_input_tx, mut player_input_rx) =
@@ -1537,6 +1586,22 @@ impl HardcodedWorld {
         // -- this seam is the concrete mechanism that phrasing assumed already existed).
         let (debug_teleport_tx, mut debug_teleport_rx) =
             tokio::sync::mpsc::unbounded_channel::<(i32, [f64; 3], oneshot::Sender<()>)>();
+        // M4-B05, test/diagnostic only -- `debug_spawn_mob`'s own doc comment.
+        let (debug_spawn_mob_tx, mut debug_spawn_mob_rx) =
+            tokio::sync::mpsc::unbounded_channel::<DebugSpawnMobMsg>();
+        // M4-B05, test/diagnostic only -- `debug_set_difficulty`'s own doc comment.
+        let (debug_difficulty_tx, mut debug_difficulty_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(Difficulty, oneshot::Sender<()>)>();
+        // M4-B05, test/diagnostic only -- `debug_deal_damage`'s own doc comment.
+        let (debug_deal_damage_tx, mut debug_deal_damage_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, f32, oneshot::Sender<bool>)>();
+        // M4-B05, test/diagnostic only -- `debug_override_attribute`'s own doc comment.
+        let (debug_override_attribute_tx, mut debug_override_attribute_rx) =
+            tokio::sync::mpsc::unbounded_channel::<DebugOverrideAttributeMsg>();
+        // M4-B05, test/diagnostic only -- `debug_query_entity`'s own doc comment.
+        let (debug_query_entity_tx, mut debug_query_entity_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, oneshot::Sender<Option<DebugEntityInfo>>)>(
+            );
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // M2 integration addition (M2-B06's own "Composition-root integration" recipe
@@ -1647,6 +1712,11 @@ impl HardcodedWorld {
             // own Context note (M4-B09's own future governance changeset fixes the complete
             // three-way order).
             rc_mechanics::spawn::register_mob_despawn(&mut builder);
+            // M4-B05: the mob-melee-attack Stage-6b system -- must be called after
+            // `register_mob_despawn` above so it keeps `order_tag = 2` (Context, "Tick-
+            // pipeline placement"; M4-B09's own future governance changeset fixes the
+            // complete three-way order across the three real registrants).
+            combat::register_mob_combat_system(&mut builder);
             let executor = builder.build().expect(
                 "the Stage-9 snapshot system never violates ARCH-D8's structural-write check",
             );
@@ -1828,58 +1898,75 @@ impl HardcodedWorld {
                     // resolution step below -- `block_action.rs`'s reach check and this
                     // same loop's own chunk-streaming/persistence steps (neither owned by
                     // this blueprint) read `PlayerMarker` directly and are not rewired.
-                    region.world.spawn((
-                        PlayerMarker {
-                            network_entity_id: join.network_entity_id,
-                            username: join.username,
-                            connection: join.connection,
-                            uuid: join.uuid,
-                            position: join.position,
-                            rotation: join.rotation,
-                            on_ground: true,
-                            last_streamed_center: join_chunk,
-                            sent_chunks: already_sent,
-                            tracked_entities: HashSet::new(),
-                            last_sent_entity_state: HashMap::new(),
-                            routing: None,
-                        },
-                        PickedUpItems::default(),
-                        PlayerMotion {
-                            position: Vec3::new(
-                                join.position[0],
-                                join.position[1],
-                                join.position[2],
-                            ),
-                            velocity: Vec3::ZERO,
-                            yaw: join.rotation[0],
-                            pitch: join.rotation[1],
-                            on_ground: true,
-                            fall_distance: 0.0,
-                        },
-                        TeleportState {
-                            awaiting_teleport_id: None,
-                            next_teleport_id: 2,
-                        },
-                        // M3-B03 join-drain additions (Deliverables, `world.rs`):
-                        // `GameModeState{instabuild: true}` (M1-B05's own hardcoded
-                        // Creative default, preserved as the real spawn value -- `#[derive
-                        // (Default)]`'s own `instabuild: false` is never relied on here,
-                        // `GameModeState`'s own doc comment), `HeldItem` defaulting to
-                        // `Block(Stone)` (M2-B07's own exact prior fixed placement
-                        // behavior, preserved as the default), `DestroyState` with its
-                        // `last_sent_stage` explicitly overridden to `-1` (Deliverables:
-                        // "-1 initial, via a `Default` override in the join-drain step").
-                        GameModeState { instabuild: true },
-                        HeldItem(HeldItemStub::Block(PlaceableBlockKind::Stone)),
-                        DestroyState {
-                            last_sent_stage: -1,
-                            ..Default::default()
-                        },
-                        // M3 field-report fix (Symptom 2): `sneaking: false` at join
-                        // (`PlayerInputState`'s own doc comment) -- a real client sends its
-                        // own current `player_input` state again soon after joining anyway.
-                        PlayerInputState::default(),
-                    ));
+                    let joined_network_id = join.network_entity_id;
+                    let joined_entity = region
+                        .world
+                        .spawn((
+                            PlayerMarker {
+                                network_entity_id: join.network_entity_id,
+                                username: join.username,
+                                connection: join.connection,
+                                uuid: join.uuid,
+                                position: join.position,
+                                rotation: join.rotation,
+                                on_ground: true,
+                                last_streamed_center: join_chunk,
+                                sent_chunks: already_sent,
+                                tracked_entities: HashSet::new(),
+                                last_sent_entity_state: HashMap::new(),
+                                routing: None,
+                            },
+                            PickedUpItems::default(),
+                            PlayerMotion {
+                                position: Vec3::new(
+                                    join.position[0],
+                                    join.position[1],
+                                    join.position[2],
+                                ),
+                                velocity: Vec3::ZERO,
+                                yaw: join.rotation[0],
+                                pitch: join.rotation[1],
+                                on_ground: true,
+                                fall_distance: 0.0,
+                                landed_fall_distance: None,
+                            },
+                            TeleportState {
+                                awaiting_teleport_id: None,
+                                next_teleport_id: 2,
+                            },
+                            // M3-B03 join-drain additions (Deliverables, `world.rs`):
+                            // `GameModeState{instabuild: true}` (M1-B05's own hardcoded
+                            // Creative default, preserved as the real spawn value -- `#[derive
+                            // (Default)]`'s own `instabuild: false` is never relied on here,
+                            // `GameModeState`'s own doc comment), `HeldItem` defaulting to
+                            // `Block(Stone)` (M2-B07's own exact prior fixed placement
+                            // behavior, preserved as the default), `DestroyState` with its
+                            // `last_sent_stage` explicitly overridden to `-1` (Deliverables:
+                            // "-1 initial, via a `Default` override in the join-drain step").
+                            GameModeState { instabuild: true },
+                            HeldItem(HeldItemStub::Block(PlaceableBlockKind::Stone)),
+                            DestroyState {
+                                last_sent_stage: -1,
+                                ..Default::default()
+                            },
+                            // M3 field-report fix (Symptom 2): `sneaking: false` at join
+                            // (`PlayerInputState`'s own doc comment) -- a real client sends its
+                            // own current `player_input` state again soon after joining anyway.
+                            PlayerInputState::default(),
+                            // M4-B05 join-drain additions (Deliverables, `world.rs (modify)`):
+                            // `PlayerCombatState::new_at_join()` (health = `MaxHealth`'s own
+                            // default `20.0`, everything else zeroed), `FoodStats::new_at_join()`,
+                            // `CombatRuntimeState::default()`.
+                            PlayerCombatState::new_at_join(),
+                            FoodStats::new_at_join(),
+                            CombatRuntimeState::default(),
+                        ))
+                        .id();
+                    region
+                        .world
+                        .resource_mut::<NetworkEntityIndex>()
+                        .0
+                        .insert(joined_network_id, joined_entity);
                     // M3 field-report fix (join/broadcast race, `task_9ce21947`'s remaining
                     // symptom: `play_block_action_broadcast_reaches_unspawned_actor.rs`'s own
                     // "bystander-block-update" stage): signaled only now, strictly after the
@@ -2219,6 +2306,16 @@ impl HardcodedWorld {
                     };
 
                     let entity = find_player_entity(&region.world, action.network_entity_id);
+                    // M4-B05 (Context, "Death -- Player death"): a dead player's own block
+                    // action is never processed -- mirrors the identical guard the movement-
+                    // resolution loop below already carries.
+                    if entity
+                        .and_then(|e| region.world.get::<PlayerCombatState>(e))
+                        .map(|s| s.is_dead)
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
                     // M2 field-report fix, restated for the raycast era: falls back to a
                     // synthetic motion at `SPAWN_POSITION` for the same join/action mpsc-
                     // ordering race the original fix handled -- never panics on a
@@ -2242,6 +2339,7 @@ impl HardcodedWorld {
                             pitch: 90.0,
                             on_ground: true,
                             fall_distance: 0.0,
+                            landed_fall_distance: None,
                         });
                     let instabuild = entity
                         .and_then(|e| region.world.get::<GameModeState>(e))
@@ -2918,6 +3016,18 @@ impl HardcodedWorld {
 
                     for (entity, network_id, connection, uuid, mut motion, mut teleport) in entries
                     {
+                        // M4-B05 (Context, "Death -- Player death"): a dead player's own
+                        // movement report is never applied -- the player entity is not
+                        // removed from `region.world` on death (unlike a mob), so this guard
+                        // is what actually keeps a dead connection's own stale motion inert.
+                        if region
+                            .world
+                            .get::<PlayerCombatState>(entity)
+                            .map(|s| s.is_dead)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
                         let report = pending_moves.remove(&network_id);
                         let had_report = report.is_some();
                         let report = report.unwrap_or_default();
@@ -3141,6 +3251,193 @@ impl HardcodedWorld {
                         }
                         None => carried_debug_teleport.push((network_entity_id, pos, ack)),
                     }
+                }
+
+                // M4-B05, test/diagnostic only (`debug_spawn_mob`'s own doc comment):
+                // spawns a real ECS entity carrying `BaseEntity`+`LivingEntity`(+ kind
+                // bundle) + `AttributeMap`(defaulted per-kind) + `CombatRuntimeState::
+                // default()`, mirroring `debug_spawn_item_entity`'s own established
+                // "spawns a real ECS entity directly" precedent.
+                while let Ok((kind, pos, reply)) = debug_spawn_mob_rx.try_recv() {
+                    let attributes = default_attributes_for(kind);
+                    let health = attributes.get(AttributeKind::MaxHealth) as f32;
+                    let base = BaseEntity {
+                        pos,
+                        velocity: [0.0, 0.0, 0.0],
+                        rotation: [0.0, 0.0],
+                        fall_distance: 0.0,
+                        fire_ticks: -1,
+                        status_flags: 0,
+                        air_ticks: 300,
+                        on_ground: false,
+                        invulnerable: false,
+                        portal_cooldown: 0,
+                        uuid: EntityUuid::new_random(),
+                        custom_name: None,
+                        custom_name_visible: false,
+                        silent: false,
+                        no_gravity: false,
+                        glowing: false,
+                        pose: Pose::Standing,
+                        ticks_frozen: 0,
+                        has_visual_fire: false,
+                    };
+                    let living = rc_mechanics::entity::LivingEntity {
+                        hand_states: 0,
+                        health,
+                        arrow_count: 0,
+                        stinger_count: 0,
+                        sleeping_bed_pos: None,
+                        absorption: 0.0,
+                        hurt_time: 0,
+                        death_time: 0,
+                        is_dead: false,
+                    };
+                    let payload = match kind {
+                        rc_mechanics::entity::EntityKind::Zombie => {
+                            EntityPayload::Zombie(rc_mechanics::entity::ZombieBundle)
+                        }
+                        rc_mechanics::entity::EntityKind::Cow => {
+                            EntityPayload::Cow(rc_mechanics::entity::CowBundle)
+                        }
+                        rc_mechanics::entity::EntityKind::Villager => {
+                            EntityPayload::Villager(rc_mechanics::entity::VillagerBundle {
+                                villager_data: rc_mechanics::entity::metadata::VillagerData {
+                                    villager_type:
+                                        rc_registries::generated_v776::registries::villager_type::PLAINS,
+                                    profession:
+                                        rc_registries::generated_v776::registries::villager_profession::NONE,
+                                    level: 1,
+                                },
+                            })
+                        }
+                        rc_mechanics::entity::EntityKind::Item => {
+                            EntityPayload::Item(rc_mechanics::entity::ItemBundle {
+                                item: rc_mechanics::entity::ItemStackRecord {
+                                    item_id: rc_registries::generated_v776::registries::item::STONE,
+                                    count: 1,
+                                    components: None,
+                                },
+                                pickup_delay_ticks: rc_mechanics::entity::pickup::PICKUP_DELAY_DEFAULT,
+                                age_ticks: 0,
+                            })
+                        }
+                    };
+                    let is_living = kind.is_living();
+                    let mut entity_commands = region.world.spawn((base, payload));
+                    if is_living {
+                        entity_commands.insert((living, attributes, CombatRuntimeState::default()));
+                    }
+                    let entity = entity_commands.id();
+                    let rc_id = rc_core::RcEntityId(entity.to_bits());
+                    let network_id = entity.to_bits() as i32;
+                    region
+                        .world
+                        .resource_mut::<EntityIndex>()
+                        .0
+                        .insert(rc_id, entity);
+                    region
+                        .world
+                        .resource_mut::<NetworkEntityIndex>()
+                        .0
+                        .insert(network_id, entity);
+                    let _ = reply.send((rc_id, network_id));
+                }
+
+                // M4-B05, test/diagnostic only (`debug_set_difficulty`'s own doc comment).
+                while let Ok((difficulty, ack)) = debug_difficulty_rx.try_recv() {
+                    region.world.resource_mut::<GlobalDifficulty>().0 = difficulty;
+                    let _ = ack.send(());
+                }
+
+                // M4-B05, test/diagnostic only (`debug_deal_damage`'s own doc comment):
+                // resolves `network_entity_id` via `NetworkEntityIndex` and applies the
+                // real damage pipeline against it directly with a synthetic, positionless
+                // `Starve`-typed `DamageSource` (Context, "Mob spawning -- a debug-only
+                // entry point").
+                while let Ok((network_entity_id, amount, reply)) = debug_deal_damage_rx.try_recv() {
+                    let target_entity = region
+                        .world
+                        .resource::<NetworkEntityIndex>()
+                        .0
+                        .get(&network_entity_id)
+                        .copied();
+                    let ok = match target_entity {
+                        Some(entity)
+                            if region.world.get::<PlayerMarker>(entity).is_some()
+                                || region
+                                    .world
+                                    .get::<rc_mechanics::entity::LivingEntity>(entity)
+                                    .is_some() =>
+                        {
+                            let source = rc_mechanics::combat::DamageSource {
+                                kind: rc_mechanics::combat::DamageTypeKind::Starve,
+                                causing_entity: None,
+                                source_position: None,
+                                causing_entity_is_living_non_player: true,
+                            };
+                            combat::debug_apply_hit(&mut region.world, entity, &source, amount);
+                            true
+                        }
+                        _ => false,
+                    };
+                    let _ = reply.send(ok);
+                }
+
+                // M4-B05, test/diagnostic only (`debug_override_attribute`'s own doc
+                // comment).
+                while let Ok((network_entity_id, kind, value, ack)) =
+                    debug_override_attribute_rx.try_recv()
+                {
+                    if let Some(&entity) = region
+                        .world
+                        .resource::<NetworkEntityIndex>()
+                        .0
+                        .get(&network_entity_id)
+                    {
+                        if let Some(mut state) = region.world.get_mut::<PlayerCombatState>(entity) {
+                            state.attributes.set_base(kind, value);
+                        } else if let Some(mut attributes) =
+                            region
+                                .world
+                                .get_mut::<rc_mechanics::combat::AttributeMap>(entity)
+                        {
+                            attributes.set_base(kind, value);
+                        }
+                    }
+                    let _ = ack.send(());
+                }
+
+                // M4-B05, test/diagnostic only (`debug_query_entity`'s own doc comment).
+                while let Ok((network_entity_id, reply)) = debug_query_entity_rx.try_recv() {
+                    let entity = region
+                        .world
+                        .resource::<NetworkEntityIndex>()
+                        .0
+                        .get(&network_entity_id)
+                        .copied();
+                    let info = entity.and_then(|entity| {
+                        if let Some(state) = region.world.get::<PlayerCombatState>(entity) {
+                            Some(DebugEntityInfo {
+                                rc_entity_id: None,
+                                health: state.health,
+                                is_dead: state.is_dead,
+                                pos: None,
+                            })
+                        } else {
+                            let pos = region.world.get::<BaseEntity>(entity).map(|base| base.pos);
+                            region
+                                .world
+                                .get::<rc_mechanics::entity::LivingEntity>(entity)
+                                .map(|living| DebugEntityInfo {
+                                    rc_entity_id: Some(rc_core::RcEntityId(entity.to_bits())),
+                                    health: living.health,
+                                    is_dead: living.is_dead,
+                                    pos,
+                                })
+                        }
+                    });
+                    let _ = reply.send(info);
                 }
 
                 // M3.5-B03, test/diagnostic only, reachable externally only via the
@@ -3386,6 +3683,16 @@ impl HardcodedWorld {
                     .resource_mut::<rc_mechanics::spawn::KnownPlayers>()
                     .0 = known_players_snapshot;
 
+                // M4-B05 (Context, "Tick-pipeline placement"): the manual, Stage-3-
+                // equivalent combat step -- inserted after M4-B01's own entity-tracking step
+                // (above) and before `executor.tick_region` below, mirroring every prior
+                // manual tick-loop step's own established insertion-point convention.
+                let mut pending_attacks: Vec<PendingAttack> = Vec::new();
+                while let Ok(attack) = attack_rx.try_recv() {
+                    pending_attacks.push(attack);
+                }
+                combat::apply_combat_step(&mut region.world, pending_attacks);
+
                 executor.tick_region(&mut region, &pool, &transport);
 
                 // M4-B02 (Context §M/§O): the player-touching half of pickup, then the
@@ -3538,6 +3845,7 @@ impl HardcodedWorld {
         Self {
             join_tx,
             block_action_tx,
+            attack_tx,
             movement_tx,
             player_input_tx,
             query_tx,
@@ -3558,6 +3866,11 @@ impl HardcodedWorld {
             debug_item_query_tx,
             debug_picked_up_items_tx,
             debug_teleport_tx,
+            debug_spawn_mob_tx,
+            debug_difficulty_tx,
+            debug_deal_damage_tx,
+            debug_override_attribute_tx,
+            debug_query_entity_tx,
         }
     }
 
@@ -3650,6 +3963,13 @@ impl HardcodedWorld {
         self.block_action_tx
             .send(action)
             .map_err(|_| RegionUnavailable)
+    }
+
+    /// M4-B05: enqueues a decoded `Attack` packet, applied at this region's own next combat
+    /// tick step (`combat::apply_combat_step`) -- mirrors `queue_block_action`'s own
+    /// established shape exactly. Never blocks.
+    pub fn queue_attack(&self, attack: PendingAttack) -> Result<(), RegionUnavailable> {
+        self.attack_tx.send(attack).map_err(|_| RegionUnavailable)
     }
 
     /// M3-B02 (superseding the M2 field-report movement-application fix's own `queue_
@@ -3945,6 +4265,114 @@ impl HardcodedWorld {
         }
         reply_rx.await.unwrap_or_default()
     }
+
+    /// M4-B05, test/diagnostic only — mirrors `debug_spawn_item_entity`'s own established
+    /// "spawns a real ECS entity directly" precedent, extended to a tier-2 `LivingEntity`-
+    /// bundle mob: allocates `RcEntityId`, spawns a `bevy_ecs` entity carrying
+    /// `BaseEntity`+`LivingEntity`(+ kind bundle) + `combat::attributes::AttributeMap`
+    /// (defaulted per-kind) + `combat::CombatRuntimeState::default()`, inserts it into
+    /// `EntityIndex`/`NetworkEntityIndex` (both already inserted, `bootstrap_region`), and
+    /// returns both identities. **Cited deviation from this blueprint's own literal
+    /// Deliverables text ("the now-shared `NetworkEntityIdAllocator`")**: this crate's own
+    /// already-landed tracking pipeline (`entity_tracking::stand_in_network_id`) derives
+    /// every real ECS-spawned entity's own wire-visible network id directly from its
+    /// `RcEntityId`'s low 32 bits (`id.0 as i32`) — `NetworkEntityIdAllocator`/
+    /// `EntityNetworkIds` is landed but genuinely unconsumed by any production spawn path
+    /// today (`entity_drops.rs`'s own `_network_ids` parameter is prefix-underscore, dead).
+    /// Wiring `debug_spawn_mob` through a *different* id scheme than the one the tracking
+    /// pipeline actually broadcasts would desynchronize `NetworkEntityIndex` from the id a
+    /// real client actually sees in `Spawn Entity` — this method instead follows the
+    /// tracking pipeline's own real, already-proven scheme (`entity.to_bits()`), keeping
+    /// `Attack`'s own target resolution self-consistent with what a client is shown. Flagged
+    /// for planning: the identical-first-id collision the blueprint's own "Cited fix" section
+    /// describes is real (a fresh region's own first player and first ECS-spawned entity can
+    /// both stand in to a low, colliding id), but reconciling it properly requires threading
+    /// a real allocated network id through every ECS-entity-spawning call site in this crate
+    /// (`entity_drops::spawn_break_drop`, `debug_spawn_item_entity`, natural mob spawning),
+    /// not only this one — out of this changeset's own bounded scope, `docs/findings-for-
+    /// planning.md` (never edited by this changeset itself, per this project's own binding
+    /// planning-authority rule — recorded here and in the final report instead).
+    pub async fn debug_spawn_mob(
+        &self,
+        kind: rc_mechanics::entity::EntityKind,
+        pos: [f64; 3],
+    ) -> (rc_core::RcEntityId, i32) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_spawn_mob_tx
+            .send((kind, pos, reply_tx))
+            .expect("tick loop still running");
+        reply_rx.await.expect("tick loop still running")
+    }
+
+    /// M4-B05, test/diagnostic only. Overrides `GlobalDifficulty`'s current value.
+    pub async fn debug_set_difficulty(&self, difficulty: Difficulty) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self.debug_difficulty_tx.send((difficulty, ack_tx)).is_ok() {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// M4-B05, test/diagnostic only. Resolves `network_entity_id` via `NetworkEntityIndex`
+    /// and applies `apply_damage_pipeline` against it directly with a synthetic, positionless
+    /// `Starve`-typed `DamageSource`, broadcasting the same packets a real hit would. A no-op
+    /// (returns `false`) if `network_entity_id` does not resolve to a living target.
+    pub async fn debug_deal_damage(&self, network_entity_id: i32, amount: f32) -> bool {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .debug_deal_damage_tx
+            .send((network_entity_id, amount, reply_tx))
+            .is_err()
+        {
+            return false;
+        }
+        reply_rx.await.unwrap_or(false)
+    }
+
+    /// M4-B05, test/diagnostic only. Resolves `network_entity_id` via `NetworkEntityIndex`
+    /// and applies `f` to that entity's own `AttributeMap` in place. A no-op if the id does
+    /// not resolve or the resolved entity carries no `AttributeMap` (e.g. a player, whose
+    /// attributes live on `PlayerCombatState` instead — Context, "Player health").
+    pub async fn debug_override_attribute(
+        &self,
+        network_entity_id: i32,
+        kind: AttributeKind,
+        value: f64,
+    ) {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        if self
+            .debug_override_attribute_tx
+            .send((network_entity_id, kind, value, ack_tx))
+            .is_ok()
+        {
+            let _ = ack_rx.await;
+        }
+    }
+
+    /// M4-B05, test/diagnostic only. `None` if `network_entity_id` no longer resolves
+    /// (despawned or never spawned) — used to assert full despawn after death.
+    pub async fn debug_query_entity(&self, network_entity_id: i32) -> Option<DebugEntityInfo> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_query_entity_tx
+            .send((network_entity_id, reply_tx))
+            .ok()?;
+        reply_rx.await.ok().flatten()
+    }
+}
+
+/// M4-B05, test/diagnostic only — `HardcodedWorld::debug_query_entity`'s own doc comment.
+/// Mirrors `debug_query_block`'s own `DebugBlockInfo`-shaped precedent.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DebugEntityInfo {
+    /// `Some` for a mob/item (`EntityIndex`), `None` for a player (Context, "Player health"
+    /// — players are never given an `RcEntityId`).
+    pub rc_entity_id: Option<rc_core::RcEntityId>,
+    pub health: f32,
+    pub is_dead: bool,
+    /// Additive beyond this blueprint's own literal Deliverables listing — `None` for a
+    /// player (`PlayerMarker.position` is not exposed through this seam at all), `Some` for a
+    /// mob (`BaseEntity.pos`). Needed by acceptance tests that must re-aim a second `Attack`
+    /// at a target the first hit's own knockback impulse already displaced.
+    pub pos: Option<[f64; 3]>,
 }
 
 /// M4-B02, test/diagnostic only — `HardcodedWorld::debug_query_item_entity`'s own doc comment.

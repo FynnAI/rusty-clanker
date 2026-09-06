@@ -239,6 +239,7 @@ fn spawn_arrived_player(world: &mut bevy_ecs::world::World, payload: PlayerTrans
         pitch: payload.pitch,
         on_ground: payload.on_ground,
         fall_distance: payload.fall_distance,
+        landed_fall_distance: None,
     };
     let teleport = crate::play::movement::TeleportState {
         awaiting_teleport_id: None,

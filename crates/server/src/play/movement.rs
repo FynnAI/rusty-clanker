@@ -40,6 +40,11 @@ pub struct PlayerMotion {
     pub pitch: f32,
     pub on_ground: bool,
     pub fall_distance: f64,
+    /// M4-B05 (Context, "Fall damage"): `Some(d)` for exactly one tick after a landing with
+    /// `d > 0.0`, else `None` — captured immediately before `fall_distance` resets to `0.0`
+    /// below, consumed and cleared by `play::combat::apply_combat_step`'s own per-player fall-
+    /// damage step, which runs immediately after this same tick's movement resolution.
+    pub landed_fall_distance: Option<f64>,
 }
 
 /// Teleport/correction acknowledgment state (Context: "Teleport / position-sync protocol").
@@ -214,6 +219,20 @@ pub fn evaluate_movement(
     if motion.velocity.y < 0.0 {
         motion.fall_distance -= motion.velocity.y;
     }
+    // M4-B05 (Context, "Fall damage"): captured immediately before the reset below, so a
+    // landing with a positive prior distance is observable for exactly one tick by `play::
+    // combat::apply_combat_step`'s own `landed_fall_distance.take()` consumption. **Cited
+    // deviation from this blueprint's own literal Deliverables text**, which describes "two
+    // existing reset sites (both already-cited call sites)" — the current landed
+    // `evaluate_movement` has already consolidated the client-reported-`on_ground` and
+    // server-replayed-fallback branches into this single shared `motion.on_ground` check (both
+    // branches already converge into `motion.on_ground` above), so there is exactly one reset
+    // site left to instrument, not two.
+    if motion.on_ground && motion.fall_distance > 0.0 {
+        motion.landed_fall_distance = Some(motion.fall_distance);
+    } else {
+        motion.landed_fall_distance = None;
+    }
     if motion.on_ground {
         motion.fall_distance = 0.0;
     }
@@ -387,6 +406,7 @@ mod tests {
             pitch: 0.0,
             on_ground: true,
             fall_distance: 0.0,
+            landed_fall_distance: None,
         }
     }
 

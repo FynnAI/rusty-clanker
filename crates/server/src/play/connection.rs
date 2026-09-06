@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 
 use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
+use super::combat::PendingAttack;
+use super::combat_packets::{Attack, Interact};
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
 use super::mining::{HeldItemStub, PlaceableBlockKind, placeable_kind_for_item_id};
 use super::movement::{
@@ -755,6 +757,27 @@ fn dispatch_inbound(
                     return false;
                 }
             }
+        }
+        Attack::ID => {
+            if let Ok(packet) = decode_one::<Attack>(raw.body)
+                && world
+                    .queue_attack(PendingAttack {
+                        network_entity_id,
+                        connection: handle.clone(),
+                        target_network_id: packet.entity_id,
+                    })
+                    .is_err()
+            {
+                tracing::error!("region unavailable; closing connection");
+                return false;
+            }
+        }
+        // M4-B05 (Context, "Packets" — `Interact` is a silent no-op accept): decoded far
+        // enough to validate the wire shape, never queued or acted on. Right-click
+        // interaction (trading/feeding/mounting) has no modeled mechanic in this crate's
+        // own scope.
+        Interact::ID => {
+            let _ = decode_one::<Interact>(raw.body);
         }
         other => {
             tracing::trace!(

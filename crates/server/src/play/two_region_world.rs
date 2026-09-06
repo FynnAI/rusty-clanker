@@ -371,6 +371,10 @@ fn spawn_debug_mob(
         arrow_count: 0,
         stinger_count: 0,
         sleeping_bed_pos: None,
+        absorption: 0.0,
+        hurt_time: 0,
+        death_time: 0,
+        is_dead: false,
     };
     let payload = match kind {
         EntityKind::Item => EntityPayload::Item(ItemBundle {
@@ -524,6 +528,7 @@ fn run_region_tick_loop(
                     pitch: join.rotation[1],
                     on_ground: true,
                     fall_distance: 0.0,
+                    landed_fall_distance: None,
                 },
                 TeleportState {
                     awaiting_teleport_id: None,

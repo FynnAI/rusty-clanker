@@ -11,6 +11,8 @@
 mod attribute_packets;
 mod block_action;
 mod chunk;
+pub mod combat;
+pub mod combat_packets;
 mod connection;
 mod entity_drops;
 mod entity_packets;
