@@ -161,6 +161,26 @@ async fn collect_block_events(
         match tokio::time::timeout(remaining, recv_clientbound(socket, accumulator)).await {
             Ok((id, body)) if id == BlockEvent::ID => {
                 seen.push(decode_one::<BlockEvent>(body).unwrap());
+                // A long window is a deadline for the first event, not a quiet period: once
+                // one arrived, drain what else is already queued for a short grace and stop.
+                if window > Duration::from_secs(5) {
+                    let grace = tokio::time::Instant::now() + Duration::from_secs(2);
+                    loop {
+                        let left = grace.saturating_duration_since(tokio::time::Instant::now());
+                        if left.is_zero() {
+                            return seen;
+                        }
+                        match tokio::time::timeout(left, recv_clientbound(socket, accumulator))
+                            .await
+                        {
+                            Ok((id, body)) if id == BlockEvent::ID => {
+                                seen.push(decode_one::<BlockEvent>(body).unwrap());
+                            }
+                            Ok(_) => {}
+                            Err(_) => return seen,
+                        }
+                    }
+                }
             }
             Ok(_) => {}
             Err(_) => return seen,
@@ -401,10 +421,15 @@ async fn a_bystander_at_60_blocks_receives_the_event_one_at_70_does_not() {
             .await;
         place_and_read_id(&mut a, &mut a_acc, &mut seq, BlockPos::new(3, -61, 0), 1).await;
 
+        // `near` was just teleported 60 blocks: its socket carries the whole chunk-streaming
+        // burst that teleport queued ahead of the block event, so the first event is awaited
+        // with a bounded deadline (Tier-1 run 34112323614's ubuntu gates job saw 2 s elapse
+        // before it arrived under load), never a fixed window. `far`'s window starts only
+        // after `near` has received it, so the negative check follows the positive one.
         let near_events =
-            collect_block_events(&mut near, &mut near_acc, Duration::from_secs(2)).await;
-        let far_events = collect_block_events(&mut far, &mut far_acc, Duration::from_secs(2)).await;
+            collect_block_events(&mut near, &mut near_acc, Duration::from_secs(30)).await;
         assert_eq!(near_events.len(), 1, "60 blocks < 64 -- must receive it");
+        let far_events = collect_block_events(&mut far, &mut far_acc, Duration::from_secs(2)).await;
         assert!(
             far_events.is_empty(),
             "70 blocks > 64 -- must not receive it"
