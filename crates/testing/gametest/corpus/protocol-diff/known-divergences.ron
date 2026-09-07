@@ -66,20 +66,20 @@
     (steps: "*", packet: "minecraft:set_entity_motion", class: Timer, closes_with: None, expires: None),
 
     // --- Item drops of every break: entity infrastructure and item entities (M4) ---
-    (steps: "session/break/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/break/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/break/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/break/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/break/*", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/place/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/place/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/place/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/place/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/place/*", packet: "minecraft:entity_position_sync", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/break/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/break/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/break/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/break/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/break/*", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:entity_position_sync", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/dig_stone_survival", packet: "minecraft:add_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/dig_stone_survival", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/dig_stone_survival", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/dig_stone_survival", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     (steps: "session/dig_stone_survival", packet: "minecraft:player_abilities", class: Missing, closes_with: Some("NET hardening: gamemode switch sequence"), expires: Some("M5")),
     (steps: "session/dig_stone_survival", packet: "minecraft:game_event", class: Missing, closes_with: Some("NET hardening: gamemode switch sequence"), expires: Some("M5")),
     (steps: "session/dig_stone_survival", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: gamemode switch sequence"), expires: Some("M5")),
@@ -92,9 +92,9 @@
     (steps: "*", packet: "minecraft:level_chunk_with_light", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
     (steps: "*", packet: "minecraft:forget_level_chunk", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
     (steps: "*", packet: "minecraft:set_chunk_cache_center", class: Missing, closes_with: Some("NET hardening: chunk streaming and batch pacing"), expires: Some("M5")),
-    (steps: "session/move", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/move", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/sneak", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/move", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/move", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/sneak", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
 
     // --- Join / reconnect sequence (NET hardening) — every one of these packet types
     // replays identically on `session/spawn` and `session/disconnect_reconnect`, and
@@ -115,47 +115,47 @@
     (steps: "session/*", packet: "minecraft:update_recipes", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/*", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/*", packet: "minecraft:disconnect", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/spawn", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/spawn", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/spawn", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/spawn", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/spawn", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/spawn", packet: "minecraft:entity_event", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     // The M4-B01 attribute-sync gap already registered on `session/spawn` above also
     // surfaced on this one place step — the server-side trigger for an
     // `update_attributes` resend is timing-dependent (M4-B01's own missing
     // implementation), not deterministically tied to any one step, so it is
     // registered exactly where observed rather than widened to a `session/*` glob no
     // other place/break step has shown a need for.
-    (steps: "session/place/redstone_torch", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/place/redstone_torch", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:entity_event", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     // The survival dig's own dropped item (decoded: `add_entity` entity type 71,
     // `minecraft:item`, plus its `set_entity_data` stack) is re-sent by the oracle
     // to the rejoining player; our tracking pass never re-announces an item that
     // already existed before the join.
-    (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     // The bot sprints while observing: vanilla syncs the player's own sprint state
     // (decoded: entity flags byte 0x08 in `set_entity_data`, the sprinting
     // `movement_speed` modifier in `update_attributes`, both for the bot's own
     // entity id) — self-entity metadata and attribute sync are M4-B01's gap.
-    (steps: "session/observe_chunk", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/observe_chunk", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/observe_chunk", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Body, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "session/observe_chunk", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/observe_chunk", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/observe_chunk", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:add_entity", class: Body, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
 
     // --- Redstone-corpus-over-the-wire entity/join-sequence backlog — every
     // contraption step id is `redstone/<category>/<name>`, never matched by any
     // `session/*` entry above, and every contraption capture connects its own fresh
     // bot, so it replays the join sequence too. ---
-    (steps: "redstone/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:entity_position_sync", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:set_equipment", class: Missing, closes_with: Some("M4-B01"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:bundle_delimiter", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:entity_event", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:entity_position_sync", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:remove_entities", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:add_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:set_entity_data", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:set_equipment", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     (steps: "redstone/*", packet: "minecraft:player_info_remove", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     // `block_event` is deliberately NOT registered here: MECH-D83 landed and
     // `crates/server/src/play/world.rs` now sends it — a registered-Missing entry for
@@ -163,7 +163,7 @@
     // TEST-D59's own expiry rule exists to catch. If the real run still shows a
     // genuine divergence here it will surface as an unregistered mismatch (most
     // likely `Body`, not `Missing`) and gets a fresh, accurately-classed entry then.
-    (steps: "redstone/*", packet: "minecraft:section_blocks_update", class: Missing, closes_with: Some("M3.5-B06 follow-up: block-change coalescing matches vanilla's per-tick batching"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:section_blocks_update", class: Missing, closes_with: Some("NET hardening: block-change coalescing matches vanilla's per-tick batching"), expires: Some("M5")),
     (steps: "redstone/*", packet: "minecraft:open_screen", class: Missing, closes_with: Some("M3.5-B03 harness: container fill parity"), expires: Some("M5")),
     (steps: "redstone/*", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("M3.5-B03 harness: container fill parity"), expires: Some("M5")),
     (steps: "redstone/*", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
@@ -178,8 +178,8 @@
     // torch, dropping and then despawning-via-pickup an item entity — the same
     // M4-B02 entity/item gap already registered elsewhere in this file, just not yet
     // needed on any other redstone fixture.
-    (steps: "redstone/*", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
-    (steps: "redstone/*", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("M4-B02"), expires: Some("M4")),
+    (steps: "redstone/*", packet: "minecraft:container_set_slot", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
+    (steps: "redstone/*", packet: "minecraft:take_item_entity", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     // The same scripted torch destroy → drop → pickup on this contraption also unlocks a
     // recipe and grants an advancement on the oracle (recipe book and advancements are
     // whole features our server does not have); scoped to this one step, the only
@@ -192,7 +192,6 @@
     (steps: "session/configuration", packet: "minecraft:update_tags", class: Body, closes_with: Some("NET hardening: registry/tag sync order"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:registry_data", class: Body, closes_with: Some("NET hardening: registry sync content"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:update_tags", class: Body, closes_with: Some("NET hardening: registry/tag sync order"), expires: Some("M5")),
-    (steps: "session/dig_stone_survival", packet: "minecraft:block_update", class: Body, closes_with: Some("World parity: placeholder world adopts the vanilla flat preset layers"), expires: Some("M4")),
 
     // --- Join-sequence packet bodies (NET hardening) — state-aware name resolution
     // (`session/login`/`session/configuration` decode against their own clientbound

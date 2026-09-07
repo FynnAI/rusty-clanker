@@ -901,7 +901,12 @@ Entries name the milestone that surfaced them and the code they concern.
   disguise"). Planning: either M4-B09 owns them as its composition-root
   reconciliation (players as `BaseEntity`/`LivingEntity`, tracking pass on
   join, self-sync) or the entries move to a named NET-hardening changeset with
-  `expires M5` — decide before M4's acceptance run.
+  `expires M5` — decide before M4's acceptance run. **Decided (PLAN-D12, 2026-09-07):** the
+  entries moved to `NET hardening: entity tracking on join, self-entity sync
+  and item sync` (register v8, `expires M5`), together with the
+  `section_blocks_update` coalescing entry; the changeset is an M5 entry-gate
+  item. The `dig_stone_survival` `block_update` Body entry was deleted — the
+  flat preset landed and it matched nothing.
 
 - **A pressure plate pressed by state swap does not light a wire beside its
   support block on the oracle; our replay does.** M4-B10's fourth fixture
@@ -945,6 +950,16 @@ Entries name the milestone that surfaced them and the code they concern.
   entity-reactive block — plates, tripwire, later observers of entities — in
   the origin cell or its column, or move the bot's stance out of every
   contraption's bounding box.
+
+- **`m4-report`'s 300 s budget does not hold on the Windows CI runner.** The
+  first scheduled `m4-acceptance` run (34112370916) measured 255 s on
+  `ubuntu-24.04` and 527 s on `windows-2025` for the same 13 subprocesses;
+  M4-B09 set `BUDGET_MS = 300_000` from the 8-core development machine
+  (54–241 s idle, 416 s under load). The budget assertion is opt-in
+  (`RC_RUN_M4_REPORT=1`) so nothing failed. Planning: either pin the budget
+  per runner class the way TEST-D58 did for the captures, or drop the
+  wall-clock budget in favour of a per-case hang deadline, which is what the
+  guard was meant to catch.
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
