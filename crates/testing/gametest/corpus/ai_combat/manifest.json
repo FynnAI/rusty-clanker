@@ -1,0 +1,18 @@
+{
+  "protocol_version": 0,
+  "mc_version": "26.2",
+  "entries": [
+    {
+      "path": "wall_with_gap.ron",
+      "sha256": "970e376b306b41e3dbea629015a36c523894fb17a16637dcecd7dfd747373006",
+      "generator_tool_version": "manual/M4-B09",
+      "source_jar_sha1": "n/a"
+    },
+    {
+      "path": "four_block_pit.ron",
+      "sha256": "96e93797d6f6dc9b52b31258c214e086cce306e05168b29c9366ce2f58f4ac22",
+      "generator_tool_version": "manual/M4-B09",
+      "source_jar_sha1": "n/a"
+    }
+  ]
+}

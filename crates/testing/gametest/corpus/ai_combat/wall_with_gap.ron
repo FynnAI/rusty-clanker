@@ -1,0 +1,28 @@
+// M4-B09 Context Part G, scenario 1 (`zombie_routes_around_wall_gap`): a straight,
+// 1-block-thick, 3-block-tall wall at z=6 spanning x=-2..=2, with exactly one 1-block
+// gap at x=0 -- the zombie spawns at (0,64,0), the player-proxy waypoint sits at
+// (0,64,12), 12 blocks beyond the wall. Every unlisted position defaults to air.
+//
+// state_id 1 = the default STONE block state (source: blocks.json --
+// rc_registries::generated_v776::block_states::default_state::STONE, id 1 -- read
+// directly off the already-generated, jar-derived registry table checked in at
+// crates/registries/generated/v776/block_states.rs, per every prior corpus blueprint's
+// own identical reconciliation discipline).
+AiScenarioSpec(
+    id: "wall_with_gap",
+    blocks: [
+        BlockPlacement(pos: (-2, 64, 6), state_id: 1),
+        BlockPlacement(pos: (-2, 65, 6), state_id: 1),
+        BlockPlacement(pos: (-2, 66, 6), state_id: 1),
+        BlockPlacement(pos: (-1, 64, 6), state_id: 1),
+        BlockPlacement(pos: (-1, 65, 6), state_id: 1),
+        BlockPlacement(pos: (-1, 66, 6), state_id: 1),
+        // x = 0: the gap -- deliberately unlisted (defaults to air).
+        BlockPlacement(pos: (1, 64, 6), state_id: 1),
+        BlockPlacement(pos: (1, 65, 6), state_id: 1),
+        BlockPlacement(pos: (1, 66, 6), state_id: 1),
+        BlockPlacement(pos: (2, 64, 6), state_id: 1),
+        BlockPlacement(pos: (2, 65, 6), state_id: 1),
+        BlockPlacement(pos: (2, 66, 6), state_id: 1),
+    ],
+)

@@ -1,0 +1,57 @@
+// M4-B09 Context Part G, scenario 2 (zombie_refuses_a_four_block_drop): a walkable
+// floor plane at y=63 across x in {0,1,2}, z in 0..=12, with the floor entirely absent
+// (defaulting to air down to the world below -- a 4-block-deep pit) at the (0,*,6) and
+// (1,*,6) columns -- the shortest straight line from spawn (0,64,0) to the waypoint
+// (0,64,12) crosses the pit directly; the x=2 lane stays intact as the walk-around
+// route. The zombie carries no live AI target for this scenario -- find_path is
+// invoked directly against the waypoint (Context Part G).
+//
+// state_id 1 = the default STONE block state (source: blocks.json --
+// rc_registries::generated_v776::block_states::default_state::STONE, id 1 -- read
+// directly off the already-generated, jar-derived registry table checked in at
+// crates/registries/generated/v776/block_states.rs).
+AiScenarioSpec(
+    id: "four_block_pit",
+    blocks: [
+        BlockPlacement(pos: (0, 63, 0), state_id: 1),
+        BlockPlacement(pos: (0, 63, 1), state_id: 1),
+        BlockPlacement(pos: (0, 63, 2), state_id: 1),
+        BlockPlacement(pos: (0, 63, 3), state_id: 1),
+        BlockPlacement(pos: (0, 63, 4), state_id: 1),
+        BlockPlacement(pos: (0, 63, 5), state_id: 1),
+        // (0, 63, 6): the pit -- deliberately unlisted (defaults to air), and every
+        // position directly below it down to (0, 60, 6) too.
+        BlockPlacement(pos: (0, 63, 7), state_id: 1),
+        BlockPlacement(pos: (0, 63, 8), state_id: 1),
+        BlockPlacement(pos: (0, 63, 9), state_id: 1),
+        BlockPlacement(pos: (0, 63, 10), state_id: 1),
+        BlockPlacement(pos: (0, 63, 11), state_id: 1),
+        BlockPlacement(pos: (0, 63, 12), state_id: 1),
+        BlockPlacement(pos: (1, 63, 0), state_id: 1),
+        BlockPlacement(pos: (1, 63, 1), state_id: 1),
+        BlockPlacement(pos: (1, 63, 2), state_id: 1),
+        BlockPlacement(pos: (1, 63, 3), state_id: 1),
+        BlockPlacement(pos: (1, 63, 4), state_id: 1),
+        BlockPlacement(pos: (1, 63, 5), state_id: 1),
+        // (1, 63, 6): also part of the pit -- unlisted, defaults to air.
+        BlockPlacement(pos: (1, 63, 7), state_id: 1),
+        BlockPlacement(pos: (1, 63, 8), state_id: 1),
+        BlockPlacement(pos: (1, 63, 9), state_id: 1),
+        BlockPlacement(pos: (1, 63, 10), state_id: 1),
+        BlockPlacement(pos: (1, 63, 11), state_id: 1),
+        BlockPlacement(pos: (1, 63, 12), state_id: 1),
+        BlockPlacement(pos: (2, 63, 0), state_id: 1),
+        BlockPlacement(pos: (2, 63, 1), state_id: 1),
+        BlockPlacement(pos: (2, 63, 2), state_id: 1),
+        BlockPlacement(pos: (2, 63, 3), state_id: 1),
+        BlockPlacement(pos: (2, 63, 4), state_id: 1),
+        BlockPlacement(pos: (2, 63, 5), state_id: 1),
+        BlockPlacement(pos: (2, 63, 6), state_id: 1),
+        BlockPlacement(pos: (2, 63, 7), state_id: 1),
+        BlockPlacement(pos: (2, 63, 8), state_id: 1),
+        BlockPlacement(pos: (2, 63, 9), state_id: 1),
+        BlockPlacement(pos: (2, 63, 10), state_id: 1),
+        BlockPlacement(pos: (2, 63, 11), state_id: 1),
+        BlockPlacement(pos: (2, 63, 12), state_id: 1),
+    ],
+)
