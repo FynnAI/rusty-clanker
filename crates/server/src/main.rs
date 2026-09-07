@@ -86,7 +86,12 @@ struct ParsedArgs {
     /// M3.5-B03: `--debug-hooks` — off by default. Widens the stdin-line reader
     /// task's own recognized-line set (below) to include `debug-setblock`/
     /// `debug-gamemode`; every other line's handling is byte-for-byte unchanged
-    /// whether this is set or not.
+    /// whether this is set or not. M3.5-B03 field-report fix: once a recognized line
+    /// actually applies, `handle_debug_hook_line` prints `debug-hooks: applied <line>`
+    /// to stdout (flushed) so a caller can synchronize on the hook having actually
+    /// landed instead of guessing with a fixed sleep — nothing is printed for a line
+    /// that fails to parse or is rejected, and the flag-off path never reaches
+    /// `handle_debug_hook_line` at all, so it stays byte-for-byte inert.
     debug_hooks: bool,
     /// M4-B04 field-report fix: `--gamerule <name>=<value>` (repeatable) — this file's
     /// own module doc comment has the full flag contract.
@@ -435,6 +440,16 @@ async fn run(parsed: ParsedArgs) -> std::process::ExitCode {
 /// `debug-gamemode <network_entity_id> <survival|creative>` and
 /// `debug-setblock <x> <y> <z> <state_id>` — `main.rs`'s own module doc comment names
 /// both.
+///
+/// M3.5-B03 field-report fix: once a hook's own `.await` above returns, this prints
+/// exactly `debug-hooks: applied <line>` to stdout (`<line>` is the exact, already-
+/// trimmed line this function was called with) and flushes it — a caller with
+/// `ManagedServerConfig::capture_stdout` set can poll for this line to know the hook
+/// has actually landed rather than guessing with a fixed sleep (the exact race a fixed
+/// sleep left open on a slower CI runner). A line that fails to parse, or whose
+/// gamemode word is neither `survival` nor `creative`, returns before ever reaching
+/// its hook call and therefore never prints anything — the acknowledgement is proof
+/// positive the hook actually applied, not merely that a `debug-*` line was received.
 async fn handle_debug_hook_line(world: &rusty_clanker_server::play::HardcodedWorld, line: &str) {
     let mut parts = line.split_whitespace();
     match parts.next() {
@@ -451,6 +466,7 @@ async fn handle_debug_hook_line(world: &rusty_clanker_server::play::HardcodedWor
                 _ => return,
             };
             world.debug_set_survival(network_entity_id, survival).await;
+            print_debug_hook_ack(line);
         }
         Some("debug-setblock") => {
             let (Some(x), Some(y), Some(z), Some(state_id)) =
@@ -469,9 +485,22 @@ async fn handle_debug_hook_line(world: &rusty_clanker_server::play::HardcodedWor
             world
                 .debug_set_block_state(rc_core::BlockPos::new(x, y, z), state_id)
                 .await;
+            print_debug_hook_ack(line);
         }
         _ => {}
     }
+}
+
+/// M3.5-B03 field-report fix: `handle_debug_hook_line`'s own shared "print the
+/// acknowledgement" step — a bare `println!` would go through the process's normal
+/// line-buffered-on-a-TTY-but-block-buffered-on-a-pipe stdout, so this explicitly
+/// flushes afterward: `ManagedServer::stdout_snapshot`'s own background reader thread
+/// (`crates/testing/test-harness/src/process.rs`) only ever sees a line once it
+/// actually reaches the pipe.
+fn print_debug_hook_ack(line: &str) {
+    println!("debug-hooks: applied {line}");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 }
 
 #[cfg(test)]
