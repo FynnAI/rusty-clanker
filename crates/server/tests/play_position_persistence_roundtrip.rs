@@ -22,7 +22,7 @@ use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
 use rusty_clanker_server::play::packets::{
     ChunkBatchFinished, KeepAliveClientbound, KeepAliveServerbound, LoginPlay,
-    SetDefaultSpawnPosition, SetPlayerPositionAndRotation, SynchronizePlayerPosition,
+    SetPlayerPositionAndRotation, SynchronizePlayerPosition,
 };
 use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -172,10 +172,19 @@ async fn position_and_rotation_persist_across_a_real_disconnect_and_rejoin() {
         let mut acc = BytesMut::new();
         let (login_id, _) = recv_packet(&mut client, &mut acc).await;
         assert_eq!(login_id, LoginPlay::ID);
-        let (spawn_id, _) = recv_packet(&mut client, &mut acc).await;
-        assert_eq!(spawn_id, SetDefaultSpawnPosition::ID);
-        let (sync_id, sync_body) = recv_packet(&mut client, &mut acc).await;
-        assert_eq!(sync_id, SynchronizePlayerPosition::ID);
+        // NET hardening (PLAN-D12, join sequence) test-authoring fix: `enter_play` now
+        // sends several more packets between `LoginPlay` and `SynchronizePlayerPosition`
+        // (`connection.rs`'s own real oracle-matched join order) -- loops past whatever
+        // comes first rather than hardcoding "exactly these two packets, in this order"
+        // (`SetDefaultSpawnPosition` in particular no longer immediately precedes
+        // `SynchronizePlayerPosition`), mirroring every other acceptance test's own
+        // `drain_play_entry`-style tolerance for insertions.
+        let sync_body = loop {
+            let (id, body) = recv_packet(&mut client, &mut acc).await;
+            if id == SynchronizePlayerPosition::ID {
+                break body;
+            }
+        };
 
         let sync = decode_one::<SynchronizePlayerPosition>(sync_body).unwrap();
         assert_eq!(sync.x, 12.5);

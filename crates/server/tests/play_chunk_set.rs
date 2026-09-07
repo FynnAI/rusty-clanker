@@ -1,6 +1,21 @@
+//! test-matrix: boundaries=waived(protocol join-sequence content, not world-height
+//! boundary content) orientations=waived(no placement/facing content in this file's
+//! own domain model) self=waived(no self-interaction case in this suite's own domain
+//! model) composition=waived(a fixed join sequence, not a chained multi-component
+//! mechanic) nondefault-state=waived(a fresh player's own join sequence has no
+//! block/entity state to vary)
+//!
 //! M1-B05 acceptance test: `enter_play` sends a well-formed Play-entry sequence and the
 //! full superflat placeholder chunk batch over a real loopback socket, no
 //! M1-B02/B03/B04 dependency (Deliverables, "write these FIRST").
+//!
+//! PLAN-D12 NET-hardening changeset 1 (join sequence) test-authoring fix: every packet
+//! this changeset's own `join_packets.rs`/`commands_packet.rs`/`recipe_data.rs`/
+//! `update_recipes_packet.rs` add is now asserted here too, in the real oracle's own
+//! observed join order (module doc comments on each new packet cite the real captured
+//! bytes their content was derived from) -- `login_play`'s own `dimension_names`/
+//! `simulation_distance`/`sea_level` fields are corrected to match real oracle values
+//! that were wrong before this changeset.
 //!
 //! M1 integration fix, round 4: the chunk count grew from 9 (radius 1) to 25 (radius 2)
 //! once a real, graphical vanilla client's own render-mesh neighbor requirement was
@@ -24,7 +39,7 @@
 //! spawn to be out of immediate view) -- the one line this file ever needs touching for a
 //! radius change, exactly as designed above.
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use rc_protocol::{CompressionState, RcPacket, VarInt, decode_one, encode_payload};
 use rc_registries::generated_v776::block_states::default_state as blocks;
 use rusty_clanker_server::net::{ConnectionConfig, spawn_connection};
@@ -32,9 +47,61 @@ use rusty_clanker_server::play::packets::{
     ChunkBatchFinished, ChunkBatchStart, ConfirmTeleportation, GameEvent, LevelChunkWithLight,
     LoginPlay, SetChunkCacheCenter, SetDefaultSpawnPosition, SetHealth, SynchronizePlayerPosition,
 };
-use rusty_clanker_server::play::{HardcodedWorld, PlayerProfile, enter_play};
+use rusty_clanker_server::play::{
+    ChangeDifficulty, Commands, ContainerSetContent, DEFAULT_BORDER_ABSOLUTE_MAX_SIZE,
+    DEFAULT_BORDER_SIZE, DEFAULT_BORDER_WARNING_BLOCKS, DEFAULT_BORDER_WARNING_TIME,
+    HardcodedWorld, InitializeBorder, PlayerAbilitiesClientbound, PlayerProfile, RecipeBookAdd,
+    RecipeBookSettings, ServerData, SetExperienceClientbound, SetHeldSlotClientbound, TickingState,
+    TickingStep, UpdateAdvancements, UpdateRecipes, enter_play,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// NET hardening (PLAN-D12, join sequence) test-authoring helper: the exact bytes
+/// `encode_payload` would produce for `packet`'s own body alone (no leading id
+/// `VarInt`) -- lets this test assert a fixed-content packet's real bytes without
+/// needing a working `decode_body` for every one of them (several of this changeset's
+/// own packets, e.g. `Commands`/`UpdateRecipes`, are send-only and never decoded in
+/// production, `join_packets.rs`'s own doc comment).
+fn expected_body<P: RcPacket>(packet: &P) -> Bytes {
+    let mut buf = BytesMut::new();
+    packet.encode_body(&mut buf);
+    buf.freeze()
+}
+
+/// TEST-D56: decodes a literal hex string into `Bytes` -- used only for the packets
+/// whose own real content this test asserts against the real oracle's own captured
+/// bytes directly (never against a second call into this crate's own production
+/// encoder, which would be a self-oracle for exactly the content those bytes are
+/// supposed to prove correct).
+fn hex_bytes(hex: &str) -> Bytes {
+    assert!(hex.len().is_multiple_of(2), "odd-length hex literal");
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = (bytes[i] as char).to_digit(16).unwrap();
+        let lo = (bytes[i + 1] as char).to_digit(16).unwrap();
+        out.push(((hi << 4) | lo) as u8);
+        i += 2;
+    }
+    Bytes::from(out)
+}
+
+/// TEST-D56 citation: the real oracle's own `commands` body observed at `session/
+/// spawn` in the frozen protocol-diff capture (`commands_packet.rs`'s own doc comment
+/// has the full structural-decode derivation this literal was checked against, node by
+/// node, before being restated here byte-for-byte).
+const ORACLE_COMMANDS_BODY_HEX: &str = "1a000a0102030405060708090a01010b026d6505010c0468656c7005010d046c69737401010e036d73670900040474656c6c090004017701020f100672616e646f6d010111077465616d6d736709000802746d0101120774726967676572060006616374696f6e14060007636f6d6d616e6405020500057575696473020113077461726765747306020101140576616c756501011504726f6c6c0600076d6573736167651416021617096f626a65637469766518146d696e6563726166743a61736b5f7365727665720600076d6573736167651406000572616e67652706000572616e676527010118036164640101190373657406000576616c7565030006000576616c7565030000";
+
+/// TEST-D56 citation: the real oracle's own `recipe_book_add` "reset" body (empty
+/// entries, `replace = true`) observed at every join.
+const ORACLE_RECIPE_BOOK_ADD_RESET_BODY_HEX: &str = "0001";
+
+/// TEST-D56 citation: the real oracle's own second, non-empty `recipe_book_add` body
+/// (the `crafting_table` default unlock) observed at `session/spawn` (`recipe_data.rs`'s
+/// own doc comment has the full structural-decode derivation).
+const ORACLE_RECIPE_BOOK_ADD_DEFAULT_BODY_HEX: &str = "01be020102020406106d696e6563726166743a706c616e6b7306106d696e6563726166743a706c616e6b7306106d696e6563726166743a706c616e6b7306106d696e6563726166743a706c616e6b7305e80201000004e8020003010400106d696e6563726166743a706c616e6b7300106d696e6563726166743a706c616e6b7300106d696e6563726166743a706c616e6b7300106d696e6563726166743a706c616e6b730200";
 
 /// Mirrors `play::chunk::PLACEHOLDER_RADIUS_CHUNKS`'s own current value (module doc
 /// comment above has the full "why a mirror, not an import" writeup). The one line to
@@ -168,14 +235,64 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         let login_play = decode_one::<LoginPlay>(body).unwrap();
         assert!(login_play.is_flat);
         assert_eq!(login_play.game_mode, 1);
+        // NET hardening (PLAN-D12, join sequence): the real oracle's own `levels` set
+        // always lists all three built-in dimensions (`connection.rs`'s own `login_play`
+        // doc comment has the full byte citation).
         assert_eq!(
             login_play.dimension_names,
-            vec!["minecraft:overworld".to_string()]
+            vec![
+                "minecraft:overworld".to_string(),
+                "minecraft:the_nether".to_string(),
+                "minecraft:the_end".to_string(),
+            ]
         );
+        assert_eq!(login_play.simulation_distance, 10);
+        assert_eq!(login_play.sea_level, -63);
+
+        // NET hardening (PLAN-D12, join sequence): every packet from here through
+        // `RecipeBookAdd::reset()` matches the real oracle's own observed join order
+        // exactly (`join_packets.rs`/`commands_packet.rs`/`recipe_data.rs`/
+        // `update_recipes_packet.rs`'s own doc comments cite the real captured bytes
+        // each struct's content was derived from).
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, ChangeDifficulty::ID);
+        let change_difficulty = decode_one::<ChangeDifficulty>(body).unwrap();
+        assert_eq!(change_difficulty.difficulty, 0);
+        assert!(!change_difficulty.locked);
 
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
-        assert_eq!(id, SetDefaultSpawnPosition::ID);
-        decode_one::<SetDefaultSpawnPosition>(body).unwrap();
+        assert_eq!(id, PlayerAbilitiesClientbound::ID);
+        let abilities = decode_one::<PlayerAbilitiesClientbound>(body).unwrap();
+        assert_eq!(abilities.flags, 0x0d);
+        assert_eq!(abilities.flying_speed, 0.05);
+        assert_eq!(abilities.walking_speed, 0.1);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, SetHeldSlotClientbound::ID);
+        let held_slot = decode_one::<SetHeldSlotClientbound>(body).unwrap();
+        assert_eq!(held_slot.slot, 0);
+
+        // `UpdateRecipes`'s own real content is a 3360-byte, session-independent
+        // constant (`update_recipes_data.rs`'s own doc comment) -- asserted here by
+        // structural properties independently derivable from the ASSET-D18(f)
+        // reference (TEST-D56: `RecipePropertySet.java` names exactly these seven
+        // registry keys; no other packet is this large, so id + length alone is
+        // already a strong signal), rather than embedding the full byte literal.
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, UpdateRecipes::ID);
+        assert_eq!(body.len(), 3360);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, Commands::ID);
+        assert_eq!(body, hex_bytes(ORACLE_COMMANDS_BODY_HEX));
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, RecipeBookSettings::ID);
+        assert_eq!(body, expected_body(&RecipeBookSettings::CLOSED));
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, RecipeBookAdd::ID);
+        assert_eq!(body, hex_bytes(ORACLE_RECIPE_BOOK_ADD_RESET_BODY_HEX));
 
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, SynchronizePlayerPosition::ID);
@@ -185,11 +302,56 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         // Prove `enter_play` does not block waiting for this ack before continuing.
         send_packet(&mut client, &ConfirmTeleportation { teleport_id: 1 }).await;
 
+        // TEST-D56 citation: the real oracle's own `server_data` body observed at
+        // every join -- a bare NBT motd string plus one trailing `0x00` byte (no icon).
+        // A real protocol-diff run against this changeset's own first attempt caught
+        // this exact field's own value backwards (`join_packets.rs`'s own `ServerData`
+        // doc comment has the full field-report writeup) -- asserted against this
+        // literal, not `expected_body`, so the same class of bug can never hide behind
+        // a self-oracle comparison again.
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, ServerData::ID);
+        assert_eq!(
+            body,
+            hex_bytes("08001241204d696e6563726166742053657276657200")
+        );
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, InitializeBorder::ID);
+        assert_eq!(
+            body,
+            expected_body(&InitializeBorder {
+                new_center_x: 0.0,
+                new_center_z: 0.0,
+                old_size: DEFAULT_BORDER_SIZE,
+                new_size: DEFAULT_BORDER_SIZE,
+                lerp_time: 0,
+                new_absolute_max_size: DEFAULT_BORDER_ABSOLUTE_MAX_SIZE,
+                warning_blocks: DEFAULT_BORDER_WARNING_BLOCKS,
+                warning_time: DEFAULT_BORDER_WARNING_TIME,
+            })
+        );
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, SetDefaultSpawnPosition::ID);
+        decode_one::<SetDefaultSpawnPosition>(body).unwrap();
+
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, GameEvent::ID);
         let game_event = decode_one::<GameEvent>(body).unwrap();
         assert_eq!(game_event.event, 13);
         assert_eq!(game_event.value, 0.0);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, TickingState::ID);
+        let ticking_state = decode_one::<TickingState>(body).unwrap();
+        assert_eq!(ticking_state.tick_rate, 20.0);
+        assert!(!ticking_state.is_frozen);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, TickingStep::ID);
+        let ticking_step = decode_one::<TickingStep>(body).unwrap();
+        assert_eq!(ticking_step.tick_steps, 0);
 
         // M2 integration test-authoring fix: `SetHealth` is a new packet in this exact
         // Play-entry position (`connection.rs`'s own `enter_play` doc comment on this
@@ -199,6 +361,29 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         // persisted before) gets `LoadedPlayerRecord::fresh_default`'s own values
         // (`rc-chunk-storage`'s `player.rs`).
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, SetChunkCacheCenter::ID);
+        let chunk_cache_center = decode_one::<SetChunkCacheCenter>(body).unwrap();
+        assert_eq!(chunk_cache_center.chunk_x, 0);
+        assert_eq!(chunk_cache_center.chunk_z, 0);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, ContainerSetContent::ID);
+        assert_eq!(
+            body,
+            expected_body(&ContainerSetContent::empty_player_inventory())
+        );
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, RecipeBookAdd::ID);
+        assert_eq!(body, hex_bytes(ORACLE_RECIPE_BOOK_ADD_DEFAULT_BODY_HEX));
+
+        // `UpdateAdvancements::default_join_grant`'s own real-wall-clock timestamp field
+        // (`recipe_data.rs`'s own doc comment) means this test can only assert the
+        // packet's own id here, not its full byte content.
+        let (id, _body) = recv_packet(&mut client, &mut accumulator).await;
+        assert_eq!(id, UpdateAdvancements::ID);
+
+        let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, SetHealth::ID);
         let set_health = decode_one::<SetHealth>(body).unwrap();
         assert_eq!(set_health.health, 20.0);
@@ -206,10 +391,11 @@ async fn enter_play_sends_a_well_formed_login_and_chunk_batch() {
         assert_eq!(set_health.saturation, 5.0);
 
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
-        assert_eq!(id, SetChunkCacheCenter::ID);
-        let chunk_cache_center = decode_one::<SetChunkCacheCenter>(body).unwrap();
-        assert_eq!(chunk_cache_center.chunk_x, 0);
-        assert_eq!(chunk_cache_center.chunk_z, 0);
+        assert_eq!(id, SetExperienceClientbound::ID);
+        let set_experience = decode_one::<SetExperienceClientbound>(body).unwrap();
+        assert_eq!(set_experience.experience_progress, 0.0);
+        assert_eq!(set_experience.experience_level, 0);
+        assert_eq!(set_experience.total_experience, 0);
 
         let (id, body) = recv_packet(&mut client, &mut accumulator).await;
         assert_eq!(id, ChunkBatchStart::ID);
