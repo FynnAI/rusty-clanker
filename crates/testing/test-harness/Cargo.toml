@@ -19,6 +19,10 @@ thiserror = { workspace = true }
 rc-chunk-storage = { path = "../../chunk-storage" }
 rc-nbt = { path = "../../nbt" }
 rc-core = { path = "../../core" }
+# M4-B09 (Context Part E): `position_delta::PositionSample.region` is typed
+# `Option<rc_messaging::RegionId>` (ARCH-D10's own region-boundary framing) -- an
+# internal workspace crate, not a new external dependency (Constraint (c)).
+rc-messaging = { path = "../../messaging" }
 # M2-B08's own one permitted new external dependency (Constraint (c)): deterministic
 # PRNG for `chunk_soak::generate_chunk_payload`. Only `rand_chacha` itself is added --
 # its own re-exported `rand_chacha::rand_core` (the crate it already depends on) is

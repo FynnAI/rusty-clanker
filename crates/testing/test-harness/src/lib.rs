@@ -10,6 +10,7 @@
 pub mod chunk_soak;
 pub mod fake_server;
 pub mod fixtures;
+pub mod position_delta;
 pub mod probe;
 pub mod process;
 pub mod save_cadence;

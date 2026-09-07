@@ -12,6 +12,7 @@
 //! `rc_paritybot::corpus_capture` instead, calling back into this crate's own
 //! `capture`/`trace`/`spec` items.
 
+pub mod ai_scenario;
 pub mod capture;
 pub mod known_divergences;
 pub mod placement_spec;
