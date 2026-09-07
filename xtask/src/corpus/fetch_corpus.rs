@@ -237,6 +237,12 @@ pub fn run(args: &FetchCorpusArgs) -> std::process::ExitCode {
     }
 
     let jar = if let Some(server_jar) = &args.server_jar {
+        // Governance fix: the runner subprocess runs with `current_dir` set to the paritybot
+        // crate, so a relative `--server-jar` must be absolutized against the repository
+        // root here (as `protocol-diff`/`placement-diff` already do) or `java -jar` finds
+        // no jar and the oracle silently never becomes ready.
+        let server_jar = absolutize(&repo_root, server_jar);
+        let server_jar = &server_jar;
         crate::fetch_data::FetchedJar {
             jar_path: server_jar.clone(),
             version_id: args.version.clone(),
@@ -317,4 +323,13 @@ fn sha1_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// A relative CLI path resolved against the repository root (mirrors `protocol_diff::absolutize`).
+fn absolutize(repo_root: &std::path::Path, path: &std::path::Path) -> std::path::PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_root.join(path)
+    }
 }
