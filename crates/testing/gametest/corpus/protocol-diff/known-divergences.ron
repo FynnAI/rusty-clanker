@@ -99,20 +99,18 @@
     // --- Join / reconnect sequence (NET hardening) — every one of these packet types
     // replays identically on `session/spawn` and `session/disconnect_reconnect`, and
     // on every other non-place/break step too (the whole handshake replays there). ---
-    (steps: "session/*", packet: "minecraft:change_difficulty", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:commands", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:container_set_content", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:initialize_border", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:player_abilities", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:recipe_book_settings", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:server_data", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:set_experience", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:set_held_slot", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:ticking_state", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:ticking_step", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
-    (steps: "session/*", packet: "minecraft:update_recipes", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
+    // The join sequence now sends the fresh-player advancement grant; the body still
+    // differs by the `unlock_right_away` criterion's wall-clock grant timestamp and, on
+    // the reconnect step, by the oracle's accumulated progression (no advancement,
+    // recipe-book or inventory persistence on our side yet).
+    (steps: "session/*", packet: "minecraft:update_advancements", class: Body, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:recipe_book_add", class: Body, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    // Placing an item the player holds for the first time unlocks recipes on the oracle
+    // (`recipe_book_add` plus the matching `update_advancements` grant) — no recipe
+    // book on our side yet.
+    (steps: "session/place/*", packet: "minecraft:recipe_book_add", class: Missing, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    (steps: "session/place/*", packet: "minecraft:update_advancements", class: Missing, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    (steps: "session/disconnect_reconnect", packet: "minecraft:container_set_content", class: Body, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),
     (steps: "session/*", packet: "minecraft:system_chat", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/*", packet: "minecraft:disconnect", class: Missing, closes_with: Some("NET hardening: join sequence"), expires: Some("M5")),
     (steps: "session/spawn", packet: "minecraft:update_attributes", class: Missing, closes_with: Some("NET hardening: entity tracking on join, self-entity sync and item sync"), expires: Some("M5")),

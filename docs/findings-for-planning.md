@@ -688,7 +688,12 @@ Entries name the milestone that surfaced them and the code they concern.
   server's keep-alive timeout when the runner is slow. Test-authoring
   follow-up: service every socket concurrently in this file's helpers (the
   pattern already used by the multiplayer tests) or raise the keep-alive
-  window for test servers.
+  window for test servers. Recurred in Tier-1 run 34112323614 (`ubuntu-24.04`
+  gates, the test's own 300 s stage timeout) on a commit whose gates passed
+  on both runners in scheduled run 34112370916; the same run also tripped
+  `play_block_event_field_report`'s 60-block bystander on a fixed 2 s window,
+  which now waits on a deadline (test-authoring fix on `main`). The
+  keep-alive-starvation follow-up above is still open.
 
 - **Flaky under CI load: `play_chunk_streaming_on_move::chunk_boundary_crossing_updates_cache_center_within_the_same_tick_it_resolves`
   (run 33968675213, `windows-2025` gates).** The test bounds the wall-clock
@@ -960,6 +965,70 @@ Entries name the milestone that surfaced them and the code they concern.
   per runner class the way TEST-D58 did for the captures, or drop the
   wall-clock budget in favour of a per-case hang deadline, which is what the
   guard was meant to catch.
+
+- **PLAN-D12 NET hardening changeset 1 (join sequence, 2026-09-07): the
+  TEST-D59 protocol-diff harness's own `login` normalizer walks a stale
+  field layout, masking the wrong bytes and forever showing `login` as a
+  Body divergence no implementation can close.**
+  `crates/testing/gametest/src/protocol_capture.rs::try_normalize_login`
+  reads `playerId`, `hardcore`, the `levels` list, then a `holder` VarInt it
+  treats as `dimensionType` and masks `seed` right after — but the real
+  `ClientboundLoginPacket`/`CommonPlayerSpawnInfo` (decompiled-source-
+  verified, protocol 776) place six more fields between `levels` and
+  `commonPlayerSpawnInfo`'s own `dimensionType`: `maxPlayers`,
+  `chunkRadius`, `simulationDistance`, `reducedDebugInfo`,
+  `showDeathScreen`, `doLimitedCrafting`. A real protocol-diff run after
+  this changeset landed a byte-identical `login` body (every field but
+  `hashed_seed`, confirmed by direct byte comparison against the frozen
+  oracle capture) still shows as a live Body divergence, because the
+  normalizer's own misaligned walk masks a run of bytes that do not
+  actually contain the seed field. This file is a protected path
+  (`crates/testing/gametest/**`) implementation may not edit — planning
+  or a governance changeset needs to correct `try_normalize_login`'s own
+  field-skip sequence (insert the six missing reads before the
+  `dimensionType` holder VarInt) before `login` can ever show a clean
+  pass, on any implementation.
+- **PLAN-D12 changeset 1: `session/*`'s own `player_position` Body
+  divergence is not a join-sequence packet-shape gap — the wire shape is
+  already correct — but the real oracle's own spawn coordinate
+  (`x=-3.5, y=-60, z=0.5`, decoded from the real capture) is offset from
+  the configured spawn block by vanilla's own safe-spawn-search
+  algorithm, which this engine does not implement at all (it always
+  teleports a fresh player to the literal configured `SPAWN_POSITION`,
+  no search).** Reproducing the real oracle's own offset needs a
+  worldgen/spawn-placement parity pass (GEN-/MECH- territory, not
+  NET-), scoped and scheduled by planning; it is not "join sequence"
+  work in the NET-hardening sense.
+- **PLAN-D12 changeset 1: `update_advancements`'s own `unlock_right_away`
+  criterion carries a real wall-clock grant timestamp
+  (`AdvancementProgress`'s own real semantics) that can never byte-match
+  one specific historical oracle capture on any run, by two independent
+  servers or even the same oracle run twice.** Every other field of this
+  packet is now byte-identical to the real oracle. Planning should decide
+  whether this field belongs in `protocol_capture.rs`'s own
+  `NORMALIZATION_RULES` masked-field table (structurally analogous to
+  `SetTime`'s own `game_time` masking) so the register can actually close
+  this entry, or whether it stays permanently registered as an accepted,
+  unclosable exception.
+- **PLAN-D12 changeset 1: real vanilla join/leave broadcast
+  (`multiplayer.player.joined`/`.left` `system_chat`, `player_info_remove`,
+  a leave-time `Disconnect`) is only ever sent to OTHER already-connected
+  players — `PlayerList.placeNewPlayer` broadcasts the join message
+  BEFORE adding the joiner to its own `players` list (decompiled-source-
+  verified), so a solo joiner never receives their own message, matching
+  every available oracle capture (zero occurrences in the whole frozen
+  corpus, confirmed by direct search).** This changeset defines the three
+  packet types (`join_packets.rs`) but does not wire a real send site —
+  doing so needs `world.rs`'s own per-tick broadcast/entity-tracking
+  infrastructure, which the brief that scoped this changeset explicitly
+  reserves for a different one ("entity tracking on join, self-entity
+  sync and item sync"). Planning should decide which changeset actually
+  owns wiring the broadcast (this one's own register rows for
+  `redstone/*` `system_chat`/`player_info_remove` stay open until
+  whichever changeset does this lands) — no oracle bytes exist yet to
+  verify the exact `JoinLeaveMessage` NBT encoding against either, since
+  the corpus has no multi-bot-overlap capture that shows one; that
+  encoding is reference-derived only (recorded in section B below).
 
 ## B. Shipped deviations and simplifications awaiting a decision
 
@@ -2850,6 +2919,50 @@ Entries name the milestone that surfaced them and the code they concern.
   jar and the oracle "did not become ready" with no further diagnostic. Closed
   by absolutizing in `fetch-corpus` too; the oracle launcher should also
   surface the child's first stderr lines on a startup timeout.
+
+- **PLAN-D12 changeset 1 (join sequence): `UpdateRecipes`'s own content
+  (seven `RecipePropertySet` item tables, 319 stonecutter recipes) is a
+  fixed Rust constant table generated once from a structural decode of
+  the real oracle's own capture bytes, not derived from any recipe
+  registry this engine actually models (none exists yet).** Correct for
+  the pinned protocol 776 today; if the pin is ever bumped (NET-D1), or
+  if a future milestone adds a real recipe-crafting system, this table
+  needs regenerating (or superseding) rather than hand-edited. The
+  generation method (a throwaway scratch decoder over a real, legally-
+  captured oracle body) is recorded in `update_recipes_data.rs`'s own
+  module doc comment for whoever regenerates it.
+- **PLAN-D12 changeset 1: `RecipeBookAdd`/`UpdateAdvancements` send only
+  the one fixed "genuinely fresh player" grant
+  (`minecraft:recipes/root` + `minecraft:recipes/decorations/
+  crafting_table`) on every join, regardless of what the player has
+  actually unlocked or crafted before — this engine has no recipe-unlock
+  or advancement-progress persistence at all.** Honest for every scenario
+  this project's own test corpus currently exercises (a freshly created
+  player on every capture), but a real multi-session player would see
+  their recipe book and advancement tree silently reset on every rejoin
+  once persistence exists elsewhere. A future recipe/advancement
+  milestone should replace `RecipeBookAdd::default_unlocks`/
+  `UpdateAdvancements::default_join_grant`'s own fixed content with a
+  real per-player read.
+- **PLAN-D12 changeset 1: `join_packets::JoinLeaveMessage`'s own NBT
+  encoding (a translatable `multiplayer.player.joined`/`.left` component
+  with a yellow-styled, one-argument `with` list) is derived from the
+  ASSET-D18(f) reference's own `TranslatableContents`/`Style.Serializer`
+  codecs, never verified against a real captured `system_chat` body —
+  see section A's own entry on why no such capture exists in this
+  changeset's corpus.** Send site is also not wired (section A). Both
+  need closing together once a multi-bot capture (or a dedicated
+  two-connection scripted step) exists to verify the real bytes against.
+- **PLAN-D12 changeset 1: `commands_packet.rs`'s own 26-node command
+  graph is the real vanilla dispatch tree for exactly one permission
+  level — a fresh, non-operator player — decoded from the one real
+  capture this changeset had (an offline-mode bot, never opped).** A
+  future capability that needs a different permission level (an opped
+  test bot, a `/gamerule`-driven permission change) will see a much
+  larger real tree (every command `Commands.java` registers, gated by
+  `NodeInspector`) that this hardcoded table does not model at all —
+  out of scope for "join sequence" today, flagged so a future commands-
+  related changeset does not assume this table is exhaustive.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
