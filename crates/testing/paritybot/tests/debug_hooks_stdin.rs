@@ -223,7 +223,11 @@ async fn wait_for_ack(managed: &ManagedServer, line: &str, timeout: Duration) ->
     let needle = ack_line_for(line);
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if managed.stdout_snapshot().iter().any(|observed| observed == &needle) {
+        if managed
+            .stdout_snapshot()
+            .iter()
+            .any(|observed| observed == &needle)
+        {
             return true;
         }
         if tokio::time::Instant::now() >= deadline {
