@@ -36,16 +36,34 @@ const SKY_POS: (i32, i32, i32) = (0, 40, 0);
 /// `minecraft:stone`'s default state id (`corpus_capture.rs`'s own established
 /// `BARRIER_STATE_STONE` constant, restated here).
 const STONE_STATE_ID: u32 = 1;
-/// How long a `debug-setblock`/`debug-gamemode` line — and, for the gamemode cases,
-/// the one break attempt that follows — is given to land before this file's own
+/// How long the "inert without the flag" tests' bounded absence-of-acknowledgement
+/// poll (`wait_for_ack`) waits before concluding no acknowledgement will ever land,
+/// and — unrelated to any debug hook's own synchronization — how long the one break
+/// attempt each gamemode test issues is given to land before this file's own
 /// assertions read the result. Comfortably longer than one tick-loop drain step
 /// (§4.6's own mpsc-plus-oneshot-ack wiring resolves within a tick or two) and
 /// comfortably shorter than any real "correct tool" survival break time, so a break
 /// still standing at the end of this window is a genuine "still survival" signal, not
 /// merely "hasn't finished yet" (blueprint §5's own "creative-speed break completing
 /// under the timing window... is the observable signal a gamemode switch never
-/// landed").
+/// landed"). A debug hook actually landing is no longer synchronized by sleeping this
+/// fixed duration at all — see `ACK_POLL_TIMEOUT`/`wait_for_ack` below, added to fix
+/// the exact CI-only race (PLAN-D10 M3.5-B03) a fixed pre-break sleep of this length
+/// left open: a slower runner's own heavier first-tick workload (Stage-8 light seeding
+/// of the 225-chunk grid, the natural-spawn census) could push the acknowledgement
+/// past this window.
 const SETTLE: Duration = Duration::from_millis(800);
+
+/// Upper bound `wait_for_ack` polls for the acknowledgement line
+/// (`crates/server/src/main.rs::handle_debug_hook_line`'s own `debug-hooks: applied
+/// <line>` contract, printed only once the hook's own `.await` has actually returned)
+/// once a debug-hook line has been sent with `--debug-hooks` set. Generous enough to
+/// absorb even a heavily loaded CI runner's slow first ticks — the exact condition
+/// that made a fixed `SETTLE`-length sleep before the follow-up action flaky.
+const ACK_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Poll period `wait_for_ack` sleeps between successive `ManagedServer::
+/// stdout_snapshot` checks.
+const ACK_POLL_PERIOD: Duration = Duration::from_millis(50);
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -107,6 +125,12 @@ fn spawn(label: &str, debug_hooks: bool) -> (ManagedServer, TempWorldDir) {
     config.world_dir = Some(world.path.clone());
     config.debug_hooks = debug_hooks;
     config.startup_timeout = Duration::from_secs(60);
+    // M3.5-B03 field-report fix (PLAN-D10): every test in this file now synchronizes
+    // on the server's own acknowledgement line (`wait_for_ack`, below) rather than a
+    // fixed sleep, so every spawn needs its stdout actually captured
+    // (`ManagedServer::stdout_snapshot`) — every pre-existing call site elsewhere in
+    // this crate that never sets this field keeps stdout inherited, unchanged.
+    config.capture_stdout = true;
     let managed =
         spawn_server(config).expect("rusty-clanker-server should start and accept a connection");
     (managed, world)
@@ -179,6 +203,36 @@ fn current_thread_runtime() -> tokio::runtime::Runtime {
         .expect("building a current-thread tokio runtime should never fail here")
 }
 
+/// The exact acknowledgement line `handle_debug_hook_line`
+/// (`crates/server/src/main.rs`) prints to stdout once it has actually applied
+/// `line` — restated here as its own function (rather than inlined at every call
+/// site) so this file's own assertions can never drift from that wire format.
+fn ack_line_for(line: &str) -> String {
+    format!("debug-hooks: applied {line}")
+}
+
+/// Bounded poll (`ACK_POLL_PERIOD` between checks, up to `timeout`) of `managed`'s
+/// captured stdout (`ManagedServerConfig::capture_stdout`, `ManagedServer::
+/// stdout_snapshot`) for the acknowledgement line `line` produces — `true` the moment
+/// it is observed, `false` if `timeout` elapses first. Replaces this file's own prior
+/// fixed `sleep(SETTLE)` after every `send_stdin_line("debug-…")` call: this resolves
+/// as soon as the server has actually applied the hook rather than hoping a fixed
+/// sleep was long enough, fixing the exact CI-only race (PLAN-D10 M3.5-B03) a fixed
+/// sleep left open on a slower runner.
+async fn wait_for_ack(managed: &ManagedServer, line: &str, timeout: Duration) -> bool {
+    let needle = ack_line_for(line);
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if managed.stdout_snapshot().iter().any(|observed| observed == &needle) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(ACK_POLL_PERIOD).await;
+    }
+}
+
 #[test]
 fn debug_setblock_is_inert_without_the_flag() {
     let (mut managed, _world) = spawn("setblock-off", false);
@@ -197,11 +251,16 @@ fn debug_setblock_is_inert_without_the_flag() {
             "expected air at the sky test cell before any debug hook"
         );
 
-        managed.send_stdin_line(&format!(
+        let debug_line = format!(
             "debug-setblock {} {} {} {STONE_STATE_ID}",
             SKY_POS.0, SKY_POS.1, SKY_POS.2
-        ));
-        tokio::time::sleep(SETTLE).await;
+        );
+        managed.send_stdin_line(&debug_line);
+        assert!(
+            !wait_for_ack(&managed, &debug_line, SETTLE).await,
+            "debug-setblock must never print an acknowledgement line without \
+             --debug-hooks"
+        );
 
         assert_eq!(
             view.state_id_at(SKY_POS),
@@ -287,7 +346,11 @@ fn debug_gamemode_is_inert_without_the_flag() {
         // `play_block_break_place_full.rs` and every other in-process M3 test relies
         // on this identical convention for a single-bot session).
         managed.send_stdin_line("debug-gamemode 1 survival");
-        tokio::time::sleep(SETTLE).await;
+        assert!(
+            !wait_for_ack(&managed, "debug-gamemode 1 survival", SETTLE).await,
+            "debug-gamemode must never print an acknowledgement line without \
+             --debug-hooks"
+        );
 
         instant_break(&client, floor);
         tokio::time::sleep(SETTLE).await;
@@ -323,7 +386,11 @@ fn debug_gamemode_switches_survival_when_the_flag_is_set() {
             .expect("floor cell already observed by discover_floor");
 
         managed.send_stdin_line("debug-gamemode 1 survival");
-        tokio::time::sleep(SETTLE).await;
+        assert!(
+            wait_for_ack(&managed, "debug-gamemode 1 survival", ACK_POLL_TIMEOUT).await,
+            "debug-gamemode must print its acknowledgement line within \
+             {ACK_POLL_TIMEOUT:?} when --debug-hooks is set"
+        );
 
         instant_break(&client, floor);
         tokio::time::sleep(SETTLE).await;
