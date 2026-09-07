@@ -43,6 +43,12 @@ struct Scratch {
     navigation: PathNavigation,
     movement_intent: PendingMovementIntent,
     look_target: Option<[f64; 3]>,
+    // M4-B09 Context Part C.3: `AiContext` gains `melee_attack_signal`/`current_target`/
+    // `current_target_pos` — a coordinated, cited, additive-field update across every
+    // already-merged `AiContext`-constructing test file (mirroring M4-B07's own identical
+    // `UpdateContext` field-addition precedent, M4-B00-index), never touching this file's
+    // own test bodies/assertions below.
+    melee_attack_signal: Option<RcEntityId>,
 }
 
 impl Scratch {
@@ -54,6 +60,7 @@ impl Scratch {
             navigation: PathNavigation::default(),
             movement_intent: PendingMovementIntent::default(),
             look_target: None,
+            melee_attack_signal: None,
         }
     }
 
@@ -72,6 +79,9 @@ impl Scratch {
             movement_intent: &mut self.movement_intent,
             look_target: &mut self.look_target,
             hurt_by: None,
+            melee_attack_signal: &mut self.melee_attack_signal,
+            current_target: None,
+            current_target_pos: None,
         }
     }
 }
