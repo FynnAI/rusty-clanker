@@ -903,6 +903,33 @@ Entries name the milestone that surfaced them and the code they concern.
   join, self-sync) or the entries move to a named NET-hardening changeset with
   `expires M5` — decide before M4's acceptance run.
 
+- **A pressure plate pressed by state swap does not light a wire beside its
+  support block on the oracle; our replay does.** M4-B10's fourth fixture
+  (`pressure_plate_strong_powers_block_below`) was narrowed to the half the
+  oracle confirms (a wire beside the plate itself) because the real capture of
+  "wire beside the support stone" never lights. The likely cause is the
+  fixture method, not the signal model: the corpus presses the plate with
+  `/setblock powered=true`, and vanilla's `setBlock` notifies only the plate's
+  own six neighbours, whereas a real press runs the plate's own
+  `updateNeighbours`, which also notifies the support block's neighbours; the
+  lever fixture's geometry happens to put its wire within the lever's own
+  neighbour set. Our engine's fan-out reaches the support block's neighbours
+  either way. Planning: this is the concrete cost of the missing corpus `use`
+  action (entry above) — until the harness can press a plate through entity
+  presence or click a button through the bot, input-component fixtures can
+  only assert what a raw state write propagates in vanilla, and the
+  support-relay half of the blueprint's claim stays unverified.
+- **The replay harness's registry is hand-maintained and silently drifts
+  from the composition root.** `rc_gametest::replay::tier1_registry` never
+  gained `register_tier2_inputs` when M4-B10 landed it in
+  `bootstrap_redstone_dispatch`; every button and plate state resolved to the
+  no-op defaults during replay until a fixture placed one beside a wire. The
+  M3.5-B02 dispatch-range unification closed the id side of this drift; the
+  behaviour registration side is still two lists. Planning: derive the replay
+  registry from the same bootstrap function as production (with the harness's
+  own `NoEntities` presence source injected) so a registration can never be
+  missing on one side only.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
