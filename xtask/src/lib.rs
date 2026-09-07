@@ -19,6 +19,7 @@ pub mod m1_report;
 pub mod m2_report;
 pub mod m3_5_be_report;
 pub mod m3_report;
+pub mod m4_report;
 pub mod metadata;
 pub mod path_guard;
 pub mod process;
@@ -190,6 +191,11 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = m3_report::Mode::Smoke)]
         mode: m3_report::Mode,
     },
+    /// M4-B09: aggregates all three M4 roadmap acceptance criteria (region-boundary
+    /// position delta, hopper cross-chunk cadence, the eleven-scenario AI/combat suite)
+    /// into `target/verify/m4-acceptance.json`. No `--mode` flag (Context Part A: no
+    /// oracle exists for any of M4's own criteria, so no smoke/full distinction applies).
+    M4Report,
     /// M3 field-report harness (governance changeset): drives every tier-1 placeable
     /// block kind through the real client -> server `UseItemOn`/creative-hotbar
     /// packet path (never the redstone corpus's own oracle-pre-resolved,

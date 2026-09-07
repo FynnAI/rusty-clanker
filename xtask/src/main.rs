@@ -203,6 +203,7 @@ fn main() -> ExitCode {
             }
         },
         Command::M3Report { server_bin, mode } => xtask::m3_report::run(server_bin, mode),
+        Command::M4Report => xtask::m4_report::run(),
         Command::PlacementDiff {
             version,
             server_jar,

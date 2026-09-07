@@ -452,6 +452,57 @@ jobs:
             target/verify/parity-check-redstone-diffs/**
           if-no-files-found: warn
 
+  m4-acceptance:
+    name: m4-acceptance (${{ matrix.os }})
+    # M4-B09 Context Part A's own "Structural simplification": no vanilla oracle exists
+    # for any of M4's own three criteria, so (unlike m1/m2/m3-acceptance above) this job
+    # runs on every PR, not gated behind `schedule`/`workflow_dispatch` -- no `if:` guard.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    # `RUSTC_BOOTSTRAP=1`: identical `simdnbt`/`portable_simd` precedent to every other
+    # job above that builds `rc-nbt`/`rc-chunk-storage` transitively on this workspace's
+    # pinned *stable* toolchain.
+    env:
+      RUSTC_BOOTSTRAP: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Forced deviation from this blueprint's own literal CI-job sketch (final report
+      # has the full citation): `m4_report::run` itself shells out to `cargo nextest run`
+      # (Context Part A, mechanism 1, applied to all thirteen cases) -- the sketch's own
+      # bare `cargo run -p xtask -- m4-report` step, with no `cargo-nextest` install step
+      # at all, could never actually succeed. Restated here with the identical
+      # cache-then-install pattern every `m1/m2/m3-acceptance` job above already uses.
+      - name: Cache cargo-nextest binary
+        id: nextest-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ matrix.os }}-0.9.143
+
+      - name: Install cargo-nextest (WS-D10 pin)
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-nextest --locked --version 0.9.143
+
+      - name: m4-report
+        run: cargo run -p xtask -- m4-report
+
+      - name: Upload m4-acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-acceptance-${{ matrix.os }}
+          path: target/verify/m4-acceptance.json
+          if-no-files-found: warn
+
   # TEST-D58 replaces the old single sequential `protocol-diff` job (which ran both
   # captures one after another inside one job, then diffed in-process) with the three
   # jobs below: `protocol-capture-oracle` and `protocol-capture-ours` run in parallel
