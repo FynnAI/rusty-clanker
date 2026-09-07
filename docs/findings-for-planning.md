@@ -930,6 +930,22 @@ Entries name the milestone that surfaced them and the code they concern.
   own `NoEntities` presence source injected) so a registration can never be
   missing on one side only.
 
+- **Three M4-B09 constants have no decision ID.** `MELEE_ATTACK_RANGE = 1.5`,
+  `HURT_BY_MEMORY_TTL_TICKS = 100` and `STEP_BLOCKS_PER_TICK = 0.2` ship as
+  local constants of the AI–combat bridge and the scenario harness; the
+  blueprint's Part J left them unpinned. Planning: ratify or correct them as
+  MECH- rows (the reference's own values for melee reach, hurt-by memory expiry
+  and the scenario step size), then the constants cite the row.
+- **Entity-sensitive corpus fixtures must keep clear of the capture bot's
+  cell.** `fetch-corpus` teleports the bot to the contraption origin; a
+  pressure plate built at local `(0, 1, 0)` is pressed by the bot's own body
+  depending on timing (CI saw the wire at power 15 during setup, the local
+  oracle at 0). The M4-B10 fixture now sits two blocks off the origin. Planning:
+  make the rule part of the fixture lint (`spec.rs` support lint family): no
+  entity-reactive block — plates, tripwire, later observers of entities — in
+  the origin cell or its column, or move the bot's stance out of every
+  contraption's bounding box.
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real
@@ -2797,6 +2813,28 @@ Entries name the milestone that surfaced them and the code they concern.
   Planning: the blueprint that adds commands owns the live path; the
   protocol-diff harness now starts our side with the same three rules the
   oracle is frozen with.
+
+- **M4-B09 landed with documented deviations from its blueprint text.**
+  `m4-report`'s per-scenario budget is 300 s, not 20 s (measured 54–385 s on
+  warm and cold runs); nextest filters by bare function name; the
+  `combat/attributes.rs` + `attribute_packets.rs` pair was kept and bridged
+  (`IntoAttributeKind`) instead of retired, because M4-B05's protected golden
+  tests depend on it; `AiContext` gained a fourth field (`current_target_pos`)
+  for the follow-range and line-of-sight adapters; scenario 10's health
+  sequence uses the landed attack damage 2.0; scenario 11's ratio bound is
+  4.0 instead of 7.0 over a real round trip; the Stage-6b order test lives in
+  `crates/server/tests` because `register_mob_combat_system` is a server
+  function. A real defect was fixed on the way: the villager brain's panic
+  trigger read `HurtBy` instead of `HurtByEntity`. Planning: fold the
+  corrections into the M4-B09 text at the next pass; the two-attribute-map
+  state stays until a blueprint retires one of them.
+- **`fetch-corpus` passes a relative `--server-jar` verbatim to a subprocess
+  with a different working directory.** `protocol-diff` and `placement-diff`
+  absolutize the path against the repository root; `fetch-corpus` did not, so
+  `--server-jar oracle/26.2/server.jar` launched a `java -jar` that found no
+  jar and the oracle "did not become ready" with no further diagnostic. Closed
+  by absolutizing in `fetch-corpus` too; the oracle launcher should also
+  surface the child's first stderr lines on a startup timeout.
 
 ## C. Blueprint corrections already applied (planning reconciliation may be needed)
 
