@@ -183,9 +183,11 @@ fn milestone_token_len(subject: &str) -> Option<usize> {
 }
 
 /// §2.9 step 1: parses a leading `M<n>` / `M<n>.<m>` token, optionally immediately
-/// followed by `-B<nn>` (exactly two ASCII digits), followed in either case by
-/// whitespace, from the start of `subject`. Anything else -- no leading token, a
-/// malformed `-B` suffix, no trailing whitespace, lower-case -- is `None`.
+/// followed by `-B<nn>` (exactly two ASCII digits) plus an optional single lower-case
+/// ASCII letter (a sizing-rule split sibling such as `M5-B06b`, `M5-B12f` -- the
+/// PLAN-D11 wave's convention), followed in either case by whitespace, from the start
+/// of `subject`. Anything else -- no leading token, a malformed `-B` suffix, no
+/// trailing whitespace, lower-case milestone letter -- is `None`.
 pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
     let milestone_len = milestone_token_len(subject)?;
     let after_milestone = &subject[milestone_len..];
@@ -195,7 +197,13 @@ pub fn subject_owner(subject: &str) -> Option<SubjectOwner> {
         if digit_count != 2 {
             return None;
         }
-        let id_len = milestone_len + 2 + digit_count;
+        let suffix_len = usize::from(
+            rest[digit_count..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase()),
+        );
+        let id_len = milestone_len + 2 + digit_count + suffix_len;
         return subject[id_len..]
             .starts_with(|c: char| c.is_whitespace())
             .then(|| SubjectOwner::Blueprint(subject[..id_len].to_string()));

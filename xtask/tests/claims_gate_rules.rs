@@ -98,6 +98,25 @@ fn subject_owner_parses_blueprint_and_milestone_forms() {
 }
 
 #[test]
+fn subject_owner_accepts_a_split_sibling_letter_suffix() {
+    // PLAN-D11 wave convention: a sizing-rule split keeps the parent's number and adds
+    // one lower-case letter (`M5-B06b`, `M5-B12f`); the owner is the suffixed id.
+    assert_eq!(
+        subject_owner("M5-B06b implementation: the tunnel-local carver stream"),
+        Some(SubjectOwner::Blueprint("M5-B06b".to_string()))
+    );
+    assert_eq!(
+        subject_owner("M5-B12f test-authoring: geode layer thresholds"),
+        Some(SubjectOwner::Blueprint("M5-B12f".to_string()))
+    );
+    // Two letters, an upper-case letter, or a digit-then-letter without whitespace
+    // after it are not ids.
+    assert_eq!(subject_owner("M5-B06bb implementation: probe"), None);
+    assert_eq!(subject_owner("M5-B06B implementation: probe"), None);
+    assert_eq!(subject_owner("M5-B06b: probe"), None);
+}
+
+#[test]
 fn subject_owner_is_none_without_a_leading_id() {
     assert_eq!(
         subject_owner("CI nightly tier: build the release server before the paritybot tests"),
