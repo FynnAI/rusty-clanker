@@ -17,9 +17,12 @@
 // changeset boundary (TEST-D45/D46) — asserting the wrong expectation into a committed fixture
 // would be worse than omitting the scenario.
 //
-// Geometry: a support stone at (0,0,0); an oak pressure plate directly on top at (0,1,0); a
-// wire at (0,1,-1) — north of the PLATE itself, same Y as the plate — on its own separate
-// floor at (0,0,-1).
+// Geometry: a support stone at (2,0,0); an oak pressure plate directly on top at (2,1,0); a
+// wire at (2,1,-1) — north of the PLATE itself, same Y as the plate — on its own separate
+// floor at (2,0,-1). Two blocks east of the origin on purpose: the capture bot is teleported
+// to the origin cell, and a plate built there is pressed by the bot's own body (observed on
+// CI as a wire already at power 15 during setup) — an entity-sensitive block must never
+// share the bot's cell.
 //
 // Every block_id/state_id below was resolved directly against the generated registry
 // (`rc_registries::block_state_properties::state_id`): `minecraft:stone` = block_id 975,
@@ -38,15 +41,15 @@ ContraptionSpec(
     quirk: "`BasePressurePlateBlock`-style plates emit weak signal omnidirectionally while pressed (this project's own `PressurePlateBehavior::weak_signal_toward`, `M4-B10`) — sufficient on its own for any neighbour directly touching the plate, the same rule a button's own adjacent-wire fixture already exercises.",
     max_ticks: 6,
     blocks: [
-        (pos: (0, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
-        (pos: (0, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
-        (pos: (0, 1, -1), vanilla_state: "minecraft:redstone_wire[east=none,north=none,power=0,south=none,west=none]", state_id: 5171),
+        (pos: (2, 0, 0), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
+        (pos: (2, 0, -1), vanilla_state: "minecraft:stone", state_id: 1),
+        (pos: (2, 1, -1), vanilla_state: "minecraft:redstone_wire[east=none,north=none,power=0,south=none,west=none]", state_id: 5171),
     ],
     actions: [
         // Tick 3: press the plate in place (standing in for a real entity stepping onto it).
-        (tick: 3, pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=true]", state_id: 6861),
+        (tick: 3, pos: (2, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=true]", state_id: 6861),
         // Tick 5: release it.
-        (tick: 5, pos: (0, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
+        (tick: 5, pos: (2, 1, 0), vanilla_state: "minecraft:oak_pressure_plate[powered=false]", state_id: 6862),
     ],
 )
