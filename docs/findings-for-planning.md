@@ -1030,6 +1030,22 @@ Entries name the milestone that surfaced them and the code they concern.
   the corpus has no multi-bot-overlap capture that shows one; that
   encoding is reference-derived only (recorded in section B below).
 
+- **`update_recipes` orders its seven recipe property sets by Java identity
+  hash — a per-JVM-run order no server can reproduce.** The scheduled
+  protocol-diff run 34136496501 (`ubuntu-24.04`) diffed the 3360-byte body
+  as different on `session/spawn` and `session/disconnect_reconnect` while
+  the local frozen capture matched byte-for-byte: `ClientboundUpdateRecipesPacket`
+  writes `Map<ResourceKey<RecipePropertySet>, RecipePropertySet>` in `HashMap`
+  order and `ResourceKey` hashes by identity, so the order is fixed only
+  within one JVM process. Same class as the `update_tags` finding (registry
+  and tag maps in identity-hash order). Decision (planning, 2026-09-07): the
+  harness normaliser canonicalises identity-hash-ordered maps before the
+  byte comparison (sort `update_tags`' per-registry map and `update_recipes`'
+  property-set map by key) — the order carries no semantics for the client,
+  which rebuilds maps — instead of registering these permanently; until that
+  test-authoring change lands the register carries a Body entry
+  (`NET hardening: registry/tag sync order`, v10).
+
 ## B. Shipped deviations and simplifications awaiting a decision
 
 - **Stage 7's own production wiring is closed, but nothing yet spawns a real

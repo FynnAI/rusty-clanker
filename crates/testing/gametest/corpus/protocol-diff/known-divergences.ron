@@ -104,6 +104,12 @@
     // the reconnect step, by the oracle's accumulated progression (no advancement,
     // recipe-book or inventory persistence on our side yet).
     (steps: "session/*", packet: "minecraft:update_advancements", class: Body, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
+    // `update_recipes` carries its seven RecipePropertySet entries in a Java HashMap
+    // keyed by ResourceKey identity hashes: the order differs between JVM runs (the
+    // scheduled run 34136496501 saw smithing_addition first where the frozen local
+    // capture and our table have smoker_input first), never the content. Same class as
+    // `update_tags` — closes when the normalizer canonicalises identity-hash-ordered maps.
+    (steps: "session/*", packet: "minecraft:update_recipes", class: Body, closes_with: Some("NET hardening: registry/tag sync order"), expires: Some("M5")),
     (steps: "session/disconnect_reconnect", packet: "minecraft:recipe_book_add", class: Body, closes_with: Some("NET hardening: recipe book and advancements"), expires: Some("M5")),
     // Placing an item the player holds for the first time unlocks recipes on the oracle
     // (`recipe_book_add` plus the matching `update_advancements` grant) — no recipe

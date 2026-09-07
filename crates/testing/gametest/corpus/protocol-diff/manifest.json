@@ -4,8 +4,8 @@
   "entries": [
     {
       "path": "known-divergences.ron",
-      "sha256": "410ed425983f036586f266fa936b1ad4d09f49d2580ce73c55d235e5cffef385",
-      "generator_tool_version": "manual/M3.5-B03-TEST-D59-v9",
+      "sha256": "28a205e7dd6ddef9a67f369bcc770fc8072d1a8911da7dd7a1fd69aeebe7ea8f",
+      "generator_tool_version": "manual/M3.5-B03-TEST-D59-v10",
       "source_jar_sha1": "n/a"
     }
   ]
