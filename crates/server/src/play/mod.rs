@@ -13,6 +13,7 @@ mod block_action;
 mod chunk;
 pub mod combat;
 pub mod combat_packets;
+mod commands_packet;
 mod connection;
 mod entity_drops;
 mod entity_packets;
@@ -23,6 +24,7 @@ mod entity_persistence;
 /// and its one manual tick-loop step (`entity_inside_step`) are consumed directly by `world.rs`.
 pub mod entity_presence;
 mod entity_tracking;
+mod join_packets;
 mod keepalive;
 mod mining;
 mod movement;
@@ -40,8 +42,11 @@ mod movement;
 pub mod packets;
 mod persistence;
 mod player_transfer;
+mod recipe_data;
 mod registry_resolvers;
 mod two_region_world;
+mod update_recipes_data;
+mod update_recipes_packet;
 mod world;
 
 pub use attribute_packets::{UpdateAttributes, build_update_attributes};
@@ -50,6 +55,7 @@ pub use block_action::{
     PendingBlockAction, debug_query_block, debug_query_light, resolve_place_position,
     seed_chunk_column, target_position, to_storage_biome_id, to_storage_id,
 };
+pub use commands_packet::Commands;
 pub use connection::{PlayerProfile, enter_play};
 pub use entity_packets::{
     LpVec3, RemoveEntities, SetEntityData, SetEntityVelocity, SetHeadRotation, SpawnEntity,
@@ -60,6 +66,15 @@ pub use entity_persistence::{read_entities_chunk, write_entities_chunk};
 pub use entity_tracking::{
     ENTITY_UPDATE_INTERVAL_TICKS, apply_tracking_delta_for_player, entity_pickup_step,
     entity_resync_step,
+};
+pub use join_packets::{
+    ABILITY_FLAG_CAN_FLY, ABILITY_FLAG_FLYING, ABILITY_FLAG_INSTABUILD, ABILITY_FLAG_INVULNERABLE,
+    ChangeDifficulty, ContainerSetContent, DEFAULT_BORDER_ABSOLUTE_MAX_SIZE, DEFAULT_BORDER_SIZE,
+    DEFAULT_BORDER_WARNING_BLOCKS, DEFAULT_BORDER_WARNING_TIME, DEFAULT_MOTD, DEFAULT_TICK_RATE,
+    DIFFICULTY_PEACEFUL, Disconnect, EmptySlot, InitializeBorder, JOIN_MESSAGE_KEY,
+    JoinLeaveMessage, LEAVE_MESSAGE_KEY, PLAYER_INVENTORY_SLOT_COUNT, PlayerAbilitiesClientbound,
+    PlayerInfoRemove, RecipeBookSettings, ServerData, SetExperienceClientbound,
+    SetHeldSlotClientbound, SystemChat, TickingState, TickingStep,
 };
 pub use keepalive::{DisconnectReason, KeepAliveAction, KeepAliveDriver};
 pub use mining::{
@@ -88,10 +103,12 @@ pub use player_transfer::{
     PlayerTransferPayload, RegionQueueHandles, TRANSFER_PAYLOAD_KIND_PLAYER,
     build_player_entity_snapshot, combined_arrival_driver, try_decode_player_snapshot,
 };
+pub use recipe_data::{RecipeBookAdd, UpdateAdvancements};
 pub use two_region_world::{
     BOUNDARY_CHUNK_X, REGION_EAST_ID, REGION_WEST_ID, STRIP_CHUNK_X_RANGE, STRIP_CHUNK_Z_RANGE,
     TwoRegionWorld,
 };
+pub use update_recipes_packet::UpdateRecipes;
 pub use world::{
     DebugItemEntityInfo, EncodedChunk, HARDCODED_REGION_ID, HardcodedWorld, PendingJoin,
     PlayerMarker, SYNCHRONIZED_REGISTRIES, Stage4Counters,

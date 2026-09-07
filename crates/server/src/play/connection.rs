@@ -15,6 +15,14 @@ use super::block_action::{BlockActionKind, Face, PendingBlockAction};
 use super::chunk;
 use super::combat::PendingAttack;
 use super::combat_packets::{Attack, Interact};
+use super::commands_packet::Commands;
+use super::join_packets::{
+    ABILITY_FLAG_CAN_FLY, ABILITY_FLAG_INSTABUILD, ABILITY_FLAG_INVULNERABLE, ChangeDifficulty,
+    ContainerSetContent, DEFAULT_BORDER_ABSOLUTE_MAX_SIZE, DEFAULT_BORDER_SIZE,
+    DEFAULT_BORDER_WARNING_BLOCKS, DEFAULT_BORDER_WARNING_TIME, DEFAULT_MOTD, DEFAULT_TICK_RATE,
+    DIFFICULTY_PEACEFUL, InitializeBorder, PlayerAbilitiesClientbound, RecipeBookSettings,
+    ServerData, SetExperienceClientbound, SetHeldSlotClientbound, TickingState, TickingStep,
+};
 use super::keepalive::{KeepAliveAction, KeepAliveDriver};
 use super::mining::{HeldItemStub, PlaceableBlockKind, placeable_kind_for_item_id};
 use super::movement::{
@@ -28,8 +36,11 @@ use super::packets::{
     SetPlayerRotation, SynchronizePlayerPosition, UseItemOn, pack_position, unpack_position,
 };
 use super::persistence::PlayerSessionStore;
+use super::recipe_data::{RecipeBookAdd, UpdateAdvancements};
+use super::update_recipes_packet::UpdateRecipes;
 use super::world::{HardcodedWorld, PendingJoin};
 use crate::net::ConnectionHandle;
+use rc_protocol::NbtTextComponent;
 
 pub struct PlayerProfile {
     pub uuid: u128,
@@ -42,6 +53,21 @@ pub const SPAWN_POSITION: BlockPos = BlockPos::new(0, -60, 0);
 /// `KeepAliveDriver::on_tick` itself gates on `KEEPALIVE_INTERVAL`, so any poll cadence
 /// finer or coarser than exactly 15s never changes observed behavior (Context).
 const KEEPALIVE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// NET hardening (PLAN-D12, join sequence): the message text this crate's own
+/// server-initiated `Disconnect` carries for each `keepalive::DisconnectReason` --
+/// plain English restatements of vanilla's own translation keys (`disconnect.timeout`
+/// et al.), matching this crate's own established "plain literal, not a translation
+/// key" convention for every other `NbtTextComponent` reason string in this codebase
+/// (`net::configuration_flow::disconnect`'s own identical style).
+fn disconnect_reason_text(reason: super::keepalive::DisconnectReason) -> &'static str {
+    use super::keepalive::DisconnectReason;
+    match reason {
+        DisconnectReason::KeepAliveTimeout => "Timed out",
+        DisconnectReason::KeepAliveIdMismatch => "Timed out",
+        DisconnectReason::UnsolicitedKeepAlive => "Timed out",
+    }
+}
 
 /// This blueprint's own entry point (Context: "Assumed hand-off"). Sends the full
 /// Play-entry sequence, then drives the keep-alive + inbound-dispatch loop for the
@@ -121,14 +147,28 @@ pub async fn enter_play(
     let login_play = LoginPlay {
         entity_id: network_entity_id,
         is_hardcore: false,
-        dimension_names: vec!["minecraft:overworld".to_string()],
+        // NET hardening (PLAN-D12, join sequence): the real oracle's own `levels` set
+        // always lists all three built-in dimensions, regardless of which are actually
+        // loaded (`ClientboundLoginPacket.levels`'s own real content, decompiled-
+        // source-verified: every `ResourceKey<Level>` currently registered, not merely
+        // the joining player's own current dimension) -- real body observed at every
+        // join (`connection.rs`'s own test-authoring commit has the full byte
+        // citation).
+        dimension_names: vec![
+            "minecraft:overworld".to_string(),
+            "minecraft:the_nether".to_string(),
+            "minecraft:the_end".to_string(),
+        ],
         max_players: 20,
         // M1 integration fix, round 5: raised from `2` to `5` alongside `chunk::
         // PLACEHOLDER_RADIUS_CHUNKS` (that constant's own doc comment has the full
         // writeup) -- large enough for a real client's own chunk-cache array to hold the
         // new 11x11 send grid.
         view_distance: 5,
-        simulation_distance: 2,
+        // NET hardening (PLAN-D12, join sequence): real oracle bytes observed `10`, not
+        // this crate's own prior `2` -- vanilla's own default `simulation-distance`
+        // server property.
+        simulation_distance: 10,
         reduced_debug_info: false,
         enable_respawn_screen: true,
         do_limited_crafting: false,
@@ -141,7 +181,12 @@ pub async fn enter_play(
         is_flat: true,
         has_death_location: false,
         portal_cooldown: 0,
-        sea_level: 63,
+        // NET hardening (PLAN-D12, join sequence): real oracle bytes decode to `-63`,
+        // not the "normal overworld" `63` this crate's own first implementation
+        // assumed -- this flat preset's own dimension type configures sea level one
+        // block above its own bedrock floor (`SPAWN_POSITION`'s own `y = -60` sits
+        // squarely inside that same low band), not the standard overworld default.
+        sea_level: -63,
         // Purely informational to a real client (never gates `Event::Spawn`); this
         // blueprint's own `enter_play` has no route to the real `ServerLoginConfig::
         // online_mode` flag a much earlier connection stage already resolved (threading it
@@ -159,14 +204,59 @@ pub async fn enter_play(
         return;
     }
 
-    let spawn_position = SetDefaultSpawnPosition {
-        dimension: "minecraft:overworld".to_string(),
-        location: pack_position(SPAWN_POSITION),
-        yaw: 0.0,
-        pitch: 0.0,
-    };
+    // NET hardening (PLAN-D12, join sequence): every one of these packets' own real
+    // oracle body (change_difficulty through recipe_book_add's "reset" call) is
+    // `join_packets.rs`/`commands_packet.rs`/`recipe_data.rs`'s own doc-comment
+    // citation -- restated here only as the exact real join-time send order those
+    // modules' own doc comments already establish.
     if handle
-        .try_send_payload(encode_payload(&spawn_position))
+        .try_send_payload(encode_payload(&ChangeDifficulty {
+            difficulty: DIFFICULTY_PEACEFUL,
+            locked: false,
+        }))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&PlayerAbilitiesClientbound {
+            flags: ABILITY_FLAG_INVULNERABLE | ABILITY_FLAG_CAN_FLY | ABILITY_FLAG_INSTABUILD,
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&SetHeldSlotClientbound { slot: 0 }))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&UpdateRecipes))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle.try_send_payload(encode_payload(&Commands)).is_err() {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&RecipeBookSettings::CLOSED))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&RecipeBookAdd::reset()))
         .is_err()
     {
         return;
@@ -195,6 +285,45 @@ pub async fn enter_play(
         return;
     }
 
+    if handle
+        .try_send_payload(encode_payload(&ServerData {
+            motd: NbtTextComponent(DEFAULT_MOTD.to_string()),
+            icon_present: false,
+        }))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&InitializeBorder {
+            new_center_x: 0.0,
+            new_center_z: 0.0,
+            old_size: DEFAULT_BORDER_SIZE,
+            new_size: DEFAULT_BORDER_SIZE,
+            lerp_time: 0,
+            new_absolute_max_size: DEFAULT_BORDER_ABSOLUTE_MAX_SIZE,
+            warning_blocks: DEFAULT_BORDER_WARNING_BLOCKS,
+            warning_time: DEFAULT_BORDER_WARNING_TIME,
+        }))
+        .is_err()
+    {
+        return;
+    }
+
+    let spawn_position = SetDefaultSpawnPosition {
+        dimension: "minecraft:overworld".to_string(),
+        location: pack_position(SPAWN_POSITION),
+        yaw: 0.0,
+        pitch: 0.0,
+    };
+    if handle
+        .try_send_payload(encode_payload(&spawn_position))
+        .is_err()
+    {
+        return;
+    }
+
     let game_event = GameEvent {
         event: 13,
         value: 0.0,
@@ -206,24 +335,18 @@ pub async fn enter_play(
         return;
     }
 
-    // M2 integration addition: sent here, immediately after `GameEvent` and before any
-    // chunk data -- deliberately NOT after `ChunkBatchFinished` (this project's own first
-    // attempt at this placement broke every `drain_play_entry`-style acceptance test
-    // that reads exactly through `ChunkBatchFinished` then asserts the very next packet
-    // is a specific response, e.g. `play_reach_validation.rs`'s own `assert_eq!(id,
-    // AcknowledgeBlockChange::ID)` immediately after `spawn_actor` returns -- a leftover
-    // `SetHealth` sitting unread past `ChunkBatchFinished` was consumed by that next
-    // `recv_packet` call instead, a real regression confirmed by a real `cargo nextest`
-    // run before this placement was corrected). `play_chunk_set.rs`'s own strict,
-    // packet-by-packet Play-entry assertion needed a matching test-authoring fix for
-    // this exact insertion point (see that commit).
-    let set_health = SetHealth {
-        health,
-        food: food_level,
-        saturation: food_saturation_level,
-    };
     if handle
-        .try_send_payload(encode_payload(&set_health))
+        .try_send_payload(encode_payload(&TickingState {
+            tick_rate: DEFAULT_TICK_RATE,
+            is_frozen: false,
+        }))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&TickingStep { tick_steps: 0 }))
         .is_err()
     {
         return;
@@ -247,6 +370,63 @@ pub async fn enter_play(
     };
     if handle
         .try_send_payload(encode_payload(&chunk_cache_center))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(
+            &ContainerSetContent::empty_player_inventory(),
+        ))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&RecipeBookAdd::default_unlocks()))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&UpdateAdvancements::default_join_grant()))
+        .is_err()
+    {
+        return;
+    }
+
+    // M2 integration addition: sent here, before any chunk data -- deliberately NOT
+    // after `ChunkBatchFinished` (this project's own first attempt at this placement
+    // broke every `drain_play_entry`-style acceptance test that reads exactly through
+    // `ChunkBatchFinished` then asserts the very next packet is a specific response,
+    // e.g. `play_reach_validation.rs`'s own `assert_eq!(id, AcknowledgeBlockChange::
+    // ID)` immediately after `spawn_actor` returns -- a leftover `SetHealth` sitting
+    // unread past `ChunkBatchFinished` was consumed by that next `recv_packet` call
+    // instead, a real regression confirmed by a real `cargo nextest` run before this
+    // placement was corrected). `play_chunk_set.rs`'s own strict, packet-by-packet
+    // Play-entry assertion needed a matching test-authoring fix for this exact
+    // insertion point (see that commit).
+    let set_health = SetHealth {
+        health,
+        food: food_level,
+        saturation: food_saturation_level,
+    };
+    if handle
+        .try_send_payload(encode_payload(&set_health))
+        .is_err()
+    {
+        return;
+    }
+
+    if handle
+        .try_send_payload(encode_payload(&SetExperienceClientbound {
+            experience_progress: 0.0,
+            experience_level: 0,
+            total_experience: 0,
+        }))
         .is_err()
     {
         return;
@@ -402,6 +582,17 @@ pub async fn enter_play(
                     }
                     KeepAliveAction::Disconnect(reason) => {
                         tracing::debug!(?reason, "keep-alive timeout; closing connection");
+                        // NET hardening (PLAN-D12, join sequence): vanilla always sends a
+                        // `Disconnect` packet before a server-initiated close
+                        // (`ServerCommonPacketListenerImpl`'s own disconnect path, this
+                        // module's own `join_packets::Disconnect` doc comment) --
+                        // best-effort (the connection may already be unusable), mirroring
+                        // `net::configuration_flow::disconnect`'s own identical
+                        // send-then-yield-then-close pattern.
+                        let _ = handle.try_send_payload(encode_payload(&super::join_packets::Disconnect {
+                            reason: rc_protocol::NbtTextComponent(disconnect_reason_text(reason).to_string()),
+                        }));
+                        tokio::task::yield_now().await;
                         handle.close();
                         return;
                     }
