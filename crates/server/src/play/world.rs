@@ -1476,6 +1476,10 @@ pub struct HardcodedWorld {
     /// New (M4-B05), test/diagnostic only -- `debug_query_entity`'s own doc comment.
     debug_query_entity_tx:
         tokio::sync::mpsc::UnboundedSender<(i32, oneshot::Sender<Option<DebugEntityInfo>>)>,
+    /// New (M4-B09), test/diagnostic only -- `debug_query_attack_strength_ticker`'s own doc
+    /// comment.
+    debug_query_attack_strength_ticker_tx:
+        tokio::sync::mpsc::UnboundedSender<(i32, oneshot::Sender<Option<u32>>)>,
 }
 
 /// M4-B05, test/diagnostic only -- `HardcodedWorld::debug_spawn_mob`'s own channel message
@@ -1490,6 +1494,34 @@ type DebugSpawnMobMsg = (
 /// M4-B05, test/diagnostic only -- `HardcodedWorld::debug_override_attribute`'s own channel
 /// message shape.
 type DebugOverrideAttributeMsg = (i32, AttributeKind, f64, oneshot::Sender<()>);
+
+/// M4-B09 Context Part B (adapted -- `debug_override_attribute`'s own doc comment has the
+/// full citation): resolves either the retired-in-name-only `AttributeKind` or the real
+/// `minecraft:attribute` registry constant into the one concrete `AttributeKind` this crate's
+/// live `combat::attributes::AttributeMap`/`PlayerCombatState.attributes` storage is still
+/// keyed by. A local trait (not a foreign `From` impl) because neither `AttributeKind` nor
+/// `rc_registries::generated_v776::registries::RegistryEntryId` is local to this crate for a
+/// `RegistryEntryId`-targeted `From` impl to be legal under Rust's orphan rule.
+pub trait IntoAttributeKind {
+    /// `None` for a registry id this crate's own `AttributeKind` table has no corresponding
+    /// variant for (never the case for any of the fourteen registry constants Context Part B
+    /// names, but a well-defined "no-op" outcome rather than a panic for any other id).
+    fn into_attribute_kind(self) -> Option<AttributeKind>;
+}
+
+impl IntoAttributeKind for AttributeKind {
+    fn into_attribute_kind(self) -> Option<AttributeKind> {
+        Some(self)
+    }
+}
+
+impl IntoAttributeKind for rc_registries::generated_v776::registries::RegistryEntryId {
+    fn into_attribute_kind(self) -> Option<AttributeKind> {
+        AttributeKind::ALL
+            .into_iter()
+            .find(|k| k.registry_ordinal() == self.0 as i32)
+    }
+}
 
 /// M3 field-report fix (symptom 2): `HardcodedWorld`'s per-connection channel methods
 /// (`queue_join`/`queue_block_action`/`queue_movement_packet`/`queue_player_input`/
@@ -1650,6 +1682,11 @@ impl HardcodedWorld {
         let (debug_query_entity_tx, mut debug_query_entity_rx) =
             tokio::sync::mpsc::unbounded_channel::<(i32, oneshot::Sender<Option<DebugEntityInfo>>)>(
             );
+        // M4-B09, test/diagnostic only -- `debug_query_attack_strength_ticker`'s own doc
+        // comment (Context Part G, scenario 10/11's own need for exact, jitter-free tick-level
+        // control over a real player's own attack-cooldown charge curve).
+        let (debug_query_attack_strength_ticker_tx, mut debug_query_attack_strength_ticker_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(i32, oneshot::Sender<Option<u32>>)>();
         let shutdown_flag = Arc::new(AtomicBool::new(false));
 
         // M2 integration addition (M2-B06's own "Composition-root integration" recipe
@@ -3430,7 +3467,18 @@ impl HardcodedWorld {
                     let is_living = kind.is_living();
                     let mut entity_commands = region.world.spawn((base, payload));
                     if is_living {
-                        entity_commands.insert((living, attributes, CombatRuntimeState::default()));
+                        // M4-B09 Context Part C.1/C.2: `PendingMeleeAttack`/`RecentDamage`
+                        // attached alongside `AttributeMap`/`CombatRuntimeState` at every
+                        // mob-spawn call site, both defaulted to `None` (the Stage-6a<->
+                        // Stage-6b AI/combat bridge, inert until a live target/attack decision
+                        // is actually set).
+                        entity_commands.insert((
+                            living,
+                            attributes,
+                            CombatRuntimeState::default(),
+                            rc_mechanics::combat::PendingMeleeAttack::default(),
+                            rc_mechanics::combat::RecentDamage::default(),
+                        ));
                     }
                     let entity = entity_commands.id();
                     let rc_id = rc_core::RcEntityId(entity.to_bits());
@@ -3542,6 +3590,24 @@ impl HardcodedWorld {
                         }
                     });
                     let _ = reply.send(info);
+                }
+
+                // M4-B09, test/diagnostic only (`debug_query_attack_strength_ticker`'s own
+                // doc comment): resolves `network_entity_id` and reads its own live
+                // `CombatRuntimeState.attack_strength_ticker` directly -- `None` if the id
+                // does not resolve or the resolved entity carries no `CombatRuntimeState`.
+                while let Ok((network_entity_id, reply)) =
+                    debug_query_attack_strength_ticker_rx.try_recv()
+                {
+                    let ticker = region
+                        .world
+                        .resource::<NetworkEntityIndex>()
+                        .0
+                        .get(&network_entity_id)
+                        .copied()
+                        .and_then(|entity| region.world.get::<CombatRuntimeState>(entity))
+                        .map(|runtime| runtime.attack_strength_ticker);
+                    let _ = reply.send(ticker);
                 }
 
                 // M3.5-B03, test/diagnostic only, reachable externally only via the
@@ -4028,6 +4094,7 @@ impl HardcodedWorld {
             debug_deal_damage_tx,
             debug_override_attribute_tx,
             debug_query_entity_tx,
+            debug_query_attack_strength_ticker_tx,
             debug_input_signal_tx,
             debug_pending_tick_tx,
             debug_entity_census_tx,
@@ -4534,12 +4601,30 @@ impl HardcodedWorld {
     /// and applies `f` to that entity's own `AttributeMap` in place. A no-op if the id does
     /// not resolve or the resolved entity carries no `AttributeMap` (e.g. a player, whose
     /// attributes live on `PlayerCombatState` instead — Context, "Player health").
+    ///
+    /// **M4-B09 Context Part B, adapted**: the blueprint's own literal text retypes this
+    /// method's second parameter from `rc_mechanics::combat::AttributeKind` to
+    /// `rc_registries::generated_v776::registries::RegistryEntryId` outright — but
+    /// `crates/server/tests/play_combat_melee_flow.rs` (M4-B05, already-merged, protected
+    /// per Constraints (a)) constructs this same call with a literal `AttributeKind::
+    /// AttackDamage` value at two call sites, so a hard retype would break that file's own
+    /// compilation. This method is instead made generic over `IntoAttributeKind` (below,
+    /// `world.rs`-local): both the retired-in-name-only `AttributeKind` and the real
+    /// registry-constant type (`rc_registries::generated_v776::registries::attribute::ARMOR`
+    /// etc.) now resolve here without changing either call site's own source text —
+    /// `play_combat_melee_flow.rs` keeps compiling unmodified, and this blueprint's own new
+    /// scenario 10/11 tests (`crates/server/tests/ai_combat_melee_scenarios.rs`) can pass the
+    /// real registry constant directly, exactly as Context Part B's own scenario 10 table
+    /// specifies. Recorded as a deviation in this blueprint's own final report.
     pub async fn debug_override_attribute(
         &self,
         network_entity_id: i32,
-        kind: AttributeKind,
+        kind: impl IntoAttributeKind,
         value: f64,
     ) {
+        let Some(kind) = kind.into_attribute_kind() else {
+            return;
+        };
         let (ack_tx, ack_rx) = oneshot::channel();
         if self
             .debug_override_attribute_tx
@@ -4555,6 +4640,21 @@ impl HardcodedWorld {
     pub async fn debug_query_entity(&self, network_entity_id: i32) -> Option<DebugEntityInfo> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.debug_query_entity_tx
+            .send((network_entity_id, reply_tx))
+            .ok()?;
+        reply_rx.await.ok().flatten()
+    }
+
+    /// M4-B09, test/diagnostic only (Context Part G, scenario 10/11): the live
+    /// `CombatRuntimeState.attack_strength_ticker` a real player's or mob's own
+    /// `attack_strength_ticker` currently holds — needed for exact, jitter-free tick-level
+    /// alignment against the attack-cooldown charge curve's own real-time increment (a real
+    /// wall-clock sleep cannot reliably hit an exact tick count). `None` if
+    /// `network_entity_id` does not resolve or the resolved entity carries no
+    /// `CombatRuntimeState` at all.
+    pub async fn debug_query_attack_strength_ticker(&self, network_entity_id: i32) -> Option<u32> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.debug_query_attack_strength_ticker_tx
             .send((network_entity_id, reply_tx))
             .ok()?;
         reply_rx.await.ok().flatten()

@@ -139,12 +139,16 @@ pub struct DimensionResource(pub DimensionId);
 /// `system_mob_despawn` and M4-B05's mob-combat system each land in this same group; this
 /// function must be called first so this system keeps `order_tag = 0` regardless of which of
 /// the other two land afterward.
-pub fn register_stage6b(builder: &mut RcExecutorBuilder) {
+/// M4-B09 Context Part I, additive: now returns the `SystemId` `register_system` itself
+/// already produces (previously discarded) — needed by
+/// `entity_physics_integration_group_registration.rs`'s own `order_tag` assertions;
+/// fully backward-compatible (every existing call site already ignores this return value).
+pub fn register_stage6b(builder: &mut RcExecutorBuilder) -> rc_scheduler::SystemId {
     builder.register_system(
         DomainGroup::EntityPhysicsIntegration,
         entity_physics_integration_factory(),
         vec![],
-    );
+    )
 }
 
 fn entity_physics_integration_factory() -> SystemFactory {

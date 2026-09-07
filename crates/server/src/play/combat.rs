@@ -959,28 +959,40 @@ fn send_health_packet(world: &World, entity: Entity) {
 }
 
 /// The Stage-6b `EntityPhysicsIntegration` system (Context, "Mob melee attacks"): consumes
-/// and removes every `PendingMeleeAttack`, applying `assemble_mob_melee_damage` +
-/// `apply_damage_pipeline` + one knockback impulse against its `target`. Also runs death
-/// handling for every entity whose `LivingEntity.is_dead` became true this tick, and
-/// decrements every non-player combat-capable entity's own `CombatRuntimeState.
-/// invulnerable_time` (floored at `0`) — players are decremented once instead by
-/// `apply_combat_step`'s own manual step (Context, `damage.rs`'s own module doc comment: "a
-/// manual per-tick decrement for players inside the same combat tick-loop step"), avoiding a
-/// double decrement on the one component type both entity shapes share.
+/// and clears every `PendingMeleeAttack` whose own `Option` field is `Some` this tick,
+/// applying `assemble_mob_melee_damage` + `apply_damage_pipeline` + one knockback impulse
+/// against its target. Also runs death handling for every entity whose `LivingEntity.is_dead`
+/// became true this tick, and decrements every non-player combat-capable entity's own
+/// `CombatRuntimeState.invulnerable_time` (floored at `0`) — players are decremented once
+/// instead by `apply_combat_step`'s own manual step (Context, `damage.rs`'s own module doc
+/// comment: "a manual per-tick decrement for players inside the same combat tick-loop step"),
+/// avoiding a double decrement on the one component type both entity shapes share.
 ///
-/// **Known limitation, cited**: `PendingMeleeAttack.target` is typed `rc_core::RcEntityId`
-/// (Deliverables' own literal signature) — but `EntityIndex` (Context) "covers non-player
-/// entities only... players are never given an `RcEntityId`", so this seam cannot represent a
-/// real mob-attacks-player target at all. No acceptance test in this changeset exercises a
-/// mob attacking a player through this system (every required scenario is player-attacks-mob
-/// or a direct `debug_deal_damage` call); reconciling this typing gap is explicitly M4-B09's
-/// own Part C task (M4-B00-index).
-pub fn register_mob_combat_system(builder: &mut RcExecutorBuilder) {
+/// **M4-B09 Context Part C.1** reshapes `PendingMeleeAttack` from a Commands-added-and-
+/// removed marker into an always-attached, `Option`-valued field — a Stage-6a `Goal`
+/// structurally cannot add a component via `Commands` at all (MECH-D32). This system's own
+/// query gains `&mut PendingMeleeAttack` in place of the retired add/remove `Commands` pair;
+/// its entry condition is now a direct field read-and-clear (`attack.0.take()`), never a
+/// structural removal — every downstream line of the already-specified algorithm below is
+/// otherwise unchanged.
+///
+/// **Known limitation, cited (unchanged by Part C.1)**: `PendingMeleeAttack`'s own
+/// `RcEntityId` payload is typed `rc_core::RcEntityId` (Deliverables' own literal signature)
+/// — but `EntityIndex` (Context) "covers non-player entities only... players are never given
+/// an `RcEntityId`", so this seam cannot represent a real mob-attacks-player target at all. No
+/// acceptance test in this changeset exercises a mob attacking a player through this system
+/// (every required scenario is player-attacks-mob or a direct `debug_deal_damage` call);
+/// restated as a still-open scope boundary, not silently dropped.
+/// M4-B09 Context Part I, additive: now returns the `SystemId` `register_system` itself
+/// already produces (previously discarded) — needed by
+/// `entity_physics_integration_group_registration.rs`'s own `order_tag` assertions;
+/// fully backward-compatible (every existing call site already ignores this return value).
+pub fn register_mob_combat_system(builder: &mut RcExecutorBuilder) -> rc_scheduler::SystemId {
     builder.register_system(
         DomainGroup::EntityPhysicsIntegration,
         mob_combat_factory(),
         vec![],
-    );
+    )
 }
 
 fn mob_combat_factory() -> SystemFactory {
@@ -989,35 +1001,37 @@ fn mob_combat_factory() -> SystemFactory {
 
 #[allow(clippy::type_complexity)]
 fn system_mob_melee_attacks(
-    attackers: Query<(Entity, &PendingMeleeAttack)>,
+    mut attackers: Query<(Entity, &mut PendingMeleeAttack)>,
     mut targets: Query<
         (
             &mut rc_mechanics::entity::LivingEntity,
             &AttributeMap,
             &mut CombatRuntimeState,
+            Option<&mut rc_mechanics::combat::RecentDamage>,
         ),
         Without<PlayerMarker>,
     >,
     entity_index: Res<EntityIndex>,
-    mut commands: Commands,
 ) {
-    for (attacker_entity, pending) in attackers.iter() {
-        commands
-            .entity(attacker_entity)
-            .remove::<PendingMeleeAttack>();
-        let Some(&target_entity) = entity_index.0.get(&pending.target) else {
+    for (attacker_entity, mut pending) in attackers.iter_mut() {
+        let Some(attack_target) = pending.0.take() else {
+            continue;
+        };
+        let Some(&target_entity) = entity_index.0.get(&attack_target) else {
             continue;
         };
         let attacker_attributes = targets
             .get(attacker_entity)
-            .map(|(_, attrs, _)| attrs.clone())
+            .map(|(_, attrs, _, _)| attrs.clone())
             .ok();
         let Some(attacker_attributes) = attacker_attributes else {
             continue;
         };
         let damage = assemble_mob_melee_damage(&attacker_attributes, EnchantLevels::default());
 
-        let Ok((mut living, attributes, mut runtime)) = targets.get_mut(target_entity) else {
+        let Ok((mut living, attributes, mut runtime, recent_damage)) =
+            targets.get_mut(target_entity)
+        else {
             continue;
         };
         let was_top_up = runtime.invulnerable_time > 10;
@@ -1025,9 +1039,16 @@ fn system_mob_melee_attacks(
         let mut absorption = living.absorption;
         let mut invulnerable_time = runtime.invulnerable_time;
         let mut last_hurt = runtime.last_hurt;
+        // M4-B09 Context Part C.2: the attacking mob's own `RcEntityId`, derived from its
+        // `Entity` handle exactly as `HardcodedWorld::debug_spawn_mob` already derives every
+        // spawned mob's own id (`RcEntityId(entity.to_bits())`) -- the one currently-reachable
+        // producer of a resolvable attacking id (the mob-attacks-player and player-attacks-mob
+        // legs remain the already-cited "no `RcEntityId` for a player" scope boundary, module
+        // doc comment above).
+        let attacker_id = RcEntityId(attacker_entity.to_bits());
         let source = DamageSource {
             kind: DamageTypeKind::MobAttack,
-            causing_entity: None,
+            causing_entity: Some(attacker_id),
             source_position: None,
             causing_entity_is_living_non_player: true,
         };
@@ -1054,6 +1075,15 @@ fn system_mob_melee_attacks(
         if matches!(outcome, DamageOutcome::Died) {
             living.is_dead = true;
         }
+        // M4-B09 Context Part C.2: `RecentDamage` is the Stage-6b -> Stage-6a bridge
+        // `HurtByTargetGoal`/`HurtBySensor` (M4-B03, closed by this blueprint's own Part C.4)
+        // read next tick -- set on any nonzero-net-damage outcome against a target that
+        // carries the component (every mob spawned by `debug_spawn_mob`).
+        if outcome.dealt_damage()
+            && let Some(mut recent_damage) = recent_damage
+        {
+            recent_damage.0 = Some(attacker_id);
+        }
         let _ = was_top_up; // knockback impulse for the mob-melee path is a bounded,
         // documented no-op pending M4-B09's own AI-to-combat bridge (module doc comment).
     }
@@ -1062,7 +1092,7 @@ fn system_mob_melee_attacks(
     // at `0`) -- reuses the identical query above rather than a second, aliasing one (a mob
     // that was also just hit above is decremented starting from its own already-updated
     // value this same tick, matching this project's own "one system, one pass" convention).
-    for (_, _, mut runtime) in targets.iter_mut() {
+    for (_, _, mut runtime, _) in targets.iter_mut() {
         runtime.invulnerable_time = (runtime.invulnerable_time - 1).max(0);
     }
 }

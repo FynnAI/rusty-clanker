@@ -2,6 +2,7 @@
 //! ECS-free math + plain data types; `rusty-clanker-server` supplies the ECS/packet adapter
 //! layer, mirroring M3-B01's `BlockWorldAccess`/M4-B01's tracking-core split exactly.
 
+pub mod ai_bridge;
 pub mod attributes;
 pub mod damage;
 pub mod death;
@@ -11,6 +12,7 @@ pub mod knockback;
 pub mod melee;
 pub mod reach;
 
+pub use ai_bridge::RecentDamage;
 pub use attributes::{
     AttributeInstance, AttributeKind, AttributeMap, AttributeModifier, ModifierOperation,
     default_attributes_for, default_player_attributes,

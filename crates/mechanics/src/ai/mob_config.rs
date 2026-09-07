@@ -64,6 +64,30 @@ pub fn default_attribute_map(kind: EntityKind) -> AttributeMap {
         attribute::JUMP_STRENGTH,
         AttributeInstance::new(0.42, 0.0, 32.0),
     );
+    // M4-B09 Context Part B: four registry rows M4-B05's own combat-only `AttributeKind`
+    // table needed and this table did not yet declare, added here so the one, registry-
+    // keyed `AttributeMap` (this module's own) stays complete for every combat-relevant
+    // attribute — every value copied verbatim from Part B's own table (TEST-D57 CONFIRMED,
+    // `M4-B09-CLAIMS.md`). Consumed by M4-B05's own formulas only through the still-separate
+    // `combat::attributes::AttributeMap` (Part B's own governance changeset keeps that type
+    // alive rather than retiring it -- final report has the full citation), so these four
+    // rows are registry-completeness content here, not yet read by any production system.
+    map.insert(
+        attribute::ATTACK_SPEED,
+        AttributeInstance::new(4.0, 0.0, 1024.0),
+    );
+    map.insert(
+        attribute::SAFE_FALL_DISTANCE,
+        AttributeInstance::new(3.0, -1024.0, 1024.0),
+    );
+    map.insert(
+        attribute::FALL_DAMAGE_MULTIPLIER,
+        AttributeInstance::new(1.0, 0.0, 100.0),
+    );
+    map.insert(
+        attribute::SWEEPING_DAMAGE_RATIO,
+        AttributeInstance::new(0.0, 0.0, 1.0),
+    );
     map
 }
 
@@ -110,18 +134,113 @@ impl Goal for ConstantGoal {
     }
 }
 
-/// `can_use` reads the bounded `hurt_by` seam every tier-2 kind's own `HurtByTargetGoal`
-/// (Zombie target selector)/`PanicGoal` (Cow) shares (Context §J).
-struct HurtByGoal {
-    flags: u8,
-}
-impl Goal for HurtByGoal {
+/// M4-B09 Context Part C.4: the melee-adjacency constant `ZombieAttackGoal::can_use`/
+/// `tick` reads. Vanilla's real per-mob attack reach varies by hitbox and is not pinned
+/// by any merged blueprint — this blueprint's own moderate-confidence value, flagged for
+/// reconciliation (Context Part J).
+pub const MELEE_ATTACK_RANGE: f64 = 1.5;
+/// M4-B09 Context Part C.4: `HurtBySensor`'s own Villager `HurtBy`-memory expiry — no
+/// merged blueprint pins vanilla's real value; flagged for reconciliation (Context Part J).
+pub const HURT_BY_MEMORY_TTL_TICKS: u32 = 100;
+
+/// `HurtByTargetGoal` (M4-B09 Context Part C.4, citing M4-B03's own `can_use` condition
+/// verbatim): the Zombie target-selector row whose `can_use` reads the bounded `hurt_by`
+/// seam directly, claiming `FLAG_TARGET` whenever `ctx.hurt_by.is_some()`. `start` needs
+/// no body of its own — the adapter (`ScenarioWorld`/a future production Stage-6a
+/// composition root) is what actually reads "which goal now holds `FLAG_TARGET`" and
+/// derives `current_target`/`current_target_pos` from it (Context Part D's own
+/// `running_goal_holding` introspection); this goal's own job is only to *claim* the flag
+/// slot, overriding ordinary range-based targeting via `GoalSelector`'s own priority
+/// eviction (this Goal's priority `1` beats `NearestAttackableTargetGoal`'s `2`,
+/// `zombie_target_selector` below).
+pub struct HurtByTargetGoal;
+impl Goal for HurtByTargetGoal {
     fn flags(&self) -> u8 {
-        self.flags
+        FLAG_TARGET
     }
     fn can_use(&self, ctx: &AiContext) -> bool {
         ctx.hurt_by.is_some()
     }
+}
+
+/// `ZombieAttackGoal` (M4-B09 Context Part C.4, concrete body): claims `FLAG_MOVE|
+/// FLAG_LOOK` and sets `ctx.melee_attack_signal` (backing `combat::PendingMeleeAttack.0`
+/// directly) whenever `ctx.current_target` is within `MELEE_ATTACK_RANGE` — the 3D
+/// Euclidean distance to `current_target`'s own adapter-supplied `current_target_pos`
+/// (Context §D's "horizontal+vertical distance," i.e. full 3D, not a horizontal-only
+/// check).
+pub struct ZombieAttackGoal;
+impl Goal for ZombieAttackGoal {
+    fn flags(&self) -> u8 {
+        FLAG_MOVE | FLAG_LOOK
+    }
+    fn can_use(&self, ctx: &AiContext) -> bool {
+        within_melee_range(ctx)
+    }
+    fn can_continue_to_use(&self, ctx: &AiContext) -> bool {
+        within_melee_range(ctx)
+    }
+    fn tick(&mut self, ctx: &mut AiContext) {
+        *ctx.melee_attack_signal = if within_melee_range(ctx) {
+            ctx.current_target
+        } else {
+            None
+        };
+    }
+}
+
+fn within_melee_range(ctx: &AiContext) -> bool {
+    let (Some(_), Some(target_pos)) = (ctx.current_target, ctx.current_target_pos) else {
+        return false;
+    };
+    let dx = target_pos[0] - ctx.self_pos[0];
+    let dy = target_pos[1] - ctx.self_pos[1];
+    let dz = target_pos[2] - ctx.self_pos[2];
+    (dx * dx + dy * dy + dz * dz).sqrt() <= MELEE_ATTACK_RANGE
+}
+
+/// `PanicGoal` (Cow, M4-B09 Context Part C.4): `can_use: ctx.hurt_by.is_some()`, flees at
+/// a `2.0` navigation-speed modifier away from `hurt_by`'s own last-known position
+/// (`ctx.current_target_pos`, the adapter's own hurt_by-derived position — Context Part
+/// C.3's own additive field). `2.0` is the Cow's own panic speed modifier (TEST-D57
+/// CONFIRMED, `M4-B09-CLAIMS.md`) — this blueprint's own navigation-execution layer
+/// (`MoveControl`) carries no per-instance speed-modifier parameter to thread that number
+/// through structurally (Context §G's own already-cited bounded gap), so this Goal's own
+/// `tick` sets a full-speed (`forward = 1.0`) flee heading directly, the same bounded
+/// simplification `ScenarioWorld`'s own movement-realization step already applies
+/// (Context Part D) — `2.0` is restated here as this Goal's own documented intent, not a
+/// literal multiplier this engine's movement model can yet apply.
+pub struct PanicGoal;
+impl Goal for PanicGoal {
+    fn flags(&self) -> u8 {
+        FLAG_MOVE
+    }
+    fn can_use(&self, ctx: &AiContext) -> bool {
+        ctx.hurt_by.is_some()
+    }
+    fn tick(&mut self, ctx: &mut AiContext) {
+        flee_from_current_target(ctx);
+    }
+}
+
+/// Shared flee-heading computation (`PanicGoal`/`FleeFromHostile`, Context Part C.4):
+/// points `movement_intent`'s own `yaw_degrees` directly away from `ctx.current_target_pos`
+/// (the same `atan2`-based convention `MoveControl`/`LookControl` already use, Context §G)
+/// and drives `forward = 1.0`. A no-op when the adapter has no position to flee from this
+/// tick (Context Part C.3's own field doc comment: `current_target_pos` is a one-tick
+/// pulse, not sticky).
+fn flee_from_current_target(ctx: &mut AiContext) {
+    let Some(target_pos) = ctx.current_target_pos else {
+        return;
+    };
+    let dx = ctx.self_pos[0] - target_pos[0];
+    let dz = ctx.self_pos[2] - target_pos[2];
+    if dx == 0.0 && dz == 0.0 {
+        return;
+    }
+    let yaw = (dz.atan2(dx)).to_degrees() as f32 - 90.0;
+    ctx.movement_intent.0.forward = 1.0;
+    ctx.movement_intent.0.yaw_degrees = yaw;
 }
 
 /// `WaterAvoidingRandomStrollGoal` (Context §J: "no current `WalkTarget`, `1/120`-
@@ -140,13 +259,7 @@ impl Goal for WaterAvoidingRandomStrollGoal {
 /// Context §J's own Zombie goal-selector table.
 pub fn zombie_goal_selector() -> GoalSelector {
     let mut selector = GoalSelector::new();
-    selector.add_goal(
-        3,
-        Box::new(ConstantGoal {
-            flags: FLAG_MOVE | FLAG_LOOK,
-            can_use: false,
-        }),
-    ); // ZombieAttackGoal
+    selector.add_goal(3, Box::new(ZombieAttackGoal));
     selector.add_goal(7, Box::new(WaterAvoidingRandomStrollGoal));
     selector.add_goal(
         8,
@@ -168,7 +281,7 @@ pub fn zombie_goal_selector() -> GoalSelector {
 /// Context §J's own Zombie target-selector table.
 pub fn zombie_target_selector() -> GoalSelector {
     let mut selector = GoalSelector::new();
-    selector.add_goal(1, Box::new(HurtByGoal { flags: FLAG_TARGET })); // HurtByTargetGoal
+    selector.add_goal(1, Box::new(HurtByTargetGoal));
     selector.add_goal(
         2,
         Box::new(ConstantGoal {
@@ -190,7 +303,7 @@ pub fn cow_goal_selector() -> GoalSelector {
             can_use: true,
         }),
     ); // FloatGoal
-    selector.add_goal(1, Box::new(HurtByGoal { flags: FLAG_MOVE })); // PanicGoal
+    selector.add_goal(1, Box::new(PanicGoal));
     selector.add_goal(
         2,
         Box::new(ConstantGoal {
@@ -330,18 +443,23 @@ impl Behavior for VillagerCalmDown {
 }
 
 /// `FleeFromHostile` (Context §J's own Panic package) — models only the `HurtByEntity`
-/// flee behavior (this design carries no `NearestHostile`-equivalent memory). No
-/// position is associated with the `HurtByEntity` memory's own `RcEntityId` value
-/// anywhere in this blueprint's own `AiContext` (a bounded gap, restated in
-/// `docs/findings-for-planning.md`), so this behavior's own `tick` gates correctly on
-/// the real memory requirement but drives no real movement yet.
+/// flee behavior (this design carries no `NearestHostile`-equivalent memory). M4-B09
+/// Context Part C.4/C.3: `tick` now drives real movement via `flee_from_current_target`
+/// (the same shared heading computation `PanicGoal` uses) whenever `ctx.current_target_pos`
+/// happens to carry the attacker's position this tick (a one-tick pulse, Context Part
+/// C.3's own field doc comment — this Behavior's own gating memory, `HurtByEntity`, persists
+/// for `HURT_BY_MEMORY_TTL_TICKS` ticks via `HurtBySensor`'s own TTL, longer than the one
+/// tick `current_target_pos` itself stays populated; a no-op on every tick after the first
+/// is the honest, bounded consequence, restated in the final report).
 struct FleeFromHostile;
 impl Behavior for FleeFromHostile {
     fn required_memories(&self) -> &'static [(MemoryModuleType, MemoryStatus)] {
         &[(MemoryModuleType::HurtByEntity, MemoryStatus::ValuePresent)]
     }
     fn start(&mut self, _ctx: &mut AiContext) {}
-    fn tick(&mut self, _ctx: &mut AiContext) {}
+    fn tick(&mut self, ctx: &mut AiContext) {
+        flee_from_current_target(ctx);
+    }
     fn stop(&mut self, _ctx: &mut AiContext) {}
 }
 
@@ -358,8 +476,13 @@ impl Sensor for PlayerSensor {
     fn tick(&self, _ctx: &AiContext, _brain: &mut Brain) {}
 }
 
-/// `HurtBySensor` (Context §J) — writes `HurtByEntity` only, from the same bounded
-/// `hurt_by` seam Zombie/Cow use.
+/// `HurtBySensor` (Context §J, TTL added by M4-B09 Context Part C.4) — writes
+/// `HurtByEntity` only, from the same bounded `hurt_by` seam Zombie/Cow use, with an
+/// explicit `HURT_BY_MEMORY_TTL_TICKS`-tick expiry standing in for vanilla's own
+/// damage-source-driven, TTL-argument-free expiry (M4-B09-CLAIMS.md's own corrected
+/// row: vanilla's `HurtBySensor` sets no TTL, expiring instead when `getLastDamageSource`
+/// returns null or the attacker dies/changes level — this engine's bounded seam has
+/// neither signal, so a fixed TTL is this blueprint's own concrete substitute).
 struct HurtBySensor;
 impl Sensor for HurtBySensor {
     fn requires(&self) -> &'static [MemoryModuleType] {
@@ -367,7 +490,11 @@ impl Sensor for HurtBySensor {
     }
     fn tick(&self, ctx: &AiContext, brain: &mut Brain) {
         if let Some(id) = ctx.hurt_by {
-            brain.set(MemoryModuleType::HurtByEntity, id, None);
+            brain.set(
+                MemoryModuleType::HurtByEntity,
+                id,
+                Some(HURT_BY_MEMORY_TTL_TICKS),
+            );
         }
     }
 }
@@ -454,7 +581,13 @@ pub fn villager_brain_program() -> BrainProgram {
         ],
         packages: vec![core, idle, work, meet, rest, panic],
         schedule_candidates: vec![Activity::Work, Activity::Meet, Activity::Idle],
-        panic_trigger_memory: Some(MemoryModuleType::HurtBy),
+        // M4-B09 governance fix: `HurtBySensor` (above) only ever sets `HurtByEntity`, never
+        // `HurtBy` (this engine's bounded `hurt_by` seam carries only a resolvable attacker
+        // id, never a full damage-source value — Context Part C.2/C.4's own citation) — the
+        // landed `Some(MemoryModuleType::HurtBy)` here could never actually fire, since no
+        // sensor this crate ships ever writes that key. Corrected to the memory the sensor
+        // really writes.
+        panic_trigger_memory: Some(MemoryModuleType::HurtByEntity),
         schedule_update_delay_ticks: 20,
     }
 }

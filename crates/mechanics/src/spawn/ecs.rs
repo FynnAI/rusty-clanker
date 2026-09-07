@@ -268,12 +268,16 @@ fn mob_spawn_cycle_factory() -> SystemFactory {
 /// `order_tag = 1` — M4-B09's own future governance changeset fixes the required
 /// three-way order across this function, `register_stage6b`, and M4-B05's own mob-combat
 /// registration function.
-pub fn register_mob_despawn(builder: &mut RcExecutorBuilder) {
+/// M4-B09 Context Part I, additive: now returns the `SystemId` `register_system` itself
+/// already produces (previously discarded) — needed by
+/// `entity_physics_integration_group_registration.rs`'s own `order_tag` assertions;
+/// fully backward-compatible (every existing call site already ignores this return value).
+pub fn register_mob_despawn(builder: &mut RcExecutorBuilder) -> rc_scheduler::SystemId {
     builder.register_system(
         DomainGroup::EntityPhysicsIntegration,
         mob_despawn_factory(),
         vec![],
-    );
+    )
 }
 
 fn mob_despawn_factory() -> SystemFactory {

@@ -149,6 +149,11 @@ pub fn goal_selector_tick_system(
         let self_id = placeholder_self_id(entity);
         let full_tick = should_full_tick(tick.0, self_id);
         let mut look_target: Option<[f64; 3]> = None;
+        // M4-B09 Context Part C.3: this dead, never-production-wired system (module doc
+        // comment) constructs `AiContext` with every new field at its own inert default --
+        // no live `PendingMeleeAttack`/`RecentDamage`/target-selector-output feed exists
+        // here, matching this file's own already-established `hurt_by: None` precedent.
+        let mut melee_attack_signal: Option<RcEntityId> = None;
         let mut ctx = AiContext {
             self_id,
             self_pos: [0.0, 0.0, 0.0],
@@ -163,6 +168,9 @@ pub fn goal_selector_tick_system(
             movement_intent: &mut movement_intent,
             look_target: &mut look_target,
             hurt_by: None,
+            current_target_pos: None,
+            melee_attack_signal: &mut melee_attack_signal,
+            current_target: None,
         };
         if let Some(mut goal_selector) = goal_selector {
             goal_selector.0.tick(&mut ctx, full_tick);
@@ -192,6 +200,7 @@ pub fn brain_tick_system(
     {
         let self_id = placeholder_self_id(entity);
         let mut look_target: Option<[f64; 3]> = None;
+        let mut melee_attack_signal: Option<RcEntityId> = None;
         let mut ctx = AiContext {
             self_id,
             self_pos: [0.0, 0.0, 0.0],
@@ -206,6 +215,9 @@ pub fn brain_tick_system(
             movement_intent: &mut movement_intent,
             look_target: &mut look_target,
             hurt_by: None,
+            current_target_pos: None,
+            melee_attack_signal: &mut melee_attack_signal,
+            current_target: None,
         };
         let mut rng = deterministic_rng(tick.0, self_id);
         let BrainComponent(ref mut brain, ref mut program) = *brain_component;

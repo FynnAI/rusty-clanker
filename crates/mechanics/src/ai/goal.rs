@@ -37,8 +37,35 @@ pub struct AiContext<'a> {
     /// This blueprint's own bounded seam (Context §J): `Some(entity)` on any tick this
     /// entity was just damaged, populated by no system this blueprint ships — a future
     /// combat blueprint's own signal (M4-B00 index: "M4-B03's own `AiContext.hurt_by`
-    /// field already assumed existed").
+    /// field already assumed existed"). M4-B09 Context Part C.2 supplies the concrete
+    /// producer (`combat::RecentDamage`, read-and-cleared once per Stage-6a tick by
+    /// whichever adapter constructs this struct).
     pub hurt_by: Option<RcEntityId>,
+    /// M4-B09 Context Part C.3 — output, backs `combat::PendingMeleeAttack.0` directly.
+    pub melee_attack_signal: &'a mut Option<RcEntityId>,
+    /// M4-B09 Context Part C.3 — this tick's target-selector output, populated by the
+    /// adapter (a future production Stage-6a system, or this blueprint's own
+    /// `ScenarioWorld`, Part D) *before* `goal_selector` ticks, since `target_selector`
+    /// ticks first (Part D's own fixed ordering) and a goal like `ZombieAttackGoal` needs
+    /// to read its result without re-deriving it from `target_selector`'s own internal
+    /// state directly. The adapter's own rule (Context Part D, restated): whenever
+    /// `hurt_by` is `Some` this tick, `current_target` is set to that same id regardless of
+    /// whether the mob's own `target_selector` carries any real content (`HurtByTargetGoal`'s
+    /// role is conceptually "claim the target slot," which a target-selector-less kind like
+    /// Cow has no slot to claim into — the adapter still derives the same "was just hurt,
+    /// react to the attacker" signal directly).
+    pub current_target: Option<RcEntityId>,
+    /// M4-B09 Context Part C.3, additive: `current_target`'s own last-known position,
+    /// `Some` iff `current_target` is `Some` — needed by `ZombieAttackGoal` (melee-range
+    /// check) and by Cow's `PanicGoal`/Villager's `FleeFromHostile` (flee *away from* a
+    /// real position), neither of which `AiContext` could otherwise express at all (no
+    /// general entity-position directory exists, Context §D's own "how does a Stage-6a
+    /// adapter learn where players are" open question, restated here for `current_target`
+    /// specifically). Not one of Part C.3's own literally-named three fields — a necessary,
+    /// disclosed, additive deviation the final report cites in full: without it, neither
+    /// already-specified behavior (melee-range gating, flee direction) has anything to
+    /// measure or flee from.
+    pub current_target_pos: Option<[f64; 3]>,
 }
 
 pub trait Goal: Send + Sync {
@@ -96,6 +123,28 @@ impl GoalSelector {
             goal,
             running: false,
         });
+    }
+
+    /// Test/debug-only introspection (M4-B09 `ai_scenario_layout.rs`'s own "has at least
+    /// N entries" checks): the number of goals registered via `add_goal`.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// `self.len() == 0`.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Test/debug-only introspection (M4-B09 Context Part G, scenario 9): the `entries`
+    /// index currently holding `flag` in `locked_flags`, `None` if unheld — mirrors every
+    /// `debug_*` precedent in this project.
+    pub fn running_goal_holding(&self, flag: u8) -> Option<usize> {
+        let bit = flag.trailing_zeros();
+        if bit >= 4 {
+            return None;
+        }
+        self.locked_flags[bit as usize]
     }
 
     pub fn disable_flag(&mut self, flag: u8) {

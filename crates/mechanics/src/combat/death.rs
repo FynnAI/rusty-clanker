@@ -5,19 +5,21 @@
 use crate::entity::{EntityKind, ItemStackRecord};
 use crate::random::RcRandom;
 
-/// Written by a Stage-6a system (a future AI blueprint, M4-B03), consumed and cleared by this
-/// blueprint's own Stage-6b `apply_mob_melee_attacks`-equivalent system
-/// (`rusty-clanker-server::play::combat`). One component per attacker entity; presence for
-/// one tick means "attack `target` this tick," matching MECH-D32's own "chosen-action command
-/// consumed by Stage 6b" framing exactly. Never read or written by this blueprint's own Stage
-/// 6a (this blueprint registers nothing into `EntityAiSelection`).
-///
-/// Not reconciled with M4-B03's own independently-invented `AiContext`/goal contract — M4-B09's
-/// own Part C is the reconciliation step (M4-B00-index).
-#[derive(bevy_ecs::prelude::Component, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct PendingMeleeAttack {
-    pub target: rc_core::RcEntityId,
-}
+/// The Stage-6a(AI) -> Stage-6b(combat) attack-decision seam (M4-B09 Context Part C.1,
+/// reshaping M4-B05's own original Commands-added-marker design). `Some(target)` means
+/// "attack `target` this tick"; `None` (the always-attached default) means no attack was
+/// decided this tick. Reshaped from a Commands-added-and-removed marker component into an
+/// always-attached, `Option`-valued field because a Stage-6a `Goal` structurally cannot add
+/// a new component via `Commands` at all (MECH-D32's own "Stage 6a never mutates
+/// authoritative World state" rule, made structural by M4-B01's Stage split) — only mutate a
+/// component it already owns via `Query<&mut T>`. Attached (as `PendingMeleeAttack::default()`,
+/// i.e. `None`) at every mob-spawn call site alongside `AttributeMap`/`CombatRuntimeState`
+/// (`HardcodedWorld::debug_spawn_mob`) and `RecentDamage` (`ai_bridge.rs`). Consumed and
+/// cleared by this blueprint's own Stage-6b `system_mob_melee_attacks`
+/// (`rusty-clanker-server::play::combat`) via a direct field read-and-clear
+/// (`attack.0.take()`), never a structural `Commands` removal.
+#[derive(bevy_ecs::prelude::Component, Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingMeleeAttack(pub Option<rc_core::RcEntityId>);
 
 /// The seam a future data-driven loot-table blueprint (MECH-D55: pools -> entries ->
 /// functions/conditions, interpreted against `rc_mechanics::random::RcRandom`) is expected to
